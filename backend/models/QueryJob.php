@@ -9,8 +9,10 @@ use yii\db\ActiveRecord;
  *
  * @property string $id UUID
  * @property string $sql_text
+ * @property string $sql_hash SHA-256 hash for dedup
  * @property string $params JSON
  * @property string $source builder|nl|manual
+ * @property int    $user_id
  * @property string $status pending|running|completed|failed|cancelled
  * @property string $result_columns JSON column names
  * @property string $result_rows JSON row data
@@ -35,9 +37,10 @@ class QueryJob extends ActiveRecord
             [['id', 'sql_text'], 'required'],
             [['sql_text', 'result_rows', 'error_message'], 'string'],
             [['params', 'result_columns'], 'string'],
+            [['sql_hash'], 'string', 'max' => 64],
             [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
             [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled']],
-            [['row_count', 'execution_time_ms'], 'integer'],
+            [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
             [['progress_message'], 'string', 'max' => 255],
             [['id'], 'string', 'max' => 36],
         ];

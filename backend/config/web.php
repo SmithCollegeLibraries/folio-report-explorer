@@ -94,6 +94,21 @@ $config = [
                 'DELETE training/<id:\d+>' => 'folio-query/training-delete',
                 'POST training/correct' => 'folio-query/training-correct',
 
+                // Auth endpoints
+                'GET auth/me' => 'folio-query/auth-me',
+                'POST auth/refresh' => 'folio-query/auth-refresh',
+                'POST auth/logout' => 'folio-query/auth-logout',
+
+                // User management (admin)
+                'GET users' => 'folio-query/user-list',
+                'PUT users/<id:\d+>/approve' => 'folio-query/user-approve',
+                'PUT users/<id:\d+>/role' => 'folio-query/user-role',
+                'DELETE users/<id:\d+>' => 'folio-query/user-delete',
+                'PUT users/<id:\d+>/notifications' => 'folio-query/user-notifications',
+
+                // Query history
+                'GET query/history' => 'folio-query/query-history',
+
                 // CORS preflight
                 'OPTIONS <path:.*>' => 'folio-query/options',
             ],
@@ -101,7 +116,7 @@ $config = [
         'db' => $db,
         'folioDb' => $dbFolio,
         'user' => [
-            'identityClass' => 'app\models\DummyIdentity',
+            'identityClass' => 'app\models\User',
             'enableSession' => false,
             'enableAutoLogin' => false,
         ],

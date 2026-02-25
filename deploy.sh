@@ -130,11 +130,29 @@ if (file_exists($envFile)) {
 ENVPHP
 echo "→ Generated env.php loader"
 
-# ── 8. Seed database (idempotent — uses REPLACE INTO) ─────────────
+# ── 8. Generate JWT secret if not set ──────────────────────────────
+if ! grep -q '^JWT_SECRET=' .env 2>/dev/null; then
+    JWT_SECRET=$(php -r 'echo bin2hex(random_bytes(32));')
+    echo "JWT_SECRET=$JWT_SECRET" >> .env
+    echo "→ Generated JWT_SECRET and added to .env"
+fi
+
+# ── 9. Run database migrations ─────────────────────────────────────
+echo "→ Running migrations..."
+MYSQL_HOST="${MYSQL_HOST:-localhost}"
+MYSQL_CMD="mysql -h $MYSQL_HOST -u ${MYSQL_USER:-folio_app} -p${MYSQL_PASSWORD:-folio_app_pass} ${MYSQL_DATABASE:-folio_reports}"
+
+# Apply each migration SQL file in order
+for migration in mysql/migrations/*.sql; do
+    if [ -f "$migration" ]; then
+        echo "  Applying $(basename "$migration")..."
+        $MYSQL_CMD < "$migration" 2>/dev/null || true
+    fi
+done
+
+# ── 10. Seed database (idempotent — uses REPLACE INTO) ─────────────
 if [ "${SEED_DB:-false}" = "true" ]; then
     echo "→ Seeding database..."
-    MYSQL_HOST="${MYSQL_HOST:-localhost}"
-    MYSQL_CMD="mysql -h $MYSQL_HOST -u ${MYSQL_USER:-folio_app} -p${MYSQL_PASSWORD:-folio_app_pass} ${MYSQL_DATABASE:-folio_reports}"
 
     $MYSQL_CMD < mysql/init.sql 2>/dev/null || true
     $MYSQL_CMD < mysql/seed_reports.sql
@@ -151,9 +169,13 @@ echo ""
 echo "  First deploy? Run with SEED_DB=true to load all data:"
 echo "    SEED_DB=true bash deploy.sh"
 echo ""
-echo "  Or load manually:"
-echo "    mysql -u USER -p DB < mysql/init.sql"
-echo "    mysql -u USER -p DB < mysql/seed_reports.sql"
-echo "    mysql -u USER -p DB < mysql/seed_training_hints.sql"
-echo "    mysql -u USER -p DB < mysql/seed_saved_queries.sql"
+echo "  Auth setup: admin/.htaccess handles Shibboleth protection."
+echo "  Ensure mod_shib is loaded and Apache allows .htaccess overrides."
+echo ""
+echo "  Ensure these are set in .env:"
+echo "    JWT_SECRET=...          (auto-generated on first deploy)"
+echo "    VITE_AUTH_ENABLED=true  (enables frontend auth)"
+echo ""
+echo "  Data cleanup (add to cron):"
+echo "    0 3 * * 0 cd $SCRIPT_DIR && php backend/yii cleanup/run"
 echo ""

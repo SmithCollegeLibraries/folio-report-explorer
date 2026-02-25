@@ -21,7 +21,11 @@ import type {
   TrainingHintInput,
   CorrectionInput,
   CorrectionResponse,
+  AuthUser,
+  RefreshResponse,
+  HistoryResponse,
 } from '../types';
+import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
 // Derive API URL from VITE_BASE_PATH (e.g. '/folio-report-explorer/api')
 // Falls back to VITE_API_URL for dev Docker setup, or plain '/api'
@@ -33,6 +37,83 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
   timeout: 60000,
 });
+
+// ── Auth interceptors ─────────────────────────────────────────────
+
+// Request interceptor: attach JWT Bearer token
+api.interceptors.request.use((config) => {
+  const token = getStoredAccessToken();
+  if (token) {
+    config.headers = config.headers || {};
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Response interceptor: handle 401 by attempting token refresh
+let isRefreshing = false;
+let refreshSubscribers: ((token: string) => void)[] = [];
+
+function onRefreshed(token: string) {
+  refreshSubscribers.forEach((cb) => cb(token));
+  refreshSubscribers = [];
+}
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+    const authEnabled = import.meta.env.VITE_AUTH_ENABLED === 'true';
+
+    // Only handle 401 when auth is enabled
+    if (error.response?.status !== 401 || !authEnabled) {
+      return Promise.reject(error);
+    }
+
+    // Don't retry refresh or auth endpoints
+    if (originalRequest.url?.includes('/auth/refresh') || originalRequest._retry) {
+      // Redirect to Shibboleth login
+      window.location.href = `${basePath}/admin/authorize.php`;
+      return Promise.reject(error);
+    }
+
+    if (!isRefreshing) {
+      isRefreshing = true;
+      const refreshToken = getStoredRefreshToken();
+
+      if (!refreshToken) {
+        window.location.href = `${basePath}/admin/authorize.php`;
+        return Promise.reject(error);
+      }
+
+      try {
+        const { data } = await axios.post<RefreshResponse>(`${apiBase}/auth/refresh`, {
+          refreshToken,
+        });
+
+        localStorage.setItem('fre_access_token', data.accessToken);
+        localStorage.setItem('fre_refresh_token', data.refreshToken);
+        isRefreshing = false;
+        onRefreshed(data.accessToken);
+      } catch {
+        isRefreshing = false;
+        localStorage.removeItem('fre_access_token');
+        localStorage.removeItem('fre_refresh_token');
+        window.location.href = `${basePath}/admin/authorize.php`;
+        return Promise.reject(error);
+      }
+    }
+
+    // Queue this request until refresh completes
+    return new Promise((resolve) => {
+      refreshSubscribers.push((token: string) => {
+        originalRequest._retry = true;
+        originalRequest.headers.Authorization = `Bearer ${token}`;
+        resolve(api(originalRequest));
+      });
+    });
+  },
+);
 
 // ─── Schema ───────────────────────────────────────────────────────
 
@@ -308,5 +389,68 @@ export async function submitCorrection(
   correction: CorrectionInput,
 ): Promise<CorrectionResponse> {
   const { data } = await api.post('/training/correct', correction);
+  return data;
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────
+
+export async function fetchCurrentUser(): Promise<AuthUser> {
+  const { data } = await api.get('/auth/me');
+  return data;
+}
+
+export async function refreshAuthToken(
+  refreshToken: string,
+): Promise<RefreshResponse> {
+  const { data } = await api.post('/auth/refresh', { refreshToken });
+  return data;
+}
+
+export async function logoutAuth(): Promise<void> {
+  await api.post('/auth/logout');
+}
+
+// ─── User Management (admin) ─────────────────────────────────────
+
+export async function listUsers(): Promise<AuthUser[]> {
+  const { data } = await api.get('/users');
+  return data;
+}
+
+export async function approveUser(
+  id: number,
+  approved: boolean,
+): Promise<AuthUser> {
+  const { data } = await api.put(`/users/${id}/approve`, { approved });
+  return data;
+}
+
+export async function changeUserRole(
+  id: number,
+  role: 'admin' | 'user',
+): Promise<AuthUser> {
+  const { data } = await api.put(`/users/${id}/role`, { role });
+  return data;
+}
+
+export async function deleteUser(id: number): Promise<void> {
+  await api.delete(`/users/${id}`);
+}
+
+export async function toggleUserNotifications(
+  id: number,
+  receive: boolean,
+): Promise<AuthUser> {
+  const { data } = await api.put(`/users/${id}/notifications`, { receive });
+  return data;
+}
+
+// ─── Query History ────────────────────────────────────────────────
+
+export async function fetchQueryHistory(
+  limit = 50,
+  offset = 0,
+): Promise<HistoryResponse> {
+  const { data } = await api.get('/query/history', { params: { limit, offset } });
   return data;
 }

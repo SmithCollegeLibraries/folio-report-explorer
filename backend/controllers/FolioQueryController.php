@@ -13,6 +13,8 @@ use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
 use app\models\ReportTemplate;
+use app\models\User;
+use Firebase\JWT\JWT;
 
 /**
  * FolioQueryController — REST API for the FOLIO Report Explorer.
@@ -42,7 +44,7 @@ class FolioQueryController extends Controller
     {
         $behaviors = parent::behaviors();
 
-        // CORS support
+        // CORS support (must be first — before authenticator)
         $behaviors['corsFilter'] = [
             'class' => \yii\filters\Cors::class,
             'cors' => [
@@ -62,6 +64,44 @@ class FolioQueryController extends Controller
             ],
         ];
 
+        // JWT Bearer authentication (production only)
+        if (YII_ENV !== 'dev') {
+            $behaviors['authenticator'] = [
+                'class' => \yii\filters\auth\HttpBearerAuth::class,
+                'except' => ['options', 'health', 'auth-refresh'],
+            ];
+
+            // Role-based access control
+            $behaviors['access'] = [
+                'class' => \yii\filters\AccessControl::class,
+                'except' => ['options', 'health', 'auth-refresh'],
+                'rules' => [
+                    // Admin-only actions
+                    [
+                        'allow' => true,
+                        'actions' => [
+                            'settings', 'settings-save', 'settings-test',
+                            'training-list', 'training-detail', 'training-create',
+                            'training-update', 'training-delete', 'training-correct',
+                            'report-create', 'report-update', 'report-delete',
+                            'report-generate', 'report-convert',
+                            'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
+                        ],
+                        'roles' => ['@'],
+                        'matchCallback' => function ($rule, $action) {
+                            $identity = Yii::$app->user->identity;
+                            return $identity && $identity->isAdmin();
+                        },
+                    ],
+                    // Any authenticated user
+                    [
+                        'allow' => true,
+                        'roles' => ['@'],
+                    ],
+                ],
+            ];
+        }
+
         return $behaviors;
     }
 
@@ -72,6 +112,33 @@ class FolioQueryController extends Controller
     {
         Yii::$app->response->format = Response::FORMAT_JSON;
         return parent::beforeAction($action);
+    }
+
+    /**
+     * Get the current authenticated user's ID (null in dev mode or if not authenticated).
+     * @return int|null
+     */
+    private function getCurrentUserId()
+    {
+        return Yii::$app->user->isGuest ? null : Yii::$app->user->id;
+    }
+
+    /**
+     * Require admin role. Returns true if admin, sends 403 and returns false otherwise.
+     * (Used for dev-mode manual checks since AccessControl is only active in production.)
+     * @return bool
+     */
+    private function requireAdmin()
+    {
+        if (YII_ENV === 'dev') {
+            return true; // No auth enforcement in dev
+        }
+        $identity = Yii::$app->user->identity;
+        if (!$identity || !$identity->isAdmin()) {
+            Yii::$app->response->statusCode = 403;
+            return false;
+        }
+        return true;
     }
 
     // ─── Schema endpoints ─────────────────────────────────────────────
@@ -238,6 +305,7 @@ class FolioQueryController extends Controller
         $log->sql_text = $sql;
         $log->params = json_encode($params);
         $log->source = $source;
+        $log->user_id = $this->getCurrentUserId();
 
         try {
             $db = Yii::$app->folioDb;
@@ -338,6 +406,8 @@ class FolioQueryController extends Controller
 
         // Create job
         $job = QueryJob::createJob($sql, $params, $source);
+        $job->user_id = $this->getCurrentUserId();
+        $job->sql_hash = hash('sha256', $sql . json_encode($params));
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
             return ['error' => 'Failed to create job', 'details' => $job->errors];
@@ -460,6 +530,7 @@ class FolioQueryController extends Controller
 
         $model = new SavedQuery();
         $model->name = $body['name'] ?? 'Untitled Query';
+        $model->user_id = $this->getCurrentUserId();
         $model->description = $body['description'] ?? null;
         $model->query_definition = json_encode($body['queryDefinition'] ?? []);
         $model->generated_sql = $body['generatedSql'] ?? null;
@@ -814,6 +885,7 @@ class FolioQueryController extends Controller
 
         // Create async job
         $job = QueryJob::createJob($bound['sql'], $bound['params'], 'report');
+        $job->user_id = $this->getCurrentUserId();
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
             return ['error' => 'Failed to create job', 'details' => $job->errors];
@@ -1027,6 +1099,7 @@ class FolioQueryController extends Controller
             'original_sql' => $body['originalSql'] ?? null,
             'notes' => $body['notes'] ?? null,
             'is_active' => isset($body['isActive']) ? (int) $body['isActive'] : 1,
+            'user_id' => $this->getCurrentUserId(),
         ])->execute();
 
         $id = $db->getLastInsertID();
@@ -1127,6 +1200,7 @@ class FolioQueryController extends Controller
             'original_sql' => $originalSql,
             'notes' => $notes,
             'is_active' => 1,
+            'user_id' => $this->getCurrentUserId(),
         ])->execute();
         $correctionId = $db->getLastInsertID();
 
@@ -1139,6 +1213,229 @@ class FolioQueryController extends Controller
         return [
             'correction' => $correction,
             'message' => 'Correction saved. The corrected query will be used as a training example for future AI queries.',
+        ];
+    }
+
+    // ─── Auth endpoints ────────────────────────────────────────────
+
+    /**
+     * GET /api/auth/me — return current authenticated user info.
+     */
+    public function actionAuthMe()
+    {
+        if (Yii::$app->user->isGuest) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+
+        return Yii::$app->user->identity->toArray();
+    }
+
+    /**
+     * POST /api/auth/refresh — exchange refresh token for new access token.
+     * Body: {refreshToken: string}
+     */
+    public function actionAuthRefresh()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $refreshToken = $body['refreshToken'] ?? '';
+
+        if (empty($refreshToken)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'refreshToken is required'];
+        }
+
+        $secret = getenv('JWT_SECRET');
+        if (!$secret) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => 'JWT not configured'];
+        }
+
+        try {
+            $decoded = JWT::decode($refreshToken, $secret, ['HS256']);
+
+            if (!isset($decoded->sub) || ($decoded->type ?? '') !== 'refresh') {
+                Yii::$app->response->statusCode = 401;
+                return ['error' => 'Invalid refresh token'];
+            }
+
+            $user = User::findOne((int) $decoded->sub);
+            if (!$user || !$user->is_approved) {
+                Yii::$app->response->statusCode = 401;
+                return ['error' => 'User not found or not approved'];
+            }
+
+            // Verify token hasn't been revoked
+            if (!$user->validateRefreshToken($refreshToken)) {
+                Yii::$app->response->statusCode = 401;
+                return ['error' => 'Refresh token has been revoked'];
+            }
+
+            // Generate new token pair
+            $newAccessToken = $user->generateAccessToken();
+            $newRefreshToken = $user->generateRefreshToken();
+
+            return [
+                'accessToken' => $newAccessToken,
+                'refreshToken' => $newRefreshToken,
+                'user' => $user->toArray(),
+            ];
+        } catch (\Exception $e) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Invalid or expired refresh token'];
+        }
+    }
+
+    /**
+     * POST /api/auth/logout — revoke refresh token.
+     */
+    public function actionAuthLogout()
+    {
+        if (!Yii::$app->user->isGuest) {
+            Yii::$app->user->identity->revokeRefreshToken();
+        }
+        return ['success' => true];
+    }
+
+    // ─── User management (admin) ──────────────────────────────────
+
+    /**
+     * GET /api/users — list all users.
+     */
+    public function actionUserList()
+    {
+        $users = User::find()
+            ->orderBy(['created_at' => SORT_DESC])
+            ->all();
+
+        return array_map(function ($u) {
+            return $u->toArray();
+        }, $users);
+    }
+
+    /**
+     * PUT /api/users/<id>/approve — toggle user approval.
+     */
+    public function actionUserApprove($id)
+    {
+        $user = User::findOne($id);
+        if (!$user) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'User not found'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $user->is_approved = !empty($body['approved']) ? 1 : 0;
+        $user->save(false);
+
+        return $user->toArray();
+    }
+
+    /**
+     * PUT /api/users/<id>/role — change user role.
+     */
+    public function actionUserRole($id)
+    {
+        $user = User::findOne($id);
+        if (!$user) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'User not found'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $role = $body['role'] ?? '';
+
+        if (!in_array($role, ['admin', 'user'])) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'Role must be "admin" or "user"'];
+        }
+
+        $user->role = $role;
+        $user->save(false);
+
+        return $user->toArray();
+    }
+
+    /**
+     * PUT /api/users/<id>/notifications — toggle notification preference.
+     */
+    public function actionUserNotifications($id)
+    {
+        $user = User::findOne($id);
+        if (!$user) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'User not found'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $user->receive_notifications = !empty($body['receive']) ? 1 : 0;
+        $user->save(false);
+
+        return $user->toArray();
+    }
+
+    /**
+     * DELETE /api/users/<id> — delete a user.
+     */
+    public function actionUserDelete($id)
+    {
+        // Prevent self-deletion
+        if (!Yii::$app->user->isGuest && (int) $id === Yii::$app->user->id) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'Cannot delete your own account'];
+        }
+
+        $user = User::findOne($id);
+        if (!$user) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'User not found'];
+        }
+
+        $user->delete();
+        return ['success' => true];
+    }
+
+    // ─── Query history ────────────────────────────────────────────
+
+    /**
+     * GET /api/query/history — list the current user's completed jobs with results.
+     * Optional: ?limit=20&offset=0
+     */
+    public function actionQueryHistory()
+    {
+        $userId = $this->getCurrentUserId();
+        $limit = (int) (Yii::$app->request->get('limit', 50));
+        $offset = (int) (Yii::$app->request->get('offset', 0));
+
+        $query = QueryJob::find()
+            ->where(['status' => 'completed'])
+            ->orderBy(['completed_at' => SORT_DESC])
+            ->limit(min($limit, 100))
+            ->offset($offset);
+
+        // In production, filter to current user's jobs only
+        if ($userId) {
+            $query->andWhere(['user_id' => $userId]);
+        }
+
+        $total = (clone $query)->count();
+        $jobs = $query->all();
+
+        return [
+            'total' => (int) $total,
+            'offset' => $offset,
+            'limit' => $limit,
+            'items' => array_map(function ($job) {
+                return [
+                    'jobId' => $job->id,
+                    'sql' => $job->sql_text,
+                    'source' => $job->source,
+                    'rowCount' => (int) $job->row_count,
+                    'executionTimeMs' => (int) $job->execution_time_ms,
+                    'createdAt' => $job->created_at,
+                    'completedAt' => $job->completed_at,
+                ];
+            }, $jobs),
         ];
     }
 

@@ -1,0 +1,9 @@
+Header set Access-Control-Allow-Origin "*"
+RewriteEngine On
+RewriteCond %{HTTPS} Off
+RewriteRule .* https://%{HTTP_HOST}%{REQUEST_URI} [R,L]
+
+# Shibboleth authentication
+AuthType shibboleth
+ShibRequestSetting requireSession 1
+Require valid-user

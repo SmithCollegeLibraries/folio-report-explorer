@@ -10,8 +10,13 @@ RewriteRule ^nginx/ - [F,L]
 RewriteRule ^public/ - [F,L]
 RewriteRule ^\.env - [F,L]
 RewriteRule ^deploy\.sh - [F,L]
+RewriteRule ^worker\.sh - [F,L]
 RewriteRule ^docker-compose\.yml - [F,L]
 RewriteRule ^composer\. - [F,L]
+
+# ── admin/authorize.php — pass through for Shibboleth ─────────────
+# admin/.htaccess enforces Shibboleth requireSession on this folder
+RewriteRule ^admin/authorize\.php$ - [L]
 
 # ── API requests → backend via symlink ─────────────────────────────
 # api/ is a symlink to backend/web/ — route everything through index.php

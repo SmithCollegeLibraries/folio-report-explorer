@@ -363,3 +363,61 @@ export interface CorrectionResponse {
   correction: TrainingHint;
   message: string;
 }
+
+// ─── Auth types ───────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: number;
+  smithId: string;
+  username: string;
+  firstName: string | null;
+  lastName: string | null;
+  displayName: string;
+  affiliation: string | null;
+  email: string | null;
+  role: 'admin' | 'user';
+  isApproved: boolean;
+  receiveNotifications: boolean;
+  lastLogin: string | null;
+  createdAt: string;
+}
+
+export interface JwtPayload {
+  iss: string;
+  sub: number;
+  iat: number;
+  exp: number;
+  type: 'access' | 'refresh';
+  user?: {
+    id: number;
+    username: string;
+    firstName: string | null;
+    lastName: string | null;
+    role: 'admin' | 'user';
+  };
+}
+
+export interface RefreshResponse {
+  accessToken: string;
+  refreshToken: string;
+  user: AuthUser;
+}
+
+// ─── Query history types ──────────────────────────────────────────
+
+export interface HistoryItem {
+  jobId: string;
+  sql: string;
+  source: string;
+  rowCount: number;
+  executionTimeMs: number;
+  createdAt: string;
+  completedAt: string;
+}
+
+export interface HistoryResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  items: HistoryItem[];
+}

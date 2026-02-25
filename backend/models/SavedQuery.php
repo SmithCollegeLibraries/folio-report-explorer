@@ -9,6 +9,7 @@ use yii\db\ActiveRecord;
  *
  * @property int $id
  * @property string $name
+ * @property int    $user_id
  * @property string $description
  * @property string $query_definition JSON
  * @property string $generated_sql
@@ -40,7 +41,7 @@ class SavedQuery extends ActiveRecord
             [['query_definition'], 'string'],
             [['source'], 'in', 'range' => ['builder', 'nl']],
             [['source'], 'default', 'value' => 'builder'],
-            [['is_pinned'], 'integer'],
+            [['is_pinned', 'user_id'], 'integer'],
             [['is_pinned'], 'default', 'value' => 0],
         ];
     }

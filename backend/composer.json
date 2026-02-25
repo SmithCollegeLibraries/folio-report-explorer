@@ -14,9 +14,8 @@
         "php": ">=7.2.0",
         "yiisoft/yii2": "~2.0.49",
         "yiisoft/yii2-httpclient": "~2.0",
+        "firebase/php-jwt": "^5.5",
         "npm-asset/jquery": "^3.7"
-    },
-    "require-dev": {
     },
     "autoload": {
         "psr-4": {
