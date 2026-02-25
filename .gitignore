@@ -39,9 +39,11 @@ composer.phar
 
 # Build output
 frontend/dist/
-public/index.html
-public/assets/
-public/api
+public/
+/index.html
+/assets/
+/api
+/vite.svg
 
 # OS
 Thumbs.db

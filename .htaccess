@@ -1,0 +1,26 @@
+Options +FollowSymLinks -Indexes
+RewriteEngine On
+
+# ── Block direct access to source directories ─────────────────────
+# These contain PHP source, config, .env, node_modules, etc.
+RewriteRule ^backend/(config|commands|controllers|data|migrations|models|runtime|services|views|vendor)/ - [F,L]
+RewriteRule ^frontend/ - [F,L]
+RewriteRule ^mysql/ - [F,L]
+RewriteRule ^nginx/ - [F,L]
+RewriteRule ^public/ - [F,L]
+RewriteRule ^\.env - [F,L]
+RewriteRule ^deploy\.sh - [F,L]
+RewriteRule ^docker-compose\.yml - [F,L]
+RewriteRule ^composer\. - [F,L]
+
+# ── API requests → backend via symlink ─────────────────────────────
+# api/ is a symlink to backend/web/ — route everything through index.php
+RewriteRule ^api/(.*)$ api/index.php [L,QSA]
+
+# ── Static files → serve directly ─────────────────────────────────
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# ── Everything else → SPA (index.html) ────────────────────────────
+RewriteRule ^ index.html [L]

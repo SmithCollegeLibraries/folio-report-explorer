@@ -1,3 +1,4 @@
+Options +FollowSymLinks
 RewriteEngine On
 
 # Redirect everything to index.php unless it's a real file or directory

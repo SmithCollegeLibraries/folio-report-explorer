@@ -1,375 +1,48 @@
--- Seed all report templates converted from Yii2 models.
--- Uses INSERT ... ON DUPLICATE KEY UPDATE to be idempotent.
+-- MySQL dump 10.13  Distrib 8.0.45, for Linux (aarch64)
 --
--- v2 changes:
---   - Replaced hardcoded acq_unit_ids UUID with :acqUnitId select param
---   - Replaced hardcoded fiscal year series with :fiscalYearSeries select param
---   - Replaced hardcoded PO prefix with :poPrefix select param
---   - Replaced hardcoded library/location names with select params
---   - Added ROUND(..., 2) to all money SUM calculations
---   - Added item status / library / campus select params with options_sql
+-- Host: localhost    Database: folio_reports
+-- ------------------------------------------------------
+-- Server version	8.0.45
 
--- 1. Budget Report
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('budget-report',
- 'Budget Report by Material Type',
- 'Summarizes acquisitions expenditures by material type, broken down by order type (one-time, standing order, serial). Shows payments from paid invoices within the specified fiscal date range.',
- 'acquisitions',
- 'SELECT
-    COALESCE(mtte.name, mttp.name, ''Unknown'') AS "Material Type",
-    ROUND(SUM(CASE WHEN pot.order_type = ''One-Time'' THEN inv.payment ELSE 0 END), 2) AS "BK",
-    ROUND(SUM(CASE WHEN pot.order_type = ''Ongoing'' AND NOT pot.ongoing__is_subscription THEN inv.payment ELSE 0 END), 2) AS "SO",
-    ROUND(SUM(CASE WHEN pot.order_type = ''Ongoing'' AND pot.ongoing__is_subscription THEN inv.payment ELSE 0 END), 2) AS "SE",
-    ROUND(SUM(inv.AP), 2) AS "AP",
-    ROUND(SUM(inv.payment), 2) AS "Total"
-FROM orders.po_line__t plt
-INNER JOIN orders.purchase_order__t__acq_unit_ids potaui
-    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)
-LEFT JOIN orders.purchase_order__t pot ON plt.purchase_order_id = pot.id
-INNER JOIN (
-    SELECT
-        SUM(iltfd.total * (iltfd.fund_distributions__value * .01)) AS payment,
-        po_line_id,
-        ftaui."name" AS fund,
-        SUM(CASE WHEN (iltfd.fund_distributions__code = ''SCBPA'' OR iltfd.fund_distributions__code = ''SCBIA'') THEN iltfd.total ELSE 0 END) AS AP
-    FROM invoice.invoice_lines__t__fund_distributions iltfd
-    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id AND it.payment_date::date BETWEEN :startDate AND :endDate
-    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id
-    WHERE iltfd.invoice_line_status = ''Paid''
-    GROUP BY po_line_id, ftaui."name"
-) AS inv ON plt.id = inv.po_line_id
-LEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type
-LEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type
-WHERE COALESCE(mtte.name, mttp.name, ''Unknown'') LIKE :materialType
-GROUP BY COALESCE(mtte.name, mttp.name, ''Unknown'')',
- '[{"name":"acqUnitId","type":"select","label":"Acquisitions Unit","required":true,"default":"","placeholder":"Select acquisitions unit","description":"Filter by acquisitions unit (institution)","options_sql":"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name"},{"name":"startDate","type":"date","label":"Start Date","required":true,"default":"$fiscal_year_start","placeholder":"YYYY-MM-DD","description":"Beginning of fiscal period"},{"name":"endDate","type":"date","label":"End Date","required":true,"default":"$fiscal_year_end","placeholder":"YYYY-MM-DD","description":"End of fiscal period"},{"name":"materialType","type":"text","label":"Material Type","required":false,"default":"","placeholder":"Filter by material type","description":"Filter results by material type name (partial match)","wrap":"like"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!50503 SET NAMES utf8mb4 */;
+/*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
+/*!40103 SET TIME_ZONE='+00:00' */;
+/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;
+/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
+/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
+/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
 
--- 2. Title List Report
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('title-list-report',
- 'Title List Report',
- 'Lists purchase order lines with title, format, material type, PO status, payment totals, fund names, and invoice line status. Filterable by multiple fields.',
- 'acquisitions',
- 'SELECT
-    plt.po_line_number AS "POL #",
-    plt.title_or_package AS "Title or Package",
-    plt.order_format AS "POL format",
-    COALESCE(mtte."name", mttp."name", ''Unknown'') AS "Material Type",
-    potaui.workflow_status AS "PO Status",
-    potaui.order_type AS "PO Type",
-    ROUND(inv.payment, 2) AS "Sum of Invoice Payments",
-    inv.fund AS "Fund name",
-    inv.status AS "Invoice Line Status"
-FROM orders.po_line__t plt
-INNER JOIN orders.purchase_order__t__acq_unit_ids potaui
-    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)
-INNER JOIN (
-    SELECT ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS payment,
-           po_line_id, ftaui."name" AS fund, iltfd.invoice_line_status AS status
-    FROM invoice.invoice_lines__t__fund_distributions iltfd
-    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id
-        AND CAST(substring(it.payment_date, 0, 11) AS date) BETWEEN :startDate AND :endDate
-    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id
-    GROUP BY po_line_id, ftaui."name", iltfd.invoice_line_status
-) AS inv ON plt.id = inv.po_line_id
-LEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type
-LEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type
-WHERE plt.po_line_number LIKE :polNumberFilter
-  AND plt.title_or_package LIKE :titleFilter
-  AND potaui.order_type LIKE :poTypeFilter
-  AND potaui.workflow_status LIKE :poStatusFilter
-  AND COALESCE(mtte."name", mttp."name", ''Unknown'') LIKE :materialTypeFilter
-  AND inv.status LIKE :invoiceLineStatusFilter
-ORDER BY plt.po_line_number ASC',
- '[{"name":"acqUnitId","type":"select","label":"Acquisitions Unit","required":true,"default":"","placeholder":"Select acquisitions unit","description":"Filter by acquisitions unit (institution)","options_sql":"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name"},{"name":"startDate","type":"date","label":"Start Date","required":true,"default":"$fiscal_year_start","placeholder":"YYYY-MM-DD","description":"Beginning of fiscal period"},{"name":"endDate","type":"date","label":"End Date","required":true,"default":"$fiscal_year_end","placeholder":"YYYY-MM-DD","description":"End of fiscal period"},{"name":"polNumberFilter","type":"text","label":"POL Number","required":false,"default":"","placeholder":"Filter by POL #","description":"Partial match on purchase order line number","wrap":"like"},{"name":"titleFilter","type":"text","label":"Title","required":false,"default":"","placeholder":"Filter by title","description":"Partial match on title or package name","wrap":"like"},{"name":"poTypeFilter","type":"text","label":"PO Type","required":false,"default":"","placeholder":"e.g. One-Time, Ongoing","description":"Filter by purchase order type","wrap":"like"},{"name":"poStatusFilter","type":"text","label":"PO Status","required":false,"default":"","placeholder":"e.g. Open, Closed","description":"Filter by purchase order status","wrap":"like"},{"name":"materialTypeFilter","type":"text","label":"Material Type","required":false,"default":"","placeholder":"e.g. Book, E-Journal","description":"Filter by material type name","wrap":"like"},{"name":"invoiceLineStatusFilter","type":"text","label":"Invoice Line Status","required":false,"default":"","placeholder":"e.g. Paid, Approved","description":"Filter by invoice line status","wrap":"like"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
+--
+-- Dumping data for table `report_templates`
+--
 
--- 3. Material Type Totals
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('material-type-totals',
- 'Material Type Totals',
- 'Shows total paid invoice amounts grouped by material type for a selected acquisitions unit. No date filtering - shows all-time totals.',
- 'acquisitions',
- 'SELECT
-    COALESCE(mtte.name, mttp.name, ''Unknown'') AS "Material Type",
-    ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS "Total"
-FROM orders.po_line__t plt
-INNER JOIN orders.purchase_order__t__acq_unit_ids potaui
-    ON plt.purchase_order_id = potaui.id
-    AND potaui.acq_unit_ids = :acqUnitId
-LEFT JOIN orders.purchase_order__t pot ON plt.purchase_order_id = pot.id
-INNER JOIN invoice.invoice_lines__t__fund_distributions iltfd ON plt.id = iltfd.po_line_id
-INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id
-LEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type
-LEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type
-WHERE iltfd.invoice_line_status = ''Paid''
-GROUP BY COALESCE(mtte.name, mttp.name, ''Unknown'')
-ORDER BY "Material Type"',
- '[{"name":"acqUnitId","type":"select","label":"Acquisitions Unit","required":true,"default":"","placeholder":"Select acquisitions unit","description":"Filter by acquisitions unit (institution)","options_sql":"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
+LOCK TABLES `report_templates` WRITE;
+/*!40000 ALTER TABLE `report_templates` DISABLE KEYS */;
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (1,'budget-report','Budget Report by Material Type','Summarizes acquisitions expenditures by material type, broken down by order type (one-time, standing order, serial). Shows payments from paid invoices within the specified fiscal date range.','acquisitions','SELECT\n    COALESCE(mtte.name, mttp.name, \'Unknown\') AS \"Material Type\",\n    ROUND(SUM(CASE WHEN pot.order_type = \'One-Time\' THEN inv.payment ELSE 0 END), 2) AS \"BK\",\n    ROUND(SUM(CASE WHEN pot.order_type = \'Ongoing\' AND NOT pot.ongoing__is_subscription THEN inv.payment ELSE 0 END), 2) AS \"SO\",\n    ROUND(SUM(CASE WHEN pot.order_type = \'Ongoing\' AND pot.ongoing__is_subscription THEN inv.payment ELSE 0 END), 2) AS \"SE\",\n    ROUND(SUM(inv.AP), 2) AS \"AP\",\n    ROUND(SUM(inv.payment), 2) AS \"Total\"\nFROM orders.po_line__t plt\nINNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)\nLEFT JOIN orders.purchase_order__t pot ON plt.purchase_order_id = pot.id\nINNER JOIN (\n    SELECT\n        SUM(iltfd.total * (iltfd.fund_distributions__value * .01)) AS payment,\n        po_line_id,\n        ftaui.\"name\" AS fund,\n        SUM(CASE WHEN (iltfd.fund_distributions__code = \'SCBPA\' OR iltfd.fund_distributions__code = \'SCBIA\') THEN iltfd.total ELSE 0 END) AS AP\n    FROM invoice.invoice_lines__t__fund_distributions iltfd\n    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id AND it.payment_date::date BETWEEN :startDate AND :endDate\n    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id\n    WHERE iltfd.invoice_line_status = \'Paid\'\n    GROUP BY po_line_id, ftaui.\"name\"\n) AS inv ON plt.id = inv.po_line_id\nLEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type\nLEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type\nWHERE COALESCE(mtte.name, mttp.name, \'Unknown\') LIKE :materialType\nGROUP BY COALESCE(mtte.name, mttp.name, \'Unknown\')','[{\"name\": \"acqUnitId\", \"type\": \"select\", \"label\": \"Acquisitions Unit\", \"default\": \"\", \"required\": true, \"description\": \"Filter by acquisitions unit (institution)\", \"options_sql\": \"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name\", \"placeholder\": \"Select acquisitions unit\"}, {\"name\": \"startDate\", \"type\": \"date\", \"label\": \"Start Date\", \"default\": \"$fiscal_year_start\", \"required\": true, \"description\": \"Beginning of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"endDate\", \"type\": \"date\", \"label\": \"End Date\", \"default\": \"$fiscal_year_end\", \"required\": true, \"description\": \"End of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"materialType\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Material Type\", \"default\": \"\", \"required\": false, \"description\": \"Filter results by material type name (partial match)\", \"placeholder\": \"Filter by material type\"}]',10000,1,'manual','2026-02-17 20:54:52','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (3,'title-list-report','Title List Report','Lists purchase order lines with title, format, material type, PO status, payment totals, fund names, and invoice line status. Filterable by multiple fields.','acquisitions','SELECT\n    plt.po_line_number AS \"POL #\",\n    plt.title_or_package AS \"Title or Package\",\n    plt.order_format AS \"POL format\",\n    COALESCE(mtte.\"name\", mttp.\"name\", \'Unknown\') AS \"Material Type\",\n    potaui.workflow_status AS \"PO Status\",\n    potaui.order_type AS \"PO Type\",\n    ROUND(inv.payment, 2) AS \"Sum of Invoice Payments\",\n    inv.fund AS \"Fund name\",\n    inv.status AS \"Invoice Line Status\"\nFROM orders.po_line__t plt\nINNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)\nINNER JOIN (\n    SELECT ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS payment,\n           po_line_id, ftaui.\"name\" AS fund, iltfd.invoice_line_status AS status\n    FROM invoice.invoice_lines__t__fund_distributions iltfd\n    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id\n        AND CAST(substring(it.payment_date, 0, 11) AS date) BETWEEN :startDate AND :endDate\n    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id\n    GROUP BY po_line_id, ftaui.\"name\", iltfd.invoice_line_status\n) AS inv ON plt.id = inv.po_line_id\nLEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type\nLEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type\nWHERE plt.po_line_number LIKE :polNumberFilter\n  AND plt.title_or_package LIKE :titleFilter\n  AND potaui.order_type LIKE :poTypeFilter\n  AND potaui.workflow_status LIKE :poStatusFilter\n  AND COALESCE(mtte.\"name\", mttp.\"name\", \'Unknown\') LIKE :materialTypeFilter\n  AND inv.status LIKE :invoiceLineStatusFilter\nORDER BY plt.po_line_number ASC','[{\"name\": \"acqUnitId\", \"type\": \"select\", \"label\": \"Acquisitions Unit\", \"default\": \"\", \"required\": true, \"description\": \"Filter by acquisitions unit (institution)\", \"options_sql\": \"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name\", \"placeholder\": \"Select acquisitions unit\"}, {\"name\": \"startDate\", \"type\": \"date\", \"label\": \"Start Date\", \"default\": \"$fiscal_year_start\", \"required\": true, \"description\": \"Beginning of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"endDate\", \"type\": \"date\", \"label\": \"End Date\", \"default\": \"$fiscal_year_end\", \"required\": true, \"description\": \"End of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"polNumberFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"POL Number\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on purchase order line number\", \"placeholder\": \"Filter by POL #\"}, {\"name\": \"titleFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Title\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on title or package name\", \"placeholder\": \"Filter by title\"}, {\"name\": \"poTypeFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"PO Type\", \"default\": \"\", \"required\": false, \"description\": \"Filter by purchase order type\", \"placeholder\": \"e.g. One-Time, Ongoing\"}, {\"name\": \"poStatusFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"PO Status\", \"default\": \"\", \"required\": false, \"description\": \"Filter by purchase order status\", \"placeholder\": \"e.g. Open, Closed\"}, {\"name\": \"materialTypeFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Material Type\", \"default\": \"\", \"required\": false, \"description\": \"Filter by material type name\", \"placeholder\": \"e.g. Book, E-Journal\"}, {\"name\": \"invoiceLineStatusFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Invoice Line Status\", \"default\": \"\", \"required\": false, \"description\": \"Filter by invoice line status\", \"placeholder\": \"e.g. Paid, Approved\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (4,'material-type-totals','Material Type Totals','Shows total paid invoice amounts grouped by material type for a selected acquisitions unit. No date filtering - shows all-time totals.','acquisitions','SELECT\n    COALESCE(mtte.name, mttp.name, \'Unknown\') AS \"Material Type\",\n    ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS \"Total\"\nFROM orders.po_line__t plt\nINNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n    ON plt.purchase_order_id = potaui.id\n    AND potaui.acq_unit_ids = :acqUnitId\nLEFT JOIN orders.purchase_order__t pot ON plt.purchase_order_id = pot.id\nINNER JOIN invoice.invoice_lines__t__fund_distributions iltfd ON plt.id = iltfd.po_line_id\nINNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id\nLEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type\nLEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type\nWHERE iltfd.invoice_line_status = \'Paid\'\nGROUP BY COALESCE(mtte.name, mttp.name, \'Unknown\')\nORDER BY \"Material Type\"','[{\"name\": \"acqUnitId\", \"type\": \"select\", \"label\": \"Acquisitions Unit\", \"default\": \"\", \"required\": true, \"description\": \"Filter by acquisitions unit (institution)\", \"options_sql\": \"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name\", \"placeholder\": \"Select acquisitions unit\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (5,'material-category-by-fiscal-year','Material Category by Fiscal Year','Breaks down acquisitions spending into Electronic, Physical, and Other categories for each fiscal year within a date range. Useful for tracking format spending trends over time.','finance','WITH categorized AS (\n    SELECT\n        CONCAT(\n            CASE WHEN extract(month FROM it.payment_date::date) >= 7 THEN extract(year FROM it.payment_date::date)\n                 ELSE extract(year FROM it.payment_date::date) - 1 END,\n            \'-\',\n            CASE WHEN extract(month FROM it.payment_date::date) >= 7 THEN extract(year FROM it.payment_date::date) + 1\n                 ELSE extract(year FROM it.payment_date::date) END\n        ) AS fiscal_year,\n        COALESCE(mtte.name, mttp.name, \'Unknown\') AS material_type,\n        SUM(iltfd.total * (iltfd.fund_distributions__value * .01)) AS total\n    FROM orders.po_line__t plt\n    INNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n        ON plt.purchase_order_id = potaui.id\n        AND potaui.acq_unit_ids = :acqUnitId\n    LEFT JOIN orders.purchase_order__t pot ON plt.purchase_order_id = pot.id\n    INNER JOIN invoice.invoice_lines__t__fund_distributions iltfd ON plt.id = iltfd.po_line_id\n    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id\n        AND it.payment_date::date BETWEEN :startDate AND :endDate\n    LEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type\n    LEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type\n    WHERE iltfd.invoice_line_status = \'Paid\'\n    GROUP BY fiscal_year, COALESCE(mtte.name, mttp.name, \'Unknown\')\n)\nSELECT\n    fiscal_year AS \"Fiscal Year\",\n    ROUND(SUM(CASE WHEN material_type IN (\'Data File\',\'Database\',\'E-Book\',\'E-Book Package\',\'E-Journal\',\'E-Journal Package\',\'E-Newspaper\',\'Streaming Video\') THEN total ELSE 0 END), 2) AS \"Electronic\",\n    ROUND(SUM(CASE WHEN material_type IN (\'Audio CD\',\'Book\',\'DVD/Blu-ray\',\'Journal\',\'Newspaper\',\'Score\',\'Serial\') THEN total ELSE 0 END), 2) AS \"Physical\",\n    ROUND(SUM(CASE WHEN material_type IN (\'Admin\',\'Unknown\',\'unspecified\') THEN total ELSE 0 END), 2) AS \"Other\",\n    ROUND(SUM(total), 2) AS \"Total\"\nFROM categorized\nGROUP BY fiscal_year\nORDER BY fiscal_year','[{\"name\": \"acqUnitId\", \"type\": \"select\", \"label\": \"Acquisitions Unit\", \"default\": \"\", \"required\": true, \"description\": \"Filter by acquisitions unit (institution)\", \"options_sql\": \"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name\", \"placeholder\": \"Select acquisitions unit\"}, {\"name\": \"startDate\", \"type\": \"date\", \"label\": \"Start Date\", \"default\": \"$90_days_ago\", \"required\": true, \"description\": \"Start of date range for fiscal year calculation\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"endDate\", \"type\": \"date\", \"label\": \"End Date\", \"default\": \"$today\", \"required\": true, \"description\": \"End of date range for fiscal year calculation\", \"placeholder\": \"YYYY-MM-DD\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (6,'fund-allocation','Fund Allocation by Fiscal Year','Shows total allocated budget amounts per fiscal year for a selected fiscal year series.','finance','SELECT\n    fyt.\"name\" AS \"Fiscal Year\",\n    ROUND(SUM(bt.allocated), 2) AS \"Total Allocated\"\nFROM finance.budget__t bt\nINNER JOIN finance.fund__t ft ON bt.fund_id = ft.id\nINNER JOIN finance.fiscal_year__t fyt ON bt.fiscal_year_id = fyt.id\nWHERE fyt.series = :fiscalYearSeries\nGROUP BY fyt.\"name\"\nORDER BY fyt.\"name\"','[{\"name\": \"fiscalYearSeries\", \"type\": \"select\", \"label\": \"Fiscal Year Series\", \"default\": \"\", \"required\": true, \"description\": \"Filter by fiscal year series (e.g. SCFY, ACFY)\", \"options_sql\": \"SELECT DISTINCT series AS value, series AS label FROM finance.fiscal_year__t ORDER BY series\", \"placeholder\": \"Select fiscal year series\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (7,'remaining-invoices','Remaining Invoices (Ongoing Subscriptions)','Lists ongoing subscription purchase orders with unreleased encumbrances, showing invoice details, vendor info, and subscription dates. Useful for tracking outstanding payments.','acquisitions','SELECT DISTINCT\n    plt.po_line_number AS \"POL #\",\n    plt.title_or_package AS \"Title or Package\",\n    ROUND(tt.encumbrance__initial_amount_encumbered, 2) AS \"Initial Encumbrance\",\n    tt.encumbrance__status AS \"Encumbrance Status\",\n    ot.name AS \"Vendor Name\",\n    plt.details__receiving_note AS \"POL Receiving Note\",\n    plt.description AS \"POL Internal Note\",\n    ot.code AS \"Vendor Code\",\n    it.vendor_invoice_no AS \"Vendor Invoice #\",\n    it.invoice_date AS \"Invoice Date\",\n    it.approval_date AS \"Approval Date\",\n    ilt.invoice_line_number AS \"Invoice Line #\",\n    ilt.comment AS \"Invoice Line Comment\",\n    ilt.subscription_info AS \"Subscription Info\",\n    ilt.subscription_start AS \"Subscription Start\",\n    ilt.subscription_end AS \"Subscription End\",\n    plt.order_format AS \"Order Format\",\n    pot.workflow_status AS \"Workflow Status\",\n    pot.ongoing__is_subscription AS \"Is Subscription\"\nFROM orders.purchase_order__t pot\nINNER JOIN orders.po_line__t plt ON pot.id = plt.purchase_order_id\nLEFT JOIN invoice.invoice_lines__t ilt ON ilt.po_line_id = plt.id\nLEFT JOIN invoice.invoice_lines__t__fund_distributions iltfd ON iltfd.po_line_id = plt.id\nLEFT JOIN invoice.invoices__t it ON it.id = ilt.invoice_id\nLEFT JOIN finance.fund__t ft ON ft.id = plt.id\nLEFT JOIN finance.budget__t bt ON bt.fund_id = iltfd.fund_distributions__fund_id\nLEFT JOIN finance.transaction__t tt ON tt.encumbrance__source_po_line_id = plt.id\nLEFT JOIN organizations.organizations__t ot ON pot.vendor = ot.id\nWHERE pot.order_type = \'Ongoing\'\n  AND pot.ongoing__is_subscription = \'true\'\n  AND pot.po_number_prefix = :poPrefix\n  AND tt.encumbrance__status = \'Unreleased\'\n  AND pot.workflow_status <> \'Closed\'\n  AND it.status <> \'Cancelled\'\n  AND plt.po_line_number LIKE :polNumberFilter\n  AND plt.title_or_package LIKE :titleFilter\n  AND ot.name LIKE :vendorFilter\nGROUP BY plt.po_line_number, plt.title_or_package, ft.code, bt.name, ilt.total,\n    tt.encumbrance__initial_amount_encumbered, tt.encumbrance__status,\n    ot.name, plt.details__receiving_note, plt.description, ot.code,\n    it.vendor_invoice_no, it.invoice_date, it.approval_date,\n    ilt.invoice_line_number, ilt.comment, ilt.subscription_info,\n    ilt.subscription_start, ilt.subscription_end,\n    plt.order_format, plt.id, pot.workflow_status, pot.ongoing__is_subscription\nORDER BY plt.po_line_number ASC, ot.name ASC','[{\"name\": \"poPrefix\", \"type\": \"select\", \"label\": \"PO Number Prefix\", \"default\": \"\", \"required\": true, \"description\": \"Filter by purchase order number prefix (institution code)\", \"options_sql\": \"SELECT DISTINCT po_number_prefix AS value, po_number_prefix AS label FROM orders.purchase_order__t WHERE po_number_prefix IS NOT NULL AND po_number_prefix <> \'\' ORDER BY po_number_prefix\", \"placeholder\": \"Select PO prefix\"}, {\"name\": \"polNumberFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"POL Number\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on purchase order line number\", \"placeholder\": \"Filter by POL #\"}, {\"name\": \"titleFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Title\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on title or package name\", \"placeholder\": \"Filter by title\"}, {\"name\": \"vendorFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Vendor Name\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on vendor/organization name\", \"placeholder\": \"Filter by vendor\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (8,'item-count-by-library','Item Count by Library','Counts items grouped by library name, filtered by item status. Select a library or leave blank to see all.','inventory','SELECT\n    lt.name AS \"Library\",\n    COUNT(it.id) AS \"Item Count\"\nFROM inventory.item__t it\nLEFT JOIN inventory.location__t llt ON it.effective_location_id = llt.id\nLEFT JOIN inventory.loclibrary__t lt ON llt.library_id = lt.id\nWHERE lt.name LIKE :libraryName\n  AND it.status__name LIKE :itemStatus\nGROUP BY lt.name\nORDER BY lt.name','[{\"name\": \"libraryName\", \"type\": \"select\", \"wrap\": \"like\", \"label\": \"Library\", \"default\": \"\", \"required\": false, \"description\": \"Filter by library name\", \"options_sql\": \"SELECT DISTINCT name AS value, name AS label FROM inventory.loclibrary__t ORDER BY name\", \"placeholder\": \"All libraries\"}, {\"name\": \"itemStatus\", \"type\": \"select\", \"wrap\": \"like\", \"label\": \"Item Status\", \"default\": \"\", \"required\": false, \"description\": \"Filter by item status\", \"options_sql\": \"SELECT DISTINCT status__name AS value, status__name AS label FROM inventory.item__t WHERE status__name IS NOT NULL ORDER BY status__name\", \"placeholder\": \"All statuses\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (9,'item-count-by-location','Item Count by Location','Counts items grouped by effective location, filtered by item status. Select a library to narrow locations.','inventory','SELECT\n    llt.name AS \"Location\",\n    COUNT(DISTINCT it.id) AS \"Item Count\"\nFROM inventory.item__t it\nLEFT JOIN inventory.location__t llt ON it.effective_location_id = llt.id\nLEFT JOIN inventory.loclibrary__t lt ON llt.library_id = lt.id\nWHERE lt.name LIKE :libraryName\n  AND it.status__name LIKE :itemStatus\nGROUP BY llt.name\nORDER BY llt.name','[{\"name\": \"libraryName\", \"type\": \"select\", \"wrap\": \"like\", \"label\": \"Library\", \"default\": \"\", \"required\": false, \"description\": \"Filter locations by their parent library\", \"options_sql\": \"SELECT DISTINCT name AS value, name AS label FROM inventory.loclibrary__t ORDER BY name\", \"placeholder\": \"All libraries\"}, {\"name\": \"itemStatus\", \"type\": \"select\", \"wrap\": \"like\", \"label\": \"Item Status\", \"default\": \"\", \"required\": false, \"description\": \"Filter by item status\", \"options_sql\": \"SELECT DISTINCT status__name AS value, status__name AS label FROM inventory.item__t WHERE status__name IS NOT NULL ORDER BY status__name\", \"placeholder\": \"All statuses\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:43:40');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (10,'item-count-by-material-and-campus','Item Count by Material Type and Campus','Counts items grouped by material type and campus. Select a campus or filter by material type.','inventory','SELECT\n    mtt.name AS \"Material Type\",\n    lct.name AS \"Campus\",\n    COUNT(it.id) AS \"Item Count\"\nFROM inventory.item__t it\nLEFT JOIN inventory.material_type__t mtt ON it.material_type_id = mtt.id\nLEFT JOIN inventory.location__t llt ON it.effective_location_id = llt.id\nLEFT JOIN inventory.\"loc-campus__t\" lct ON llt.campus_id = lct.id\nWHERE mtt.name LIKE :materialType\n  AND lct.name LIKE :campusName\nGROUP BY mtt.name, lct.name\nORDER BY mtt.name','[{\"name\": \"materialType\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Material Type\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on material type name\", \"placeholder\": \"Filter by material type\"}, {\"name\": \"campusName\", \"type\": \"select\", \"wrap\": \"like\", \"label\": \"Campus\", \"default\": \"\", \"required\": false, \"description\": \"Filter by campus name\", \"options_sql\": \"SELECT DISTINCT name AS value, name AS label FROM inventory.\\\"loc-campus__t\\\" ORDER BY name\", \"placeholder\": \"All campuses\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:44:10');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (11,'pol-report','Purchase Order Line Report','Detailed purchase order line report showing POL number, title, expense class, format, material type, PO status/type, and total paid amount within the selected date range.','acquisitions','SELECT\n    plt.po_line_number AS \"POL #\",\n    plt.title_or_package AS \"Title or Package\",\n    COALESCE(inv.expense, \'N/A\') AS \"Expense Class Name\",\n    plt.order_format AS \"POL format\",\n    COALESCE(mtte.\"name\", mttp.\"name\", \'\') AS \"Material Type\",\n    potaui.workflow_status AS \"PO Status\",\n    potaui.order_type AS \"PO Type\",\n    inv.invoice_date AS \"Invoice Date\",\n    ROUND(SUM(inv.payment), 2) AS \"Total Paid\"\nFROM orders.po_line__t plt\nINNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)\nINNER JOIN (\n    SELECT ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS payment,\n           po_line_id, ftaui.\"name\" AS fund,\n           COALESCE(ect.name, \'N/A\') AS expense,\n           it.payment_date, it.invoice_date\n    FROM invoice.invoice_lines__t__fund_distributions iltfd\n    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id\n        AND it.payment_date::date BETWEEN :startDate AND :endDate\n    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id\n    LEFT JOIN finance.expense_class__t ect ON iltfd.fund_distributions__expense_class_id = ect.id\n    WHERE iltfd.invoice_line_status = \'Paid\'\n    GROUP BY po_line_id, ftaui.\"name\", ect.name, it.payment_date, it.invoice_date\n) AS inv ON plt.id = inv.po_line_id\nLEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type\nLEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type\nWHERE plt.po_line_number LIKE :polNumberFilter\n  AND plt.title_or_package LIKE :titleFilter\n  AND COALESCE(inv.expense, \'N/A\') LIKE :expenseClassFilter\n  AND plt.order_format LIKE :polFormatFilter\n  AND (mtte.\"name\" LIKE :materialTypeFilter OR mttp.\"name\" LIKE :materialTypeFilter)\n  AND potaui.workflow_status LIKE :poStatusFilter\n  AND potaui.order_type LIKE :poTypeFilter\nGROUP BY plt.po_line_number, plt.title_or_package, inv.expense, plt.order_format,\n         mtte.\"name\", mttp.\"name\", potaui.workflow_status, potaui.order_type, inv.invoice_date\nORDER BY plt.po_line_number ASC','[{\"name\": \"acqUnitId\", \"type\": \"select\", \"label\": \"Acquisitions Unit\", \"default\": \"\", \"required\": true, \"description\": \"Filter by acquisitions unit (institution)\", \"options_sql\": \"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name\", \"placeholder\": \"Select acquisitions unit\"}, {\"name\": \"startDate\", \"type\": \"date\", \"label\": \"Start Date\", \"default\": \"$fiscal_year_start\", \"required\": true, \"description\": \"Beginning of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"endDate\", \"type\": \"date\", \"label\": \"End Date\", \"default\": \"$fiscal_year_end\", \"required\": true, \"description\": \"End of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"polNumberFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"POL Number\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on POL number\", \"placeholder\": \"Filter by POL #\"}, {\"name\": \"titleFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Title\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on title or package name\", \"placeholder\": \"Filter by title\"}, {\"name\": \"expenseClassFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Expense Class\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on expense class name\", \"placeholder\": \"Filter by expense class\"}, {\"name\": \"polFormatFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"POL Format\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on order format\", \"placeholder\": \"e.g. Physical Resource\"}, {\"name\": \"materialTypeFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Material Type\", \"default\": \"\", \"required\": false, \"description\": \"Partial match on material type\", \"placeholder\": \"e.g. Book, E-Journal\"}, {\"name\": \"poStatusFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"PO Status\", \"default\": \"\", \"required\": false, \"description\": \"Filter by purchase order workflow status\", \"placeholder\": \"e.g. Open, Closed\"}, {\"name\": \"poTypeFilter\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"PO Type\", \"default\": \"\", \"required\": false, \"description\": \"Filter by purchase order type\", \"placeholder\": \"e.g. One-Time, Ongoing\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:44:10');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (12,'expense-class-report','Expense Class Report','Shows total paid amounts grouped by expense class and material type within a date range. Useful for analyzing spending by expense classification.','finance','SELECT\n    COALESCE(inv.expense, \'N/A\') AS \"Expense Class Name\",\n    COALESCE(mtte.\"name\", mttp.\"name\", \'\') AS \"Material Type\",\n    ROUND(SUM(inv.payment), 2) AS \"Total Paid\"\nFROM orders.po_line__t plt\nINNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)\nINNER JOIN (\n    SELECT SUM(iltfd.total * (iltfd.fund_distributions__value * 0.01)) AS payment,\n           po_line_id, ftaui.\"name\" AS fund,\n           COALESCE(ect.name, \'N/A\') AS expense,\n           it.payment_date\n    FROM invoice.invoice_lines__t__fund_distributions iltfd\n    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id\n        AND it.payment_date::date BETWEEN :startDate AND :endDate\n    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id\n    LEFT JOIN finance.expense_class__t ect ON iltfd.fund_distributions__expense_class_id = ect.id\n    WHERE iltfd.invoice_line_status = \'Paid\'\n    GROUP BY po_line_id, ftaui.\"name\", ect.name, it.payment_date\n) AS inv ON plt.id = inv.po_line_id\nLEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type\nLEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type\nGROUP BY inv.expense, COALESCE(mtte.\"name\", mttp.\"name\", \'\')\nORDER BY \"Expense Class Name\", \"Material Type\"','[{\"name\": \"acqUnitId\", \"type\": \"select\", \"label\": \"Acquisitions Unit\", \"default\": \"\", \"required\": true, \"description\": \"Filter by acquisitions unit (institution)\", \"options_sql\": \"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name\", \"placeholder\": \"Select acquisitions unit\"}, {\"name\": \"startDate\", \"type\": \"date\", \"label\": \"Start Date\", \"default\": \"$fiscal_year_start\", \"required\": true, \"description\": \"Beginning of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"endDate\", \"type\": \"date\", \"label\": \"End Date\", \"default\": \"$fiscal_year_end\", \"required\": true, \"description\": \"End of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}]',10000,1,'manual','2026-02-17 21:14:55','2026-02-17 21:44:10');
+REPLACE INTO `report_templates` (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`, `default_limit`, `is_active`, `created_by`, `created_at`, `updated_at`) VALUES (33,'budget-year-pivot-report','Budget Year Pivot Report','Provides a pivot view of budget expenditures and encumbrances by expense class for a selected fiscal period, distinguishing between physical books and e-books. This report filters for specific acquisition units and funds, and expense classes starting with \'SC\'.','finance','WITH fiscal_years AS (\n    SELECT id\n    FROM finance.fiscal_year__t\n    WHERE series = :fiscalYearSeries\n      AND period_start::date <= :endDate::date\n      AND period_end::date >= :startDate::date\n),\npayments AS (\n    SELECT\n        iltfd.fund_distributions__expense_class_id AS expense_class_id,\n        iltfd.fund_distributions__fund_id AS fund_id,\n        ft.code AS fund_code,\n        ft.name AS fund_name,\n        ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * 0.01)), 2) AS payment,\n        plt.eresource__material_type,\n        plt.physical__material_type\n    FROM invoice.invoice_lines__t__fund_distributions iltfd\n    INNER JOIN invoice.invoices__t it\n        ON it.id = iltfd.invoice_id\n        AND it.payment_date::date BETWEEN :startDate AND :endDate\n    INNER JOIN orders.po_line__t plt ON iltfd.po_line_id = plt.id\n    INNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n        ON plt.purchase_order_id = potaui.id\n        AND potaui.acq_unit_ids = :acqUnitId\n    INNER JOIN finance.fund__t ft ON ft.id = iltfd.fund_distributions__fund_id\n    WHERE iltfd.invoice_line_status = \'Paid\'\n      AND iltfd.fund_distributions__fund_id IN (:fundIds)\n    GROUP BY iltfd.fund_distributions__expense_class_id,\n             iltfd.fund_distributions__fund_id,\n             ft.code, ft.name,\n             plt.eresource__material_type,\n             plt.physical__material_type\n),\nencumbrances AS (\n    SELECT\n        tt.expense_class_id,\n        tt.from_fund_id AS fund_id,\n        ft.code AS fund_code,\n        ft.name AS fund_name,\n        ROUND(SUM(tt.encumbrance__initial_amount_encumbered\n                  - tt.encumbrance__amount_expended\n                  - tt.encumbrance__amount_awaiting_payment), 2) AS current_encumbrance,\n        plt.eresource__material_type,\n        plt.physical__material_type\n    FROM finance.transaction__t tt\n    INNER JOIN orders.po_line__t plt ON tt.encumbrance__source_po_line_id = plt.id\n    INNER JOIN orders.purchase_order__t__acq_unit_ids potaui\n        ON plt.purchase_order_id = potaui.id\n        AND potaui.acq_unit_ids = :acqUnitId\n    INNER JOIN finance.fund__t ft ON ft.id = tt.from_fund_id\n    WHERE tt.transaction_type = \'Encumbrance\'\n      AND tt.encumbrance__status IN (\'Unreleased\', \'Active\')\n      AND tt.fiscal_year_id IN (SELECT id FROM fiscal_years)\n      AND tt.from_fund_id IN (:fundIds)\n    GROUP BY tt.expense_class_id, tt.from_fund_id,\n             ft.code, ft.name,\n             plt.eresource__material_type, plt.physical__material_type\n)\nSELECT\n    ect.name AS \"Expense Class\",\n    ect.code AS \"Expense Code\",\n    COALESCE(p.fund_code, e.fund_code) AS \"Fund Code\",\n    COALESCE(p.fund_name, e.fund_name) AS \"Fund Name\",\n    COALESCE(mtte.name, mttp.name, \'Unknown\') AS \"Material Type\",\n    COALESCE(p.payment, 0) AS \"Payments\",\n    COALESCE(e.current_encumbrance, 0) AS \"Encumbrances\",\n    COALESCE(p.payment, 0) + COALESCE(e.current_encumbrance, 0) AS \"Total Spent\"\nFROM finance.expense_class__t ect\nLEFT JOIN payments p ON p.expense_class_id = ect.id\nLEFT JOIN encumbrances e ON e.expense_class_id = ect.id\n    AND COALESCE(e.fund_id, \'\') = COALESCE(p.fund_id, \'\')\n    AND COALESCE(e.eresource__material_type, \'\') = COALESCE(p.eresource__material_type, \'\')\n    AND COALESCE(e.physical__material_type, \'\') = COALESCE(p.physical__material_type, \'\')\nLEFT JOIN inventory.material_type__t mtte ON mtte.id = COALESCE(p.eresource__material_type, e.eresource__material_type)\nLEFT JOIN inventory.material_type__t mttp ON mttp.id = COALESCE(p.physical__material_type, e.physical__material_type)\nWHERE ect.name LIKE :expenseClassName\n  AND (p.expense_class_id IS NOT NULL OR e.expense_class_id IS NOT NULL)\nORDER BY ect.name, COALESCE(p.fund_code, e.fund_code), \"Material Type\"','[{\"name\": \"acqUnitId\", \"type\": \"select\", \"label\": \"Acquisitions Unit\", \"default\": \"\", \"required\": true, \"description\": \"Filter by acquisitions unit\", \"options_sql\": \"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name\", \"placeholder\": \"Select acquisitions unit\"}, {\"name\": \"fiscalYearSeries\", \"type\": \"select\", \"label\": \"Fiscal Year Series\", \"default\": \"\", \"required\": true, \"description\": \"Fiscal year series code for encumbrance lookup\", \"options_sql\": \"SELECT DISTINCT series AS value, series AS label FROM finance.fiscal_year__t WHERE series IS NOT NULL ORDER BY series\", \"placeholder\": \"Select fiscal year series\"}, {\"name\": \"fundIds\", \"type\": \"list\", \"label\": \"Fund IDs\", \"default\": \"\", \"required\": true, \"description\": \"Fund IDs to include (one per line). Find IDs via Finance > Funds in FOLIO.\", \"placeholder\": \"One fund ID per line\"}, {\"name\": \"startDate\", \"type\": \"date\", \"label\": \"Start Date\", \"default\": \"\", \"required\": true, \"description\": \"Beginning of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"endDate\", \"type\": \"date\", \"label\": \"End Date\", \"default\": \"\", \"required\": true, \"description\": \"End of fiscal period\", \"placeholder\": \"YYYY-MM-DD\"}, {\"name\": \"expenseClassName\", \"type\": \"text\", \"wrap\": \"like\", \"label\": \"Expense Class Filter\", \"default\": \"\", \"required\": false, \"description\": \"Filter expense classes by name (partial match)\", \"placeholder\": \"e.g. SC\"}]',10000,1,'ai','2026-02-18 14:29:30','2026-02-18 14:34:18');
+/*!40000 ALTER TABLE `report_templates` ENABLE KEYS */;
+UNLOCK TABLES;
+/*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
--- 4. Material Category by Fiscal Year
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('material-category-by-fiscal-year',
- 'Material Category by Fiscal Year',
- 'Breaks down acquisitions spending into Electronic, Physical, and Other categories for each fiscal year within a date range. Useful for tracking format spending trends over time.',
- 'finance',
- 'WITH categorized AS (
-    SELECT
-        CONCAT(
-            CASE WHEN extract(month FROM it.payment_date::date) >= 7 THEN extract(year FROM it.payment_date::date)
-                 ELSE extract(year FROM it.payment_date::date) - 1 END,
-            ''-'',
-            CASE WHEN extract(month FROM it.payment_date::date) >= 7 THEN extract(year FROM it.payment_date::date) + 1
-                 ELSE extract(year FROM it.payment_date::date) END
-        ) AS fiscal_year,
-        COALESCE(mtte.name, mttp.name, ''Unknown'') AS material_type,
-        SUM(iltfd.total * (iltfd.fund_distributions__value * .01)) AS total
-    FROM orders.po_line__t plt
-    INNER JOIN orders.purchase_order__t__acq_unit_ids potaui
-        ON plt.purchase_order_id = potaui.id
-        AND potaui.acq_unit_ids = :acqUnitId
-    LEFT JOIN orders.purchase_order__t pot ON plt.purchase_order_id = pot.id
-    INNER JOIN invoice.invoice_lines__t__fund_distributions iltfd ON plt.id = iltfd.po_line_id
-    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id
-        AND it.payment_date::date BETWEEN :startDate AND :endDate
-    LEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type
-    LEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type
-    WHERE iltfd.invoice_line_status = ''Paid''
-    GROUP BY fiscal_year, COALESCE(mtte.name, mttp.name, ''Unknown'')
-)
-SELECT
-    fiscal_year AS "Fiscal Year",
-    ROUND(SUM(CASE WHEN material_type IN (''Data File'',''Database'',''E-Book'',''E-Book Package'',''E-Journal'',''E-Journal Package'',''E-Newspaper'',''Streaming Video'') THEN total ELSE 0 END), 2) AS "Electronic",
-    ROUND(SUM(CASE WHEN material_type IN (''Audio CD'',''Book'',''DVD/Blu-ray'',''Journal'',''Newspaper'',''Score'',''Serial'') THEN total ELSE 0 END), 2) AS "Physical",
-    ROUND(SUM(CASE WHEN material_type IN (''Admin'',''Unknown'',''unspecified'') THEN total ELSE 0 END), 2) AS "Other",
-    ROUND(SUM(total), 2) AS "Total"
-FROM categorized
-GROUP BY fiscal_year
-ORDER BY fiscal_year',
- '[{"name":"acqUnitId","type":"select","label":"Acquisitions Unit","required":true,"default":"","placeholder":"Select acquisitions unit","description":"Filter by acquisitions unit (institution)","options_sql":"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name"},{"name":"startDate","type":"date","label":"Start Date","required":true,"default":"$90_days_ago","placeholder":"YYYY-MM-DD","description":"Start of date range for fiscal year calculation"},{"name":"endDate","type":"date","label":"End Date","required":true,"default":"$today","placeholder":"YYYY-MM-DD","description":"End of date range for fiscal year calculation"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
+/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;
+/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;
+/*!40014 SET UNIQUE_CHECKS=@OLD_UNIQUE_CHECKS */;
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
+/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- 5. Fund Allocation by Fiscal Year
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('fund-allocation',
- 'Fund Allocation by Fiscal Year',
- 'Shows total allocated budget amounts per fiscal year for a selected fiscal year series.',
- 'finance',
- 'SELECT
-    fyt."name" AS "Fiscal Year",
-    ROUND(SUM(bt.allocated), 2) AS "Total Allocated"
-FROM finance.budget__t bt
-INNER JOIN finance.fund__t ft ON bt.fund_id = ft.id
-INNER JOIN finance.fiscal_year__t fyt ON bt.fiscal_year_id = fyt.id
-WHERE fyt.series = :fiscalYearSeries
-GROUP BY fyt."name"
-ORDER BY fyt."name"',
- '[{"name":"fiscalYearSeries","type":"select","label":"Fiscal Year Series","required":true,"default":"","placeholder":"Select fiscal year series","description":"Filter by fiscal year series (e.g. SCFY, ACFY)","options_sql":"SELECT DISTINCT series AS value, series AS label FROM finance.fiscal_year__t ORDER BY series"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
-
--- 6. Remaining Invoices (Ongoing Subscriptions)
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('remaining-invoices',
- 'Remaining Invoices (Ongoing Subscriptions)',
- 'Lists ongoing subscription purchase orders with unreleased encumbrances, showing invoice details, vendor info, and subscription dates. Useful for tracking outstanding payments.',
- 'acquisitions',
- 'SELECT DISTINCT
-    plt.po_line_number AS "POL #",
-    plt.title_or_package AS "Title or Package",
-    ROUND(tt.encumbrance__initial_amount_encumbered, 2) AS "Initial Encumbrance",
-    tt.encumbrance__status AS "Encumbrance Status",
-    ot.name AS "Vendor Name",
-    plt.details__receiving_note AS "POL Receiving Note",
-    plt.description AS "POL Internal Note",
-    ot.code AS "Vendor Code",
-    it.vendor_invoice_no AS "Vendor Invoice #",
-    it.invoice_date AS "Invoice Date",
-    it.approval_date AS "Approval Date",
-    ilt.invoice_line_number AS "Invoice Line #",
-    ilt.comment AS "Invoice Line Comment",
-    ilt.subscription_info AS "Subscription Info",
-    ilt.subscription_start AS "Subscription Start",
-    ilt.subscription_end AS "Subscription End",
-    plt.order_format AS "Order Format",
-    pot.workflow_status AS "Workflow Status",
-    pot.ongoing__is_subscription AS "Is Subscription"
-FROM orders.purchase_order__t pot
-INNER JOIN orders.po_line__t plt ON pot.id = plt.purchase_order_id
-LEFT JOIN invoice.invoice_lines__t ilt ON ilt.po_line_id = plt.id
-LEFT JOIN invoice.invoice_lines__t__fund_distributions iltfd ON iltfd.po_line_id = plt.id
-LEFT JOIN invoice.invoices__t it ON it.id = ilt.invoice_id
-LEFT JOIN finance.fund__t ft ON ft.id = plt.id
-LEFT JOIN finance.budget__t bt ON bt.fund_id = iltfd.fund_distributions__fund_id
-LEFT JOIN finance.transaction__t tt ON tt.encumbrance__source_po_line_id = plt.id
-LEFT JOIN organizations.organizations__t ot ON pot.vendor = ot.id
-WHERE pot.order_type = ''Ongoing''
-  AND pot.ongoing__is_subscription = ''true''
-  AND pot.po_number_prefix = :poPrefix
-  AND tt.encumbrance__status = ''Unreleased''
-  AND pot.workflow_status <> ''Closed''
-  AND it.status <> ''Cancelled''
-  AND plt.po_line_number LIKE :polNumberFilter
-  AND plt.title_or_package LIKE :titleFilter
-  AND ot.name LIKE :vendorFilter
-GROUP BY plt.po_line_number, plt.title_or_package, ft.code, bt.name, ilt.total,
-    tt.encumbrance__initial_amount_encumbered, tt.encumbrance__status,
-    ot.name, plt.details__receiving_note, plt.description, ot.code,
-    it.vendor_invoice_no, it.invoice_date, it.approval_date,
-    ilt.invoice_line_number, ilt.comment, ilt.subscription_info,
-    ilt.subscription_start, ilt.subscription_end,
-    plt.order_format, plt.id, pot.workflow_status, pot.ongoing__is_subscription
-ORDER BY plt.po_line_number ASC, ot.name ASC',
- '[{"name":"poPrefix","type":"select","label":"PO Number Prefix","required":true,"default":"","placeholder":"Select PO prefix","description":"Filter by purchase order number prefix (institution code)","options_sql":"SELECT DISTINCT po_number_prefix AS value, po_number_prefix AS label FROM orders.purchase_order__t WHERE po_number_prefix IS NOT NULL AND po_number_prefix <> '''' ORDER BY po_number_prefix"},{"name":"polNumberFilter","type":"text","label":"POL Number","required":false,"default":"","placeholder":"Filter by POL #","description":"Partial match on purchase order line number","wrap":"like"},{"name":"titleFilter","type":"text","label":"Title","required":false,"default":"","placeholder":"Filter by title","description":"Partial match on title or package name","wrap":"like"},{"name":"vendorFilter","type":"text","label":"Vendor Name","required":false,"default":"","placeholder":"Filter by vendor","description":"Partial match on vendor/organization name","wrap":"like"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
-
--- 7. Item Count by Library
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('item-count-by-library',
- 'Item Count by Library',
- 'Counts items grouped by library name, filtered by item status. Select a library or leave blank to see all.',
- 'inventory',
- 'SELECT
-    lt.name AS "Library",
-    COUNT(it.id) AS "Item Count"
-FROM inventory.item__t it
-LEFT JOIN inventory.location__t llt ON it.effective_location_id = llt.id
-LEFT JOIN inventory.loclibrary__t lt ON llt.library_id = lt.id
-WHERE lt.name LIKE :libraryName
-  AND it.status__name LIKE :itemStatus
-GROUP BY lt.name
-ORDER BY lt.name',
- '[{"name":"libraryName","type":"select","label":"Library","required":false,"default":"","placeholder":"All libraries","description":"Filter by library name","wrap":"like","options_sql":"SELECT DISTINCT name AS value, name AS label FROM inventory.loclibrary__t ORDER BY name"},{"name":"itemStatus","type":"select","label":"Item Status","required":false,"default":"","placeholder":"All statuses","description":"Filter by item status","wrap":"like","options_sql":"SELECT DISTINCT status__name AS value, status__name AS label FROM inventory.item__t WHERE status__name IS NOT NULL ORDER BY status__name"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
-
--- 8. Item Count by Location
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('item-count-by-location',
- 'Item Count by Location',
- 'Counts items grouped by effective location, filtered by item status. Select a library to narrow locations.',
- 'inventory',
- 'SELECT
-    llt.name AS "Location",
-    COUNT(DISTINCT it.id) AS "Item Count"
-FROM inventory.item__t it
-LEFT JOIN inventory.location__t llt ON it.effective_location_id = llt.id
-LEFT JOIN inventory.loclibrary__t lt ON llt.library_id = lt.id
-WHERE lt.name LIKE :libraryName
-  AND it.status__name LIKE :itemStatus
-GROUP BY llt.name
-ORDER BY llt.name',
- '[{"name":"libraryName","type":"select","label":"Library","required":false,"default":"","placeholder":"All libraries","description":"Filter locations by their parent library","wrap":"like","options_sql":"SELECT DISTINCT name AS value, name AS label FROM inventory.loclibrary__t ORDER BY name"},{"name":"itemStatus","type":"select","label":"Item Status","required":false,"default":"","placeholder":"All statuses","description":"Filter by item status","wrap":"like","options_sql":"SELECT DISTINCT status__name AS value, status__name AS label FROM inventory.item__t WHERE status__name IS NOT NULL ORDER BY status__name"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
-
--- 9. Item Count by Material Type and Campus
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('item-count-by-material-and-campus',
- 'Item Count by Material Type and Campus',
- 'Counts items grouped by material type and campus. Select a campus or filter by material type.',
- 'inventory',
- 'SELECT
-    mtt.name AS "Material Type",
-    lct.name AS "Campus",
-    COUNT(it.id) AS "Item Count"
-FROM inventory.item__t it
-LEFT JOIN inventory.material_type__t mtt ON it.material_type_id = mtt.id
-LEFT JOIN inventory.location__t llt ON it.effective_location_id = llt.id
-LEFT JOIN inventory."loc-campus__t" lct ON llt.campus_id = lct.id
-WHERE mtt.name LIKE :materialType
-  AND lct.name LIKE :campusName
-GROUP BY mtt.name, lct.name
-ORDER BY mtt.name',
- '[{"name":"materialType","type":"text","label":"Material Type","required":false,"default":"","placeholder":"Filter by material type","description":"Partial match on material type name","wrap":"like"},{"name":"campusName","type":"select","label":"Campus","required":false,"default":"","placeholder":"All campuses","description":"Filter by campus name","wrap":"like","options_sql":"SELECT DISTINCT name AS value, name AS label FROM inventory.\\\"loc-campus__t\\\" ORDER BY name"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
-
--- 10. POL Report
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('pol-report',
- 'Purchase Order Line Report',
- 'Detailed purchase order line report showing POL number, title, expense class, format, material type, PO status/type, and total paid amount within the selected date range.',
- 'acquisitions',
- 'SELECT
-    plt.po_line_number AS "POL #",
-    plt.title_or_package AS "Title or Package",
-    COALESCE(inv.expense, ''N/A'') AS "Expense Class Name",
-    plt.order_format AS "POL format",
-    COALESCE(mtte."name", mttp."name", '''') AS "Material Type",
-    potaui.workflow_status AS "PO Status",
-    potaui.order_type AS "PO Type",
-    inv.invoice_date AS "Invoice Date",
-    ROUND(SUM(inv.payment), 2) AS "Total Paid"
-FROM orders.po_line__t plt
-INNER JOIN orders.purchase_order__t__acq_unit_ids potaui
-    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)
-INNER JOIN (
-    SELECT ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS payment,
-           po_line_id, ftaui."name" AS fund,
-           COALESCE(ect.name, ''N/A'') AS expense,
-           it.payment_date, it.invoice_date
-    FROM invoice.invoice_lines__t__fund_distributions iltfd
-    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id
-        AND it.payment_date::date BETWEEN :startDate AND :endDate
-    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id
-    LEFT JOIN finance.expense_class__t ect ON iltfd.fund_distributions__expense_class_id = ect.id
-    WHERE iltfd.invoice_line_status = ''Paid''
-    GROUP BY po_line_id, ftaui."name", ect.name, it.payment_date, it.invoice_date
-) AS inv ON plt.id = inv.po_line_id
-LEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type
-LEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type
-WHERE plt.po_line_number LIKE :polNumberFilter
-  AND plt.title_or_package LIKE :titleFilter
-  AND COALESCE(inv.expense, ''N/A'') LIKE :expenseClassFilter
-  AND plt.order_format LIKE :polFormatFilter
-  AND (mtte."name" LIKE :materialTypeFilter OR mttp."name" LIKE :materialTypeFilter)
-  AND potaui.workflow_status LIKE :poStatusFilter
-  AND potaui.order_type LIKE :poTypeFilter
-GROUP BY plt.po_line_number, plt.title_or_package, inv.expense, plt.order_format,
-         mtte."name", mttp."name", potaui.workflow_status, potaui.order_type, inv.invoice_date
-ORDER BY plt.po_line_number ASC',
- '[{"name":"acqUnitId","type":"select","label":"Acquisitions Unit","required":true,"default":"","placeholder":"Select acquisitions unit","description":"Filter by acquisitions unit (institution)","options_sql":"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name"},{"name":"startDate","type":"date","label":"Start Date","required":true,"default":"$fiscal_year_start","placeholder":"YYYY-MM-DD","description":"Beginning of fiscal period"},{"name":"endDate","type":"date","label":"End Date","required":true,"default":"$fiscal_year_end","placeholder":"YYYY-MM-DD","description":"End of fiscal period"},{"name":"polNumberFilter","type":"text","label":"POL Number","required":false,"default":"","placeholder":"Filter by POL #","description":"Partial match on POL number","wrap":"like"},{"name":"titleFilter","type":"text","label":"Title","required":false,"default":"","placeholder":"Filter by title","description":"Partial match on title or package name","wrap":"like"},{"name":"expenseClassFilter","type":"text","label":"Expense Class","required":false,"default":"","placeholder":"Filter by expense class","description":"Partial match on expense class name","wrap":"like"},{"name":"polFormatFilter","type":"text","label":"POL Format","required":false,"default":"","placeholder":"e.g. Physical Resource","description":"Partial match on order format","wrap":"like"},{"name":"materialTypeFilter","type":"text","label":"Material Type","required":false,"default":"","placeholder":"e.g. Book, E-Journal","description":"Partial match on material type","wrap":"like"},{"name":"poStatusFilter","type":"text","label":"PO Status","required":false,"default":"","placeholder":"e.g. Open, Closed","description":"Filter by purchase order workflow status","wrap":"like"},{"name":"poTypeFilter","type":"text","label":"PO Type","required":false,"default":"","placeholder":"e.g. One-Time, Ongoing","description":"Filter by purchase order type","wrap":"like"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
-
--- 11. Expense Class Report
-INSERT INTO report_templates (slug, name, description, category, sql_template, parameters, default_limit, created_by) VALUES
-('expense-class-report',
- 'Expense Class Report',
- 'Shows total paid amounts grouped by expense class and material type within a date range. Useful for analyzing spending by expense classification.',
- 'finance',
- 'SELECT
-    COALESCE(inv.expense, ''N/A'') AS "Expense Class Name",
-    COALESCE(mtte."name", mttp."name", '''') AS "Material Type",
-    ROUND(SUM(inv.payment), 2) AS "Total Paid"
-FROM orders.po_line__t plt
-INNER JOIN orders.purchase_order__t__acq_unit_ids potaui
-    ON (plt.purchase_order_id = potaui.id AND potaui.acq_unit_ids = :acqUnitId)
-INNER JOIN (
-    SELECT SUM(iltfd.total * (iltfd.fund_distributions__value * 0.01)) AS payment,
-           po_line_id, ftaui."name" AS fund,
-           COALESCE(ect.name, ''N/A'') AS expense,
-           it.payment_date
-    FROM invoice.invoice_lines__t__fund_distributions iltfd
-    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id
-        AND it.payment_date::date BETWEEN :startDate AND :endDate
-    LEFT JOIN finance.fund__t__acq_unit_ids ftaui ON iltfd.fund_distributions__fund_id = ftaui.id
-    LEFT JOIN finance.expense_class__t ect ON iltfd.fund_distributions__expense_class_id = ect.id
-    WHERE iltfd.invoice_line_status = ''Paid''
-    GROUP BY po_line_id, ftaui."name", ect.name, it.payment_date
-) AS inv ON plt.id = inv.po_line_id
-LEFT JOIN inventory.material_type__t mtte ON mtte.id = plt.eresource__material_type
-LEFT JOIN inventory.material_type__t mttp ON mttp.id = plt.physical__material_type
-GROUP BY inv.expense, COALESCE(mtte."name", mttp."name", '''')
-ORDER BY "Expense Class Name", "Material Type"',
- '[{"name":"acqUnitId","type":"select","label":"Acquisitions Unit","required":true,"default":"","placeholder":"Select acquisitions unit","description":"Filter by acquisitions unit (institution)","options_sql":"SELECT id AS value, name AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY name"},{"name":"startDate","type":"date","label":"Start Date","required":true,"default":"$fiscal_year_start","placeholder":"YYYY-MM-DD","description":"Beginning of fiscal period"},{"name":"endDate","type":"date","label":"End Date","required":true,"default":"$fiscal_year_end","placeholder":"YYYY-MM-DD","description":"End of fiscal period"}]',
- 10000, 'manual')
-ON DUPLICATE KEY UPDATE name=VALUES(name), description=VALUES(description), sql_template=VALUES(sql_template), parameters=VALUES(parameters);
+-- Dump completed on 2026-02-25 19:02:52

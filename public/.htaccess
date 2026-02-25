@@ -1,12 +1,16 @@
+Options +FollowSymLinks
 RewriteEngine On
 
-# If the request is for the API, forward to the backend entry point
+# ── API requests → backend via symlink ─────────────────────────────
+# The api/ directory is a symlink to backend/web/
+# Forward all /api/* requests to backend/web/index.php
+RewriteCond %{REQUEST_URI} ^(.*)/api/(.*)$ [NC]
 RewriteRule ^api/(.*)$ api/index.php [L,QSA]
 
-# If the requested file or directory exists, serve it directly
+# ── Static files → serve directly ─────────────────────────────────
 RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
 RewriteRule ^ - [L]
 
-# Otherwise, serve index.html (SPA client-side routing)
+# ── Everything else → SPA (index.html) ────────────────────────────
 RewriteRule ^ index.html [L]

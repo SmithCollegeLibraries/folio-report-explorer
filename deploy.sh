@@ -2,8 +2,12 @@
 #
 # deploy.sh — Deploy folio-report-explorer on a bare-metal RHEL server.
 #
+# The repo itself lives at /var/www/html/folio-report-explorer/ and IS the
+# web root for the app. Built frontend assets, the api/ symlink, and .htaccess
+# all live at the repo root level.
+#
 # Usage:
-#   cd /opt/folio-report-explorer
+#   cd /var/www/html/folio-report-explorer
 #   bash deploy.sh
 #
 # Prerequisites:
@@ -30,13 +34,10 @@ set +a
 # Defaults
 APP_BASE_PATH="${APP_BASE_PATH:-}"
 VITE_BASE_PATH="${VITE_BASE_PATH:-/}"
-WEBROOT="${WEBROOT:-/var/www/html}"
-DEPLOY_DIR="${WEBROOT}/${APP_BASE_PATH#/}"
 
 echo "=== Folio Report Explorer Deploy ==="
-echo "  Repo:      $SCRIPT_DIR"
-echo "  Deploy to: $DEPLOY_DIR"
-echo "  Base path: ${APP_BASE_PATH:-/ (root)}"
+echo "  Repo/Web root: $SCRIPT_DIR"
+echo "  Base path:     ${APP_BASE_PATH:-/ (root)}"
 echo ""
 
 # ── 1. Pull latest code ────────────────────────────────────────────
@@ -66,21 +67,28 @@ echo "→ Building frontend (base path: $VITE_BASE_PATH)..."
 VITE_BASE_PATH="$VITE_BASE_PATH" npx vite build 2>&1 | tail -5
 cd "$SCRIPT_DIR"
 
-# ── 5. Deploy to web root ─────────────────────────────────────────
-echo "→ Deploying to $DEPLOY_DIR..."
-mkdir -p "$DEPLOY_DIR"
+# ── 5. Copy built frontend into repo root ─────────────────────────
+echo "→ Copying frontend build to repo root..."
 
-# Copy built frontend assets
-cp -r frontend/dist/* "$DEPLOY_DIR/"
+# Copy index.html to repo root
+cp frontend/dist/index.html "$SCRIPT_DIR/index.html"
 
-# Copy the .htaccess for SPA routing
-cp public/.htaccess "$DEPLOY_DIR/.htaccess"
+# Copy assets directory
+rm -rf "$SCRIPT_DIR/assets"
+cp -r frontend/dist/assets "$SCRIPT_DIR/assets"
 
-# Create api/ symlink pointing to backend/web/
-if [ -L "$DEPLOY_DIR/api" ]; then
-    rm "$DEPLOY_DIR/api"
+# Copy any other static files from dist (favicon, etc.)
+for f in frontend/dist/*; do
+    fname=$(basename "$f")
+    if [ "$fname" != "index.html" ] && [ "$fname" != "assets" ]; then
+        cp -r "$f" "$SCRIPT_DIR/$fname"
+    fi
+done
+
+# Create api/ symlink pointing to backend/web/ (if not already there)
+if [ ! -L "$SCRIPT_DIR/api" ]; then
+    ln -s "$SCRIPT_DIR/backend/web" "$SCRIPT_DIR/api"
 fi
-ln -s "$SCRIPT_DIR/backend/web" "$DEPLOY_DIR/api"
 
 # ── 6. Ensure writable directories ────────────────────────────────
 echo "→ Setting permissions..."
@@ -122,13 +130,30 @@ if (file_exists($envFile)) {
 ENVPHP
 echo "→ Generated env.php loader"
 
+# ── 8. Seed database (idempotent — uses REPLACE INTO) ─────────────
+if [ "${SEED_DB:-false}" = "true" ]; then
+    echo "→ Seeding database..."
+    MYSQL_HOST="${MYSQL_HOST:-localhost}"
+    MYSQL_CMD="mysql -h $MYSQL_HOST -u ${MYSQL_USER:-folio_app} -p${MYSQL_PASSWORD:-folio_app_pass} ${MYSQL_DATABASE:-folio_reports}"
+
+    $MYSQL_CMD < mysql/init.sql 2>/dev/null || true
+    $MYSQL_CMD < mysql/seed_reports.sql
+    $MYSQL_CMD < mysql/seed_training_hints.sql
+    $MYSQL_CMD < mysql/seed_saved_queries.sql
+    echo "  Loaded: reports, training hints, saved queries"
+fi
+
 # ── Done ───────────────────────────────────────────────────────────
 echo ""
 echo "=== Deploy complete! ==="
 echo "  URL: https://$(hostname)/${APP_BASE_PATH#/}"
 echo ""
-echo "  If this is the first deploy, remember to:"
-echo "    1. Run: mysql < mysql/init.sql"
-echo "    2. Run: mysql < mysql/seed_reports.sql"
-echo "    3. Visit the /setup page to configure FOLIO and Gemini credentials"
+echo "  First deploy? Run with SEED_DB=true to load all data:"
+echo "    SEED_DB=true bash deploy.sh"
+echo ""
+echo "  Or load manually:"
+echo "    mysql -u USER -p DB < mysql/init.sql"
+echo "    mysql -u USER -p DB < mysql/seed_reports.sql"
+echo "    mysql -u USER -p DB < mysql/seed_training_hints.sql"
+echo "    mysql -u USER -p DB < mysql/seed_saved_queries.sql"
 echo ""
