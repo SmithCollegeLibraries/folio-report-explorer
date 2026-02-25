@@ -22,6 +22,7 @@ class QueryWorkerController extends Controller
     /**
      * Run the query worker loop.
      * Continuously polls for pending jobs and executes them.
+     * Used in Docker (persistent container).
      */
     public function actionRun()
     {
@@ -40,6 +41,32 @@ class QueryWorkerController extends Controller
                 sleep($this->sleep);
             }
         }
+    }
+
+    /**
+     * Process all pending jobs then exit.
+     * Designed for cron: * * * * * php yii query-worker/process-once
+     */
+    public function actionProcessOnce()
+    {
+        $processed = 0;
+        while (true) {
+            try {
+                $job = $this->claimNextJob();
+                if (!$job) {
+                    break;
+                }
+                $this->executeJob($job);
+                $processed++;
+            } catch (\Exception $e) {
+                $this->stderr("Worker error: {$e->getMessage()}\n");
+                break;
+            }
+        }
+        if ($processed > 0) {
+            $this->stdout("Processed {$processed} job(s).\n");
+        }
+        return 0;
     }
 
     /**
