@@ -1,0 +1,105 @@
+services:
+  nginx:
+    image: nginx:1.24-alpine
+    ports:
+      - "${NGINX_PORT:-8090}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./backend/web:/var/www/html/web:ro
+    depends_on:
+      - php
+      - node
+    networks:
+      - app-network
+
+  php:
+    image: folio-report-explorer-php
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./backend:/var/www/html
+    environment:
+      - FOLIO_PG_HOST=${FOLIO_PG_HOST}
+      - FOLIO_PG_PORT=${FOLIO_PG_PORT:-25060}
+      - FOLIO_PG_DB=${FOLIO_PG_DB:-ldplite}
+      - FOLIO_PG_USER=${FOLIO_PG_USER}
+      - FOLIO_PG_PASS=${FOLIO_PG_PASS}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
+      - MYSQL_USER=${MYSQL_USER:-folio_app}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "${MYSQL_PORT:-3307}:3306"
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-rootpass}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
+      - MYSQL_USER=${MYSQL_USER:-folio_app}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  node:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:${NGINX_PORT:-8090}/api
+    networks:
+      - app-network
+
+  worker:
+    image: folio-report-explorer-php
+    volumes:
+      - ./backend:/var/www/html
+    environment:
+      - FOLIO_PG_HOST=${FOLIO_PG_HOST}
+      - FOLIO_PG_PORT=${FOLIO_PG_PORT:-25060}
+      - FOLIO_PG_DB=${FOLIO_PG_DB:-ldplite}
+      - FOLIO_PG_USER=${FOLIO_PG_USER}
+      - FOLIO_PG_PASS=${FOLIO_PG_PASS}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
+      - MYSQL_USER=${MYSQL_USER:-folio_app}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    depends_on:
+      php:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+    entrypoint: ["php", "/var/www/html/yii", "query-worker/run"]
+    restart: unless-stopped
+    networks:
+      - app-network
+
+volumes:
+  mysql-data:
+  frontend-node-modules:
+
+networks:
+  app-network:
+    driver: bridge

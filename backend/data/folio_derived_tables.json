@@ -1,0 +1,3105 @@
+{
+  "metadata": {
+    "source_repo": "folio-org/folio-analytics",
+    "source_branch": "main",
+    "source_path": "sql_metadb/derived_tables",
+    "scraped_at": "2026-02-17T14:25:04.968963+00:00",
+    "total_derived_tables": 84,
+    "errors": []
+  },
+  "tables": {
+    "item_effective_callno_components": {
+      "table_name": "item_effective_callno_components",
+      "source_file": "item_effective_callno_components.sql",
+      "output_columns": [
+        "item_effective_call_number_type_name"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.item",
+        "folio_inventory.call_number_type"
+      ],
+      "column_comments": {
+        "item_id": "UUID of the item record",
+        "item_hrid": "Human readable ID of the item record",
+        "item_effective_call_number_prefix": "Effective Call Number Prefix is the prefix of the identifier assigned to an item or its holding and associated with the item",
+        "item_effective_call_number": "Effective Call Number of the item record, is an identifier assigned to the item record",
+        "item_effective_call_number_suffix": "Effective Call Number Suffix is the suffix of the identifier assigned to an item or its holding and associated with the item",
+        "item_effective_call_number_type_id": "UUID of the source of the call number",
+        "item_effective_call_number_type_name": "Name of the source of the call number, e.g., LCC, Dewey, NLM, etc."
+      }
+    },
+    "agreements_custom_property": {
+      "table_name": "agreements_custom_property",
+      "source_file": "agreements_custom_property.sql",
+      "output_columns": [
+        "custom_property_container_id",
+        "custom_property_text_value"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_agreements",
+          "table": "custom_property_integer",
+          "column": "id",
+          "type": "bigint"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "custom_property_integer",
+          "column": "value",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "custom_property_text",
+          "column": "id",
+          "type": "bigint"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "custom_property_text",
+          "column": "value",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_agreements.custom_property_container",
+        "folio_agreements.custom_property",
+        "folio_agreements.custom_property_definition",
+        "folio_agreements.custom_property_integer",
+        "folio_agreements.custom_property_text"
+      ],
+      "column_comments": {
+        "custom_property_container_id": "Container ID of the custom property. The ID can be linked to the custom_properties_id attribute in the folio_agreements.subscription_agreement table",
+        "custom_property_id": "ID of the custom property",
+        "custom_property_note": "Internal note to the custom property, that displays internally to FOLIO users",
+        "custom_property_public_note": "Public note to the custom property, that displays externally to the public",
+        "custom_property_definition_uuid": "ID of the custom property definition",
+        "custom_property_definition_pd_name": "Name of the custom property definition",
+        "custom_property_definition_pd_type": "Type of the custom property definition",
+        "custom_property_definition_pd_description": "Further explanation of the property",
+        "custom_property_definition_pd_label": "The property name that appears when displaying the property to users in FOLIO",
+        "custom_property_integer_id": "ID of the integer value",
+        "custom_property_integer_value": "Value of the integer, that was entered",
+        "custom_property_text_id": "ID of the text value",
+        "custom_property_text_value": "Value of the text value, that was entered"
+      }
+    },
+    "agreements_package_content_item": {
+      "table_name": "agreements_package_content_item",
+      "source_file": "agreements_package_content_item.sql",
+      "output_columns": [
+        "res_publication_type_category"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_resource_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "erm_resource",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "erm_resource",
+          "column": "res_name",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "erm_resource",
+          "column": "res_publication_type_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "erm_resource",
+          "column": "res_sub_type_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "erm_resource",
+          "column": "res_type_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "identifier",
+          "column": "id_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "identifier",
+          "column": "id_ns_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "identifier",
+          "column": "id_value",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "identifier_namespace",
+          "column": "idns_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "identifier_namespace",
+          "column": "idns_value",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "identifier_occurrence",
+          "column": "io_identifier_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "identifier_occurrence",
+          "column": "io_res_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package",
+          "column": "pkg_reference",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package",
+          "column": "pkg_remote_kb",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package",
+          "column": "pkg_source",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package",
+          "column": "pkg_vendor_fk",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package_content_item",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package_content_item",
+          "column": "pci_access_end",
+          "type": "date"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package_content_item",
+          "column": "pci_access_start",
+          "type": "date"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package_content_item",
+          "column": "pci_pkg_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package_content_item",
+          "column": "pci_pti_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "package_content_item",
+          "column": "pci_removed_ts",
+          "type": "bigint"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "platform",
+          "column": "pt_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "platform",
+          "column": "pt_name",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "platform_title_instance",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "platform_title_instance",
+          "column": "pti_pt_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "platform_title_instance",
+          "column": "pti_ti_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "platform_title_instance",
+          "column": "pti_url",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "refdata_category",
+          "column": "rdc_description",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "refdata_category",
+          "column": "rdc_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "refdata_value",
+          "column": "rdv_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "refdata_value",
+          "column": "rdv_label",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "refdata_value",
+          "column": "rdv_owner",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "refdata_value",
+          "column": "rdv_value",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "remotekb",
+          "column": "rkb_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "remotekb",
+          "column": "rkb_name",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "title_instance",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "title_instance",
+          "column": "ti_date_monograph_published",
+          "type": "date"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "title_instance",
+          "column": "ti_first_author",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "title_instance",
+          "column": "ti_first_editor",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "title_instance",
+          "column": "ti_monograph_edition",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "title_instance",
+          "column": "ti_monograph_volume",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "title_instance",
+          "column": "ti_work_fk",
+          "type": "uuid"
+        }
+      ],
+      "source_tables": [
+        "folio_agreements.package_content_item",
+        "folio_agreements.entitlement",
+        "folio_agreements.package",
+        "folio_agreements.org",
+        "folio_agreements.remotekb",
+        "folio_agreements.platform_title_instance",
+        "folio_agreements.platform",
+        "folio_agreements.title_instance",
+        "folio_agreements.identifier_occurrence",
+        "folio_agreements.identifier",
+        "folio_agreements.identifier_namespace",
+        "folio_agreements.erm_resource",
+        "folio_agreements.refdata_value",
+        "folio_agreements.refdata_category"
+      ],
+      "column_comments": {
+        "pci_id": "ID of the package content item",
+        "pci_access_start": "The date on which a package content item was first accessible in a package",
+        "pci_access_end": "The date on which a package content item was last accessible in a package",
+        "pci_package_id": "ID of package",
+        "pci_removed_ts": "Timestamp when a package content item was removed",
+        "package_source": "String describing the source of the package data",
+        "package_vendor_id": "ID of the package provider organisation (in mod_agreements.orgs)",
+        "org_vendor_name": "Name of the organization",
+        "package_remote_kb_id": "ID of the remote knowledgebase from which the package data was obtained (in mod_agreements.remotekb)",
+        "remotekb_remote_kb_name": "Name of the remote knowledgebase from which the package data was obtained (in mod_agreements.remotekb)",
+        "package_reference": "ID or reference for the package in an external system",
+        "pci_platform_title_instance_id": "ID of the platform title instance",
+        "pti_platform_id": "UUID of Platform",
+        "pt_platform_name": "Name/label of the platform",
+        "pti_title_instance_id": "ID of the platform title instance",
+        "pti_url": "The URL of the platform title instance",
+        "ti_id": "ID of the title_instance",
+        "ti_work_id": "The ID of the work to which the title instance is linked",
+        "ti_date_monograph_published": "For monographs (books), the date the monograph was first published in the media specified by the linked erm resource subtype (typically “print” or “electronic”)",
+        "ti_first_author": "For monographs (books), the last name of the book’s first author",
+        "ti_monograph_edition": "For monographs (books), edition of the book",
+        "ti_monograph_volume": "For monographs (books), the volume number of the book",
+        "ti_first_editor": "For monographs (books), the last name of the book’s first editor",
+        "identifier_id": "UUID of identifier",
+        "identifier_value": "Value of the identifier (i.e. the identifier string)",
+        "identifier_namespace_id": "UUID of identifier_namespace",
+        "identifiernamespace_name": "Value of the namespace (i.e. the namespace name as a string)",
+        "entitlement_id": "UUID of Entitlement (aka Agreement Line)",
+        "res_name": "Name of the resource (can be name of a package or other resource type or the title of a published work such as a book or journal)",
+        "res_sub_type_fk": "ID of reference data value for the subtype of resource",
+        "res_sub_type_value": "A string value which is used to identify the reference data value",
+        "res_sub_type_label": "A string label for the reference data value",
+        "res_sub_type_category": "Text string identifying the reference data category",
+        "res_type_fk": "ID of reference data value for the type of resource",
+        "res_type_value": "A string value which is used to identify the reference data value",
+        "res_type_label": "A string label for the reference data value",
+        "res_type_category": "Text string identifying the reference data category",
+        "res_publication_type_fk": "ID of the publication type",
+        "res_publication_type_value": "A string value which is used to identify the reference data value",
+        "res_publication_type_label": "A string label for the reference data value",
+        "res_publication_type_category": "Text string identifying the reference data category"
+      }
+    },
+    "agreements_subscription_agreement": {
+      "table_name": "agreements_subscription_agreement",
+      "source_file": "agreements_subscription_agreement.sql",
+      "output_columns": [
+        "sa_custom_properties_id"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_agreements.subscription_agreement",
+        "folio_agreements.refdata_value"
+      ],
+      "column_comments": {
+        "sa_id": "UUID of Agreement",
+        "sa_renewal_priority": "ID of reference data value for renewal priority",
+        "sa_renewal_priority_value": "Describes whether an agreement should be renewed, reviewed or cancelled",
+        "sa_renewal_priority_label": "Displayed name of renewal priority",
+        "sa_is_perpetual": "ID of reference data value for is perpetual",
+        "sa_is_perpetual_value": "Describes whether the agreement is a perpetual agreement or not",
+        "sa_is_perpetual_label": "Displayed name of is perpetual",
+        "sa_name": "A name for the agreement assigned by the institution",
+        "sa_local_reference": "Where an agreement has been created through an integration / data import from an external system the sa_local_reference is used to store a reference/identifier for the agreement in the external system to support ongoing data synchronisation/updates",
+        "sa_agreement_status": "ID of reference data value for agreement status",
+        "sa_agreement_status_value": "Describes the current status of the agreement (e.g. Active, Closed)",
+        "sa_agreement_status_label": "Displayed name of agreement status",
+        "sa_description": "A description for the agreement assigned by the institution",
+        "sa_license_note": "To record any general information about the license for the Agreement",
+        "sa_reason_for_closure": "ID of reference data value for reason for closure",
+        "sa_reason_for_closure_value": "Describes for a closed agreement, the reason the agreement has been closed ",
+        "sa_reason_for_closure_label": "Displayed name of reason for closure",
+        "sa_custom_properties_id": "ID used to link custom_properties"
+      }
+    },
+    "agreements_subscription_agreement_entitlement": {
+      "table_name": "agreements_subscription_agreement_entitlement",
+      "source_file": "agreements_subscription_agreement_entitlement.sql",
+      "output_columns": [
+        "entitlement_active_to"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_active_to",
+          "type": "date"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_active_from",
+          "type": "date"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_owner_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_resource_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_authority",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "entitlement",
+          "column": "ent_reference",
+          "type": "text"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "order_line",
+          "column": "pol_owner_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_agreements",
+          "table": "order_line",
+          "column": "pol_orders_fk",
+          "type": "uuid"
+        }
+      ],
+      "source_tables": [
+        "folio_agreements.subscription_agreement",
+        "folio_agreements.entitlement",
+        "folio_agreements.order_line",
+        "folio_agreements.refdata_value"
+      ],
+      "column_comments": {
+        "subscription_agreement_id": "UUID of Agreement",
+        "subscription_agreement_name": "A name for the agreement assigned by the institution",
+        "subscription_agreement_local_reference": "Where an agreement has been created through an integration / data import from an external system the sa_local_reference is used to store a reference/identifier for the agreement in the external system to support ongoing data synchronisation/updates",
+        "subscription_agreement_type": "ID of reference data value for agreement type",
+        "subscription_agreement_type_value": "Describes the type of the agreement",
+        "subscription_agreement_type_label": "Displayed name of agreement type",
+        "subscription_agreement_status": "ID of reference data value for agreement status",
+        "subscription_agreement_status_value": "Describes the current status of the agreement (e.g. Active, Closed)",
+        "subscription_agreement_status_label": "Displayed name of agreement status",
+        "entitlement_id": "UUID of Entitlement (aka Agreement Line)",
+        "entitlement_active_to": "Date to which the entitlement was active in format yyyy-MM-dd. No time or timezone",
+        "entitlement_active_from": "Date from which the entitlement was active in format yyyy-MM-dd. No time or timezone",
+        "entitlement_subscription_agreement_id": "ID of Agreement to which the entitlement belongs",
+        "entitlement_resource_fk": "ID of the resource (mod_agreements.erm_resource.id, mod_agreements.package.id, mod_agreements.package_content_item.id ) which the Entitlement gives access to",
+        "entitlement_authority": "Where an entitlement gives access to a resource described in a source other than the mod_agreements internal knowledgebase, the ent_authority is a way of identifying where the definition of the resource is held ",
+        "entitlement_reference": "Where an entitlement gives access to a resource described in a source other than the mod_agreements internal knowledgebase, the ent_reference is the ID for the resource in the source identified by ent_authority ",
+        "po_line_id": "UUID of purchase order line in Orders app"
+      }
+    },
+    "agreements_subscription_agreement_org_ext": {
+      "table_name": "agreements_subscription_agreement_org_ext",
+      "source_file": "agreements_subscription_agreement_org_ext.sql",
+      "output_columns": [
+        "sao_role_label"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_agreements.subscription_agreement_org",
+        "folio_agreements.subscription_agreement_org_role",
+        "folio_agreements.refdata_value",
+        "folio_agreements.org"
+      ],
+      "column_comments": {
+        "sao_id": "UUID for subscription and organization pairing",
+        "subscription_agreement_id": "UUId for the subscritpion and agreement pairing",
+        "sao_org_id": "The unique UUID for an organization",
+        "sao_org_name": "The name of an organization",
+        "sao_role_id": "ID of the type of provider role",
+        "sao_role_value": "Name of the type of provider role",
+        "sao_role_label": "Public name of the type of provider role",
+        "sao_note": "Notes attached",
+        "org_orgs_uuid": "UUID of organization attached to the agreement"
+      }
+    },
+    "feesfines_accounts_actions": {
+      "table_name": "feesfines_accounts_actions",
+      "source_file": "feesfines_accounts_actions.sql",
+      "output_columns": [
+        "patron_group_name"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_feesfines.accounts",
+        "folio_feesfines.feefineactions",
+        "folio_users.users__t",
+        "folio_users.groups__t"
+      ],
+      "column_comments": {}
+    },
+    "finance_budgets": {
+      "table_name": "finance_budgets",
+      "source_file": "finance_budgets.sql",
+      "output_columns": [
+        "available_balance",
+        "over_expended",
+        "over_encumbered"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_finance.fund__t",
+        "folio_finance.budget__t",
+        "folio_finance.fiscal_year__t",
+        "folio_finance.fund_type__t"
+      ],
+      "column_comments": {
+        "budget_id": "UUID of the budget record",
+        "budget_status": "The status of the budget",
+        "fiscal_yr_name": "The name for the fiscal year",
+        "fund_code": "The code for the fund",
+        "fund_status": "The current status of the fund",
+        "fund_name": "The name for the fund",
+        "allowable_expenditure": "The percentage of allowable expenditures in relation to total funding",
+        "allowable_encumbrance": "The percentage of allowable encumbrances in relation to total funding",
+        "initial_allocation": "The initial allocation to the fund",
+        "increase_in_allocation": "The total increases in allocation to the fund",
+        "decrease_in_allocation": "The total decreases in allocation to the fund",
+        "total_allocated": "The total funding allocated to a fund",
+        "net_transfers": "The net total of all transfers to and from a fund",
+        "total_funding": "The total funding allocated and transfered to a fund",
+        "encumbered": "The total of open encumbrances on a fund",
+        "awaiting_payment": "The total of funding awaiting payment on a fund",
+        "expended": "The total expenditures of a fund",
+        "unavailable": "The total amount of open encumbrances, awaiting payments, and expenditures on a fund",
+        "cash_balance": "The total funding minus expenditures of a fund",
+        "available_balance": "The total funding minus unavailable funding of a fund",
+        "over_expended": "The total funding minus expenditures of a fund",
+        "over_encumbered": "The total funding minus open encumbrances of a fund"
+      }
+    },
+    "finance_funds": {
+      "table_name": "finance_funds",
+      "source_file": "finance_funds.sql",
+      "output_columns": [
+        "ledger_description"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_finance.fiscal_year",
+        "folio_finance.budget",
+        "folio_finance.fund",
+        "folio_finance.fund_type",
+        "folio_finance.ledger"
+      ],
+      "column_comments": {
+        "fiscal_year_id": "UUID of the fiscal year record",
+        "fiscal_year_code": "The code of the fiscal year",
+        "fiscal_year_name": "The name of the fiscal year",
+        "fiscal_year_period_start": "The start date of the fiscal year",
+        "fiscal_year_period_end": "The end date of the fiscal year",
+        "fiscal_year_description": "The description of the fiscal year",
+        "budget_id": "UUID of this budget",
+        "budget_name": "The name of the budget",
+        "budget_status": "The status of the budget",
+        "fund_id": "UUID of this fund",
+        "fund_code": "A unique code associated with the fund",
+        "fund_name": "The name of this fund",
+        "fund_status": "The current status of this fund",
+        "fund_description": "The description of this fund",
+        "fund_type_id": "UUID of the fund type associated with this fund",
+        "fund_type_name": "Name of fund type",
+        "ledger_id": "UUID of this ledger",
+        "ledger_code": "The code for the ledger",
+        "ledger_name": "The name of the ledger",
+        "ledger_status": "The status of the ledger",
+        "ledger_description": "The description of the ledger"
+      }
+    },
+    "finance_invoice_transactions": {
+      "table_name": "finance_invoice_transactions",
+      "source_file": "finance_invoice_transactions.sql",
+      "output_columns": [
+        "invoice_line_distribution_expense_class_id"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_finance",
+          "table": "expense_class__t",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_finance",
+          "table": "expense_class__t",
+          "column": "code",
+          "type": "text"
+        },
+        {
+          "schema": "folio_finance",
+          "table": "expense_class__t",
+          "column": "name",
+          "type": "text"
+        },
+        {
+          "schema": "folio_finance",
+          "table": "expense_class__t",
+          "column": "external_account_number_ext",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_invoice.invoice_lines",
+        "folio_invoice.invoices__t",
+        "folio_organizations.organizations__t",
+        "folio_finance.fiscal_year__t",
+        "folio_finance.budget__t",
+        "folio_finance.fund__t",
+        "folio_finance.ledger__t",
+        "folio_finance.transaction__t",
+        "folio_finance.expense_class__t",
+        "folio_invoice.invoice_lines__t"
+      ],
+      "column_comments": {
+        "invoice_id": "UUID of the invoice",
+        "invoice_status": "Workflow status of the invoice",
+        "folio_invoice_number": "Invoice number in folio system",
+        "vendor_id": "UUID for vendor",
+        "vendor_name": "Name of vendor",
+        "vendor_invoice_number": "This is the number from the vendors invoice, which is different from the folio invoice number",
+        "invoice_date": "Invoice date",
+        "invoice_line_id": "UUID of the invoice line",
+        "invoice_line_total": "Total of each separate invoice line",
+        "invoice_currency": "Ideally this is the ISO code and not something the user defines",
+        "invoice_line_distribution_value": "The percentage of the cost to be applied to this fund",
+        "invoice_line_distribution_type": "Type of value (percentage or amount)",
+        "invoice_line_fund_id": "UUID of the fund associated with this fund distribution",
+        "invoice_line_fund_code": "Code of the fund",
+        "invoice_line_expense_class_id": "UUID of the expense class from the invoice line",
+        "invoice_line_expense_class_code": "Code of the expense class from the invoice line",
+        "invoice_line_expense_class_name": "Name of the expense class from the invoice line",
+        "external_account_number_ext": "An external account number extension",
+        "exchange_rate": "Exchange rate",
+        "transaction_id": "UUID of this transaction",
+        "transaction_amount": "The amount of this transaction",
+        "effective_transaction_amount": "The amount of this transaction for calculations",
+        "transaction_currency": "Currency code for this transaction - from the system currency",
+        "transaction_fund_id": "UUID of the fund associated with this transaction",
+        "transaction_fund_code": "Code of the fund associated with this transaction",
+        "fiscal_year_id": "UUID of the fiscal year",
+        "fiscal_year": "Code of the fiscal year",
+        "ledger_id": "UUID of the ledger",
+        "ledger_name": "Name of the ledger",
+        "budget_id": "UUID of the budget",
+        "budget_name": "Name of the budget",
+        "transaction_expense_class_id": "UUID of the expense class from the transaction",
+        "transactions_expense_class_code": "Code of the expense class from the transaction",
+        "transactions_expense_class_name": "Name of the expense class from the transaction",
+        "transactions_external_account_number_ext": "An external account number extension"
+      }
+    },
+    "finance_transaction_invoices": {
+      "table_name": "finance_transaction_invoices",
+      "source_file": "finance_transaction_invoices.sql",
+      "output_columns": [
+        "transaction_amount",
+        "transaction_"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_finance.transaction",
+        "folio_invoice.invoices",
+        "folio_invoice.invoice_lines",
+        "folio_finance.fund",
+        "folio_finance.budget"
+      ],
+      "column_comments": {
+        "transaction_id": "UUID of this transaction",
+        "transaction_amount": "The amount of this transaction. For encumbrances: This is initialAmountEncumbered - (amountAwaitingPayment + amountExpended)",
+        "effective_transaction_amount": "The amount of this transaction for calculations",
+        "transaction_currency": "Currency code for this transaction - from the system currency",
+        "transaction_created_date": "Date and time when the record was created",
+        "transaction_updated_date": "Date and time when the record was last updated",
+        "transaction_description": "Description of this transaction",
+        "transaction_expense_class_id": "UUID of the associated expense class",
+        "transaction_fiscal_year_id": "UUID of the fiscal year that the transaction is taking place in",
+        "transaction_from_fund_id": "UUID of the fund money is moving from",
+        "transaction_from_fund_name": "The name of this fund money is moving from",
+        "transaction_from_fund_code": "A unique code associated with the fund money is moving from",
+        "transaction_to_fund_id": "UUID of the fund money is moving to",
+        "transaction_to_fund_name": "The name of the fund money is moving to",
+        "transaction_to_fund_code": "A unique code associated with the fund money is moving to",
+        "effective_fund_id": "UUID of the current effective fund",
+        "effective_fund_name": "The name of the current effective fund",
+        "effective_fund_code": "A unique code for the current effective fund",
+        "transaction_from_budget_id": "UUID of the budget the transaction is coming from",
+        "transaction_from_budget_name": "The name of the budget the transation is comign from",
+        "invoice_id": "UUID of this invoice",
+        "invoice_line_id": "UUID of the invoice line associated with this fund distribution",
+        "transaction_type": "This describes the type of transaction",
+        "invoice_date": "Invoice date",
+        "invoice_payment_date": "When the invoice was actually paid",
+        "invoice_exchange_rate": "Exchange rate",
+        "invoice_line_total": "Total of each separate invoice line",
+        "invoice_currency": "Ideally this is the ISO code and not something the user defines",
+        "po_line_id": "UUID of encumbrance record associated with this fund distribution",
+        "invoice_vendor_id": "UUID for vendor",
+        "invoice_vendor_name": "Name of vendor"
+      }
+    },
+    "finance_transaction_purchase_order": {
+      "table_name": "finance_transaction_purchase_order",
+      "source_file": "finance_transaction_purchase_order.sql",
+      "output_columns": [
+        "transaction_"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_finance",
+          "table": "expense_class__t",
+          "column": "id",
+          "type": "uuid"
+        }
+      ],
+      "source_tables": [
+        "folio_finance.transaction",
+        "folio_orders.po_line",
+        "folio_orders.purchase_order",
+        "folio_orders.acquisition_method__t",
+        "folio_finance.fund",
+        "folio_finance.budget",
+        "folio_organizations.organizations",
+        "folio_finance.expense_class__t"
+      ],
+      "column_comments": {
+        "transaction_id": "UUID of this transaction",
+        "transaction_amount": "The amount of this transaction. For encumbrances: This is initialAmountEncumbered - (amountAwaitingPayment + amountExpended)",
+        "transaction_currency": "Currency code for this transaction - from the system currency",
+        "transaction_expense_class_id": "UUID of the associated expense class",
+        "transaction_expense_class_code": "Code for the associated expense class",
+        "transaction_expense_class_name": "Name for the associated expense class",
+        "external_account_number_ext": "An external account number extension",
+        "transaction_fiscal_year_id": "UUID of the fiscal year that the transaction is taking place in",
+        "transaction_from_fund_id": "UUID of the fund money is moving from",
+        "transaction_from_fund_name": "The name of this fund",
+        "transaction_from_fund_code": "A unique code associated with the fund",
+        "transaction_from_budget_id": "UUID of this budget",
+        "transaction_from_budget_name": "The name of the budget",
+        "transaction_encumbrance_amount_awaiting_payment": "Deprecated! Going to be removed in next release. The amount of awaiting for payment",
+        "transaction_encumbrance_amount_expended": "The amount currently expended by this encumbrance",
+        "transaction_encumbrance_initial_amount": "The initial amount of this encumbrance. Should not change once created",
+        "transaction_encumbrance_order_type": "Taken from the purchase order",
+        "transaction_encumbrance_subscription": "Taken from the purchase Order,for fiscal year rollover",
+        "transaction_encumbrance_status": "The status of this encumbrance",
+        "po_line_id": "UUID referencing the poLine that represents the package that this POLs title belongs to",
+        "po_id": "UUID identifying this purchase order line",
+        "pol_number": "A human readable number assigned to this PO line",
+        "pol_description": "purchase order line description",
+        "pol_acquisition_method": "UUID of the acquisition method for this purchase order line",
+        "acquisition_method_name": "Name of the acquisition method for this purchase order line",
+        "po_order_type": "the purchase order type"
+      }
+    },
+    "holdings_administrative_notes": {
+      "table_name": "holdings_administrative_notes",
+      "source_file": "holdings_administrative_notes.sql",
+      "output_columns": [
+        "holdings_hrid",
+        "administrative_note_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record"
+      ],
+      "column_comments": {
+        "instance_id": "Inventory instances identifier",
+        "holdings_id": "the unique ID of the holdings record, UUID",
+        "holdings_hrid": "the human readable ID, also called eye readable ID. A system-assigned sequential ID which maps to the Instance ID",
+        "administrative_note": "Administrative notes",
+        "administrative_note_ordinality": "Administrative note ordinality"
+      }
+    },
+    "holdings_ext": {
+      "table_name": "holdings_ext",
+      "source_file": "holdings_ext.sql",
+      "output_columns": [
+        "updated_date"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_inventory",
+          "table": "ill_policy__t",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "ill_policy__t",
+          "column": "name",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "holdings_record__t",
+          "column": "call_number_prefix",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "holdings_record__t",
+          "column": "call_number_suffix",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "holdings_record__t",
+          "column": "retention_policy",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_inventory.holdings_record__t",
+        "folio_inventory.holdings_record",
+        "folio_inventory.call_number_type__t",
+        "folio_inventory.holdings_type__t",
+        "folio_inventory.ill_policy__t",
+        "folio_inventory.location__t"
+      ],
+      "column_comments": {
+        "id": "The holdings ID",
+        "holdings_hrid": "The holdings HRID",
+        "acquisition_method": "Method of holdings record acquisition",
+        "call_number": "Call Number is an identifier assigned to an item, usually printed on a label attached to the item",
+        "call_number_prefix": "Prefix of the call number on the holding level",
+        "call_number_suffix": "Suffix of the call number on the holding level",
+        "call_number_type_id": "unique ID for the type of call number on a holdings record, a UUID",
+        "call_number_type_name": "call number type, such as Library of Congress Classification",
+        "copy_number": "Item/Piece ID (usually barcode) for systems that do not use item records. Ability to designate the copy number if institution chooses to use copy numbers.",
+        "type_id": "unique ID for the type of this holdings record, a UUID",
+        "type_name": "Name of the type of holdings record, such as monograph, serial, etc.",
+        "ill_policy_id": "Unique ID for an ILL policy, a UUID",
+        "ill_policy_name": "Name of the ILL policy such as limited lending policy, will lend hard copy only, etc.",
+        "instance_id": "Unique ID for the instance record, a UUID",
+        "permanent_location_id": "ID of the permanent shelving location in which an item resides",
+        "permanent_location_name": "Name of the permanent shelving location in which an item resides",
+        "temporary_location_id": "ID of the temporary location: Temporary location is the temporary location, shelving location, or holding which is a physical place where items are stored, or an Online location.",
+        "temporary_location_name": "Name of the temporary location: Temporary location is the temporary location, shelving location, or holding which is a physical place where items are stored, or an Online location.",
+        "receipt_status": "Receipt status (e.g. pending, awaiting receipt, partially received, fully received, receipt not required, and cancelled)",
+        "retention_policy": "Records information regarding how long we have agreed to keep something",
+        "shelving_title": "Indicates the shelving form of title",
+        "discovery_suppress": "Records the fact that the record should not be displayed in a discovery system",
+        "created_date": "Date and time when the record was created",
+        "updated_by_user_id": "ID of the user who last updated the record (when available)",
+        "updated_date": "Date and time when the record was last updated"
+      }
+    },
+    "holdings_notes": {
+      "table_name": "holdings_notes",
+      "source_file": "holdings_notes.sql",
+      "output_columns": [
+        "note_updated_by_user_id"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record",
+        "folio_inventory.instance__t",
+        "folio_inventory.holdings_note_type__t"
+      ],
+      "column_comments": {}
+    },
+    "holdings_statistical_codes": {
+      "table_name": "holdings_statistical_codes",
+      "source_file": "holdings_statistical_codes.sql",
+      "output_columns": [
+        "holdings_hrid",
+        "statistical_code_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record",
+        "folio_inventory.instance__t",
+        "folio_inventory.statistical_code__t",
+        "folio_inventory.statistical_code_type__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_administrative_notes": {
+      "table_name": "instance_administrative_notes",
+      "source_file": "instance_administrative_notes.sql",
+      "output_columns": [
+        "instance_hrid",
+        "administrative_note_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "instance_ext": {
+      "table_name": "instance_ext",
+      "source_file": "instance_ext.sql",
+      "output_columns": [
+        "is_bound_with"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance__t",
+        "folio_inventory.instance",
+        "folio_inventory.instance_type__t",
+        "folio_inventory.mode_of_issuance__t",
+        "folio_inventory.instance_status__t"
+      ],
+      "column_comments": {
+        "instance_id": "The unique ID of the instance record, a UUID.",
+        "instance_hrid": "The human readable ID, also called eye readable ID. A system-assigned sequential ID which maps to the Instance ID.",
+        "cataloged_date": "Date or timestamp on an instance for when it was considered cataloged.",
+        "title": "The primary title (or label) associated with the resource.",
+        "index_title": "Title normalized for browsing and searching; based on the title with articles removed",
+        "type_id": "UUID of the unique term for the resource type whether it is from the RDA content term list of locally defined.",
+        "type_name": "Label for the resource type.",
+        "mode_of_issuance_id": "UUID of the RDA mode of issuance, a categorization reflecting whether a resource is issued in one or more parts, the way it is updated, and whether its termination is predetermined or not (e.g. monograph,  sequential monograph, serial; integrating Resource, other).",
+        "mode_of_issuance_name": "Label for the mode of issuance.",
+        "previously_held": "Records the fact that the resource was previously held by the library for things like Hathi access, etc.",
+        "instance_source": "The metadata source and the format of the underlying record to the instance record. (e.g. FOLIO if it is a record created in Inventory;  MARC if it is a MARC record created in MARCcat or EPKB if it is a record coming from eHoldings).",
+        "discovery_suppress": "Records the fact that the record should not be displayed in a discovery system.",
+        "staff_suppress": "Records the fact that the record should not be displayed for others than catalogers.",
+        "status_id": "UUID for the Instance status term (e.g. cataloged, uncatalogued, batch loaded, temporary, other, not yet assigned).",
+        "status_name": "Label for the instance status.",
+        "status_updated_date": "Date [or timestamp] for when the instance status was updated.",
+        "record_source": "The metadata source and the format of the underlying record to the instance record. (e.g. FOLIO if it is a record created in Inventory;  MARC if it is a MARC record created in MARCcat or EPKB if it is a record coming from eHoldings).",
+        "record_created_date": "Date and time when the record was created.",
+        "updated_by_user_id": "ID of the user who last updated the record (when available).",
+        "updated_date": "Date and time when the record was last updated.",
+        "match_key": "A unique instance identifier matching a client-side bibliographic record identification scheme, in particular for a scenario where multiple separate catalogs with no shared record identifiers contribute to the same Instance in Inventory. A match key is typically generated from select, normalized pieces of metadata in bibliographic records.",
+        "is_bound_with": "Relationships to other entities if it is bounded with them."
+      }
+    },
+    "holdings_statements_supplements": {
+      "table_name": "holdings_statements_supplements",
+      "source_file": "holdings_statements_supplements.sql",
+      "output_columns": [
+        "statement_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record",
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "holdings_statements": {
+      "table_name": "holdings_statements",
+      "source_file": "holdings_statements.sql",
+      "output_columns": [
+        "statement_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record",
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "holdings_statements_indexes": {
+      "table_name": "holdings_statements_indexes",
+      "source_file": "holdings_statements_indexes.sql",
+      "output_columns": [
+        "statement_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record",
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "holdings_tags": {
+      "table_name": "holdings_tags",
+      "source_file": "holdings_tags.sql",
+      "output_columns": [
+        "holdings_hrid",
+        "holdings_tag_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record__t",
+        "folio_inventory.holdings_record"
+      ],
+      "column_comments": {}
+    },
+    "holdings_electronic_access": {
+      "table_name": "holdings_electronic_access",
+      "source_file": "holdings_electronic_access.sql",
+      "output_columns": [
+        "eaccess_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.holdings_record",
+        "folio_inventory.instance__t",
+        "folio_inventory.electronic_access_relationship__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_relationships_ext": {
+      "table_name": "instance_relationships_ext",
+      "source_file": "instance_relationships_ext.sql",
+      "output_columns": [
+        "relationship_super_instance_id"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_inventory",
+          "table": "instance_relationship",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "instance_relationship",
+          "column": "instancerelationshiptypeid",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "instance_relationship",
+          "column": "subinstanceid",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "instance_relationship",
+          "column": "superinstanceid",
+          "type": "uuid"
+        }
+      ],
+      "source_tables": [
+        "folio_inventory.instance_relationship",
+        "folio_inventory.instance_relationship_type__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_classifications": {
+      "table_name": "instance_classifications",
+      "source_file": "instance_classifications.sql",
+      "output_columns": [
+        "classification_name"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.classification_type__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_contributors": {
+      "table_name": "instance_contributors",
+      "source_file": "instance_contributors.sql",
+      "output_columns": [
+        "contributor_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.contributor_type__t",
+        "folio_inventory.contributor_name_type__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_alternative_titles": {
+      "table_name": "instance_alternative_titles",
+      "source_file": "instance_alternative_titles.sql",
+      "output_columns": [
+        "alternative_title_type_name"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.alternative_title_type"
+      ],
+      "column_comments": {}
+    },
+    "instance_electronic_access": {
+      "table_name": "instance_electronic_access",
+      "source_file": "instance_electronic_access.sql",
+      "output_columns": [
+        "electronic_access_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.electronic_access_relationship__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_publication": {
+      "table_name": "instance_publication",
+      "source_file": "instance_publication.sql",
+      "output_columns": [
+        "publication_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "instance_identifiers": {
+      "table_name": "instance_identifiers",
+      "source_file": "instance_identifiers.sql",
+      "output_columns": [
+        "identifier_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.identifier_type__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_statistical_codes": {
+      "table_name": "instance_statistical_codes",
+      "source_file": "instance_statistical_codes.sql",
+      "output_columns": [
+        "instance_hrid",
+        "stat_code_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.statistical_code__t",
+        "folio_inventory.statistical_code_type__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_formats": {
+      "table_name": "instance_formats",
+      "source_file": "instance_formats.sql",
+      "output_columns": [
+        "instance_hrid",
+        "instance_format_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.instance_format__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_editions": {
+      "table_name": "instance_editions",
+      "source_file": "instance_editions.sql",
+      "output_columns": [
+        "instance_hrid",
+        "edition_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "instance_languages": {
+      "table_name": "instance_languages",
+      "source_file": "instance_languages.sql",
+      "output_columns": [
+        "instance_hrid",
+        "language_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "instance_nature_content": {
+      "table_name": "instance_nature_content",
+      "source_file": "instance_nature_content.sql",
+      "output_columns": [
+        "instance_hrid",
+        "nature_of_content_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.nature_of_content_term__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_physical_descriptions": {
+      "table_name": "instance_physical_descriptions",
+      "source_file": "instance_physical_descriptions.sql",
+      "output_columns": [
+        "instance_hrid",
+        "physical_description_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "instance_notes": {
+      "table_name": "instance_notes",
+      "source_file": "instance_notes.sql",
+      "output_columns": [
+        "instance_notes_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance",
+        "folio_inventory.instance_note_type__t"
+      ],
+      "column_comments": {}
+    },
+    "instance_series": {
+      "table_name": "instance_series",
+      "source_file": "instance_series.sql",
+      "output_columns": [
+        "instance_hrid",
+        "series_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "instance_subjects": {
+      "table_name": "instance_subjects",
+      "source_file": "instance_subjects.sql",
+      "output_columns": [
+        "instance_hrid",
+        "subjects_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "instance_tags": {
+      "table_name": "instance_tags",
+      "source_file": "instance_tags.sql",
+      "output_columns": [
+        "instance_hrid",
+        "instance_tag_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.instance"
+      ],
+      "column_comments": {}
+    },
+    "invoice_adjustments_in_addition_to": {
+      "table_name": "invoice_adjustments_in_addition_to",
+      "source_file": "invoice_adjustments_in_addition_to.sql",
+      "output_columns": [
+        "adjustment_value"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_invoice.invoices"
+      ],
+      "column_comments": {
+        "invoice_id": "UUID of this invoice",
+        "adjustment_description": "List of invoice level adjustments. The adjustments can be pro-rated which are defined at the invoice level, but are applied to the invoice lines. A generic example is a shipping fee which should be spread out across all of the invoice lines so that all funds involved pay some portion of the fee.",
+        "adjustment_prorate": "Displayed in invoice line per adjustment in toggled on in settings",
+        "adjustment_relationToTotal": "Relationship of this adjustment to the total;In addition to: added to subtotal;Included in: reported as subtotal portion;Separate from:calculated from subtotal",
+        "adjustment_type": "Adjustment type",
+        "adjustment_value": "Adjustment value"
+      }
+    },
+    "invoice_adjustments_ext": {
+      "table_name": "invoice_adjustments_ext",
+      "source_file": "invoice_adjustments_ext.sql",
+      "output_columns": [
+        "invl_total"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_invoice.invoices",
+        "folio_invoice.invoice_lines"
+      ],
+      "column_comments": {
+        "invoice_id": "UUID of this invoice",
+        "invl_id": "UUID of the invoice line associated with this fund distribution",
+        "invoice_line_value": "The percentage of the cost to be applied to this fund",
+        "inv_adjust_total_value": "Total adjustment amount",
+        "invls_total": "Invoice line total amount which is sum of subTotal and adjustmentsTotal. This amount is always calculated by system.",
+        "inv_adj_prorate": "Displayed in invoice line per adjustment in toggled on in settings",
+        "inv_adj_relationToTotal": "Relationship of this adjustment to the total;In addition to: added to subtotal;Included in: reported as subtotal portion;Separate from:calculated from subtotal",
+        "ratio_of_inv_adj_per_invoice_line": "This is the ratio of the invoice adjustment per invoice line",
+        "inv_adj_total": "This is the adjustment at the invoice line level, taking into consideration the total ratio per invoice line.",
+        "transaction_invoice_line_value": "This is invoice_line_value in system currency",
+        "transaction_invoice_adj_value": "This is inv_adjust_total_value in system currency",
+        "transactions_inv_adj_total": "This is the adjustment at the invoice line level, taking into consideration the total ratio per invoice line. IN SYSTEM CURRENCY"
+      }
+    },
+    "invoice_lines_adjustments": {
+      "table_name": "invoice_lines_adjustments",
+      "source_file": "invoice_lines_adjustments.sql",
+      "output_columns": [
+        "adjustment_adjustments_total"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_invoice.invoice_lines"
+      ],
+      "column_comments": {
+        "invoice_line_id": "UUID of this invoice line id",
+        "adjustment_description": "List of invoice level adjustments. The adjustments can be pro-rated which are defined at the invoice level, but are applied to the invoice lines. A generic example is a shipping fee which should be spread out across all of the invoice lines so that all funds involved pay some portion of the fee.",
+        "adjustment_prorate": "Displayed in invoice line per adjustment in toggled on in settings",
+        "adjustment_relation_to_total": "Relationship of this adjustment to the total",
+        "adjustment_type": "Adjustment type",
+        "adjustment_value": "Adjustment value",
+        "adjustment_adjustments_total": "Total amount which is sum of all invoice line adjustments and all non-prorated invoice level adjustments. This amount is always calculated by system."
+      }
+    },
+    "invoice_voucher_lines_fund_distributions": {
+      "table_name": "invoice_voucher_lines_fund_distributions",
+      "source_file": "invoice_voucher_lines_fund_distributions.sql",
+      "output_columns": [
+        "voucher_id"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_finance",
+          "table": "fund__t",
+          "column": "fund_type_id",
+          "type": "uuid"
+        }
+      ],
+      "source_tables": [
+        "folio_invoice.voucher_lines",
+        "folio_finance.fund__t",
+        "folio_finance.fund_type__t",
+        "folio_finance.expense_class__t",
+        "folio_invoice.vouchers__t"
+      ],
+      "column_comments": {
+        "invoice_voucher_line_id": "UUID of this voucher line",
+        "voucher_id": "UUID of this voucher",
+        "voucher_number": "Number generated by folio that will eventually identify the payment request sent out to external financial system",
+        "invoice_voucher_lines_amount": "Total amount of this voucher",
+        "fund_distribution_type": "Percentage or amount type of the value property",
+        "fund_distribution_id": "UUID of the fund associated with this fund distribution",
+        "fund_distribution_code": "Code of the fund associated with this fund distribution",
+        "fund_name": "Name of this fund",
+        "fund_distribution_invl_id": "UUID of the invoice line associated with this fund distribution",
+        "fund_distribution_expense_class_id": "UUID of the expense class associated with this fund distribution",
+        "expense_class_name": "Name of the expense class",
+        "fund_distribution_value": "Percentage of the cost to be applied to this fund",
+        "fund_status": "Current status of this fund",
+        "fund_type_id": "UUID of fund type",
+        "fund_type_name": "Name of fund type",
+        "invoice_voucher_lines_external_account_number": "All distributions that come from funds with the same account number are grouped by voucher line"
+      }
+    },
+    "licenses_custom_property": {
+      "table_name": "licenses_custom_property",
+      "source_file": "licenses_custom_property.sql",
+      "output_columns": [
+        "custom_property_local_date_value"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_licenses",
+          "table": "license",
+          "column": "custom_properties_id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "license",
+          "column": "lic_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "license",
+          "column": "lic_name",
+          "type": "text"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_container",
+          "column": "id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property",
+          "column": "parent_id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property",
+          "column": "definition_id",
+          "type": "text"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property",
+          "column": "id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_definition",
+          "column": "pd_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_definition",
+          "column": "pd_label",
+          "type": "text"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_definition",
+          "column": "pd_description",
+          "type": "text"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_text",
+          "column": "id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_text",
+          "column": "value",
+          "type": "text"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_integer",
+          "column": "id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_integer",
+          "column": "value",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_decimal",
+          "column": "id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_decimal",
+          "column": "value",
+          "type": "numeric"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_local_date",
+          "column": "id",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_licenses",
+          "table": "custom_property_local_date",
+          "column": "value",
+          "type": "timestamp"
+        }
+      ],
+      "source_tables": [
+        "folio_licenses.license",
+        "folio_licenses.custom_property_container",
+        "folio_licenses.custom_property",
+        "folio_licenses.custom_property_definition",
+        "folio_licenses.custom_property_text",
+        "folio_licenses.custom_property_integer",
+        "folio_licenses.custom_property_decimal",
+        "folio_licenses.custom_property_local_date"
+      ],
+      "column_comments": {
+        "license_id": "The UUID of the license",
+        "license_name": "The name of the license",
+        "custom_property_definition_id": "UUID of the custom property",
+        "custom_property_definition_name": "Name of the custom property",
+        "custom_property_definition_description": "Description of the custom property",
+        "custom_property_text_value": "The value of text based custom property",
+        "custom_property_integer_value": "The value of integer based custom property",
+        "custom_property_decimal_value": "The value of decimal based custom property",
+        "custom_property_local_date_value": "The value of date based custom property"
+      }
+    },
+    "licenses_license_ext": {
+      "table_name": "licenses_license_ext",
+      "source_file": "licenses_license_ext.sql",
+      "output_columns": [
+        "license_org_uuid"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_licenses.license",
+        "folio_licenses.license_org",
+        "folio_licenses.org",
+        "folio_licenses.refdata_value",
+        "folio_licenses.license_org_role"
+      ],
+      "column_comments": {
+        "license_id": "The UUID of the license",
+        "license_name": "Name of license",
+        "license_description": "Description of license",
+        "license_start": "Start date of this license",
+        "license_end": "End date of this license",
+        "license_type": "Reference data value for license type",
+        "license_status": "Reference data value for license status",
+        "license_org": "Name of the organization",
+        "license_org_role": "Reference data value for the role of the organization",
+        "license_org_uuid": "UUID of organization"
+      }
+    },
+    "loans_renewal_dates": {
+      "table_name": "loans_renewal_dates",
+      "source_file": "loans_renewal_dates.sql",
+      "output_columns": [
+        "loan_status"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_circulation.audit_loan",
+        "folio_circulation.loan",
+        "folio_inventory.item__t"
+      ],
+      "column_comments": {
+        "loan_id": "The ID of the loan",
+        "item_id": "The ID of the item",
+        "item_hrid": "The HRID of the loan",
+        "loan_action": "Last action performed on a loan (currently can be any value, values commonly used are checkedout and checkedin)",
+        "renewal_date": "Date of renewal of the loan",
+        "folio_renewal_count": "Number of times the loan was renewed in FOLIO",
+        "loan_status": "Name of the status of the loan (currently can be any value, values commonly used are Open and Closed)"
+      }
+    },
+    "locations_libraries": {
+      "table_name": "locations_libraries",
+      "source_file": "locations_libraries.sql",
+      "output_columns": [
+        "institution_code"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.loccampus__t",
+        "folio_inventory.location__t",
+        "folio_inventory.locinstitution__t",
+        "folio_inventory.loclibrary__t"
+      ],
+      "column_comments": {}
+    },
+    "locations_service_points": {
+      "table_name": "locations_service_points",
+      "source_file": "locations_service_points.sql",
+      "output_columns": [
+        "location_discovery_display_name"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.location",
+        "folio_inventory.service_point__t",
+        "folio_derived.locations_libraries"
+      ],
+      "column_comments": {}
+    },
+    "po_acq_unit_ids": {
+      "table_name": "po_acq_unit_ids",
+      "source_file": "po_acq_unit_ids.sql",
+      "output_columns": [
+        "po_number",
+        "po_acquisition_unit_name"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_orders",
+          "table": "acquisitions_unit__t",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_orders",
+          "table": "acquisitions_unit__t",
+          "column": "name",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_orders.purchase_order__t",
+        "folio_orders.purchase_order",
+        "folio_orders.acquisitions_unit__t"
+      ],
+      "column_comments": {
+        "po_id": "UUID of this purchase order",
+        "po_number": "human readable ID assigned to this purchase order",
+        "po_acquisition_unit_id": "UUID of this acquisitions unit record",
+        "po_acquisition_unit_name": "Name for this acquisitions unit"
+      }
+    },
+    "po_instance": {
+      "table_name": "po_instance",
+      "source_file": "po_instance.sql",
+      "output_columns": [
+        "holdings_location_name"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_orders.po_line__t",
+        "folio_inventory.instance__t",
+        "folio_inventory.location__t",
+        "folio_orders.purchase_order__t",
+        "folio_inventory.holdings_record__t",
+        "folio_organizations.organizations__t",
+        "folio_orders.purchase_order",
+        "folio_configuration.config_data__t",
+        "folio_users.users__t"
+      ],
+      "column_comments": {
+        "manual_po": "If true, order cannot be sent automatically, e.g. via EDI",
+        "rush": "Whether or not this is a rush order",
+        "order_type": "Type of purchase order",
+        "requester": "Who requested this material and needs to be notified on arrival",
+        "selector": "Who selected this material",
+        "po_number": "A human readable number assigned to PO",
+        "po_number_id": "UUID identifying this PO",
+        "po_line_number": "A human readable number assigned to PO line",
+        "po_line_id": "UUID identifying this purchase order line",
+        "vendor_code": "The code of the vendor",
+        "created_by_username": "Username of the user who created the record (when available)",
+        "po_workflow_status": "Workflow status of purchase order",
+        "status_approved": "Whether purchase order is approved or not",
+        "created_date": "Date when the purchase order was created",
+        "bill_to": "Name of the bill_to location of the purchase order",
+        "ship_to": "Name of the ship_to location of the purchase order",
+        "pol_instance_id": "UUID of the instance record this purchase order line is related to",
+        "pol_instance_hrid": "A human readable number of the instance record this purchase order line is related to",
+        "pol_holding_id": "UUID of the holdings this purchase order line is related to",
+        "pol_location_id": "UUID of the location created for this purcase order line",
+        "pol_location_name": "Name of the purchase order line location",
+        "pol_location_source": "Whether location is a holdings location or permanent location of the purchase order line",
+        "title": "Title of the material",
+        "publication_date": "Date (year) of the material",
+        "publisher": "Publisher of the material",
+        "payment_status": "The payment status of the order",
+        "receipt_status": "The recete status of the order",
+        "po_updated_by": "Name of the user who updated the order",
+        "po_updated_date": "Date when the order was last updated",
+        "holdings_location_name": "Location name of the holding on purchase order line"
+      }
+    },
+    "po_lines_cost": {
+      "table_name": "po_lines_cost",
+      "source_file": "po_lines_cost.sql",
+      "output_columns": [
+        "po_line_estimated_price"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line"
+      ],
+      "column_comments": {
+        "pol_id": "purchaseOrders",
+        "po_line_list_unit_price_phys": "The per-item list price for physical or resources of Other order format",
+        "po_line_quant_phys": "Quantity of physical items or resources of Other order format in this purchase order line",
+        "po_line_list_unit_price_elec": "The e-resource per-item list price",
+        "po_line_quant_elec": "Quantity of electronic items in this purchase order line",
+        "po_line_additional_cost": "Lump sum that is added to the total estimated price - not affected by discount",
+        "po_line_currency": "An ISO currency code",
+        "po_line_discount": "Percentage (0 to 100) or amount (positive number) that is subtracted from the list price time quantities calculation before additional cost",
+        "po_line_discount_type": "Percentage or amount discount type",
+        "po_line_estimated_price": "The calculated total estimated price for this purchase order line: list price time quantities minus discount amount plus additional cost"
+      }
+    },
+    "po_line_fund_distribution_transactions": {
+      "table_name": "po_line_fund_distribution_transactions",
+      "source_file": "po_line_fund_distribution_transactions.sql",
+      "output_columns": [],
+      "required_columns": [],
+      "source_tables": [],
+      "column_comments": {}
+    },
+    "po_lines_fund_distribution_transactions": {
+      "table_name": "po_lines_fund_distribution_transactions",
+      "source_file": "po_lines_fund_distribution_transactions.sql",
+      "output_columns": [
+        "poline_title_or_package"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_finance.fiscal_year",
+        "folio_finance.ledger",
+        "folio_finance.fund",
+        "folio_finance.budget",
+        "folio_finance.transaction",
+        "folio_orders.purchase_order"
+      ],
+      "column_comments": {
+        "po_id": "UUID identifying this entity",
+        "po_number": "A human readable ID assigned to this purchase order",
+        "po_workflowstatus": "the workflow status for this purchase order",
+        "po_line_id": "UUID identifying this purchase order line",
+        "poline_number": "A human readable number assigned to this PO line",
+        "poline_title_or_package": "title of the material",
+        "poline_listunitprice": "The per-item list price for physical or resources of Other order format",
+        "poline_quantityphysical": "Quantity of physical items or resources of Other order format in this purchase order line",
+        "poline_listunitpriceelectronic": "The e-resource per-item list price",
+        "poline_quantityelectronic": "Quantity of electronic items in this purchase order line",
+        "poline_currency": "An ISO currency code",
+        "poline_discount": "Percentage (0 to 100) or amount (positive number) that is subtracted from the list price time quantities calculation before additional cost",
+        "poline_discounttype": "Percentage or amount discount type",
+        "poline_additionalcost": "Lump sum that is added to the total estimated price - not affected by discount",
+        "poline_estimated_price": "The calculated total estimated price for this purchase order line: list price time quantities minus discount amount plus additional cost",
+        "po_line_fyroadjustmentamount": "Adjustment amount if rollover was happen",
+        "fund_distribution_value": "The value of the cost to be applied to this fund",
+        "fund_distribution_type": "Percentage or amount type of the value property",
+        "budget_id": "UUID of the budget record",
+        "budget_name": "The name of the budget",
+        "fund_id": "UUID of the fund associated with this fund distribution",
+        "fund_code": "the fund code",
+        "fiscal_year_id": "UUID of the fiscal year record",
+        "fiscal_year": "The fiscal year",
+        "transaction_id": "UUID of this transaction",
+        "transaction_currency": "Currency code for this transaction - from the system currency",
+        "transaction_amount": "The amount of this transaction. For encumbrances: This is initialAmountEncumbered - (amountAwaitingPayment + amountExpended)",
+        "transaction_encumbrance_initial_amount": "The initial amount of this encumbrance. Should not change once create",
+        "transaction_encumbrance_amount_expended": "The amount currently expended by this encumbrance",
+        "transaction_encumbrance_order_type": "Taken from the purchase order",
+        "transaction_encumbrance_subscription": "Taken from the purchase Order,for fiscal year rollover"
+      }
+    },
+    "po_line_vendor_reference_number": {
+      "table_name": "po_line_vendor_reference_number",
+      "source_file": "po_line_vendor_reference_number.sql",
+      "output_columns": [],
+      "required_columns": [],
+      "source_tables": [],
+      "column_comments": {}
+    },
+    "po_lines_vendor_reference_numbers": {
+      "table_name": "po_lines_vendor_reference_numbers",
+      "source_file": "po_lines_vendor_reference_numbers.sql",
+      "output_columns": [
+        "vendor_instructions"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_orders.po_line__t"
+      ],
+      "column_comments": {
+        "po_line_id": "UUID identifying this purchase order line",
+        "po_line_number": "A human readable number assigned to this PO line",
+        "vendor_reference_number": "A reference number for this purchase order line",
+        "vendor_reference_number_type": "The reference number type",
+        "vendor_instructions": "Special instructions for the vendor"
+      }
+    },
+    "po_lines_details_subscription": {
+      "table_name": "po_lines_details_subscription",
+      "source_file": "po_lines_details_subscription.sql",
+      "output_columns": [
+        "pol_subscription_"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_subscription_from": "the start date of the subscription",
+        "pol_subscription_to": "the end date of the subscription",
+        "pol_subscription_interval": "the subscription interval in days"
+      }
+    },
+    "po_lines_er_mat_type": {
+      "table_name": "po_lines_er_mat_type",
+      "source_file": "po_lines_er_mat_type.sql",
+      "output_columns": [
+        "pol_er_mat_type_id"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_inventory.material_type__t"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_er_mat_type_id": "UUID of the material type",
+        "pol_er_mat_type_name": "Name of the material type"
+      }
+    },
+    "po_lines_eresource": {
+      "table_name": "po_lines_eresource",
+      "source_file": "po_lines_eresource.sql",
+      "output_columns": [
+        "pol_location_source"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_inventory.location__t",
+        "folio_inventory.holdings_record__t",
+        "folio_inventory.material_type__t",
+        "folio_organizations.organizations__t"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_holding_id": "Holding UUID associated with order line",
+        "pol_holding_hrid": "the human readable ID, also called eye readable ID. A system-assigned sequential ID which maps to the Holding ID",
+        "pol_location_id": "UUID of the (inventory) location record",
+        "location_name": "Displayed location name",
+        "pol_location_source": "Shows if the displayed location is sourced from the pol_location_id or pol_holding_id",
+        "pol_access_provider": "UUID of the access provider",
+        "provider_org_name": "Displayed access provider name",
+        "pol_activated": "whether or not this resource is activated",
+        "pol_activation_due": "number of days until activation, from date of order placement",
+        "pol_create_inventory": "Shows what inventory objects need to be created for electronic resource",
+        "pol_expected_activation": "expected date the resource will be activated",
+        "pol_license_code": "license code",
+        "pol_license_desc": "license description",
+        "pol_license_reference": "license reference",
+        "pol_material_type_id": "UUID of the material Type",
+        "pol_er_mat_type_name": "Material Type name",
+        "pol_trial": "whether or not this is a trial",
+        "pol_user_limit": "the concurrent user-limit",
+        "pol_resource_url": "Electronic resource can be access via this URL"
+      }
+    },
+    "po_lines_locations": {
+      "table_name": "po_lines_locations",
+      "source_file": "po_lines_locations.sql",
+      "output_columns": [
+        "pol_loc_qty_phys"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_inventory.holdings_record__t",
+        "folio_inventory.location__t"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_loc_qty": "Combined/total quantity of physical and electronic items",
+        "pol_loc_qty_elec": "Quantity of electronic items in this purchase order line",
+        "pol_loc_qty_phys": "Quantity of physical items or resources of \"Other\" order format in this purchase order line",
+        "pol_location_id": "UUID of the (inventory) location record or Holding UUID associated with order line",
+        "pol_location_name": "Name of the location associated with pol_location_id",
+        "pol_location_source": "Source of the location associated with pol_location_id"
+      }
+    },
+    "po_lines_phys_mat_type": {
+      "table_name": "po_lines_phys_mat_type",
+      "source_file": "po_lines_phys_mat_type.sql",
+      "output_columns": [
+        "pol_phys_mat_type_id"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_inventory.material_type__t"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_phys_mat_type_id": "UUID of the material Type",
+        "pol_mat_type_name": "Name of the material type"
+      }
+    },
+    "po_lines_physical": {
+      "table_name": "po_lines_physical",
+      "source_file": "po_lines_physical.sql",
+      "output_columns": [
+        "pol_phys_receipt_due",
+        "pol_volumes_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_inventory.material_type__t",
+        "folio_organizations.organizations__t"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_phys_create_inventory": "Shows what inventory objects need to be created for electronic resource",
+        "pol_phys_mat_type_id": "UUID of the material Type",
+        "pol_phys_mat_type_name": "Label for the material type",
+        "pol_phys_mat_supplier_id": "UUID of the material supplier record",
+        "supplier_org_name": "UUID of this purchase order",
+        "pol_phys_expected_receipt_date": "Vendor agreed date prior to the Receipt Due date item is expected to be received by",
+        "pol_phys_receipt_due": "Date item should be received by",
+        "pol_volumes": "List of volumes included to the physical material",
+        "pol_volumes_ordinality": "Volumes ordinality"
+      }
+    },
+    "po_ongoing": {
+      "table_name": "po_ongoing",
+      "source_file": "po_ongoing.sql",
+      "output_columns": [
+        "po_ongoing_review_period"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.purchase_order"
+      ],
+      "column_comments": {
+        "po_id": "UUID of this purchase order",
+        "po_ongoing_interval": "The subscription interval in days",
+        "po_ongoing_is_subscription": "Whether or not this is a subscription",
+        "po_ongoing_manual_renewal": "Whether or not this is a manual renewal",
+        "po_ongoing_renewal_date": "The date this Ongoing PO",
+        "po_ongoing_review_period": "Time prior to renewal where changes can be made to subscription"
+      }
+    },
+    "po_prod_ids": {
+      "table_name": "po_prod_ids",
+      "source_file": "po_prod_ids.sql",
+      "output_columns": [
+        "product_id_type"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line",
+        "folio_inventory.identifier_type__t"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_number": "A human readable ID assigned to this purchase order line",
+        "product_id": "The actual product identifier",
+        "product_id_type": "The type of product identifier"
+      }
+    },
+    "po_organization": {
+      "table_name": "po_organization",
+      "source_file": "po_organization.sql",
+      "output_columns": [
+        "alias_description",
+        "contact_id"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_organizations",
+          "table": "contacts__t",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_organizations",
+          "table": "contacts__t",
+          "column": "first_name",
+          "type": "text"
+        },
+        {
+          "schema": "folio_organizations",
+          "table": "contacts__t",
+          "column": "last_name",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_organizations.organizations",
+        "folio_organizations.contacts",
+        "folio_users.users",
+        "folio_organizations.organizations__t",
+        "folio_orders.purchase_order__t"
+      ],
+      "column_comments": {
+        "po_number": "A human readable number assigned to PO",
+        "vendor_id": "The unique UUID for the vendor",
+        "organization_id": "The unique UUID for the organization",
+        "organization_code": "The code of the organization",
+        "organization_name": "The name of the organization",
+        "organization_description": "The description for the organization",
+        "is_vendor": "Indication for the organization if also a vendor",
+        "contact_first_name": "Contact First name for the organization",
+        "contact_last_name": "Contact Last name for the organization",
+        "notes": "Notes for this contact",
+        "address_line_1": "First line of this address",
+        "address_line_2": "Second line of this address",
+        "city": "City for this address",
+        "state_region": "State or Region for this address",
+        "country": "Country for this address",
+        "zip_code": "Zip Code for this address",
+        "is_primary": "Used to set this address as primary for the organization.",
+        "email_address": "Email address for the contact",
+        "phone_number": "Phone number for the contact",
+        "url": "URL of the organization",
+        "url_description": "URL description for the organization"
+      }
+    },
+    "item_administrative_notes": {
+      "table_name": "item_administrative_notes",
+      "source_file": "item_administrative_notes.sql",
+      "output_columns": [
+        "holdings_record_id",
+        "administrative_note_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.item",
+        "folio_inventory.item__t"
+      ],
+      "column_comments": {}
+    },
+    "item_ext": {
+      "table_name": "item_ext",
+      "source_file": "item_ext.sql",
+      "output_columns": [
+        "discovery_suppress"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "enumeration",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_inventory.item",
+        "folio_inventory.item__t",
+        "folio_inventory.service_point__t",
+        "folio_inventory.material_type__t",
+        "folio_inventory.loan_type__t",
+        "folio_inventory.location__t",
+        "folio_inventory.item_damaged_status__t",
+        "folio_inventory.call_number_type__t"
+      ],
+      "column_comments": {}
+    },
+    "item_electronic_access": {
+      "table_name": "item_electronic_access",
+      "source_file": "item_electronic_access.sql",
+      "output_columns": [
+        "uri"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.item",
+        "folio_inventory.item__t",
+        "folio_inventory.electronic_access_relationship__t"
+      ],
+      "column_comments": {}
+    },
+    "item_notes": {
+      "table_name": "item_notes",
+      "source_file": "item_notes.sql",
+      "output_columns": [
+        "note_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.item",
+        "folio_inventory.item__t",
+        "folio_inventory.item_note_type__t"
+      ],
+      "column_comments": {}
+    },
+    "item_statistical_codes": {
+      "table_name": "item_statistical_codes",
+      "source_file": "item_statistical_codes.sql",
+      "output_columns": [
+        "item_hrid",
+        "statistical_code_id"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.item",
+        "folio_inventory.item__t",
+        "folio_inventory.statistical_code__t",
+        "folio_inventory.statistical_code_type__t"
+      ],
+      "column_comments": {}
+    },
+    "items_holdings_instances": {
+      "table_name": "items_holdings_instances",
+      "source_file": "items_holdings_instances.sql",
+      "output_columns": [
+        "loan_type_name"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_inventory",
+          "table": "holdings_record__t",
+          "column": "acquisition_method",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "holdings_record__t",
+          "column": "copy_number",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "holdings_record__t",
+          "column": "holdings_type_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "holdings_record__t",
+          "column": "shelving_title",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "chronology",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "copy_number",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "enumeration",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "item_identifier",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "number_of_pieces",
+          "type": "text"
+        },
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "volume",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_inventory.item__t",
+        "folio_inventory.holdings_record__t",
+        "folio_inventory.instance__t",
+        "folio_inventory.loan_type__t",
+        "folio_inventory.material_type__t",
+        "folio_inventory.holdings_type__t",
+        "folio_inventory.call_number_type__t"
+      ],
+      "column_comments": {}
+    },
+    "item_tags": {
+      "table_name": "item_tags",
+      "source_file": "item_tags.sql",
+      "output_columns": [
+        "item_hrid",
+        "item_tag_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.item",
+        "folio_inventory.item__t"
+      ],
+      "column_comments": {}
+    },
+    "loans_items": {
+      "table_name": "loans_items",
+      "source_file": "loans_items.sql",
+      "output_columns": [
+        "renewal_count"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_circulation.loan__t",
+        "folio_circulation.loan",
+        "folio_inventory.service_point__t",
+        "folio_inventory.item",
+        "folio_inventory.item__t",
+        "folio_inventory.location__t",
+        "folio_derived.locations_libraries",
+        "folio_circulation.loan_policy__t",
+        "folio_feesfines.lost_item_fee_policy__t",
+        "folio_feesfines.overdue_fine_policy__t",
+        "folio_users.groups__t",
+        "folio_inventory.material_type__t",
+        "folio_inventory.loan_type__t"
+      ],
+      "column_comments": {}
+    },
+    "loans_renewal_count": {
+      "table_name": "loans_renewal_count",
+      "source_file": "loans_renewal_count.sql",
+      "output_columns": [
+        "num_renewals"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_circulation",
+          "table": "loan__t",
+          "column": "renewal_count",
+          "type": "numeric"
+        }
+      ],
+      "source_tables": [
+        "folio_circulation.loan__t",
+        "folio_inventory.item"
+      ],
+      "column_comments": {}
+    },
+    "openaccess_checklists": {
+      "table_name": "openaccess_checklists",
+      "source_file": "openaccess_checklists.sql",
+      "output_columns": [
+        "publication_request_id"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_oa.checklist_item",
+        "folio_oa.checklist_item_definition",
+        "folio_oa.refdata_value",
+        "folio_oa.publication_request"
+      ],
+      "column_comments": {
+        "cli_id": "UUID of the checklist item",
+        "cli_version": "Version of the record",
+        "cli_date_created": "Timestamp when the checklist item was created",
+        "cli_last_updated": "Timestamp when the checklist item was updated",
+        "cli_definition_fk": "UUID reference to folio_oa.checklist_item_definition",
+        "cli_definition_value": "Value of the definition for a checklist item",
+        "cli_definition_label": "Label for the definition for a checklist item",
+        "cli_definition_description": "Description for the checklist item definition",
+        "cli_parent_fk": "UUID reference to associated data where the checklists are used",
+        "cli_outcome_fk": "UUID reference to a refdata value",
+        "cli_outcome_value": "Refdata value for checklist item outcome",
+        "cli_outcome_label": "Refdata label for checklist item outcome",
+        "cli_status_fk": "UUID reference to a refdata value",
+        "cli_status_value": "Refdata value for checklist item status",
+        "cli_status_label": "Refdata label for checklist item status",
+        "publication_request_id": "UUID reference to a record of the publication request"
+      }
+    },
+    "openaccess_publication_request": {
+      "table_name": "openaccess_publication_request",
+      "source_file": "openaccess_publication_request.sql",
+      "output_columns": [
+        "pr_request_contact_rp_party_fk"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_oa.publication_request",
+        "folio_oa.refdata_value",
+        "folio_oa.request_party",
+        "folio_oa.party"
+      ],
+      "column_comments": {
+        "pr_id": "UUID of the publication request",
+        "pr_request_date": "Timestamp when the request was made (manually)",
+        "pr_date_created": "Timestamp when the record was created (comes from the system)",
+        "pr_last_updated": "Timestamp when the record is last updated (comes from the system)",
+        "pr_request_number": "Human readable number for a publication request",
+        "pr_title": "Title of the publication",
+        "pr_request_status": "UUID reference to a refdata value",
+        "pr_request_status_value": "Refdata value for publication request status",
+        "pr_request_status_label": "Refdata label for publication request status",
+        "pr_pub_type_fk": "UUID reference to a refdata value",
+        "pr_pub_type_value": "Refdata value for publication request publication type",
+        "pr_pub_type_label": "Refdata label for publication request publication type",
+        "pr_authnames": "List of names of the authors of the publication",
+        "pr_corresponding_author_fk": "FK for a record in table request_party",
+        "pr_corresponding_author_role_value": "Refdata value for the role of the corresponding author",
+        "pr_corresponding_author_role_label": "Refdata label for role of the corresponding author",
+        "pr_corresponding_author_name": "Name of the linked corresponding author",
+        "pr_corresponding_author_rp_party_fk": "FK to the table party",
+        "pr_local_ref": "ID to use for a local repository or storage",
+        "pr_pub_url": "URL for the publication",
+        "pr_subtype": "UUID reference to a refdata value",
+        "pr_subtype_value": "Refdata value for publication request subtype",
+        "pr_subtype_label": "Refdata label for publication request subtype",
+        "pr_publisher": "UUID reference to a refdata value",
+        "pr_publisher_value": "Refdata value for publication request publisher",
+        "pr_publisher_label": "Refdata label for publication request publisher",
+        "pr_license": "UUID reference to a refdata value",
+        "pr_license_value": "Refdata value for publication request license",
+        "pr_license_label": "Refdata label for publication request license",
+        "pr_doi": "DOI for the publication",
+        "pr_group_fk": "",
+        "pr_agreement_reference": "FK for publication request agreement",
+        "pr_without_agreement": "Is there a agreement to the publication request",
+        "pr_work_fk": "FK for a record in the table work",
+        "pr_book_date_of_publication": "Year of publication. For books only",
+        "pr_book_place_of_publication": "Place of publication. For books only",
+        "pr_work_indexed_in_doaj_fk": "UUID reference to a refdata value",
+        "pr_work_indexed_in_doaj_value": "Refdata value for publication request doaj status",
+        "pr_work_indexed_in_doaj_label": "Refdata label for publication request doaj status",
+        "pr_work_oa_status_fk": "UUID reference to a refdata value",
+        "pr_work_oa_status_value": "Refdata value for publication request open access status",
+        "pr_work_oa_status_label": "Refdata label for publication request open access status",
+        "pr_corresponding_institution_level_1_fk": "UUID reference to a refdata value",
+        "pr_corresponding_institution_level_1_value": "Refdata value for publication request \"institution level 1\"",
+        "pr_corresponding_institution_level_1_label": "Refdata label for publication request \"institution level 1\"",
+        "pr_corresponding_institution_level_2": "Second level for free naming the institution",
+        "pr_retrospective_oa": "Indicates if the request is for \"retrospective OA\". Where a publication previously published as closed access is converted to open access through a payment or other mechanism",
+        "pr_closure_reason_fk": "UUID reference to a refdata value",
+        "pr_closure_reason_value": "Refdata value for publication request closure reason",
+        "pr_closure_reason_label": "Refdata label for publication request closure reason",
+        "pr_request_contact_fk": "FK for a record in the table request_party",
+        "pr_request_contact_role_value": "Refdata value for role of the request contact",
+        "pr_request_contact_role_label": "Refdata label for role of the request contact",
+        "pr_request_contact_name": "Name of the linked request contact",
+        "pr_request_contact_rp_party_fk": "FK to the table party"
+      }
+    },
+    "openaccess_works": {
+      "table_name": "openaccess_works",
+      "source_file": "openaccess_works.sql",
+      "output_columns": [
+        "io_status_label"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_oa",
+          "table": "work",
+          "column": "w_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "work",
+          "column": "w_version",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "work",
+          "column": "w_title",
+          "type": "text"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "work",
+          "column": "w_indexed_in_doaj_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "work",
+          "column": "w_oa_status_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "refdata_value",
+          "column": "rdv_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "refdata_value",
+          "column": "rdv_value",
+          "type": "text"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "refdata_value",
+          "column": "rdv_label",
+          "type": "text"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "title_instance",
+          "column": "ti_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "title_instance",
+          "column": "ti_version",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "title_instance",
+          "column": "ti_work_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "title_instance",
+          "column": "ti_type_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "title_instance",
+          "column": "ti_subtype_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "title_instance",
+          "column": "ti_publication_type_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "title_instance",
+          "column": "ti_title",
+          "type": "text"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_occurrence",
+          "column": "io_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_occurrence",
+          "column": "io_version",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_occurrence",
+          "column": "io_ti_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_occurrence",
+          "column": "io_status_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_occurrence",
+          "column": "io_identifier_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_occurrence",
+          "column": "io_selected",
+          "type": "boolean"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier",
+          "column": "id_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier",
+          "column": "id_version",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier",
+          "column": "id_ns_fk",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier",
+          "column": "id_value",
+          "type": "text"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_namespace",
+          "column": "idns_id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_namespace",
+          "column": "idns_version",
+          "type": "integer"
+        },
+        {
+          "schema": "folio_oa",
+          "table": "identifier_namespace",
+          "column": "idns_value",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_oa.work",
+        "folio_oa.title_instance",
+        "folio_oa.identifier_occurrence",
+        "folio_oa.identifier",
+        "folio_oa.identifier_namespace",
+        "folio_oa.refdata_value"
+      ],
+      "column_comments": {
+        "w_id": "ID of the record in the table work",
+        "w_version": "Version of the record in the table work",
+        "w_title": "Title of the publication",
+        "w_indexed_in_doaj_fk": "ID of reference data value for the status in the directory DOAJ",
+        "w_indexed_in_doaj_value": "Reference data value for the status in the directory DOAJ",
+        "w_indexed_in_doaj_label": "Label of the reference data value for the status in the directory DOAJ",
+        "w_oa_status_fk": "ID of reference data value for the kind of Open Access",
+        "w_oa_status_value": "Reference data value for the kind of Open Access",
+        "w_oa_status_label": "Label of the reference data value for the kind of Open Access",
+        "ti_id": "ID of the record in the table title_instance",
+        "ti_version": "Version of the record in the table title_instance",
+        "ti_work_fk": "ID to the related record in the table work",
+        "ti_type_fk": "ID of reference data value for type of the title instance",
+        "ti_type_value": "Reference data value for the type of the title instance",
+        "ti_type_label": "Label of the reference data value for the type of the title instance",
+        "ti_subtype_fk": "ID of reference data value for subtype of the title instance",
+        "ti_subtype_value": "Reference data value for the subtype of the title instance",
+        "ti_subtype_label": "Label of the reference data value for the subtype of the title instance",
+        "ti_publication_type_fk": "ID of reference data value for publication type of the title instance",
+        "ti_publication_type_value": "Reference data value for the publication type of the title instance",
+        "ti_publication_type_label": "Label of the reference data value for the publication type of the title instance",
+        "ti_title": "Title of the title instance",
+        "io_id": "ID of the identifier occurrence that is related to the title instance",
+        "io_version": "Version of the record for identifier occurrence",
+        "io_ti_fk": "ID of the record in the table title_instance",
+        "io_status_fk": "Status of the record for identifier occurrence",
+        "io_status_value": "Reference data value for the status of the record for identifier occurrence",
+        "io_status_label": "Label of the reference data value for the status of the record for identifier occurrence",
+        "io_identifier_fk": "ID to the record for the identifier that is related to the title instance",
+        "io_selected": "",
+        "id_id": "ID for the record for the identifier",
+        "id_version": "Version of the record for the identifier",
+        "id_ns_fk": "ID to the record for the type of identifier",
+        "id_value": "Value of the identifier",
+        "idns_id": "ID of the record for the type of identifier",
+        "idns_version": "Version of the record for the type of identifier",
+        "idns_value": "Value of the type of identifier"
+      }
+    },
+    "po_lines_tags": {
+      "table_name": "po_lines_tags",
+      "source_file": "po_lines_tags.sql",
+      "output_columns": [
+        "pol_id",
+        "pol_tag_ordinality"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_orders.po_line"
+      ],
+      "column_comments": {
+        "pol_id": "UUID identifying this purchase order line",
+        "pol_tag": "Arbitrary tags associated with this purchase order line",
+        "pol_tag_ordinality": "The ordinality of the tag associated with the po line"
+      }
+    },
+    "requests_items": {
+      "table_name": "requests_items",
+      "source_file": "requests_items.sql",
+      "output_columns": [
+        "item_temporary_loan_type_name"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_inventory",
+          "table": "item__t",
+          "column": "enumeration",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_circulation.request__t",
+        "folio_circulation.request",
+        "folio_inventory.item__t",
+        "folio_inventory.item",
+        "folio_inventory.service_point__t",
+        "folio_users.users__t",
+        "folio_users.groups__t",
+        "folio_inventory.location__t",
+        "folio_inventory.loan_type__t",
+        "folio_inventory.material_type__t"
+      ],
+      "column_comments": {}
+    },
+    "users_addresses": {
+      "table_name": "users_addresses",
+      "source_file": "users_addresses.sql",
+      "output_columns": [
+        "is_primary_address"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_users.users",
+        "folio_users.addresstype__t"
+      ],
+      "column_comments": {}
+    },
+    "users_departments_unpacked": {
+      "table_name": "users_departments_unpacked",
+      "source_file": "users_departments_unpacked.sql",
+      "output_columns": [
+        "user_id",
+        "department_ordinality"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_users",
+          "table": "departments__t",
+          "column": "id",
+          "type": "uuid"
+        },
+        {
+          "schema": "folio_users",
+          "table": "departments__t",
+          "column": "code",
+          "type": "text"
+        },
+        {
+          "schema": "folio_users",
+          "table": "departments__t",
+          "column": "name",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_users.users",
+        "folio_users.departments__t"
+      ],
+      "column_comments": {
+        "user_id": "User ID (Generated UUID) of the user associated with the department(s)",
+        "department_id": "Department ID (Generated UUID) of the department",
+        "department_ordinality": "The ordinality of the department(s) associated with a user",
+        "department_name": "The display name of the department",
+        "department_code": "The (user-supplied) code for the department"
+      }
+    },
+    "users_groups": {
+      "table_name": "users_groups",
+      "source_file": "users_groups.sql",
+      "output_columns": [
+        "departments"
+      ],
+      "required_columns": [
+        {
+          "schema": "folio_users",
+          "table": "users__t",
+          "column": "enrollment_date",
+          "type": "timestamptz"
+        },
+        {
+          "schema": "folio_users",
+          "table": "users__t",
+          "column": "external_system_id",
+          "type": "text"
+        },
+        {
+          "schema": "folio_users",
+          "table": "users__t",
+          "column": "type",
+          "type": "text"
+        }
+      ],
+      "source_tables": [
+        "folio_users.users",
+        "folio_users.users__t",
+        "folio_users.groups__t"
+      ],
+      "column_comments": {
+        "user_id": "A globally unique (UUID) identifier for the user",
+        "active": "A flag to determine if the users account is effective and not expired. The tenant configuration can require the user to be active for login. Active is different from the loan patron block",
+        "barcode": "The unique library barcode for this user",
+        "created_date": "Date and time when the user record was created",
+        "enrollment_date": "The date when the user joined the organization",
+        "expiration_date": "The date when the user will become inactive",
+        "external_system_id": "A unique ID that corresponds to an external authority",
+        "patron_group": "A UUID corresponding to the group the user belongs to, example groups are undergraduate and faculty; loan rules, patron blocks, fees/fines and expiration days can use the patron group",
+        "group_description": "A description for the user group",
+        "group_name": "The unique name of the user group",
+        "departments": "A list of UUIDs corresponding to the departments the user belongs to",
+        "user_last_name": "The users surname",
+        "user_first_name": "The users given name",
+        "user_middle_name": "The users middle name (if any)",
+        "user_preferred_first_name": "The users preferred name",
+        "user_email": "The users email address",
+        "user_phone": "The users primary phone number",
+        "user_mobile_phone": "The users mobile phone number",
+        "user_date_of_birth": "The users birth date",
+        "user_preferred_contact_type_id": "ID of users preferred contact type like Email, Mail or Text Message",
+        "user_type": "The class of the user, like staff or patron; this is different from patronGroup",
+        "updated_date": "Date and time when the user record was last updated",
+        "username": "A unique name belonging to a user. Typically used for login"
+      }
+    },
+    "invoice_lines_fund_distributions": {
+      "table_name": "invoice_lines_fund_distributions",
+      "source_file": "invoice_lines_fund_distributions.sql",
+      "output_columns": [
+        "invoice_line_total"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_invoice.invoice_lines",
+        "folio_finance.fund__t",
+        "folio_finance.fund_type__t"
+      ],
+      "column_comments": {
+        "invoice_line_id": "UUID of the invoice line associated with this fund distribution",
+        "fund_distribution_id": "UUID of the fund distribution",
+        "fund_status": "The current status of this fund",
+        "fund_code": "The code of the fund associated with this fund distribution",
+        "fund_name": "The name of the fund associated with this fund distribution",
+        "fund_type_id": "UUID of the fund type associated with this fund",
+        "fund_type_name": "The name of this fund type",
+        "fund_distribution_value": "The percentage of the cost to be applied to this fund",
+        "fund_distribution_type": "Percentage or amount type of the value property",
+        "invoice_line_sub_total": "Invoice line amount before adjustments are applied",
+        "invoice_line_total": "Invoice line total amount which is sum of subTotal and adjustmentsTotal. This amount is always calculated by system."
+      }
+    },
+    "item_circulation_notes": {
+      "table_name": "item_circulation_notes",
+      "source_file": "item_circulation_notes.sql",
+      "output_columns": [
+        "staff_only"
+      ],
+      "required_columns": [],
+      "source_tables": [
+        "folio_inventory.item"
+      ],
+      "column_comments": {}
+    }
+  },
+  "schema_mapping": {
+    "folio_agreements": [
+      "custom_property",
+      "custom_property_container",
+      "custom_property_definition",
+      "custom_property_integer",
+      "custom_property_text",
+      "entitlement",
+      "erm_resource",
+      "identifier",
+      "identifier_namespace",
+      "identifier_occurrence",
+      "order_line",
+      "org",
+      "package",
+      "package_content_item",
+      "platform",
+      "platform_title_instance",
+      "refdata_category",
+      "refdata_value",
+      "remotekb",
+      "subscription_agreement",
+      "subscription_agreement_org",
+      "subscription_agreement_org_role",
+      "title_instance"
+    ],
+    "folio_circulation": [
+      "audit_loan",
+      "loan",
+      "loan__t",
+      "loan_policy__t",
+      "request",
+      "request__t"
+    ],
+    "folio_configuration": [
+      "config_data__t"
+    ],
+    "folio_derived": [
+      "locations_libraries"
+    ],
+    "folio_feesfines": [
+      "accounts",
+      "feefineactions",
+      "lost_item_fee_policy__t",
+      "overdue_fine_policy__t"
+    ],
+    "folio_finance": [
+      "budget",
+      "budget__t",
+      "expense_class__t",
+      "fiscal_year",
+      "fiscal_year__t",
+      "fund",
+      "fund__t",
+      "fund_type",
+      "fund_type__t",
+      "ledger",
+      "ledger__t",
+      "transaction",
+      "transaction__t"
+    ],
+    "folio_inventory": [
+      "alternative_title_type",
+      "call_number_type",
+      "call_number_type__t",
+      "classification_type__t",
+      "contributor_name_type__t",
+      "contributor_type__t",
+      "electronic_access_relationship__t",
+      "holdings_note_type__t",
+      "holdings_record",
+      "holdings_record__t",
+      "holdings_type__t",
+      "identifier_type__t",
+      "ill_policy__t",
+      "instance",
+      "instance__t",
+      "instance_format__t",
+      "instance_note_type__t",
+      "instance_relationship",
+      "instance_relationship_type__t",
+      "instance_status__t",
+      "instance_type__t",
+      "item",
+      "item__t",
+      "item_damaged_status__t",
+      "item_note_type__t",
+      "loan_type__t",
+      "location",
+      "location__t",
+      "loccampus__t",
+      "locinstitution__t",
+      "loclibrary__t",
+      "material_type__t",
+      "mode_of_issuance__t",
+      "nature_of_content_term__t",
+      "service_point__t",
+      "statistical_code__t",
+      "statistical_code_type__t"
+    ],
+    "folio_invoice": [
+      "invoice_lines",
+      "invoice_lines__t",
+      "invoices",
+      "invoices__t",
+      "voucher_lines",
+      "vouchers__t"
+    ],
+    "folio_licenses": [
+      "custom_property",
+      "custom_property_container",
+      "custom_property_decimal",
+      "custom_property_definition",
+      "custom_property_integer",
+      "custom_property_local_date",
+      "custom_property_text",
+      "license",
+      "license_org",
+      "license_org_role",
+      "org",
+      "refdata_value"
+    ],
+    "folio_oa": [
+      "checklist_item",
+      "checklist_item_definition",
+      "identifier",
+      "identifier_namespace",
+      "identifier_occurrence",
+      "party",
+      "publication_request",
+      "refdata_value",
+      "request_party",
+      "title_instance",
+      "work"
+    ],
+    "folio_orders": [
+      "acquisition_method__t",
+      "acquisitions_unit__t",
+      "po_line",
+      "po_line__t",
+      "purchase_order",
+      "purchase_order__t"
+    ],
+    "folio_organizations": [
+      "contacts",
+      "organizations",
+      "organizations__t"
+    ],
+    "folio_users": [
+      "addresstype__t",
+      "departments__t",
+      "groups__t",
+      "users",
+      "users__t"
+    ]
+  },
+  "ldp1_to_metadb": {
+    "acquisitions_memberships": "folio_orders.membership__t",
+    "acquisitions_units": "folio_orders.unit__t",
+    "audit_circulation_logs": "folio_audit.circulation_log__t",
+    "circulation_cancellation_reasons": "folio_circulation.cancellation_reason__t",
+    "circulation_check_ins": "folio_circulation.check_in__t",
+    "circulation_fixed_due_date_schedules": "folio_circulation.fixed_due_date_schedule__t",
+    "circulation_loan_history": "folio_circulation.loan_history__t",
+    "circulation_loan_policies": "folio_circulation.loan_policy__t",
+    "circulation_loans": "folio_circulation.loan__t",
+    "circulation_patron_action_sessions": "folio_circulation.patron_action_session__t",
+    "circulation_patron_notice_policies": "folio_circulation.patron_notice_policy__t",
+    "circulation_request_policies": "folio_circulation.request_policy__t",
+    "circulation_request_preference": "folio_circulation.request_preference__t",
+    "circulation_requests": "folio_circulation.request__t",
+    "circulation_scheduled_notices": "folio_circulation.scheduled_notice__t",
+    "circulation_staff_slips": "folio_circulation.staff_slip__t",
+    "configuration_entries": "folio_configuration.entry__t",
+    "course_copyrightstatuses": "folio_courses.copyrightstatus__t",
+    "course_courselistings": "folio_courses.courselisting__t",
+    "course_courses": "folio_courses.cours__t",
+    "course_coursetypes": "folio_courses.coursetype__t",
+    "course_departments": "folio_courses.department__t",
+    "course_processingstatuses": "folio_courses.processingstatus__t",
+    "course_reserves": "folio_courses.reserve__t",
+    "course_roles": "folio_courses.role__t",
+    "course_terms": "folio_courses.term__t",
+    "email_email": "folio_email.email__t",
+    "feesfines_accounts": "folio_feesfines.account__t",
+    "feesfines_comments": "folio_feesfines.comment__t",
+    "feesfines_feefineactions": "folio_feesfines.feefineaction__t",
+    "feesfines_feefines": "folio_feesfines.feefine__t",
+    "feesfines_lost_item_fees_policies": "folio_feesfines.lost_item_fees_policy__t",
+    "feesfines_manualblocks": "folio_feesfines.manualblock__t",
+    "feesfines_overdue_fines_policies": "folio_feesfines.overdue_fines_policy__t",
+    "feesfines_owners": "folio_feesfines.owner__t",
+    "feesfines_payments": "folio_feesfines.payment__t",
+    "feesfines_refunds": "folio_feesfines.refund__t",
+    "feesfines_transfer_criterias": "folio_feesfines.transfer_criteria__t",
+    "feesfines_transfers": "folio_feesfines.transfer__t",
+    "feesfines_waives": "folio_feesfines.waive__t",
+    "finance_budgets": "folio_finance.budget__t",
+    "finance_expense_classes": "folio_finance.expense_class__t",
+    "finance_fiscal_years": "folio_finance.fiscal_year__t",
+    "finance_fund_types": "folio_finance.fund_type__t",
+    "finance_funds": "folio_finance.fund__t",
+    "finance_group_fund_fiscal_years": "folio_finance.group_fund_fiscal_year__t",
+    "finance_groups": "folio_finance.group__t",
+    "finance_ledgers": "folio_finance.ledger__t",
+    "finance_transactions": "folio_finance.transaction__t",
+    "inventory_alternative_title_types": "folio_inventory.alternative_title_type__t",
+    "inventory_call_number_types": "folio_inventory.call_number_type__t",
+    "inventory_campuses": "folio_inventory.campus__t",
+    "inventory_classification_types": "folio_inventory.classification_type__t",
+    "inventory_contributor_name_types": "folio_inventory.contributor_name_type__t",
+    "inventory_contributor_types": "folio_inventory.contributor_type__t",
+    "inventory_electronic_access_relationships": "folio_inventory.electronic_access_relationship__t",
+    "inventory_holdings": "folio_inventory.holding__t",
+    "inventory_holdings_note_types": "folio_inventory.holdings_note_type__t",
+    "inventory_holdings_sources": "folio_inventory.holdings_source__t",
+    "inventory_holdings_types": "folio_inventory.holdings_type__t",
+    "inventory_identifier_types": "folio_inventory.identifier_type__t",
+    "inventory_ill_policies": "folio_inventory.ill_policy__t",
+    "inventory_instance_formats": "folio_inventory.instance_format__t",
+    "inventory_instance_note_types": "folio_inventory.instance_note_type__t",
+    "inventory_instance_relationship_types": "folio_inventory.instance_relationship_type__t",
+    "inventory_instance_relationships": "folio_inventory.instance_relationship__t",
+    "inventory_instance_statuses": "folio_inventory.instance_status__t",
+    "inventory_instance_types": "folio_inventory.instance_type__t",
+    "inventory_instances": "folio_inventory.instance__t",
+    "inventory_institutions": "folio_inventory.institution__t",
+    "inventory_item_damaged_statuses": "folio_inventory.item_damaged_status__t",
+    "inventory_item_note_types": "folio_inventory.item_note_type__t",
+    "inventory_items": "folio_inventory.item__t",
+    "inventory_libraries": "folio_inventory.library__t",
+    "inventory_loan_types": "folio_inventory.loan_type__t",
+    "inventory_locations": "folio_inventory.location__t",
+    "inventory_material_types": "folio_inventory.material_type__t",
+    "inventory_modes_of_issuance": "folio_inventory.modes_of_issuance__t",
+    "inventory_nature_of_content_terms": "folio_inventory.nature_of_content_term__t",
+    "inventory_service_points": "folio_inventory.service_point__t",
+    "inventory_service_points_users": "folio_inventory.service_points_user__t",
+    "inventory_statistical_code_types": "folio_inventory.statistical_code_type__t",
+    "inventory_statistical_codes": "folio_inventory.statistical_code__t",
+    "invoice_invoices": "folio_invoice.invoice__t",
+    "invoice_lines": "folio_invoice.line__t",
+    "invoice_voucher_lines": "folio_invoice.voucher_line__t",
+    "invoice_vouchers": "folio_invoice.voucher__t",
+    "notes": "folio_notes.__t",
+    "organization_addresses": "folio_organizations.address__t",
+    "organization_categories": "folio_organizations.category__t",
+    "organization_contacts": "folio_organizations.contact__t",
+    "organization_emails": "folio_organizations.email__t",
+    "organization_interfaces": "folio_organizations.interface__t",
+    "organization_organizations": "folio_organizations.organization__t",
+    "organization_phone_numbers": "folio_organizations.phone_number__t",
+    "organization_urls": "folio_organizations.url__t",
+    "patron_blocks_user_summary": "folio_patron_blocks.user_summary__t",
+    "perm_permissions": "folio_permissions.permission__t",
+    "perm_users": "folio_permissions.user__t",
+    "po_alerts": "folio_orders.alert__t",
+    "po_lines": "folio_orders.line__t",
+    "po_order_invoice_relns": "folio_orders.order_invoice_reln__t",
+    "po_order_templates": "folio_orders.order_template__t",
+    "po_pieces": "folio_orders.piece__t",
+    "po_purchase_orders": "folio_orders.purchase_order__t",
+    "po_receiving_history": "folio_orders.receiving_history__t",
+    "po_reporting_codes": "folio_orders.reporting_code__t",
+    "srs_error": "folio_source_record.error__t",
+    "srs_marc": "folio_source_record.marc__t",
+    "srs_records": "folio_source_record.record__t",
+    "user_addresstypes": "folio_users.addresstype__t",
+    "user_departments": "folio_users.department__t",
+    "user_groups": "folio_users.group__t",
+    "user_proxiesfor": "folio_users.proxiesfor__t",
+    "user_users": "folio_users.user__t"
+  }
+}

@@ -1,0 +1,24 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Yii2 console application entry point.
+ * Used for queue worker and other CLI commands.
+ */
+
+// Load .env on bare-metal deploys
+$envLoader = __DIR__ . '/config/env.php';
+if (file_exists($envLoader)) {
+    require $envLoader;
+}
+
+defined('YII_DEBUG') or define('YII_DEBUG', getenv('YII_DEBUG') !== 'false');
+defined('YII_ENV') or define('YII_ENV', getenv('YII_ENV') ?: 'dev');
+
+require __DIR__ . '/vendor/autoload.php';
+require __DIR__ . '/vendor/yiisoft/yii2/Yii.php';
+
+$config = require __DIR__ . '/config/console.php';
+
+$application = new yii\console\Application($config);
+$exitCode = $application->run();
+exit($exitCode);
