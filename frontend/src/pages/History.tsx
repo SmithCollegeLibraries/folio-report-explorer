@@ -1,13 +1,403 @@
-import { useState, useEffect, useCallback } from 'react';
-import { History as HistoryIcon, Clock, Database, Eye, ChevronLeft, ChevronRight, User } from 'lucide-react';
-import { fetchQueryHistory, checkJobStatus } from '../api/client';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  History as HistoryIcon, Clock, Database, Eye, ChevronLeft, ChevronRight,
+  User, Search, X, Download, Copy, Check, ChevronDown, ChevronUp,
+  Loader2, Code2, Pencil, Bookmark, LayoutDashboard, CheckCircle2,
+} from 'lucide-react';
+import { fetchQueryHistory, checkJobStatus, renameHistoryJob, saveQuery } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
-import type { HistoryItem, JobStatusResponse } from '../types';
+import type { HistoryItem, JobStatusResponse, SavedQuery } from '../types';
 
-/**
- * Query history page — shows the user's completed queries and lets them
- * re-view results.
- */
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function fmtTime(ms: number) {
+  if (ms >= 60000) return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${ms}ms`;
+}
+
+function fmtDate(iso: string) {
+  const d = new Date(iso);
+  return (
+    d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' ' +
+    d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  );
+}
+
+const SOURCE_STYLES: Record<string, string> = {
+  nl:      'bg-purple-100 text-purple-700',
+  builder: 'bg-blue-100 text-blue-700',
+  manual:  'bg-gray-100 text-gray-600',
+  report:  'bg-amber-100 text-amber-700',
+};
+
+function SourceBadge({ source }: { source: string }) {
+  const label = source === 'nl' ? 'Ask AI' : source === 'builder' ? 'Builder' : source;
+  return (
+    <span className={`inline-flex items-center text-xs font-medium px-2 py-0.5 rounded ${SOURCE_STYLES[source] ?? 'bg-gray-100 text-gray-600'}`}>
+      {label}
+    </span>
+  );
+}
+
+function downloadCsv(job: JobStatusResponse, name: string | null) {
+  if (!job.columns || !job.rows) return;
+  const escape = (v: unknown) => {
+    const s = v == null ? '' : String(v);
+    return s.includes(',') || s.includes('"') || s.includes('\n')
+      ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const header = job.columns.map(escape).join(',');
+  const rows = job.rows.map((r) => job.columns!.map((c) => escape(r[c])).join(','));
+  const csv = [header, ...rows].join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(name || 'query').replace(/[^a-z0-9_-]/gi, '_')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ─── Save-to-library dialog ───────────────────────────────────────────────────
+
+function SaveQueryDialog({
+  item, initialPinned, onClose, onSaved,
+}: {
+  item: HistoryItem;
+  initialPinned: boolean;
+  onClose: () => void;
+  onSaved: (sq: SavedQuery, pinned: boolean) => void;
+}) {
+  const [name, setName] = useState(item.name || '');
+  const [description, setDescription] = useState('');
+  const [isPinned, setIsPinned] = useState(initialPinned);
+  const [saving, setSaving] = useState(false);
+  const [savedOk, setSavedOk] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { nameRef.current?.focus(); }, []);
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) { setErr('Name is required'); return; }
+    setSaving(true);
+    setErr(null);
+    try {
+      const source = (item.source === 'nl' || item.source === 'builder') ? item.source : 'builder';
+      const sq = await saveQuery({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        generatedSql: item.sql,
+        queryDefinition: { sql: item.sql },
+        source,
+        isPinned,
+      });
+      setSavedOk(true);
+      setTimeout(() => { onSaved(sq, isPinned); onClose(); }, 900);
+    } catch (e: any) {
+      setErr(e.response?.data?.error || 'Failed to save');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+        <div className="px-6 py-4 border-b flex items-center justify-between">
+          <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+            {isPinned
+              ? <><LayoutDashboard size={16} className="text-folio-600" /> Add to Dashboard</>
+              : <><Bookmark size={16} className="text-folio-600" /> Save to Library</>}
+          </h2>
+          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-600 rounded"><X size={16} /></button>
+        </div>
+        <form onSubmit={handleSubmit} className="px-6 py-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Name <span className="text-red-500">*</span></label>
+            <input
+              ref={nameRef}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="My recurring query…"
+              className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-folio-300 focus:border-folio-500 outline-none"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Description <span className="text-xs text-gray-400 ml-1">optional</span></label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              placeholder="What does this query do?"
+              className="w-full px-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-folio-300 focus:border-folio-500 outline-none resize-none"
+            />
+          </div>
+          <label className="flex items-center gap-2.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={isPinned}
+              onChange={(e) => setIsPinned(e.target.checked)}
+              className="w-4 h-4 rounded text-folio-600 focus:ring-folio-400"
+            />
+            <span className="text-sm text-gray-700 flex items-center gap-1.5">
+              <LayoutDashboard size={14} className="text-folio-500" /> Pin to Dashboard
+            </span>
+          </label>
+          {err && <p className="text-red-600 text-xs">{err}</p>}
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-lg hover:bg-gray-50">Cancel</button>
+            <button
+              type="submit"
+              disabled={saving || savedOk}
+              className="px-4 py-2 text-sm bg-folio-600 text-white rounded-lg hover:bg-folio-700 disabled:opacity-60 flex items-center gap-1.5 transition-colors"
+            >
+              {savedOk
+                ? <><CheckCircle2 size={14} className="text-green-300" /> Saved!</>
+                : saving ? <><Loader2 size={14} className="animate-spin" /> Saving…</> : 'Save'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ─── Results modal ─────────────────────────────────────────────────────────────
+
+function ResultsModal({
+  item, job, loading, onClose, onRename, onSave,
+}: {
+  item: HistoryItem;
+  job: JobStatusResponse | null;
+  loading: boolean;
+  onClose: () => void;
+  onRename: (newName: string) => void;
+  onSave: (initialPinned: boolean) => void;
+}) {
+  const [sqlOpen, setSqlOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameVal, setRenameVal] = useState(item.name ?? '');
+  const [renameSaving, setRenameSaving] = useState(false);
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { setRenameVal(item.name ?? ''); }, [item.name]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape' && !renaming) onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose, renaming]);
+
+  useEffect(() => { if (renaming) renameInputRef.current?.focus(); }, [renaming]);
+
+  const commitRename = async () => {
+    const val = renameVal.trim();
+    if (val === (item.name ?? '')) { setRenaming(false); return; }
+    setRenameSaving(true);
+    try {
+      await renameHistoryJob(item.jobId, val);
+      onRename(val || '');
+    } finally {
+      setRenameSaving(false);
+      setRenaming(false);
+    }
+  };
+
+  const handleCopySql = () => {
+    const sql = job?.sql || item.sql;
+    if (sql) {
+      navigator.clipboard.writeText(sql);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-xl shadow-2xl flex flex-col w-full max-w-6xl max-h-[90vh] overflow-hidden">
+        {/* Header */}
+        <div className="flex items-start justify-between px-6 py-4 border-b bg-gray-50 flex-shrink-0">
+          <div className="flex-1 min-w-0 pr-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <SourceBadge source={item.source} />
+              {renaming ? (
+                <form
+                  onSubmit={(e) => { e.preventDefault(); commitRename(); }}
+                  className="flex items-center gap-1.5 flex-1 min-w-0"
+                >
+                  <input
+                    ref={renameInputRef}
+                    value={renameVal}
+                    onChange={(e) => setRenameVal(e.target.value)}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { setRenaming(false); setRenameVal(item.name ?? ''); } }}
+                    disabled={renameSaving}
+                    placeholder="Query name…"
+                    className="flex-1 px-2 py-0.5 text-sm font-semibold border rounded border-folio-400 focus:ring-1 focus:ring-folio-300 outline-none min-w-0"
+                  />
+                  {renameSaving && <Loader2 size={13} className="animate-spin text-folio-500 flex-shrink-0" />}
+                </form>
+              ) : (
+                <button
+                  onClick={() => setRenaming(true)}
+                  className="flex items-center gap-1.5 group/name min-w-0"
+                  title="Click to rename"
+                >
+                  <h2 className="text-base font-semibold text-gray-800 truncate">
+                    {item.name ?? <span className="italic text-gray-400 font-normal">Unnamed query</span>}
+                  </h2>
+                  <Pencil size={12} className="text-gray-300 group-hover/name:text-folio-500 flex-shrink-0 transition-colors" />
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-4 mt-1.5 text-xs text-gray-400 flex-wrap">
+              <span className="flex items-center gap-1"><Clock size={11} />{fmtDate(item.completedAt)}</span>
+              <span>{item.rowCount.toLocaleString()} rows</span>
+              <span>{fmtTime(item.executionTimeMs)}</span>
+              {item.runBy && (
+                <span className="flex items-center gap-1"><User size={11} />{item.runBy}</span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => onSave(false)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 text-gray-600 rounded hover:bg-gray-100 transition-colors"
+              title="Save to Library"
+            >
+              <Bookmark size={14} /> Save
+            </button>
+            <button
+              onClick={() => onSave(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 text-gray-600 rounded hover:bg-gray-100 transition-colors"
+              title="Pin to Dashboard"
+            >
+              <LayoutDashboard size={14} /> Dashboard
+            </button>
+            {job && (
+              <button
+                onClick={() => downloadCsv(job, item.name)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-folio-600 text-white rounded hover:bg-folio-700 transition-colors"
+              >
+                <Download size={14} /> CSV
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
+              title="Close (Esc)"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* SQL collapsible */}
+        <div className="border-b flex-shrink-0">
+          <button
+            onClick={() => setSqlOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-6 py-2.5 text-xs text-gray-500 hover:bg-gray-50 transition-colors"
+          >
+            <span className="flex items-center gap-1.5 font-medium"><Code2 size={13} /> SQL</span>
+            <div className="flex items-center gap-2">
+              <span
+                role="button"
+                onClick={(e) => { e.stopPropagation(); handleCopySql(); }}
+                className="flex items-center gap-1 px-2 py-0.5 rounded border border-gray-200 hover:bg-white transition-colors cursor-pointer"
+              >
+                {copied
+                  ? <><Check size={11} className="text-green-500" /> Copied</>
+                  : <><Copy size={11} /> Copy</>}
+              </span>
+              {sqlOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </div>
+          </button>
+          {sqlOpen && (
+            <div className="px-6 pb-3">
+              <pre className="text-xs font-mono text-gray-600 bg-gray-50 p-3 rounded border border-gray-100 max-h-40 overflow-auto whitespace-pre-wrap">
+                {job?.sql ?? item.sql}
+              </pre>
+            </div>
+          )}
+        </div>
+
+        {/* Results body */}
+        <div className="flex-1 overflow-auto">
+          {loading ? (
+            <div className="flex items-center justify-center h-48 gap-3 text-gray-400">
+              <Loader2 size={20} className="animate-spin text-folio-600" />
+              <span className="text-sm">Loading results…</span>
+            </div>
+          ) : job?.columns && job?.rows ? (
+            <>
+              <table className="w-full text-xs border-separate border-spacing-0">
+                <thead className="bg-gray-50 sticky top-0 z-10">
+                  <tr>
+                    {job.columns.map((col) => (
+                      <th
+                        key={col}
+                        className="text-left px-3 py-2 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap"
+                      >
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {job.rows.map((row, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                      {job.columns!.map((col) => (
+                        <td
+                          key={col}
+                          className="px-3 py-1.5 text-gray-700 whitespace-nowrap max-w-xs truncate border-b border-gray-100"
+                          title={row[col] != null ? String(row[col]) : ''}
+                        >
+                          {row[col] != null
+                            ? String(row[col])
+                            : <span className="text-gray-300 italic">null</span>}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {job.rows.length >= 200 && (
+                <div className="px-4 py-3 text-xs text-gray-400 text-center border-t bg-gray-50">
+                  Showing first {job.rows.length.toLocaleString()} rows — download CSV for full dataset
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+              No result data available.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main page ─────────────────────────────────────────────────────────────────
+
+type SortKey = 'completedAt' | 'rowCount' | 'executionTimeMs';
+
 export default function History() {
   const { isAdmin } = useAuth();
   const [items, setItems] = useState<HistoryItem[]>([]);
@@ -15,12 +405,24 @@ export default function History() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<string>('');
+  const [sortKey, setSortKey] = useState<SortKey>('completedAt');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [modalItem, setModalItem] = useState<HistoryItem | null>(null);
+  const [modalJob, setModalJob] = useState<JobStatusResponse | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
+  // Rename state
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
+  // Save-to-library dialog
+  const [savingItem, setSavingItem] = useState<HistoryItem | null>(null);
+  const [saveInitialPin, setSaveInitialPin] = useState(false);
 
-  // Selected job detail
-  const [selectedJob, setSelectedJob] = useState<JobStatusResponse | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const limit = 20;
+  const limit = 50;
 
   const load = useCallback(async () => {
     try {
@@ -36,203 +438,326 @@ export default function History() {
     }
   }, [offset]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  const handleViewResults = async (jobId: string) => {
+  const openModal = async (item: HistoryItem) => {
+    setModalItem(item);
+    setModalJob(null);
+    setModalLoading(true);
     try {
-      setDetailLoading(true);
-      setSelectedJob(null);
-      const data = await checkJobStatus(jobId);
-      setSelectedJob(data);
+      const data = await checkJobStatus(item.jobId);
+      setModalJob(data);
     } catch (e: any) {
       setError(e.response?.data?.error || 'Failed to load results');
     } finally {
-      setDetailLoading(false);
+      setModalLoading(false);
     }
   };
+
+  const closeModal = useCallback(() => { setModalItem(null); setModalJob(null); }, []);
+
+  // ── Inline rename handlers ──────────────────────────────────────
+  const startRename = (item: HistoryItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenamingId(item.jobId);
+    setRenameValue(item.name ?? '');
+  };
+
+  const cancelRename = () => { setRenamingId(null); setRenameValue(''); };
+
+  const commitRename = async (jobId: string) => {
+    const val = renameValue.trim();
+    const original = items.find((i) => i.jobId === jobId)?.name ?? '';
+    if (val === original) { cancelRename(); return; }
+    setRenameSaving(true);
+    try {
+      await renameHistoryJob(jobId, val);
+      setItems((prev) => prev.map((i) => i.jobId === jobId ? { ...i, name: val || null } : i));
+      if (modalItem?.jobId === jobId) setModalItem((m) => m ? { ...m, name: val || null } : m);
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Rename failed');
+    } finally {
+      setRenameSaving(false);
+      cancelRename();
+    }
+  };
+
+  // ── Modal-triggered rename ──────────────────────────────────────
+  const handleModalRename = async (newName: string) => {
+    if (!modalItem) return;
+    setItems((prev) => prev.map((i) => i.jobId === modalItem.jobId ? { ...i, name: newName || null } : i));
+    setModalItem((m) => m ? { ...m, name: newName || null } : m);
+  };
+
+  // ── Save-to-library ─────────────────────────────────────────────
+  const openSaveDialog = (item: HistoryItem, pinned: boolean, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setSavingItem(item);
+    setSaveInitialPin(pinned);
+    // Close modal so we don't stack two modals
+    setModalItem(null);
+    setModalJob(null);
+  };
+
+  const filtered = items
+    .filter((item) => {
+      const q = search.toLowerCase();
+      if (q && !((item.name ?? '').toLowerCase().includes(q) || item.sql.toLowerCase().includes(q) || (item.runBy ?? '').toLowerCase().includes(q))) return false;
+      if (sourceFilter && item.source !== sourceFilter) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      const av = a[sortKey] as string | number;
+      const bv = b[sortKey] as string | number;
+      const al = typeof av === 'string' ? av.toLowerCase() : av;
+      const bl = typeof bv === 'string' ? bv.toLowerCase() : bv;
+      if (al < bl) return sortDir === 'asc' ? -1 : 1;
+      if (al > bl) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  const SortIcon = ({ col }: { col: SortKey }) =>
+    sortKey === col
+      ? (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)
+      : <ChevronDown size={12} className="opacity-30" />;
 
   const totalPages = Math.ceil(total / limit);
   const currentPage = Math.floor(offset / limit) + 1;
 
   return (
     <div className="max-w-screen-xl mx-auto p-6">
+      {/* Page title */}
       <div className="flex items-center gap-3 mb-6">
-        <HistoryIcon className="text-folio-600" size={24} />
+        <HistoryIcon className="text-folio-600 flex-shrink-0" size={22} />
         <h1 className="text-2xl font-bold text-gray-800">Query History</h1>
-        <span className="text-sm text-gray-400 ml-2">
-          {total} completed {total === 1 ? 'query' : 'queries'}
-        </span>
+        <span className="text-sm text-gray-400 ml-1">{total} {total === 1 ? 'query' : 'queries'}</span>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">
-          {error}
-        </div>
+        <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">{error}</div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Job list */}
-        <div>
-          {loading ? (
-            <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-folio-600" />
-            </div>
-          ) : items.length === 0 ? (
-            <div className="text-center py-12 text-gray-400">
-              <Database size={40} className="mx-auto mb-3 opacity-50" />
-              <p>No completed queries yet.</p>
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="relative flex-1 min-w-48">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            ref={searchRef}
+            type="text"
+            placeholder="Search by name, SQL, or user…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-2 text-sm border rounded-lg focus:ring-2 focus:ring-folio-300 focus:border-folio-500 outline-none"
+          />
+          {search && (
+            <button onClick={() => setSearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+              <X size={13} />
+            </button>
+          )}
+        </div>
+        <select
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value)}
+          className="text-sm border rounded-lg px-3 py-2 bg-white focus:ring-2 focus:ring-folio-300 outline-none"
+        >
+          <option value="">All sources</option>
+          <option value="nl">Ask AI</option>
+          <option value="builder">Builder</option>
+          <option value="manual">Manual</option>
+          <option value="report">Report</option>
+        </select>
+        {(search || sourceFilter) && (
+          <span className="text-xs text-gray-500">{filtered.length} match{filtered.length !== 1 ? 'es' : ''}</span>
+        )}
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
+          <Loader2 size={20} className="animate-spin text-folio-600" />
+          <span className="text-sm">Loading history…</span>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <Database size={40} className="mx-auto mb-3 opacity-40" />
+          {items.length === 0 ? (
+            <>
+              <p className="font-medium">No queries yet</p>
               <p className="text-sm mt-1">Run a query from the Builder or Ask AI page.</p>
-            </div>
+            </>
           ) : (
             <>
-              <div className="space-y-2">
-                {items.map((item) => (
-                  <button
-                    key={item.jobId}
-                    onClick={() => handleViewResults(item.jobId)}
-                    className={`w-full text-left bg-white border rounded-lg p-4 hover:border-folio-300 transition-colors ${
-                      selectedJob?.jobId === item.jobId
-                        ? 'border-folio-500 ring-1 ring-folio-200'
-                        : 'border-gray-200'
-                    }`}
-                  >
-                    {/* Name / title row */}
-                    {item.name ? (
-                      <div className="text-sm font-semibold text-gray-800 mb-1 line-clamp-1">{item.name}</div>
-                    ) : (
-                      <div className="text-sm italic text-gray-400 mb-1">Unnamed query</div>
-                    )}
-                    <div className="flex items-start justify-between mb-2">
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-folio-600 bg-folio-50 px-2 py-0.5 rounded">
-                        {item.source}
-                      </span>
-                      <span className="text-xs text-gray-400 flex items-center gap-1">
-                        <Clock size={12} />
-                        {new Date(item.completedAt).toLocaleString()}
-                      </span>
-                    </div>
-                    <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap line-clamp-2 mb-2">
-                      {item.sql}
-                    </pre>
-                    <div className="flex items-center justify-between text-xs text-gray-400">
-                      <div className="flex items-center gap-4">
-                        <span>{item.rowCount.toLocaleString()} rows</span>
-                        <span>{item.executionTimeMs >= 1000
-                          ? `${(item.executionTimeMs / 1000).toFixed(1)}s`
-                          : `${item.executionTimeMs}ms`}</span>
-                      </div>
-                      {isAdmin && item.runBy && (
-                        <span className="flex items-center gap-1 text-gray-400">
-                          <User size={11} />{item.runBy}
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between mt-4">
-                  <button
-                    onClick={() => setOffset(Math.max(0, offset - limit))}
-                    disabled={offset === 0}
-                    className="flex items-center gap-1 px-3 py-1.5 text-sm border rounded disabled:opacity-40 hover:bg-gray-50"
-                  >
-                    <ChevronLeft size={14} /> Previous
-                  </button>
-                  <span className="text-sm text-gray-500">
-                    Page {currentPage} of {totalPages}
-                  </span>
-                  <button
-                    onClick={() => setOffset(offset + limit)}
-                    disabled={offset + limit >= total}
-                    className="flex items-center gap-1 px-3 py-1.5 text-sm border rounded disabled:opacity-40 hover:bg-gray-50"
-                  >
-                    Next <ChevronRight size={14} />
-                  </button>
-                </div>
-              )}
+              <p className="font-medium">No matches</p>
+              <p className="text-sm mt-1">Try a different search term or clear the filter.</p>
             </>
           )}
         </div>
-
-        {/* Result detail panel */}
-        <div>
-          {detailLoading ? (
-            <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-folio-600" />
-            </div>
-          ) : selectedJob ? (
-            <div className="bg-white border rounded-lg overflow-hidden sticky top-4">
-              <div className="bg-gray-50 border-b px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-medium text-gray-800 flex items-center gap-2">
-                    <Eye size={16} className="text-folio-600" />
-                    Query Results
-                  </h3>
-                  <div className="text-xs text-gray-400">
-                    {selectedJob.rowCount?.toLocaleString()} rows &middot; {selectedJob.executionTimeMs}ms
-                  </div>
-                </div>
-              </div>
-
-              {/* SQL */}
-              <div className="px-4 py-3 border-b">
-                <pre className="text-xs font-mono text-gray-600 whitespace-pre-wrap max-h-32 overflow-auto">
-                  {selectedJob.sql}
-                </pre>
-              </div>
-
-              {/* Results table */}
-              {selectedJob.columns && selectedJob.rows ? (
-                <div className="overflow-auto max-h-[60vh]">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        {selectedJob.columns.map((col) => (
-                          <th
-                            key={col}
-                            className="text-left p-2 font-medium text-gray-600 border-b whitespace-nowrap"
-                          >
-                            {col}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedJob.rows.slice(0, 200).map((row, i) => (
-                        <tr key={i} className="border-b last:border-b-0 hover:bg-gray-50">
-                          {selectedJob.columns!.map((col) => (
-                            <td key={col} className="p-2 text-gray-700 whitespace-nowrap max-w-xs truncate">
-                              {row[col] != null ? String(row[col]) : <span className="text-gray-300">null</span>}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {selectedJob.rows.length > 200 && (
-                    <div className="px-4 py-2 text-xs text-gray-400 text-center border-t">
-                      Showing first 200 of {selectedJob.rows.length.toLocaleString()} rows
-                    </div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+          <table className="w-full text-sm border-separate border-spacing-0">
+            <thead>
+              <tr className="bg-gray-50 text-left">
+                <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 w-[38%]">Query</th>
+                <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap">Source</th>
+                <th
+                  className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap cursor-pointer select-none hover:text-folio-700"
+                  onClick={() => toggleSort('rowCount')}
+                >
+                  <span className="flex items-center gap-1">Rows <SortIcon col="rowCount" /></span>
+                </th>
+                <th
+                  className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap cursor-pointer select-none hover:text-folio-700"
+                  onClick={() => toggleSort('executionTimeMs')}
+                >
+                  <span className="flex items-center gap-1">Time <SortIcon col="executionTimeMs" /></span>
+                </th>
+                {isAdmin && (
+                  <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap">Run by</th>
+                )}
+                <th
+                  className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap cursor-pointer select-none hover:text-folio-700"
+                  onClick={() => toggleSort('completedAt')}
+                >
+                  <span className="flex items-center gap-1">Completed <SortIcon col="completedAt" /></span>
+                </th>
+                <th className="px-4 py-3 border-b border-gray-200 w-16" />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((item, i) => (
+                <tr
+                  key={item.jobId}
+                  className={`group cursor-pointer transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'} hover:bg-folio-50`}
+                  onClick={() => renamingId !== item.jobId && openModal(item)}
+                >
+                  {/* Query name + SQL preview */}
+                  <td className="px-4 py-3 border-b border-gray-100">
+                    {renamingId === item.jobId ? (
+                      <form
+                        onSubmit={(e) => { e.preventDefault(); commitRename(item.jobId); }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          autoFocus
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onBlur={() => commitRename(item.jobId)}
+                          onKeyDown={(e) => { if (e.key === 'Escape') cancelRename(); }}
+                          disabled={renameSaving}
+                          placeholder="Query name…"
+                          className="w-full px-2 py-1 text-sm border rounded border-folio-400 focus:ring-1 focus:ring-folio-300 outline-none font-medium"
+                        />
+                      </form>
+                    ) : (
+                      <>
+                        {item.name
+                          ? <span className="font-medium text-gray-800 line-clamp-1">{item.name}</span>
+                          : <span className="italic text-gray-400 text-xs">Unnamed query</span>}
+                        <p className="text-xs text-gray-400 font-mono mt-0.5 line-clamp-1 truncate">{item.sql}</p>
+                      </>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 border-b border-gray-100"><SourceBadge source={item.source} /></td>
+                  <td className="px-4 py-3 border-b border-gray-100 text-gray-600 tabular-nums whitespace-nowrap">{item.rowCount.toLocaleString()}</td>
+                  <td className="px-4 py-3 border-b border-gray-100 text-gray-600 tabular-nums whitespace-nowrap">{fmtTime(item.executionTimeMs)}</td>
+                  {isAdmin && (
+                    <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">
+                      {item.runBy
+                        ? <span className="flex items-center gap-1"><User size={11} />{item.runBy}</span>
+                        : '—'}
+                    </td>
                   )}
-                </div>
-              ) : (
-                <div className="p-6 text-center text-gray-400 text-sm">
-                  Results not available. They may have been cleaned up.
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
-              <p>Select a query to view its results</p>
-            </div>
-          )}
+                  <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">{fmtDate(item.completedAt)}</td>
+                  {/* Row action buttons */}
+                  <td
+                    className="px-3 py-3 border-b border-gray-100"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => startRename(item, e)}
+                        title="Rename"
+                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        onClick={(e) => openSaveDialog(item, false, e)}
+                        title="Save to Library"
+                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                      >
+                        <Bookmark size={13} />
+                      </button>
+                      <button
+                        onClick={(e) => openSaveDialog(item, true, e)}
+                        title="Add to Dashboard"
+                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                      >
+                        <LayoutDashboard size={13} />
+                      </button>
+                      <button
+                        onClick={() => openModal(item)}
+                        title="View results"
+                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                      >
+                        <Eye size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4">
+          <button
+            onClick={() => setOffset(Math.max(0, offset - limit))}
+            disabled={offset === 0}
+            className="flex items-center gap-1 px-3 py-1.5 text-sm border rounded-lg disabled:opacity-40 hover:bg-gray-50"
+          >
+            <ChevronLeft size={14} /> Previous
+          </button>
+          <span className="text-sm text-gray-500">Page {currentPage} of {totalPages}</span>
+          <button
+            onClick={() => setOffset(offset + limit)}
+            disabled={offset + limit >= total}
+            className="flex items-center gap-1 px-3 py-1.5 text-sm border rounded-lg disabled:opacity-40 hover:bg-gray-50"
+          >
+            Next <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Results modal */}
+      {modalItem && (
+        <ResultsModal
+          item={modalItem}
+          job={modalJob}
+          loading={modalLoading}
+          onClose={closeModal}
+          onRename={handleModalRename}
+          onSave={(pinned) => openSaveDialog(modalItem, pinned)}
+        />
+      )}
+
+      {/* Save-to-library / pin-to-dashboard dialog */}
+      {savingItem && (
+        <SaveQueryDialog
+          item={savingItem}
+          initialPinned={saveInitialPin}
+          onClose={() => setSavingItem(null)}
+          onSaved={() => setSavingItem(null)}
+        />
+      )}
     </div>
   );
 }

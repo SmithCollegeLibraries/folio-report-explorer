@@ -1416,6 +1416,38 @@ class FolioQueryController extends Controller
     // ─── Query history ────────────────────────────────────────────
 
     /**
+     * PATCH /api/query/history/<id> — rename a completed query job.
+     * Body: {"name": "New name"}
+     */
+    public function actionRenameHistoryJob($id)
+    {
+        $job = QueryJob::findOne($id);
+        if (!$job) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Job not found'];
+        }
+
+        // Only the owner or an admin may rename
+        $userId   = $this->getCurrentUserId();
+        $identity = $this->getAppIdentity();
+        $isAdmin  = $identity && $identity->isAdmin();
+        if (!$isAdmin && $userId && (int) $job->user_id !== (int) $userId) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Forbidden'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $name = isset($body['name']) ? substr(trim($body['name']), 0, 255) : null;
+        $job->name = $name;
+        if (!$job->save(false)) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => 'Failed to save'];
+        }
+
+        return ['jobId' => $job->id, 'name' => $job->name];
+    }
+
+    /**
      * GET /api/query/history — list the current user's completed jobs with results.
      * Optional: ?limit=20&offset=0
      */

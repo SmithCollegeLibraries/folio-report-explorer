@@ -1,7 +1,5 @@
 -- Migration 003: Add users table, user_id columns, sql_hash for dedup, and data retention support
--- Run against: folio_reports database
-
-USE folio_reports;
+-- Run against: the DB configured in MYSQL_DATABASE (production: folio_report_explorer, dev: folio_reports)
 
 -- ── Users table ───────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS users (

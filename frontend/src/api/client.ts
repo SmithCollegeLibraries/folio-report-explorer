@@ -455,3 +455,8 @@ export async function fetchQueryHistory(
   const { data } = await api.get('/query/history', { params: { limit, offset } });
   return data;
 }
+
+export async function renameHistoryJob(jobId: string, name: string): Promise<{ jobId: string; name: string | null }> {
+  const { data } = await api.patch(`/query/history/${jobId}`, { name });
+  return data;
+}

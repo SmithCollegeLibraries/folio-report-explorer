@@ -140,7 +140,7 @@ fi
 # ── 9. Run database migrations ─────────────────────────────────────
 echo "→ Running migrations..."
 MYSQL_HOST="${MYSQL_HOST:-localhost}"
-MYSQL_CMD="mysql -h $MYSQL_HOST -u ${MYSQL_USER:-folio_app} -p${MYSQL_PASSWORD:-folio_app_pass} ${MYSQL_DATABASE:-folio_reports}"
+MYSQL_CMD="mysql -h $MYSQL_HOST -u ${MYSQL_USER:-folio_app} -p${MYSQL_PASSWORD:-folio_app_pass} ${MYSQL_DATABASE:-folio_report_explorer}"
 
 # Apply each migration SQL file in order
 for migration in mysql/migrations/*.sql; do

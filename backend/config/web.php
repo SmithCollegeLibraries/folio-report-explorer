@@ -108,6 +108,7 @@ $config = [
 
                 // Query history
                 'GET query/history' => 'folio-query/query-history',
+                'PATCH query/history/<id:[\w-]+>' => 'folio-query/rename-history-job',
 
                 // CORS preflight
                 'OPTIONS <path:.*>' => 'folio-query/options',
