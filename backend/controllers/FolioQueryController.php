@@ -594,6 +594,166 @@ class FolioQueryController extends Controller
         }, $queries);
     }
 
+    // ─── Per-user dashboard ───────────────────────────────────────────
+
+    /**
+     * GET /api/dashboard — merged dashboard for the current user.
+     * Returns personal pinned items + admin-global items, with per-user
+     * position overrides and hidden flags applied.
+     */
+    public function actionDashboard()
+    {
+        $userId = $this->getCurrentUserId();
+
+        // Personal pinned items for this user
+        $pinnedQ = SavedQuery::find()->where(['is_pinned' => 1]);
+        if ($userId) {
+            $pinnedQ->andWhere(['user_id' => $userId]);
+        }
+        $pinned = $pinnedQ->orderBy(['updated_at' => SORT_DESC])->all();
+
+        // Admin-global items (all users see these unless they hide them)
+        $global = SavedQuery::find()->where(['is_global' => 1])
+            ->orderBy(['updated_at' => SORT_DESC])->all();
+
+        // Merge, deduplicate (user may have personally pinned a global item)
+        $itemMap = []; // id => ['query' => ..., 'source_type' => ...]
+        foreach ($global as $q) {
+            $itemMap[$q->id] = ['query' => $q, 'source_type' => 'global'];
+        }
+        foreach ($pinned as $q) {
+            if (!isset($itemMap[$q->id])) {
+                $itemMap[$q->id] = ['query' => $q, 'source_type' => 'personal'];
+            }
+        }
+
+        // Load per-user prefs
+        $prefs = [];
+        if ($userId && !empty($itemMap)) {
+            $ids = array_keys($itemMap);
+            $prefRows = Yii::$app->db->createCommand(
+                'SELECT saved_query_id, position, hidden FROM user_dashboard_prefs WHERE user_id = :uid AND saved_query_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+                array_merge([':uid' => $userId], $ids)
+            )->queryAll();
+            foreach ($prefRows as $row) {
+                $prefs[(int)$row['saved_query_id']] = $row;
+            }
+        }
+
+        // Assign default positions (personal items first, then global)
+        $defaultPos = 0;
+        $active  = [];
+        $hidden  = [];
+
+        foreach ($itemMap as $sqId => $entry) {
+            $q    = $entry['query'];
+            $pref = $prefs[$sqId] ?? null;
+            $pos  = $pref !== null ? (int)$pref['position'] : ($defaultPos * 100);
+            $defaultPos++;
+
+            $formatted = $this->formatSaved($q);
+            $formatted['position']    = $pos;
+            $formatted['source_type'] = $entry['source_type'];
+
+            if ($pref && (int)$pref['hidden'] === 1) {
+                $hidden[] = $formatted;
+            } else {
+                $active[] = $formatted;
+            }
+        }
+
+        usort($active, function($a, $b) { return $a['position'] - $b['position']; });
+
+        return ['items' => $active, 'hidden' => $hidden];
+    }
+
+    /**
+     * PATCH /api/dashboard/reorder — save user-defined item order.
+     * Body: {"order": [savedQueryId1, savedQueryId2, ...]}
+     */
+    public function actionDashboardReorder()
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Authentication required'];
+        }
+        $body  = Yii::$app->request->getBodyParams();
+        $order = $body['order'] ?? [];
+        if (!is_array($order)) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'order must be an array of saved_query_id values'];
+        }
+
+        $db = Yii::$app->db;
+        foreach ($order as $pos => $sqId) {
+            $sqId = (int)$sqId;
+            $pos  = (int)$pos * 100;
+            $db->createCommand(
+                'INSERT INTO user_dashboard_prefs (user_id, saved_query_id, position) VALUES (:uid, :sqid, :pos) ON DUPLICATE KEY UPDATE position = :pos, updated_at = NOW()',
+                [':uid' => $userId, ':sqid' => $sqId, ':pos' => $pos]
+            )->execute();
+        }
+
+        return ['success' => true];
+    }
+
+    /**
+     * POST /api/dashboard/<id>/hide — hide a global dashboard item.
+     */
+    public function actionDashboardHide($id)
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Authentication required'];
+        }
+        $sqId = (int)$id;
+        Yii::$app->db->createCommand(
+            'INSERT INTO user_dashboard_prefs (user_id, saved_query_id, hidden) VALUES (:uid, :sqid, 1) ON DUPLICATE KEY UPDATE hidden = 1, updated_at = NOW()',
+            [':uid' => $userId, ':sqid' => $sqId]
+        )->execute();
+        return ['success' => true];
+    }
+
+    /**
+     * POST /api/dashboard/<id>/show — restore a hidden dashboard item.
+     */
+    public function actionDashboardShow($id)
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Authentication required'];
+        }
+        $sqId = (int)$id;
+        Yii::$app->db->createCommand(
+            'UPDATE user_dashboard_prefs SET hidden = 0, updated_at = NOW() WHERE user_id = :uid AND saved_query_id = :sqid',
+            [':uid' => $userId, ':sqid' => $sqId]
+        )->execute();
+        return ['success' => true];
+    }
+
+    /**
+     * PATCH /api/saved/<id>/global — admin-only toggle is_global.
+     */
+    public function actionSavedGlobal($id)
+    {
+        $identity = $this->getAppIdentity();
+        if (!$identity || !$identity->isAdmin()) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Admin required'];
+        }
+        $query = SavedQuery::findOne($id);
+        if (!$query) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Saved query not found'];
+        }
+        $query->is_global = $query->is_global ? 0 : 1;
+        $query->save(false);
+        return $this->formatSaved($query);
+    }
+
     /**
      * POST /api/saved/<id>/pin — toggle pin status.
      */
@@ -691,16 +851,17 @@ class FolioQueryController extends Controller
     private function formatSaved(SavedQuery $q)
     {
         return [
-            'id' => (int)$q->id,
-            'name' => $q->name,
-            'description' => $q->description,
+            'id'               => (int)$q->id,
+            'name'             => $q->name,
+            'description'      => $q->description,
             'query_definition' => $q->query_definition ? json_decode($q->query_definition, true) : null,
-            'generated_sql' => $q->generated_sql,
-            'source' => $q->source ?: 'builder',
-            'nl_prompt' => $q->nl_prompt,
-            'is_pinned' => (bool)$q->is_pinned,
-            'created_at' => $q->created_at,
-            'updated_at' => $q->updated_at,
+            'generated_sql'    => $q->generated_sql,
+            'source'           => $q->source ?: 'builder',
+            'nl_prompt'        => $q->nl_prompt,
+            'is_pinned'        => (bool)$q->is_pinned,
+            'is_global'        => (bool)($q->is_global ?? false),
+            'created_at'       => $q->created_at,
+            'updated_at'       => $q->updated_at,
         ];
     }
 

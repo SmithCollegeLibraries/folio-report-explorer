@@ -1,128 +1,161 @@
-import { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { listPinned, submitQuery, togglePin } from '../api/client';
+import {
+  fetchDashboard, reorderDashboard, hideDashboardItem, showDashboardItem,
+  toggleGlobal, togglePin, submitQuery,
+} from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import ResultsModal from '../components/ResultsModal';
-import type { SavedQuery, ExecuteResponse } from '../types';
+import type { DashboardItem, ExecuteResponse } from '../types';
 import {
-  LayoutDashboard, Pin, PinOff, Maximize2, Wrench,
-  MessageSquare, FileBarChart, Loader2, AlertCircle, Sparkles,
+  LayoutDashboard, PinOff, Maximize2, Wrench, MessageSquare, FileBarChart,
+  Loader2, AlertCircle, Sparkles, Globe, EyeOff, Eye, GripVertical,
+  ChevronDown, ChevronUp,
 } from 'lucide-react';
 
-/** A single dashboard card that auto-runs a pinned query */
+// ─── Single card ──────────────────────────────────────────────────────────────
+
 function DashboardCard({
-  query,
+  item,
+  isAdmin,
+  isDragging,
+  isDragOver,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
   onUnpin,
+  onHide,
+  onToggleGlobal,
   onExpand,
 }: {
-  query: SavedQuery;
+  item: DashboardItem;
+  isAdmin: boolean;
+  isDragging: boolean;
+  isDragOver: boolean;
+  onDragStart: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDrop: () => void;
+  onDragEnd: () => void;
   onUnpin: () => void;
+  onHide: () => void;
+  onToggleGlobal: () => void;
   onExpand: (data: ExecuteResponse, title: string) => void;
 }) {
   const [jobId, setJobId] = useState<string | null>(null);
   const [autoRan, setAutoRan] = useState(false);
-
   const { results, isRunning, error } = useJobPolling(jobId);
 
   const runMut = useMutation({
-    mutationFn: () => submitQuery(query.generated_sql || '', {}, 'builder'),
+    mutationFn: () => submitQuery(item.generated_sql || '', {}, 'builder'),
     onSuccess: (data: { jobId: string }) => setJobId(data.jobId),
   });
 
-  // Auto-run on mount
   useEffect(() => {
-    if (query.generated_sql && !autoRan) {
+    if (item.generated_sql && !autoRan) {
       setAutoRan(true);
       runMut.mutate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query.generated_sql]);
+  }, [item.generated_sql]);
 
   return (
-    <div className="border rounded-xl bg-white shadow-sm hover:shadow-md transition-shadow flex flex-col">
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={`border rounded-xl bg-white shadow-sm flex flex-col transition-all select-none
+        ${isDragging ? 'opacity-40 scale-[0.97] shadow-inner' : 'hover:shadow-md'}
+        ${isDragOver ? 'ring-2 ring-folio-400 ring-offset-1' : ''}
+      `}
+    >
       {/* Card header */}
-      <div className="px-4 py-3 border-b flex items-center gap-2">
+      <div className="px-3 py-2.5 border-b flex items-center gap-2">
+        <GripVertical size={14} className="text-gray-300 flex-shrink-0 cursor-grab active:cursor-grabbing" />
+
         <div className="flex-1 min-w-0">
-          <h3 className="font-medium text-sm truncate" title={query.name}>
-            {query.name}
-          </h3>
-          {query.nl_prompt && (
-            <p className="text-xs text-gray-400 truncate mt-0.5" title={query.nl_prompt}>
-              <Sparkles size={10} className="inline mr-1 text-purple-400" />
-              {query.nl_prompt}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {item.source_type === 'global' && (
+              <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold bg-amber-50 text-amber-600 border border-amber-200 px-1.5 py-0.5 rounded">
+                <Globe size={9} /> Admin
+              </span>
+            )}
+            {item.source === 'nl' && (
+              <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium">AI</span>
+            )}
+          </div>
+          <h3 className="font-medium text-sm truncate mt-0.5" title={item.name}>{item.name}</h3>
+          {item.nl_prompt && (
+            <p className="text-xs text-gray-400 truncate" title={item.nl_prompt}>
+              <Sparkles size={10} className="inline mr-1 text-purple-400" />{item.nl_prompt}
             </p>
           )}
-          {query.description && !query.nl_prompt && (
-            <p className="text-xs text-gray-400 truncate mt-0.5">{query.description}</p>
+          {item.description && !item.nl_prompt && (
+            <p className="text-xs text-gray-400 truncate">{item.description}</p>
           )}
         </div>
-        <div className="flex items-center gap-1 flex-shrink-0">
-          {query.source === 'nl' && (
-            <span className="text-[10px] bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded font-medium">AI</span>
-          )}
+
+        {/* Action buttons */}
+        <div className="flex items-center gap-0.5 flex-shrink-0">
           {results && (
-            <button
-              onClick={() => onExpand(results, query.name)}
-              className="p-1 text-gray-400 hover:text-folio-600 rounded"
-              title="Expand results"
-            >
-              <Maximize2 size={14} />
+            <button onClick={() => onExpand(results, item.name)} className="p-1 text-gray-400 hover:text-folio-600 rounded" title="Expand results">
+              <Maximize2 size={13} />
             </button>
           )}
-          <button
-            onClick={onUnpin}
-            className="p-1 text-gray-400 hover:text-red-500 rounded"
-            title="Unpin from dashboard"
-          >
-            <PinOff size={14} />
-          </button>
+          {isAdmin && (
+            <button
+              onClick={onToggleGlobal}
+              title={item.is_global ? 'Remove from all dashboards' : 'Push to all dashboards'}
+              className={`p-1 rounded transition-colors ${item.is_global ? 'text-amber-500 hover:text-amber-700' : 'text-gray-300 hover:text-amber-500'}`}
+            >
+              <Globe size={13} />
+            </button>
+          )}
+          {item.source_type === 'global' && !isAdmin && (
+            <button onClick={onHide} title="Hide from my dashboard" className="p-1 text-gray-300 hover:text-gray-500 rounded">
+              <EyeOff size={13} />
+            </button>
+          )}
+          {item.source_type === 'personal' && (
+            <button onClick={onUnpin} title="Remove from dashboard" className="p-1 text-gray-300 hover:text-red-500 rounded">
+              <PinOff size={13} />
+            </button>
+          )}
         </div>
       </div>
 
       {/* Card body */}
-      <div className="flex-1 p-3 overflow-hidden" style={{ maxHeight: '300px', overflow: 'auto' }}>
+      <div className="flex-1 p-3 overflow-auto" style={{ maxHeight: '280px' }}>
         {isRunning && (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 size={20} className="animate-spin text-folio-600" />
-            <span className="ml-2 text-sm text-gray-500">Running…</span>
+          <div className="flex items-center justify-center py-8 gap-2">
+            <Loader2 size={18} className="animate-spin text-folio-600" />
+            <span className="text-sm text-gray-500">Running…</span>
           </div>
         )}
-
-        {error && (
+        {(error || runMut.isError) && (
           <div className="flex items-center gap-2 text-sm text-red-600 py-4">
             <AlertCircle size={14} />
-            {error}
+            {error || String(runMut.error)}
           </div>
         )}
-
-        {runMut.isError && (
-          <div className="flex items-center gap-2 text-sm text-red-600 py-4">
-            <AlertCircle size={14} />
-            {String(runMut.error)}
-          </div>
-        )}
-
         {results && (
           <div className="text-xs">
-            {/* Compact summary */}
             <div className="flex gap-3 text-gray-500 mb-2">
               <span><strong>{results.rowCount}</strong> rows</span>
               <span><strong>{results.executionTimeMs}</strong>ms</span>
             </div>
-            {/* Compact table — show first 5 rows */}
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="bg-gray-50 border-b">
                     {results.columns.slice(0, 5).map((col) => (
-                      <th key={col} className="px-2 py-1 text-left font-semibold text-gray-600 truncate max-w-[120px]">
-                        {col}
-                      </th>
+                      <th key={col} className="px-2 py-1 text-left font-semibold text-gray-600 truncate max-w-[120px]">{col}</th>
                     ))}
-                    {results.columns.length > 5 && (
-                      <th className="px-2 py-1 text-gray-400">+{results.columns.length - 5}</th>
-                    )}
+                    {results.columns.length > 5 && <th className="px-2 py-1 text-gray-400">+{results.columns.length - 5}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -130,11 +163,7 @@ function DashboardCard({
                     <tr key={ri} className="border-b">
                       {results.columns.slice(0, 5).map((col) => (
                         <td key={col} className="px-2 py-1 truncate max-w-[120px] font-mono">
-                          {row[col] === null ? (
-                            <span className="text-gray-300 italic">null</span>
-                          ) : (
-                            String(row[col])
-                          )}
+                          {row[col] === null ? <span className="text-gray-300 italic">null</span> : String(row[col])}
                         </td>
                       ))}
                     </tr>
@@ -143,98 +172,260 @@ function DashboardCard({
               </table>
             </div>
             {results.rowCount > 5 && (
-              <button
-                onClick={() => onExpand(results, query.name)}
-                className="mt-2 text-folio-600 hover:text-folio-800 text-xs"
-              >
+              <button onClick={() => onExpand(results, item.name)} className="mt-2 text-folio-600 hover:text-folio-800 text-xs">
                 View all {results.rowCount} rows →
               </button>
             )}
           </div>
         )}
-
-        {!isRunning && !results && !error && !runMut.isError && !query.generated_sql && (
-          <div className="text-center py-6 text-gray-400 text-sm">
-            No SQL to run
-          </div>
+        {!isRunning && !results && !error && !runMut.isError && !item.generated_sql && (
+          <div className="text-center py-6 text-gray-400 text-sm">No SQL to run</div>
         )}
       </div>
     </div>
   );
 }
 
+// ─── Hidden items panel ───────────────────────────────────────────────────────
+
+function HiddenItems({ items, onRestore }: { items: DashboardItem[]; onRestore: (id: number) => void }) {
+  const [open, setOpen] = useState(false);
+  if (items.length === 0) return null;
+
+  return (
+    <div className="mt-8 border border-dashed border-gray-200 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between px-5 py-3 text-sm text-gray-500 hover:bg-gray-50 transition-colors"
+      >
+        <span className="flex items-center gap-2">
+          <EyeOff size={14} />
+          {items.length} hidden admin item{items.length !== 1 ? 's' : ''}
+        </span>
+        {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+      </button>
+      {open && (
+        <div className="px-5 py-4 border-t bg-gray-50 space-y-2">
+          {items.map((item) => (
+            <div key={item.id} className="flex items-center justify-between bg-white rounded-lg border px-4 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-700 truncate">{item.name}</p>
+                {item.description && <p className="text-xs text-gray-400 truncate">{item.description}</p>}
+              </div>
+              <button
+                onClick={() => onRestore(item.id)}
+                className="flex items-center gap-1 text-xs text-folio-600 hover:text-folio-700 ml-4 flex-shrink-0"
+              >
+                <Eye size={13} /> Restore
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth();
+
+  const [items, setItems] = useState<DashboardItem[]>([]);
+  const [hiddenItems, setHiddenItems] = useState<DashboardItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [modalData, setModalData] = useState<{ data: ExecuteResponse; title: string } | null>(null);
 
-  const { data: pinned, isLoading, error } = useQuery({
-    queryKey: ['pinnedQueries'],
-    queryFn: listPinned,
-    refetchInterval: 60000, // Refresh every minute
-  });
+  // Drag-and-drop
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const dragIdxRef = useRef<number | null>(null);
+  const reorderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const unpinMut = useMutation({
-    mutationFn: (id: number) => togglePin(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['pinnedQueries'] }),
-  });
+  const load = useCallback(async () => {
+    try {
+      setLoading(true);
+      const res = await fetchDashboard();
+      setItems(res.items);
+      setHiddenItems(res.hidden);
+      setLoadError(null);
+    } catch (e: any) {
+      setLoadError(e.response?.data?.error || 'Failed to load dashboard');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // ── Drag handlers ──────────────────────────────────────────────────────────
+
+  const handleDragStart = (i: number) => {
+    setDragIdx(i);
+    dragIdxRef.current = i;
+  };
+
+  const handleDragOver = (e: React.DragEvent, i: number) => {
+    e.preventDefault();
+    const from = dragIdxRef.current;
+    if (from === null || from === i) return;
+    setItems((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(i, 0, moved);
+      return next;
+    });
+    dragIdxRef.current = i;
+    setDragIdx(i);
+  };
+
+  const handleDrop = (currentItems: DashboardItem[]) => {
+    setDragIdx(null);
+    dragIdxRef.current = null;
+    if (reorderTimer.current) clearTimeout(reorderTimer.current);
+    reorderTimer.current = setTimeout(() => {
+      reorderDashboard(currentItems.map((it) => it.id)).catch(() => {});
+    }, 400);
+  };
+
+  const handleDragEnd = () => {
+    setDragIdx(null);
+    dragIdxRef.current = null;
+  };
+
+  // ── Item actions ───────────────────────────────────────────────────────────
+
+  const handleUnpin = async (item: DashboardItem) => {
+    try {
+      await togglePin(item.id);
+      setItems((prev) => prev.filter((it) => it.id !== item.id));
+      queryClient.invalidateQueries({ queryKey: ['pinnedQueries'] });
+    } catch { /* ignore */ }
+  };
+
+  const handleHide = async (item: DashboardItem) => {
+    try {
+      await hideDashboardItem(item.id);
+      setItems((prev) => prev.filter((it) => it.id !== item.id));
+      setHiddenItems((prev) => [{ ...item }, ...prev]);
+    } catch { /* ignore */ }
+  };
+
+  const handleRestore = async (id: number) => {
+    try {
+      await showDashboardItem(id);
+      const restored = hiddenItems.find((it) => it.id === id);
+      setHiddenItems((prev) => prev.filter((it) => it.id !== id));
+      if (restored) setItems((prev) => [...prev, restored]);
+    } catch { /* ignore */ }
+  };
+
+  const handleToggleGlobal = async (item: DashboardItem) => {
+    try {
+      const updated = await toggleGlobal(item.id);
+      setItems((prev) =>
+        prev.map((it) =>
+          it.id === item.id
+            ? { ...it, is_global: updated.is_global, source_type: updated.is_global ? 'global' : 'personal' }
+            : it,
+        ),
+      );
+    } catch { /* ignore */ }
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+
+  const globalCount = items.filter((it) => it.is_global).length;
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b px-6 py-5">
         <div className="max-w-screen-xl mx-auto">
-          <div className="flex items-center gap-3">
-            <LayoutDashboard size={24} className="text-folio-600" />
-            <div>
-              <h1 className="text-xl font-bold">Dashboard</h1>
-              <p className="text-sm text-gray-500">
-                Pinned queries run automatically and show live results.
-              </p>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <LayoutDashboard size={24} className="text-folio-600" />
+              <div>
+                <h1 className="text-xl font-bold">Dashboard</h1>
+                <p className="text-sm text-gray-500">
+                  Pinned queries run automatically.{' '}
+                  {isAdmin
+                    ? <span className="text-amber-600">Drag to reorder · <Globe size={11} className="inline" /> pushes a card to all users.</span>
+                    : 'Drag to reorder · hide admin items with the eye icon.'}
+                </p>
+              </div>
             </div>
+            {items.length > 0 && (
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <span>{items.length} item{items.length !== 1 ? 's' : ''}</span>
+                {globalCount > 0 && (
+                  <span className="flex items-center gap-1 bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded">
+                    <Globe size={10} /> {globalCount} global
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* Content */}
       <div className="max-w-screen-xl mx-auto p-6">
-        {isLoading && (
-          <div className="flex items-center justify-center py-24">
+        {loading && (
+          <div className="flex items-center justify-center py-24 gap-3">
             <Loader2 size={24} className="animate-spin text-folio-600" />
-            <span className="ml-2 text-gray-500">Loading dashboard…</span>
+            <span className="text-gray-500">Loading dashboard…</span>
           </div>
         )}
 
-        {error && (
+        {loadError && (
           <div className="text-center py-16 text-red-500">
-            Failed to load pinned queries: {String(error)}
+            Failed to load dashboard: {loadError}
           </div>
         )}
 
-        {/* Pinned query cards */}
-        {pinned && pinned.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {pinned.map((q) => (
-              <DashboardCard
-                key={q.id}
-                query={q}
-                onUnpin={() => unpinMut.mutate(q.id)}
-                onExpand={(data, title) => setModalData({ data, title })}
-              />
-            ))}
-          </div>
+        {/* Cards */}
+        {!loading && items.length > 0 && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {items.map((item, i) => (
+                <DashboardCard
+                  key={item.id}
+                  item={item}
+                  isAdmin={isAdmin}
+                  isDragging={dragIdx === i}
+                  isDragOver={dragIdxRef.current !== i && dragIdx !== null && dragIdx === i}
+                  onDragStart={() => handleDragStart(i)}
+                  onDragOver={(e) => handleDragOver(e, i)}
+                  onDrop={() => handleDrop(items)}
+                  onDragEnd={handleDragEnd}
+                  onUnpin={() => handleUnpin(item)}
+                  onHide={() => handleHide(item)}
+                  onToggleGlobal={() => handleToggleGlobal(item)}
+                  onExpand={(data, title) => setModalData({ data, title })}
+                />
+              ))}
+            </div>
+            {items.length > 1 && (
+              <p className="mt-4 text-center text-xs text-gray-400 flex items-center justify-center gap-1">
+                <GripVertical size={11} /> Drag cards to reorder — order is saved per user
+              </p>
+            )}
+          </>
         )}
 
         {/* Empty state */}
-        {pinned && pinned.length === 0 && (
+        {!loading && !loadError && items.length === 0 && (
           <div className="text-center py-20">
-            <Pin size={40} className="mx-auto text-gray-300 mb-4" />
-            <h2 className="text-lg font-semibold text-gray-600 mb-2">No pinned queries yet</h2>
+            <LayoutDashboard size={40} className="mx-auto text-gray-300 mb-4" />
+            <h2 className="text-lg font-semibold text-gray-600 mb-2">Dashboard is empty</h2>
             <p className="text-sm text-gray-400 mb-6 max-w-md mx-auto">
-              Pin saved queries to your dashboard to see live results at a glance.
-              Save a query from the Query Builder or Ask AI, then pin it from the Saved Queries page.
+              Pin saved queries to see live results here at a glance. Use the dashboard icon when
+              saving from Query History, or pin from the Saved Queries page.
             </p>
-            <div className="flex justify-center gap-3">
+            <div className="flex justify-center gap-3 flex-wrap">
               <button
                 onClick={() => navigate('/builder')}
                 className="flex items-center gap-2 px-4 py-2 bg-folio-600 text-white rounded-lg hover:bg-folio-700 text-sm"
@@ -256,15 +447,14 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* Hidden items restore panel */}
+        <HiddenItems items={hiddenItems} onRestore={handleRestore} />
       </div>
 
       {/* Expanded results modal */}
       {modalData && (
-        <ResultsModal
-          data={modalData.data}
-          onClose={() => setModalData(null)}
-          title={modalData.title}
-        />
+        <ResultsModal data={modalData.data} onClose={() => setModalData(null)} title={modalData.title} />
       )}
     </div>
   );

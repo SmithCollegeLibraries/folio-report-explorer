@@ -15,7 +15,8 @@ use yii\db\ActiveRecord;
  * @property string $generated_sql
  * @property string $source          'builder' or 'nl'
  * @property string $nl_prompt       Original NL question (source=nl)
- * @property int    $is_pinned       1 if pinned to dashboard
+ * @property int    $is_pinned       1 if pinned to personal dashboard
+ * @property int    $is_global       1 if admin-pushed to every user's dashboard
  * @property string $created_at
  * @property string $updated_at
  */
@@ -41,8 +42,8 @@ class SavedQuery extends ActiveRecord
             [['query_definition'], 'string'],
             [['source'], 'in', 'range' => ['builder', 'nl']],
             [['source'], 'default', 'value' => 'builder'],
-            [['is_pinned', 'user_id'], 'integer'],
-            [['is_pinned'], 'default', 'value' => 0],
+            [['is_pinned', 'is_global', 'user_id'], 'integer'],
+            [['is_pinned', 'is_global'], 'default', 'value' => 0],
         ];
     }
 

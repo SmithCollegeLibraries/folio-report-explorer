@@ -24,6 +24,7 @@ import type {
   AuthUser,
   RefreshResponse,
   HistoryResponse,
+  DashboardResponse,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -458,5 +459,29 @@ export async function fetchQueryHistory(
 
 export async function renameHistoryJob(jobId: string, name: string): Promise<{ jobId: string; name: string | null }> {
   const { data } = await api.patch(`/query/history/${jobId}`, { name });
+  return data;
+}
+
+// ─── Per-user Dashboard ───────────────────────────────────────────
+
+export async function fetchDashboard(): Promise<DashboardResponse> {
+  const { data } = await api.get('/dashboard');
+  return data;
+}
+
+export async function reorderDashboard(order: number[]): Promise<void> {
+  await api.patch('/dashboard/reorder', { order });
+}
+
+export async function hideDashboardItem(savedQueryId: number): Promise<void> {
+  await api.post(`/dashboard/${savedQueryId}/hide`);
+}
+
+export async function showDashboardItem(savedQueryId: number): Promise<void> {
+  await api.post(`/dashboard/${savedQueryId}/show`);
+}
+
+export async function toggleGlobal(savedQueryId: number): Promise<SavedQuery> {
+  const { data } = await api.patch(`/saved/${savedQueryId}/global`);
   return data;
 }

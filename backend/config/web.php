@@ -65,8 +65,15 @@ $config = [
                 'GET saved/pinned' => 'folio-query/saved-pinned',
                 'GET saved/<id:\d+>' => 'folio-query/saved-detail',
                 'POST saved/<id:\d+>/pin' => 'folio-query/saved-pin',
+                'PATCH saved/<id:\d+>/global' => 'folio-query/saved-global',
                 'POST saved/<id:\d+>/promote' => 'folio-query/saved-promote',
                 'DELETE saved/<id:\d+>' => 'folio-query/saved-delete',
+
+                // Per-user dashboard
+                'GET dashboard' => 'folio-query/dashboard',
+                'PATCH dashboard/reorder' => 'folio-query/dashboard-reorder',
+                'POST dashboard/<id:\d+>/hide' => 'folio-query/dashboard-hide',
+                'POST dashboard/<id:\d+>/show' => 'folio-query/dashboard-show',
 
                 // Report templates
                 'GET reports' => 'folio-query/report-list',

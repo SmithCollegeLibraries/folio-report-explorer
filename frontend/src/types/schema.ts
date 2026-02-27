@@ -210,8 +210,26 @@ export interface SavedQuery {
   source: 'builder' | 'nl';
   nl_prompt?: string | null;
   is_pinned: boolean;
+  is_global: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * A dashboard item — a SavedQuery enriched with per-user position/visibility
+ * data returned by GET /api/dashboard.
+ */
+export interface DashboardItem extends SavedQuery {
+  /** 'personal' = user's own pinned query; 'global' = admin-pushed to all users */
+  source_type: 'personal' | 'global';
+  /** sort position (lower = higher on page) */
+  position: number;
+}
+
+export interface DashboardResponse {
+  items: DashboardItem[];
+  /** global items the user has hidden — returned so they can be restored */
+  hidden: DashboardItem[];
 }
 
 /** Health check response */
