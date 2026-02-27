@@ -12,6 +12,7 @@ use yii\db\ActiveRecord;
  * @property string $sql_hash SHA-256 hash for dedup
  * @property string $params JSON
  * @property string $source builder|nl|manual
+ * @property string $name  human-readable label
  * @property int    $user_id
  * @property string $status pending|running|completed|failed|cancelled
  * @property string $result_columns JSON column names
@@ -42,6 +43,7 @@ class QueryJob extends ActiveRecord
             [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
             [['progress_message'], 'string', 'max' => 255],
+            [['name'], 'string', 'max' => 255],
             [['id'], 'string', 'max' => 36],
         ];
     }

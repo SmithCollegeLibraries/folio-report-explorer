@@ -1,5 +1,10 @@
-import { Routes, Route, NavLink } from 'react-router-dom';
-import { Database, Wrench, MessageSquare, FileBarChart, Bookmark, Settings, LayoutDashboard, Brain, History as HistoryIcon, Users as UsersIcon, LogOut } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import {
+  Database, Wrench, MessageSquare, FileBarChart, Bookmark, Settings,
+  LayoutDashboard, Brain, History as HistoryIcon, Users as UsersIcon,
+  LogOut, ChevronDown, BookOpen, ShieldCheck,
+} from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Explorer from './pages/Explorer';
 import Builder from './pages/Builder';
@@ -15,31 +20,110 @@ import AuthPending from './pages/AuthPending';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth, getShibbolethLoginUrl } from './hooks/useAuth';
 
-/** Navigation items visible to all authenticated users */
-const userNavItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/explorer', label: 'Explorer', icon: Database },
-  { to: '/builder', label: 'Query Builder', icon: Wrench },
-  { to: '/ask', label: 'Ask AI', icon: MessageSquare },
-  { to: '/reports', label: 'Reports', icon: FileBarChart },
-  { to: '/saved', label: 'Saved', icon: Bookmark },
-  { to: '/history', label: 'History', icon: HistoryIcon },
+// ─── Nav groups ────────────────────────────────────────────────────────────────
+
+const queryItems = [
+  { to: '/ask',     label: 'Ask AI',        icon: MessageSquare, desc: 'Natural-language query' },
+  { to: '/builder', label: 'Query Builder', icon: Wrench,        desc: 'Drag-and-drop SQL builder' },
+  { to: '/explorer',label: 'Schema Explorer',icon: Database,     desc: 'Browse FOLIO tables' },
 ];
 
-/** Navigation items visible only to admins */
-const adminNavItems = [
-  { to: '/training', label: 'AI Training', icon: Brain },
-  { to: '/users', label: 'Users', icon: UsersIcon },
-  { to: '/setup', label: 'Setup', icon: Settings },
+const libraryItems = [
+  { to: '/reports', label: 'Reports',       icon: FileBarChart,  desc: 'Scheduled & saved reports' },
+  { to: '/saved',   label: 'Saved Queries', icon: Bookmark,      desc: 'Your bookmarked queries' },
+  { to: '/history', label: 'History',       icon: HistoryIcon,   desc: 'Past query runs' },
 ];
+
+const adminItems = [
+  { to: '/training',label: 'AI Training',   icon: Brain,         desc: 'Tune AI query generation' },
+  { to: '/users',   label: 'Users',         icon: UsersIcon,     desc: 'Manage user access' },
+  { to: '/setup',   label: 'Setup',         icon: Settings,      desc: 'System settings' },
+];
+
+// ─── Dropdown component ────────────────────────────────────────────────────────
+
+interface DropdownItem { to: string; label: string; icon: React.ElementType; desc: string; }
+
+function NavDropdown({
+  label, icon: GroupIcon, items, color = 'folio',
+}: {
+  label: string;
+  icon: React.ElementType;
+  items: DropdownItem[];
+  color?: 'folio' | 'amber';
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const location = useLocation();
+  const isAnyActive = items.some((item) => location.pathname === item.to);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const activeCls = color === 'amber'
+    ? 'bg-amber-600 text-white'
+    : 'bg-folio-600 text-white';
+  const hoverCls = color === 'amber'
+    ? 'text-amber-200 hover:bg-folio-700 hover:text-white'
+    : 'text-folio-200 hover:bg-folio-700 hover:text-white';
+  const dotCls = color === 'amber' ? 'bg-amber-400' : 'bg-folio-400';
+  const itemHoverCls = color === 'amber'
+    ? 'hover:bg-amber-50 hover:text-amber-700'
+    : 'hover:bg-folio-50 hover:text-folio-700';
+  const iconCls = color === 'amber' ? 'text-amber-500' : 'text-folio-500';
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+          isAnyActive ? activeCls : hoverCls
+        } ${open && !isAnyActive ? 'bg-folio-700 text-white' : ''}`}
+      >
+        {isAnyActive && <span className={`w-1.5 h-1.5 rounded-full ${dotCls} opacity-0`} />}
+        <GroupIcon size={15} />
+        {label}
+        <ChevronDown size={13} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full mt-1 w-56 bg-white rounded-lg shadow-xl border border-gray-100 z-50 py-1 overflow-hidden">
+          {items.map(({ to, label: itemLabel, icon: Icon, desc }) => (
+            <NavLink
+              key={to}
+              to={to}
+              onClick={() => setOpen(false)}
+              className={({ isActive }) =>
+                `flex items-start gap-3 px-4 py-3 transition-colors ${
+                  isActive
+                    ? `bg-folio-50 text-folio-700 border-l-2 border-folio-500`
+                    : `text-gray-700 border-l-2 border-transparent ${itemHoverCls}`
+                }`
+              }
+            >
+              <Icon size={16} className={`mt-0.5 flex-shrink-0 ${iconCls}`} />
+              <div>
+                <div className="text-sm font-medium leading-tight">{itemLabel}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{desc}</div>
+              </div>
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const { user, isAdmin, authEnabled, logout } = useAuth();
-
-  // Build nav items based on role
-  const navItems = authEnabled && !isAdmin
-    ? userNavItems
-    : [...userNavItems, ...adminNavItems];
 
   const handleLogout = () => {
     logout();
@@ -53,41 +137,50 @@ export default function App() {
       {/* Top navigation bar */}
       <header className="bg-folio-800 text-white shadow-lg">
         <div className="max-w-screen-2xl mx-auto px-4 flex items-center h-14">
-          <h1 className="text-lg font-bold mr-8 tracking-tight">
-            FOLIO Report Explorer
-          </h1>
-          <nav className="flex gap-1 flex-1">
-            {navItems.map(({ to, label, icon: Icon }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === '/'}
-                className={({ isActive }) =>
-                  `flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                    isActive
-                      ? 'bg-folio-600 text-white'
-                      : 'text-folio-200 hover:bg-folio-700 hover:text-white'
-                  }`
-                }
-              >
-                <Icon size={16} />
-                {label}
-              </NavLink>
-            ))}
+          {/* Brand */}
+          <NavLink to="/" className="flex items-center gap-2 mr-6 flex-shrink-0">
+            <h1 className="text-base font-bold tracking-tight whitespace-nowrap">
+              FOLIO Report Explorer
+            </h1>
+          </NavLink>
+
+          {/* Nav groups */}
+          <nav className="flex items-center gap-1 flex-1">
+            {/* Dashboard — standalone */}
+            <NavLink
+              to="/"
+              end
+              className={({ isActive }) =>
+                `flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  isActive ? 'bg-folio-600 text-white' : 'text-folio-200 hover:bg-folio-700 hover:text-white'
+                }`
+              }
+            >
+              <LayoutDashboard size={15} />
+              Dashboard
+            </NavLink>
+
+            <NavDropdown label="Query" icon={MessageSquare} items={queryItems} />
+            <NavDropdown label="Library" icon={BookOpen} items={libraryItems} />
+            {isAdmin && (
+              <NavDropdown label="Admin" icon={ShieldCheck} items={adminItems} color="amber" />
+            )}
           </nav>
 
           {/* User info / auth controls */}
           {authEnabled && user && (
-            <div className="flex items-center gap-3 ml-4">
+            <div className="flex items-center gap-3 ml-4 flex-shrink-0">
               <span className="text-folio-200 text-sm">
                 {user.displayName}
                 {isAdmin && (
-                  <span className="ml-1 text-xs bg-folio-600 px-1.5 py-0.5 rounded">admin</span>
+                  <span className="ml-1.5 text-xs bg-amber-600 px-1.5 py-0.5 rounded font-medium">
+                    admin
+                  </span>
                 )}
               </span>
               <button
                 onClick={handleLogout}
-                className="text-folio-300 hover:text-white p-1"
+                className="text-folio-300 hover:text-white p-1 rounded"
                 title="Logout"
               >
                 <LogOut size={16} />

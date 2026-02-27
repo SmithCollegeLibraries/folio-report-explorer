@@ -27,7 +27,7 @@ return [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
     ],
     'on afterOpen' => function ($event) {
-        $event->sender->createCommand("SET statement_timeout = 300000")->execute();
+        $event->sender->createCommand("SET statement_timeout = 1800000")->execute();
         $event->sender->createCommand("SET idle_in_transaction_session_timeout = 600000")->execute();
     },
     'enableQueryCache' => true,

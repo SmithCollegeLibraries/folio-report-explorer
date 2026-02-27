@@ -14,4 +14,29 @@ class DummyIdentity implements IdentityInterface
     public function getId() { return null; }
     public function getAuthKey() { return null; }
     public function validateAuthKey($authKey) { return false; }
+    public function isAdmin(): bool { return false; }
+
+    /**
+     * No-op stub — dev mode has no real session to revoke.
+     */
+    public function revokeRefreshToken(): void {}
+
+    /**
+     * Returns an empty identity payload for dev mode.
+     *
+     * @param array $fields
+     * @param array $expand
+     * @param bool  $recursive
+     * @return array
+     */
+    public function toArray(array $fields = [], array $expand = [], $recursive = true): array
+    {
+        return [
+            'id'          => null,
+            'username'    => 'dev',
+            'displayName' => 'Dev User',
+            'role'        => 'admin',
+            'isApproved'  => true,
+        ];
+    }
 }

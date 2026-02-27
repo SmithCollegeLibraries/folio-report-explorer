@@ -63,10 +63,10 @@ export default function Ask() {
   }, [historyOpen]);
 
   // --- async job polling ---
-  const { job, results, isRunning, error: jobError, cancel: cancelJobFn, reset: resetJob } = useJobPolling(activeJobId);
+  const { job, results, isRunning, error: jobError, cancel: cancelJobFn, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
 
   const execMut = useMutation({
-    mutationFn: (sql: string) => submitQuery(sql, {}, 'nl'),
+    mutationFn: (sql: string) => submitQuery(sql, {}, 'nl', prompt.trim() || undefined),
     onSuccess: (data: { jobId: string }) => setActiveJobId(data.jobId),
   });
 
@@ -279,17 +279,43 @@ export default function Ask() {
 
         {/* Two-phase loading indicator */}
         {isLoading && (
-          <div className="flex items-center justify-center h-64">
-            <div className="flex flex-col items-center gap-3 text-gray-500">
-              <Loader2 size={24} className="animate-spin text-folio-600" />
-              <span className="text-sm">
-                {isGenerating
-                  ? 'Generating query with Gemini…'
-                  : job?.status === 'pending'
-                    ? 'Queued — waiting for worker…'
-                    : 'Running query…'}
-              </span>
-            </div>
+          <div className="flex items-center justify-center py-12">
+            {isGenerating ? (
+              <div className="flex flex-col items-center gap-3 text-gray-500">
+                <Loader2 size={24} className="animate-spin text-folio-600" />
+                <span className="text-sm">Generating query with Gemini…</span>
+              </div>
+            ) : (
+              <div className="max-w-md w-full mx-4 bg-blue-50 border border-blue-200 rounded-xl p-5">
+                <div className="flex items-start gap-3">
+                  <Loader2 size={20} className="animate-spin text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-blue-800">
+                      {job?.status === 'pending' ? 'Queued — waiting for worker…' : 'Running query…'}
+                    </div>
+                    <div className="text-sm text-blue-600 mt-1">
+                      Elapsed: <span className="font-mono font-medium">
+                        {elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`}
+                      </span>
+                      {elapsedSeconds >= 30 && (
+                        <span className="ml-2 text-blue-500">— this is a large query, please wait…</span>
+                      )}
+                    </div>
+                    <div className="mt-3 text-xs text-blue-500">
+                      You can navigate away — the query will keep running.{' '}
+                      <a href="/history" className="underline font-medium hover:text-blue-700">Check History →</a>
+                    </div>
+                  </div>
+                  <button
+                    onClick={cancelJobFn}
+                    className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 border border-red-200 rounded px-2 py-1 flex-shrink-0"
+                    title="Cancel query"
+                  >
+                    <Square size={11} /> Cancel
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

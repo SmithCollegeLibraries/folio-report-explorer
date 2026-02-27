@@ -407,12 +407,14 @@ export interface RefreshResponse {
 
 export interface HistoryItem {
   jobId: string;
+  name: string | null;
   sql: string;
   source: string;
   rowCount: number;
   executionTimeMs: number;
   createdAt: string;
   completedAt: string;
+  runBy: string | null;
 }
 
 export interface HistoryResponse {

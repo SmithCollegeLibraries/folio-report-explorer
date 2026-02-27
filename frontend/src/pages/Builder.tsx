@@ -66,7 +66,7 @@ export default function Builder() {
   const [graphOpen, setGraphOpen] = useState(false);
 
   // --- async job polling ---
-  const { job, results, isRunning, error: jobError, cancel: cancelJob, reset: resetJob } = useJobPolling(activeJobId);
+  const { job, results, isRunning, error: jobError, cancel: cancelJob, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
 
   // --- data fetching ---
   const { data: schemaData, isLoading: schemaLoading } = useQuery({
@@ -127,7 +127,12 @@ export default function Builder() {
   });
 
   const execMut = useMutation({
-    mutationFn: (sql: string) => submitQuery(sql, {}, 'builder'),
+    mutationFn: (sql: string) => {
+      const jobName = selectedTables.length > 0
+        ? `Builder: ${selectedTables.slice(0, 3).join(', ')}${selectedTables.length > 3 ? ` +${selectedTables.length - 3} more` : ''}`
+        : undefined;
+      return submitQuery(sql, {}, 'builder', jobName);
+    },
     onSuccess: (data: { jobId: string }) => setActiveJobId(data.jobId),
   });
 
@@ -523,18 +528,33 @@ export default function Builder() {
 
             {/* Job progress */}
             {isRunning && job && (
-              <div className="mx-4 mt-2 p-4 bg-blue-50 border border-blue-200 rounded flex-shrink-0">
-                <div className="flex items-center gap-3">
-                  <Loader2 size={18} className="animate-spin text-blue-600" />
-                  <div>
-                    <div className="text-sm font-medium text-blue-800">
+              <div className="mx-4 mt-2 p-4 bg-blue-50 border border-blue-200 rounded-xl flex-shrink-0">
+                <div className="flex items-start gap-3">
+                  <Loader2 size={18} className="animate-spin text-blue-600 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-blue-800">
                       {job.status === 'pending' ? 'Queued — waiting for worker…' : 'Running query…'}
                     </div>
-                    <div className="text-xs text-blue-600 mt-0.5">
-                      Job {job.jobId.slice(0, 8)}…
-                      {job.startedAt && ` • Started ${job.startedAt}`}
+                    <div className="text-sm text-blue-600 mt-0.5">
+                      Elapsed: <span className="font-mono font-medium">
+                        {elapsedSeconds < 60 ? `${elapsedSeconds}s` : `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`}
+                      </span>
+                      {elapsedSeconds >= 60 && (
+                        <span className="ml-2 text-amber-600 font-medium">— large query, please wait…</span>
+                      )}
+                    </div>
+                    <div className="mt-2 text-xs text-blue-500">
+                      You can navigate away — the query will keep running.{' '}
+                      <a href="/history" className="underline font-medium hover:text-blue-700">Check History →</a>
                     </div>
                   </div>
+                  <button
+                    onClick={cancelJob}
+                    className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 border border-red-200 bg-white rounded px-2 py-1 flex-shrink-0"
+                    title="Cancel query"
+                  >
+                    <Square size={11} /> Cancel
+                  </button>
                 </div>
               </div>
             )}

@@ -267,8 +267,9 @@ export async function submitQuery(
   sql: string,
   params: Record<string, string> = {},
   source = 'manual',
+  name?: string,
 ): Promise<JobSubmitResponse> {
-  const { data } = await api.post('/query/submit', { sql, params, source });
+  const { data } = await api.post('/query/submit', { sql, params, source, ...(name ? { name } : {}) });
   return data;
 }
 

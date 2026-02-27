@@ -13,6 +13,8 @@ interface UseJobPollingReturn {
   isRunning: boolean;
   /** Error message if failed */
   error: string | null;
+  /** Elapsed wall-clock seconds since the job was submitted */
+  elapsedSeconds: number;
   /** Cancel the current job */
   cancel: () => void;
   /** Clear the job state */
@@ -27,13 +29,19 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
   const [job, setJob] = useState<JobStatusResponse | null>(null);
   const [results, setResults] = useState<ExecuteResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeJobId = useRef<string | null>(null);
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
+    }
+    if (elapsedTimerRef.current) {
+      clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
     }
   }, []);
 
@@ -43,6 +51,7 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
     setJob(null);
     setResults(null);
     setError(null);
+    setElapsedSeconds(0);
   }, [stopPolling]);
 
   const cancelCurrent = useCallback(async () => {
@@ -65,6 +74,7 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
     activeJobId.current = jobId;
     setResults(null);
     setError(null);
+    setElapsedSeconds(0);
     setJob({
       jobId,
       status: 'pending',
@@ -74,6 +84,11 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
       startedAt: null,
       completedAt: null,
     });
+
+    // Start elapsed-seconds wall-clock timer
+    elapsedTimerRef.current = setInterval(() => {
+      setElapsedSeconds((s) => s + 1);
+    }, 1000);
 
     const poll = async () => {
       // Don't poll if this job is no longer active
@@ -119,5 +134,5 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
 
   const isRunning = job?.status === 'pending' || job?.status === 'running';
 
-  return { job, results, isRunning, error, cancel: cancelCurrent, reset };
+  return { job, results, isRunning, error, elapsedSeconds, cancel: cancelCurrent, reset };
 }

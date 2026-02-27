@@ -14,6 +14,7 @@ use app\models\QueryLog;
 use app\models\QueryJob;
 use app\models\ReportTemplate;
 use app\models\User;
+use app\models\DummyIdentity;
 use Firebase\JWT\JWT;
 
 /**
@@ -89,7 +90,7 @@ class FolioQueryController extends Controller
                         ],
                         'roles' => ['@'],
                         'matchCallback' => function ($rule, $action) {
-                            $identity = Yii::$app->user->identity;
+                            $identity = $this->getAppIdentity();
                             return $identity && $identity->isAdmin();
                         },
                     ],
@@ -115,6 +116,22 @@ class FolioQueryController extends Controller
     }
 
     /**
+     * Returns the current identity cast to User|DummyIdentity|null.
+     * Both types declare isAdmin(), which IdentityInterface does not —
+     * this is the single cast point so static analysis tools are satisfied.
+     *
+     * @return User|DummyIdentity|null
+     */
+    private function getAppIdentity()
+    {
+        $identity = Yii::$app->user->identity;
+        if ($identity instanceof User || $identity instanceof DummyIdentity) {
+            return $identity;
+        }
+        return null;
+    }
+
+    /**
      * Get the current authenticated user's ID (null in dev mode or if not authenticated).
      * @return int|null
      */
@@ -133,7 +150,7 @@ class FolioQueryController extends Controller
         if (YII_ENV === 'dev') {
             return true; // No auth enforcement in dev
         }
-        $identity = Yii::$app->user->identity;
+        $identity = $this->getAppIdentity();
         if (!$identity || !$identity->isAdmin()) {
             Yii::$app->response->statusCode = 403;
             return false;
@@ -407,6 +424,7 @@ class FolioQueryController extends Controller
         // Create job
         $job = QueryJob::createJob($sql, $params, $source);
         $job->user_id = $this->getCurrentUserId();
+        $job->name = isset($body['name']) ? substr(trim($body['name']), 0, 255) : null;
         $job->sql_hash = hash('sha256', $sql . json_encode($params));
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
@@ -1404,36 +1422,43 @@ class FolioQueryController extends Controller
     public function actionQueryHistory()
     {
         $userId = $this->getCurrentUserId();
-        $limit = (int) (Yii::$app->request->get('limit', 50));
+        $identity = $this->getAppIdentity();
+        $isAdmin = $identity && $identity->isAdmin();
+        $limit  = (int) (Yii::$app->request->get('limit', 50));
         $offset = (int) (Yii::$app->request->get('offset', 0));
 
         $query = QueryJob::find()
-            ->where(['status' => 'completed'])
-            ->orderBy(['completed_at' => SORT_DESC])
+            ->select(['qj.*', 'u.email AS runBy'])
+            ->alias('qj')
+            ->leftJoin('users u', 'u.id = qj.user_id')
+            ->where(['qj.status' => 'completed'])
+            ->orderBy(['qj.completed_at' => SORT_DESC])
             ->limit(min($limit, 100))
             ->offset($offset);
 
-        // In production, filter to current user's jobs only
-        if ($userId) {
-            $query->andWhere(['user_id' => $userId]);
+        // Non-admins see only their own jobs
+        if ($userId && !$isAdmin) {
+            $query->andWhere(['qj.user_id' => $userId]);
         }
 
         $total = (clone $query)->count();
-        $jobs = $query->all();
+        $jobs  = $query->asArray()->all();
 
         return [
-            'total' => (int) $total,
+            'total'  => (int) $total,
             'offset' => $offset,
-            'limit' => $limit,
-            'items' => array_map(function ($job) {
+            'limit'  => $limit,
+            'items'  => array_map(function ($job) use ($isAdmin) {
                 return [
-                    'jobId' => $job->id,
-                    'sql' => $job->sql_text,
-                    'source' => $job->source,
-                    'rowCount' => (int) $job->row_count,
-                    'executionTimeMs' => (int) $job->execution_time_ms,
-                    'createdAt' => $job->created_at,
-                    'completedAt' => $job->completed_at,
+                    'jobId'          => $job['id'],
+                    'name'           => $job['name'] ?? null,
+                    'sql'            => $job['sql_text'],
+                    'source'         => $job['source'],
+                    'rowCount'       => (int) ($job['row_count'] ?? 0),
+                    'executionTimeMs'=> (int) ($job['execution_time_ms'] ?? 0),
+                    'createdAt'      => $job['created_at'],
+                    'completedAt'    => $job['completed_at'],
+                    'runBy'          => $isAdmin ? ($job['runBy'] ?? null) : null,
                 ];
             }, $jobs),
         ];

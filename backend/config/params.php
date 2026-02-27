@@ -13,5 +13,5 @@ return [
     'derivedPath' => dirname(__DIR__) . '/data/folio_derived_tables.json',
     'maxQueryRows' => 10000,
     'defaultQueryLimit' => 100,
-    'queryTimeoutMs' => 300000,
+    'queryTimeoutMs' => 1800000,
 ];

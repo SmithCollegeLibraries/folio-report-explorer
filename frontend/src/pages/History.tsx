@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { History as HistoryIcon, Clock, Database, Eye, ChevronLeft, ChevronRight } from 'lucide-react';
+import { History as HistoryIcon, Clock, Database, Eye, ChevronLeft, ChevronRight, User } from 'lucide-react';
 import { fetchQueryHistory, checkJobStatus } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import type { HistoryItem, JobStatusResponse } from '../types';
 
 /**
@@ -8,6 +9,7 @@ import type { HistoryItem, JobStatusResponse } from '../types';
  * re-view results.
  */
 export default function History() {
+  const { isAdmin } = useAuth();
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -96,6 +98,12 @@ export default function History() {
                         : 'border-gray-200'
                     }`}
                   >
+                    {/* Name / title row */}
+                    {item.name ? (
+                      <div className="text-sm font-semibold text-gray-800 mb-1 line-clamp-1">{item.name}</div>
+                    ) : (
+                      <div className="text-sm italic text-gray-400 mb-1">Unnamed query</div>
+                    )}
                     <div className="flex items-start justify-between mb-2">
                       <span className="inline-flex items-center gap-1 text-xs font-medium text-folio-600 bg-folio-50 px-2 py-0.5 rounded">
                         {item.source}
@@ -105,12 +113,21 @@ export default function History() {
                         {new Date(item.completedAt).toLocaleString()}
                       </span>
                     </div>
-                    <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap line-clamp-3 mb-2">
+                    <pre className="text-xs text-gray-600 font-mono whitespace-pre-wrap line-clamp-2 mb-2">
                       {item.sql}
                     </pre>
-                    <div className="flex items-center gap-4 text-xs text-gray-400">
-                      <span>{item.rowCount.toLocaleString()} rows</span>
-                      <span>{item.executionTimeMs}ms</span>
+                    <div className="flex items-center justify-between text-xs text-gray-400">
+                      <div className="flex items-center gap-4">
+                        <span>{item.rowCount.toLocaleString()} rows</span>
+                        <span>{item.executionTimeMs >= 1000
+                          ? `${(item.executionTimeMs / 1000).toFixed(1)}s`
+                          : `${item.executionTimeMs}ms`}</span>
+                      </div>
+                      {isAdmin && item.runBy && (
+                        <span className="flex items-center gap-1 text-gray-400">
+                          <User size={11} />{item.runBy}
+                        </span>
+                      )}
                     </div>
                   </button>
                 ))}
