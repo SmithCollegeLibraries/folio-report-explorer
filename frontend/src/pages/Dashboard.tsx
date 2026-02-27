@@ -1,19 +1,32 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   fetchDashboard, reorderDashboard, hideDashboardItem, showDashboardItem,
-  toggleGlobal, togglePin, submitQuery,
+  toggleGlobal, togglePin, checkJobStatus, refreshDashboardCard, saveDashboardDisplay,
 } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import ResultsModal from '../components/ResultsModal';
-import type { DashboardItem, ExecuteResponse } from '../types';
+import ChartPanel from '../components/ChartPanel';
+import type { ChartType } from '../components/ChartPanel';
+import type { DashboardItem, ExecuteResponse, ChartConfig } from '../types';
 import {
   LayoutDashboard, PinOff, Maximize2, Wrench, MessageSquare, FileBarChart,
   Loader2, AlertCircle, Sparkles, Globe, EyeOff, Eye, GripVertical,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, RefreshCw, Play, Table, BarChart3, TrendingUp,
+  PieChart, AreaChart,
 } from 'lucide-react';
+
+// ─── Display-type toggle helpers ─────────────────────────────────────────────
+
+const DISPLAY_TYPES: { key: ChartType | 'table'; label: string; icon: React.ReactNode }[] = [
+  { key: 'table', label: 'Table', icon: <Table size={12} /> },
+  { key: 'bar',   label: 'Bar',   icon: <BarChart3 size={12} /> },
+  { key: 'line',  label: 'Line',  icon: <TrendingUp size={12} /> },
+  { key: 'pie',   label: 'Pie',   icon: <PieChart size={12} /> },
+  { key: 'area',  label: 'Area',  icon: <AreaChart size={12} /> },
+];
 
 // ─── Single card ──────────────────────────────────────────────────────────────
 
@@ -44,22 +57,71 @@ function DashboardCard({
   onToggleGlobal: () => void;
   onExpand: (data: ExecuteResponse, title: string) => void;
 }) {
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [autoRan, setAutoRan] = useState(false);
-  const { results, isRunning, error } = useJobPolling(jobId);
+  // ── Cached / live results ──
+  const [cachedResults, setCachedResults] = useState<ExecuteResponse | null>(null);
+  const [loadingCache, setLoadingCache] = useState(false);
+  const [lastJobId, setLastJobId] = useState<string | null>(item.last_job_id);
 
-  const runMut = useMutation({
-    mutationFn: () => submitQuery(item.generated_sql || '', {}, 'builder'),
-    onSuccess: (data: { jobId: string }) => setJobId(data.jobId),
-  });
+  // ── Refresh polling ──
+  const [pollingJobId, setPollingJobId] = useState<string | null>(null);
+  const { results: polledResults, isRunning, error: pollError } = useJobPolling(pollingJobId);
 
+  // ── Display type ──
+  const [displayType, setDisplayType] = useState<ChartType | 'table'>(item.display_type ?? 'table');
+  const [chartConfig, setChartConfig] = useState<ChartConfig | null>(item.chart_config ?? null);
+
+  // On mount: load cached result from last_job_id (no auto-run)
   useEffect(() => {
-    if (item.generated_sql && !autoRan) {
-      setAutoRan(true);
-      runMut.mutate();
+    if (!lastJobId) return;
+    setLoadingCache(true);
+    checkJobStatus(lastJobId)
+      .then((job) => {
+        if (job.status === 'completed' && job.columns && job.rows) {
+          setCachedResults({
+            columns: job.columns,
+            rows: job.rows,
+            rowCount: job.rowCount ?? job.rows.length,
+            executionTimeMs: job.executionTimeMs ?? 0,
+            sql: job.sql ?? '',
+          });
+        }
+      })
+      .catch(() => { /* ignore stale job errors */ })
+      .finally(() => setLoadingCache(false));
+  // only run when lastJobId changes (i.e. after a refresh)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastJobId]);
+
+  // When polling completes, update the cached results and remember the new job id
+  useEffect(() => {
+    if (polledResults) {
+      setCachedResults(polledResults);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.generated_sql]);
+  }, [polledResults]);
+
+  // Active results = freshly polled (while running) or cached
+  const results = polledResults ?? cachedResults;
+
+  const handleRefresh = async () => {
+    try {
+      const { jobId } = await refreshDashboardCard(item.id);
+      setLastJobId(jobId);
+      setPollingJobId(jobId);
+    } catch {
+      // surface via pollError
+    }
+  };
+
+  const handleDisplayChange = (dt: ChartType | 'table') => {
+    setDisplayType(dt);
+    saveDashboardDisplay(item.id, dt === 'table' ? 'table' : dt, chartConfig);
+  };
+
+  const handleChartConfigChange = (axesCfg: { xAxis: string; yAxes: string[] }) => {
+    const cfg: ChartConfig = { xAxis: axesCfg.xAxis, yAxes: axesCfg.yAxes };
+    setChartConfig(cfg);
+    saveDashboardDisplay(item.id, displayType === 'table' ? 'table' : displayType, cfg);
+  };
 
   return (
     <div
@@ -101,6 +163,18 @@ function DashboardCard({
 
         {/* Action buttons */}
         <div className="flex items-center gap-0.5 flex-shrink-0">
+          {/* Refresh / Run button */}
+          {isRunning ? (
+            <Loader2 size={13} className="animate-spin text-folio-600 mx-1" />
+          ) : lastJobId ? (
+            <button onClick={handleRefresh} className="p-1 text-gray-400 hover:text-folio-600 rounded" title="Re-run query">
+              <RefreshCw size={13} />
+            </button>
+          ) : (
+            <button onClick={handleRefresh} className="p-1 text-folio-500 hover:text-folio-700 rounded" title="Run query">
+              <Play size={13} />
+            </button>
+          )}
           {results && (
             <button onClick={() => onExpand(results, item.name)} className="p-1 text-gray-400 hover:text-folio-600 rounded" title="Expand results">
               <Maximize2 size={13} />
@@ -128,22 +202,39 @@ function DashboardCard({
         </div>
       </div>
 
+      {/* Display type toggle */}
+      <div className="flex border-b bg-gray-50 px-3 py-1.5 gap-1">
+        {DISPLAY_TYPES.map(({ key, label, icon }) => (
+          <button
+            key={key}
+            onClick={() => handleDisplayChange(key)}
+            className={`flex items-center gap-1 text-[11px] px-2 py-0.5 rounded transition-colors ${
+              displayType === key
+                ? 'bg-folio-600 text-white'
+                : 'text-gray-500 hover:bg-gray-200'
+            }`}
+          >
+            {icon} {label}
+          </button>
+        ))}
+      </div>
+
       {/* Card body */}
-      <div className="flex-1 p-3 overflow-auto" style={{ maxHeight: '280px' }}>
-        {isRunning && (
+      <div className="flex-1 overflow-auto" style={{ maxHeight: '280px' }}>
+        {(loadingCache || (isRunning && !results)) && (
           <div className="flex items-center justify-center py-8 gap-2">
             <Loader2 size={18} className="animate-spin text-folio-600" />
-            <span className="text-sm text-gray-500">Running…</span>
+            <span className="text-sm text-gray-500">{isRunning ? 'Running…' : 'Loading…'}</span>
           </div>
         )}
-        {(error || runMut.isError) && (
-          <div className="flex items-center gap-2 text-sm text-red-600 py-4">
+        {pollError && (
+          <div className="flex items-center gap-2 text-sm text-red-600 p-4">
             <AlertCircle size={14} />
-            {error || String(runMut.error)}
+            {pollError}
           </div>
         )}
-        {results && (
-          <div className="text-xs">
+        {results && displayType === 'table' && (
+          <div className="p-3 text-xs">
             <div className="flex gap-3 text-gray-500 mb-2">
               <span><strong>{results.rowCount}</strong> rows</span>
               <span><strong>{results.executionTimeMs}</strong>ms</span>
@@ -178,8 +269,26 @@ function DashboardCard({
             )}
           </div>
         )}
-        {!isRunning && !results && !error && !runMut.isError && !item.generated_sql && (
-          <div className="text-center py-6 text-gray-400 text-sm">No SQL to run</div>
+        {results && displayType !== 'table' && (
+          <ChartPanel
+            data={results}
+            chartType={displayType as ChartType}
+            initialXAxis={chartConfig?.xAxis}
+            initialYAxes={chartConfig?.yAxes}
+            onConfigChange={handleChartConfigChange}
+          />
+        )}
+        {!loadingCache && !isRunning && !results && !pollError && (
+          <div className="flex flex-col items-center justify-center py-8 gap-3 text-gray-400">
+            <Play size={24} className="text-gray-300" />
+            <p className="text-sm">No data yet</p>
+            <button
+              onClick={handleRefresh}
+              className="text-xs px-3 py-1.5 bg-folio-600 text-white rounded-lg hover:bg-folio-700 transition-colors"
+            >
+              Run query
+            </button>
+          </div>
         )}
       </div>
     </div>

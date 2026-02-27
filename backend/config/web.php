@@ -74,6 +74,8 @@ $config = [
                 'PATCH dashboard/reorder' => 'folio-query/dashboard-reorder',
                 'POST dashboard/<id:\d+>/hide' => 'folio-query/dashboard-hide',
                 'POST dashboard/<id:\d+>/show' => 'folio-query/dashboard-show',
+                'POST dashboard/<id:\d+>/refresh' => 'folio-query/dashboard-refresh',
+                'PATCH dashboard/<id:\d+>/display' => 'folio-query/dashboard-display',
 
                 // Report templates
                 'GET reports' => 'folio-query/report-list',

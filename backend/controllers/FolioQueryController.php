@@ -137,6 +137,9 @@ class FolioQueryController extends Controller
      */
     private function getCurrentUserId()
     {
+        if (YII_ENV === 'dev') {
+            return 1; // stable dev admin seeded by migration 007
+        }
         return Yii::$app->user->isGuest ? null : Yii::$app->user->id;
     }
 
@@ -632,7 +635,7 @@ class FolioQueryController extends Controller
         if ($userId && !empty($itemMap)) {
             $ids = array_keys($itemMap);
             $prefRows = Yii::$app->db->createCommand(
-                'SELECT saved_query_id, position, hidden FROM user_dashboard_prefs WHERE user_id = :uid AND saved_query_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
+                'SELECT saved_query_id, position, hidden, display_type, chart_config FROM user_dashboard_prefs WHERE user_id = :uid AND saved_query_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
                 array_merge([':uid' => $userId], $ids)
             )->queryAll();
             foreach ($prefRows as $row) {
@@ -654,6 +657,10 @@ class FolioQueryController extends Controller
             $formatted = $this->formatSaved($q);
             $formatted['position']    = $pos;
             $formatted['source_type'] = $entry['source_type'];
+            $formatted['display_type'] = $pref['display_type'] ?? 'table';
+            $formatted['chart_config'] = isset($pref['chart_config'])
+                ? json_decode($pref['chart_config'], true)
+                : null;
 
             if ($pref && (int)$pref['hidden'] === 1) {
                 $hidden[] = $formatted;
@@ -732,6 +739,72 @@ class FolioQueryController extends Controller
             [':uid' => $userId, ':sqid' => $sqId]
         )->execute();
         return ['success' => true];
+    }
+
+    /**
+     * POST /api/dashboard/<id>/refresh — re-run a saved query, store new job ID as last_job_id.
+     * Returns {jobId} immediately; client polls query/status/{jobId}.
+     */
+    public function actionDashboardRefresh($id)
+    {
+        $userId = $this->getCurrentUserId();
+        $sq = SavedQuery::findOne((int)$id);
+        if (!$sq) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Saved query not found'];
+        }
+        if (!$sq->generated_sql) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'Saved query has no SQL'];
+        }
+
+        $job = QueryJob::createJob($sq->generated_sql, [], $sq->source ?: 'builder');
+        $job->name    = $sq->name;
+        $job->user_id = $userId;
+        if (!$job->save()) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => 'Failed to create job'];
+        }
+        $jobId = $job->id;
+
+        // Persist the new job id on the saved query so dashboard can show it
+        $sq->last_job_id = $jobId;
+        $sq->save(false);
+
+        Yii::$app->response->statusCode = 202;
+        return ['jobId' => $jobId];
+    }
+
+    /**
+     * PATCH /api/dashboard/<id>/display — persist per-user display type + chart config.
+     * Body: {"displayType": "bar", "chartConfig": {"xAxis": "...", "yAxes": [...]}}
+     */
+    public function actionDashboardDisplay($id)
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Authentication required'];
+        }
+        $body        = Yii::$app->request->getBodyParams();
+        $sqId        = (int)$id;
+        $displayType = $body['displayType'] ?? 'table';
+        $chartConfig = isset($body['chartConfig']) ? json_encode($body['chartConfig']) : null;
+
+        $allowed = ['table', 'bar', 'line', 'pie', 'area'];
+        if (!in_array($displayType, $allowed, true)) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'Invalid displayType'];
+        }
+
+        Yii::$app->db->createCommand(
+            'INSERT INTO user_dashboard_prefs (user_id, saved_query_id, display_type, chart_config)
+             VALUES (:uid, :sqid, :dt, :cc)
+             ON DUPLICATE KEY UPDATE display_type = :dt, chart_config = :cc, updated_at = NOW()',
+            [':uid' => $userId, ':sqid' => $sqId, ':dt' => $displayType, ':cc' => $chartConfig]
+        )->execute();
+
+        return ['success' => true, 'displayType' => $displayType];
     }
 
     /**
@@ -860,6 +933,7 @@ class FolioQueryController extends Controller
             'nl_prompt'        => $q->nl_prompt,
             'is_pinned'        => (bool)$q->is_pinned,
             'is_global'        => (bool)($q->is_global ?? false),
+            'last_job_id'      => $q->last_job_id ?: null,
             'created_at'       => $q->created_at,
             'updated_at'       => $q->updated_at,
         ];

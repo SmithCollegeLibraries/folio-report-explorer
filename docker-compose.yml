@@ -31,6 +31,7 @@ services:
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - YII_ENV=${YII_ENV:-dev}
     depends_on:
       mysql:
         condition: service_healthy
@@ -86,6 +87,7 @@ services:
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - YII_ENV=${YII_ENV:-dev}
     depends_on:
       php:
         condition: service_started

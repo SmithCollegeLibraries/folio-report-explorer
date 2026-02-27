@@ -211,8 +211,16 @@ export interface SavedQuery {
   nl_prompt?: string | null;
   is_pinned: boolean;
   is_global: boolean;
+  /** UUID of the most-recent completed job; present when the query has been run at least once */
+  last_job_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Saved chart axis configuration */
+export interface ChartConfig {
+  xAxis: string;
+  yAxes: string[];
 }
 
 /**
@@ -224,6 +232,10 @@ export interface DashboardItem extends SavedQuery {
   source_type: 'personal' | 'global';
   /** sort position (lower = higher on page) */
   position: number;
+  /** How to render the card: table or a chart type */
+  display_type: 'table' | 'bar' | 'line' | 'pie' | 'area';
+  /** Persisted axis selection for chart display modes */
+  chart_config: ChartConfig | null;
 }
 
 export interface DashboardResponse {

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import {
   BarChart,
   Bar,
@@ -21,8 +21,16 @@ import type { ExecuteResponse } from '../types';
 
 type ChartType = 'bar' | 'line' | 'pie' | 'area';
 
+export type { ChartType };
+
 interface Props {
   data: ExecuteResponse;
+  /** When supplied from outside (e.g. dashboard card), hides the in-panel type selector */
+  chartType?: ChartType;
+  initialXAxis?: string;
+  initialYAxes?: string[];
+  /** Called whenever the user changes axis selection so the parent can persist it */
+  onConfigChange?: (cfg: { xAxis: string; yAxes: string[] }) => void;
 }
 
 // FOLIO brand-inspired palette
@@ -51,8 +59,13 @@ function isNumeric(value: unknown): boolean {
   return !isNaN(Number(value));
 }
 
-export default function ChartPanel({ data }: Props) {
-  const [chartType, setChartType] = useState<ChartType>('bar');
+export default function ChartPanel({ data, chartType: externalChartType, initialXAxis, initialYAxes, onConfigChange }: Props) {
+  const [chartType, setChartType] = useState<ChartType>(externalChartType ?? 'bar');
+  // Keep in sync if parent changes chartType prop
+  useEffect(() => { if (externalChartType) setChartType(externalChartType); }, [externalChartType]);
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const isControlled = externalChartType !== undefined;
 
   // Classify columns as numeric or categorical
   const { numericCols, categoricalCols } = useMemo(() => {
@@ -75,12 +88,28 @@ export default function ChartPanel({ data }: Props) {
 
   // Default axis selections
   const [xAxis, setXAxis] = useState<string>(
-    () => categoricalCols[0] || data.columns[0] || '',
+    () => initialXAxis || categoricalCols[0] || data.columns[0] || '',
   );
   const [yAxes, setYAxes] = useState<string[]>(
-    () => numericCols.length > 0 ? [numericCols[0]] : data.columns.length > 1 ? [data.columns[1]] : [],
+    () => initialYAxes && initialYAxes.length > 0
+      ? initialYAxes
+      : numericCols.length > 0 ? [numericCols[0]] : data.columns.length > 1 ? [data.columns[1]] : [],
   );
 
+  const notifyChange = (newX: string, newY: string[]) => {
+    onConfigChange?.({ xAxis: newX, yAxes: newY });
+  };
+
+  const handleSetXAxis = (v: string) => { setXAxis(v); notifyChange(v, yAxes); };
+  const handleToggleYAxis = (col: string) => {
+    setYAxes((prev) => {
+      const next = prev.includes(col)
+        ? (prev.length > 1 ? prev.filter((c) => c !== col) : prev)
+        : [...prev, col];
+      notifyChange(xAxis, next);
+      return next;
+    });
+  };
   // Prepare chart data (cast numeric values)
   const chartData = useMemo(() => {
     // For pie charts, limit rows
@@ -96,15 +125,6 @@ export default function ChartPanel({ data }: Props) {
     });
   }, [data.rows, xAxis, yAxes, chartType]);
 
-  const toggleYAxis = (col: string) => {
-    setYAxes((prev) => {
-      if (prev.includes(col)) {
-        return prev.length > 1 ? prev.filter((c) => c !== col) : prev;
-      }
-      return [...prev, col];
-    });
-  };
-
   if (data.columns.length < 2) {
     return (
       <div className="p-6 text-center text-gray-400 text-sm">
@@ -117,31 +137,33 @@ export default function ChartPanel({ data }: Props) {
     <div className="space-y-4">
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-4 px-4 pt-4">
-        {/* Chart type */}
-        <div className="flex items-center gap-1">
-          <span className="text-xs text-gray-500 mr-1">Type:</span>
-          {CHART_TYPES.map((ct) => (
-            <button
-              key={ct.key}
-              onClick={() => setChartType(ct.key)}
-              className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
-                chartType === ct.key
-                  ? 'bg-folio-600 text-white border-folio-600'
-                  : 'border-gray-200 hover:border-gray-300 text-gray-600'
-              }`}
-            >
-              {ct.icon}
-              {ct.label}
-            </button>
-          ))}
-        </div>
+        {/* Chart type — hidden when controlled from outside (e.g. dashboard card header) */}
+        {!isControlled && (
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-gray-500 mr-1">Type:</span>
+            {CHART_TYPES.map((ct) => (
+              <button
+                key={ct.key}
+                onClick={() => setChartType(ct.key)}
+                className={`flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
+                  chartType === ct.key
+                    ? 'bg-folio-600 text-white border-folio-600'
+                    : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                }`}
+              >
+                {ct.icon}
+                {ct.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* X axis */}
         <div className="flex items-center gap-1">
           <span className="text-xs text-gray-500">X:</span>
           <select
             value={xAxis}
-            onChange={(e) => setXAxis(e.target.value)}
+            onChange={(e) => handleSetXAxis(e.target.value)}
             className="text-xs border rounded px-2 py-1"
           >
             {data.columns.map((col) => (
@@ -160,7 +182,7 @@ export default function ChartPanel({ data }: Props) {
             .map((col) => (
               <button
                 key={col}
-                onClick={() => toggleYAxis(col)}
+                onClick={() => handleToggleYAxis(col)}
                 className={`text-xs px-2 py-0.5 rounded border transition-colors ${
                   yAxes.includes(col)
                     ? 'bg-folio-50 text-folio-700 border-folio-300 font-medium'

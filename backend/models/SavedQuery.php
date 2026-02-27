@@ -17,6 +17,7 @@ use yii\db\ActiveRecord;
  * @property string $nl_prompt       Original NL question (source=nl)
  * @property int    $is_pinned       1 if pinned to personal dashboard
  * @property int    $is_global       1 if admin-pushed to every user's dashboard
+ * @property string $last_job_id     UUID of most-recent completed job (for cache)
  * @property string $created_at
  * @property string $updated_at
  */
@@ -44,6 +45,7 @@ class SavedQuery extends ActiveRecord
             [['source'], 'default', 'value' => 'builder'],
             [['is_pinned', 'is_global', 'user_id'], 'integer'],
             [['is_pinned', 'is_global'], 'default', 'value' => 0],
+            [['last_job_id'], 'string', 'max' => 36],
         ];
     }
 

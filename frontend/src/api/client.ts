@@ -485,3 +485,18 @@ export async function toggleGlobal(savedQueryId: number): Promise<SavedQuery> {
   const { data } = await api.patch(`/saved/${savedQueryId}/global`);
   return data;
 }
+
+/** Enqueue a fresh run for a dashboard card; returns the new jobId to poll */
+export async function refreshDashboardCard(savedQueryId: number): Promise<{ jobId: string }> {
+  const { data } = await api.post(`/dashboard/${savedQueryId}/refresh`);
+  return data;
+}
+
+/** Persist per-user display mode (table / chart type) and optional axis config */
+export async function saveDashboardDisplay(
+  savedQueryId: number,
+  displayType: 'table' | 'bar' | 'line' | 'pie' | 'area',
+  chartConfig?: { xAxis: string; yAxes: string[] } | null,
+): Promise<void> {
+  await api.patch(`/dashboard/${savedQueryId}/display`, { displayType, chartConfig: chartConfig ?? null });
+}
