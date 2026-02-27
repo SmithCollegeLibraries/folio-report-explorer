@@ -634,9 +634,17 @@ class FolioQueryController extends Controller
         $prefs = [];
         if ($userId && !empty($itemMap)) {
             $ids = array_keys($itemMap);
+            // Build named placeholders (:id0, :id1, …) — PDO forbids mixing named and positional params
+            $idParams = [];
+            $params = [':uid' => $userId];
+            foreach ($ids as $i => $id) {
+                $key = ':id' . $i;
+                $idParams[] = $key;
+                $params[$key] = $id;
+            }
             $prefRows = Yii::$app->db->createCommand(
-                'SELECT saved_query_id, position, hidden, display_type, chart_config FROM user_dashboard_prefs WHERE user_id = :uid AND saved_query_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')',
-                array_merge([':uid' => $userId], $ids)
+                'SELECT saved_query_id, position, hidden, display_type, chart_config FROM user_dashboard_prefs WHERE user_id = :uid AND saved_query_id IN (' . implode(',', $idParams) . ')',
+                $params
             )->queryAll();
             foreach ($prefRows as $row) {
                 $prefs[(int)$row['saved_query_id']] = $row;
