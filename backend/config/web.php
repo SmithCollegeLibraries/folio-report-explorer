@@ -52,6 +52,8 @@ $config = [
                 'POST build' => 'folio-query/build',
                 'POST execute' => 'folio-query/execute',
                 'POST nl' => 'folio-query/nl',
+                'GET campuses' => 'folio-query/campus-list',
+                'PATCH user/campus' => 'folio-query/campus-save',
 
                 // Async query jobs
                 'POST query/submit' => 'folio-query/query-submit',

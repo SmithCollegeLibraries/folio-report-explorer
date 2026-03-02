@@ -177,9 +177,18 @@ export async function executeQueryDefinition(
   return data;
 }
 
-export async function askNl(prompt: string): Promise<NlResponse> {
-  const { data } = await api.post('/nl', { prompt });
+export async function askNl(prompt: string, campus?: string | null): Promise<NlResponse> {
+  const { data } = await api.post('/nl', { prompt, campus: campus || null });
   return data;
+}
+
+export async function fetchCampuses(): Promise<{ code: string; name: string }[]> {
+  const { data } = await api.get('/campuses');
+  return data;
+}
+
+export async function saveCampusPreference(campus: string): Promise<void> {
+  await api.patch('/user/campus', { campus });
 }
 
 export async function askSchema(

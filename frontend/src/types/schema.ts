@@ -408,6 +408,7 @@ export interface AuthUser {
   role: 'admin' | 'user';
   isApproved: boolean;
   receiveNotifications: boolean;
+  defaultCampus: string;
   lastLogin: string | null;
   createdAt: string;
 }
@@ -424,6 +425,7 @@ export interface JwtPayload {
     firstName: string | null;
     lastName: string | null;
     role: 'admin' | 'user';
+    defaultCampus?: string;
   };
 }
 

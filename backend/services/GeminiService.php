@@ -20,7 +20,7 @@ class GeminiService
      * @return array {sql: string, explanation: string}
      * @throws \RuntimeException
      */
-    public static function generateSql($prompt)
+    public static function generateSql($prompt, $campus = null)
     {
         $apiKey = Yii::$app->params['geminiApiKey'];
         if (empty($apiKey)) {
@@ -31,6 +31,13 @@ class GeminiService
 
         $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
         $schemaContext = FolioSchemaService::buildSchemaContext();
+
+        // Build optional campus-scope rule (injected as Rule 13 in the system prompt)
+        $campusRule = '';
+        if ($campus && $campus !== 'All Colleges') {
+            $safe = addslashes($campus);
+            $campusRule = "13. CAMPUS SCOPE: The user's home institution is {$campus}. Unless the query explicitly mentions a different campus or asks about all colleges, queries involving items, holdings, locations, loans, orders, or invoices MUST filter to this campus by joining to inventory.loccampus__t (via location \xe2\x86\x92 loclibrary \xe2\x86\x92 loccampus) and adding WHERE LOWER(camp.name) = LOWER('{$safe}'). System-wide reference data (material types, loan types, instance types, fund types, expense classes, etc.) does NOT need campus filtering.";
+        }
 
         $systemPrompt = <<<PROMPT
 You are a PostgreSQL query generator for a FOLIO library management system.
@@ -61,6 +68,7 @@ RULES:
 12. For item location joins, ALWAYS use inventory.item__t.effective_location_id (NOT
     holdings_record__t.permanent_location_id). The effective location reflects the item's
     current/temporary location and is the correct column for circulation and item-level queries.
+{$campusRule}
 
 SCHEMA:
 {$schemaContext}

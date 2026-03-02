@@ -506,13 +506,74 @@ class FolioQueryController extends Controller
             return ['error' => 'A "prompt" is required'];
         }
 
+        // Resolve campus: request body overrides user's saved preference
+        $campus = $body['campus'] ?? null;
+        if ($campus === null) {
+            $userId = $this->getCurrentUserId();
+            if ($userId) {
+                $user = User::findOne($userId);
+                $campus = $user ? ($user->default_campus ?: 'Smith College') : 'Smith College';
+            } else {
+                $campus = 'Smith College';
+            }
+        }
+
         try {
-            $result = GeminiService::generateSql($prompt);
+            $result = GeminiService::generateSql($prompt, $campus ?: null);
             return $result;
         } catch (\RuntimeException $e) {
             Yii::$app->response->statusCode = 500;
             return ['error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * GET /api/campuses — list available campuses for the scope selector.
+     */
+    public function actionCampusList()
+    {
+        return [
+            ['code' => 'ALL', 'name' => 'All Colleges'],
+            ['code' => 'SC',  'name' => 'Smith College'],
+            ['code' => 'AC',  'name' => 'Amherst College'],
+            ['code' => 'MH',  'name' => 'Mount Holyoke College'],
+            ['code' => 'UM',  'name' => 'University Of Massachusetts'],
+            ['code' => 'HC',  'name' => 'Hampshire College'],
+            ['code' => 'RP',  'name' => 'Five Colleges Collections'],
+            ['code' => 'YB',  'name' => 'National Yiddish Book Center'],
+        ];
+    }
+
+    /**
+     * PATCH /api/user/campus — save the user's default campus preference.
+     * Body: {campus: string}
+     */
+    public function actionCampusSave()
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+        $user = User::findOne($userId);
+        if (!$user) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'User not found'];
+        }
+        $body = Yii::$app->request->getBodyParams();
+        $campus = $body['campus'] ?? null;
+        if (empty($campus)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'campus is required'];
+        }
+        $allowed = ['All Colleges', 'Smith College', 'Amherst College', 'Mount Holyoke College', 'University Of Massachusetts', 'Hampshire College', 'Five Colleges Collections', 'National Yiddish Book Center'];
+        if (!in_array($campus, $allowed)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'Invalid campus value'];
+        }
+        $user->default_campus = $campus;
+        $user->save(false);
+        return ['defaultCampus' => $user->default_campus];
     }
 
     /**
@@ -820,9 +881,7 @@ class FolioQueryController extends Controller
      */
     public function actionSavedGlobal($id)
     {
-        $identity = $this->getAppIdentity();
-        if (!$identity || !$identity->isAdmin()) {
-            Yii::$app->response->statusCode = 403;
+        if (!$this->requireAdmin()) {
             return ['error' => 'Admin required'];
         }
         $query = SavedQuery::findOne($id);

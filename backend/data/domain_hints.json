@@ -33,18 +33,14 @@
     "inventory.instance_relationship_type__t": "Types of relationships between instances (bound-with, analytics, etc.).",
     "inventory.instance_relationship__t": "Actual relationships between instance records.",
 
-    "circulation.loan__t": "Active and historical item checkouts/loans to patrons. Contains loan dates, due dates, return dates, and renewal info.",
+    "circulation.loan__t": "Aggregate checkout/loan records — loan dates, due dates, return dates, renewal counts. Use for circulation counts and trends only. Do NOT select user_id or any patron-identifying columns.",
     "circulation.request__t": "Patron hold/recall/page requests on items.",
     "circulation.check_in__t": "Check-in transaction records.",
     "circulation.loan_policy__t": "Loan policy definitions (loan period, renewals allowed, grace period, etc.).",
     "circulation.cancellation_reason__t": "Reasons for cancelling hold/recall requests.",
     "circulation.fixed_due_date_schedule__t": "Fixed due date schedule definitions for loan policies.",
-    "circulation.patron_action_session__t": "Patron action sessions tracking user activity.",
-    "circulation.patron_notice_policy__t": "Notice/notification policy definitions for patrons.",
     "circulation.request_policy__t": "Request policy definitions (hold, recall, page rules).",
-    "circulation.scheduled_notice__t": "Scheduled patron notices/reminders.",
     "circulation.staff_slips__t": "Staff slip template definitions (hold slip, transit slip, etc.).",
-    "circulation.user_request_preference__t": "Patron preferences for request fulfillment (delivery, hold shelf).",
 
     "orders.po_line__t": "Purchase order lines — individual line items on purchase orders. Contains material type, cost, fund, physical/electronic details.",
     "orders.purchase_order__t": "Purchase orders (POs) — the top-level order record. Links to vendor organization. Contains order date, workflow status.",
@@ -73,22 +69,13 @@
     "finance.expense_class__t": "Expense class definitions for categorizing spending (e.g. Electronic, Print, Binding).",
     "finance.groups__t": "Fund group definitions for grouping related funds.",
 
-    "users.users__t": "Patron and staff user records. Contains name, barcode, email, patron group, enrollment info.",
-    "users.groups__t": "Patron group definitions (Faculty, Undergraduate, Graduate, Staff, etc.).",
-    "users.addresstype__t": "Address type definitions (home, work, mailing, etc.).",
-    "users.proxyfor__t": "Proxy borrower relationships between users.",
+    "users.groups__t": "Patron group type definitions (Faculty, Undergraduate, Graduate, Staff, etc.). Use only for labeling/grouping aggregate counts — never select individual patron records.",
 
-    "feesfines.accounts__t": "Fee/fine account records — charges on patron accounts (overdue fines, lost item fees, etc.).",
     "feesfines.feefines__t": "Fee/fine type definitions.",
-    "feesfines.feefineactions__t": "Actions taken on fee/fine accounts (payment, waiver, transfer, refund).",
     "feesfines.owners__t": "Fee/fine owner definitions (which service point/library owns the fee).",
-    "feesfines.manualblocks__t": "Manual blocks placed on patron accounts.",
     "feesfines.lost_item_fee_policy__t": "Lost item fee policy definitions.",
     "feesfines.overdue_fine_policy__t": "Overdue fine policy definitions.",
     "feesfines.payments__t": "Payment method definitions.",
-    "feesfines.comments__t": "Comments on fee/fine actions.",
-
-    "audit.circulation_logs__t": "Audit trail of circulation events (checkouts, checkins, renewals, requests, notices).",
 
     "folio_source_record.records__t": "Source bibliographic records (MARC, etc.) in their original format.",
 
@@ -99,8 +86,7 @@
 
     "notes.note_data__t": "Notes attached to various FOLIO records.",
 
-    "perms.permissions__t": "Permission definitions in the FOLIO permissions system.",
-    "perms.users_p__t": "User permission assignments."
+    "perms.permissions__t": "Permission definitions in the FOLIO permissions system."
   },
 
   "vocabulary": {
@@ -114,25 +100,18 @@
     "vendor": "organizations.organizations__t.name — vendors/suppliers you purchase materials from (EBSCO, GOBI, YBP).",
     "supplier": "organizations.organizations__t.name — same as vendor.",
     "publisher": "inventory.instance__t.index_title or publication fields — NOT organizations.",
-    "patron": "users.users__t — user/patron records. Join to users.groups__t for patron group.",
-    "borrower": "users.users__t — same as patron.",
-    "student": "users.users__t joined to users.groups__t where group = student type.",
-    "faculty": "users.users__t joined to users.groups__t where group = 'Faculty'.",
-    "checkout": "circulation.loan__t — a loan record represents a checkout. loan_date is the checkout date.",
+    "checkout": "circulation.loan__t — a loan record represents a checkout. loan_date is the checkout date. Always aggregate (COUNT) — do not return individual patron data.",
     "loan": "circulation.loan__t — same as checkout.",
     "checkin": "circulation.check_in__t or circulation.loan__t.return_date.",
     "return": "circulation.loan__t.return_date — the return date on a loan record.",
     "hold": "circulation.request__t where request_type = 'Hold'.",
     "recall": "circulation.request__t where request_type = 'Recall'.",
-    "overdue": "circulation.loan__t where due_date < CURRENT_DATE AND return_date IS NULL — active overdue loans.",
-    "fine": "feesfines.accounts__t — fee/fine charges on patron accounts.",
-    "fee": "feesfines.accounts__t — same as fine.",
     "purchased": "orders.po_line__t — purchase order lines. Use purchase_order__t.date_ordered for purchase date.",
     "ordered": "orders.purchase_order__t.date_ordered — the date a purchase order was placed.",
     "material type": "inventory.material_type__t.name — type of material (Book, DVD, serial, etc.). Values are Title Case in the database — always use ILIKE or LOWER() for matching.",
     "format": "inventory.instance_format__t.name — physical format of an instance.",
     "call number": "inventory.item__t.effective_call_number or holdings_record__t.call_number.",
-    "barcode": "inventory.item__t.barcode — item barcode, or users.users__t.barcode — patron barcode.",
+    "barcode": "inventory.item__t.barcode — item barcode for identifying physical items.",
     "title": "inventory.instance__t.title — bibliographic title.",
     "fund": "finance.fund__t.name — budget fund name.",
     "budget": "finance.budget__t — budget allocations per fund per fiscal year.",
@@ -140,9 +119,8 @@
     "fiscal year": "finance.fiscal_year__t.name or .code — fiscal year definition.",
     "expense class": "finance.expense_class__t.name — spending category (Electronic, Print, etc.).",
     "service point": "inventory.service_point__t.name — circulation desk / service location.",
-    "patron group": "users.groups__t.group — patron type (Faculty, Undergraduate, Graduate, Staff).",
+    "patron group": "users.groups__t.group — patron type label (Faculty, Undergraduate, Graduate, Staff). Use only as a GROUP BY label for aggregate counts.",
     "course reserve": "courses.coursereserves_courselistings__t — course reserve listings.",
-    "circulation log": "audit.circulation_logs__t — audit trail of circulation events.",
     "circulating": "circulation.loan__t — count loans to measure circulation. Join item → effective_location_id → location → loclibrary → loccampus for location context.",
     "book": "inventory.material_type__t where LOWER(name) = 'book'. The database stores 'Book' (capitalized). Always use case-insensitive comparison.",
     "equipment": "inventory.material_type__t where LOWER(name) LIKE '%equipment%'. Exclude with AND LOWER(imt.name) NOT LIKE '%equipment%'."
@@ -160,10 +138,6 @@
     {
       "question": "What vendors have we spent the most money with this fiscal year?",
       "sql": "SELECT org.name AS vendor_name, SUM(inv.total) AS total_spent FROM invoice.invoices__t AS inv JOIN organizations.organizations__t AS org ON inv.vendor_id = org.id WHERE inv.status = 'Paid' AND inv.invoice_date >= (SELECT start_date FROM finance.fiscal_year__t WHERE code = 'FY2026') GROUP BY org.name ORDER BY total_spent DESC LIMIT 20;"
-    },
-    {
-      "question": "Count checkouts by patron group for the Neilson Library in the last 30 days",
-      "sql": "SELECT ug.group AS patron_group, COUNT(cl.id) AS checkout_count FROM circulation.loan__t AS cl JOIN users.users__t AS uu ON cl.user_id = uu.id JOIN users.groups__t AS ug ON uu.patron_group = ug.id JOIN inventory.item__t AS ii ON cl.item_id = ii.id JOIN inventory.location__t AS loc ON ii.effective_location_id = loc.id JOIN inventory.loclibrary__t AS lib ON loc.library_id = lib.id WHERE LOWER(lib.name) = LOWER('Neilson Library') AND cl.loan_date >= (CURRENT_DATE - INTERVAL '30 days') GROUP BY ug.group ORDER BY checkout_count DESC;"
     },
     {
       "question": "Show me the top 10 highest circulating books from Smith College between June 2024 and June 2025",

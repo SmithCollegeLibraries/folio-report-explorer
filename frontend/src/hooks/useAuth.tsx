@@ -85,6 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: payload.user.role,
         isApproved: true,
         receiveNotifications: false,
+        defaultCampus: payload.user.defaultCampus ?? 'Smith College',
         lastLogin: null,
         createdAt: '',
       });
@@ -124,6 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           role: payload.user.role,
           isApproved: true,
           receiveNotifications: false,
+          defaultCampus: payload.user.defaultCampus ?? 'Smith College',
           lastLogin: null,
           createdAt: '',
         });

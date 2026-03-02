@@ -20,6 +20,7 @@ use Firebase\JWT\JWT;
  * @property string $role            'admin' or 'user'
  * @property int    $is_approved     1 if approved by admin
  * @property int    $receive_notifications  1 to receive new-user emails (admins)
+ * @property string $default_campus  Preferred campus scope for Ask AI (e.g. 'Smith College')
  * @property string $last_login
  * @property string $refresh_token   Current refresh token (for revocation)
  * @property string $created_at
@@ -66,6 +67,8 @@ class User extends ActiveRecord implements IdentityInterface
             [['is_approved'], 'integer'],
             [['is_approved'], 'default', 'value' => 0],
             [['refresh_token'], 'string', 'max' => 512],
+            [['default_campus'], 'string', 'max' => 50],
+            [['default_campus'], 'default', 'value' => 'Smith College'],
         ];
     }
 
@@ -166,6 +169,7 @@ class User extends ActiveRecord implements IdentityInterface
                 'firstName' => $this->first_name,
                 'lastName' => $this->last_name,
                 'role' => $this->role,
+                'defaultCampus' => $this->default_campus ?: 'Smith College',
             ],
         ];
 
@@ -275,6 +279,7 @@ class User extends ActiveRecord implements IdentityInterface
             'role' => $this->role,
             'isApproved' => (bool) $this->is_approved,
             'receiveNotifications' => (bool) $this->receive_notifications,
+            'defaultCampus' => $this->default_campus ?: 'Smith College',
             'lastLogin' => $this->last_login,
             'createdAt' => $this->created_at,
         ];

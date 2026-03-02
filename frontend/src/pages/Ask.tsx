@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference } from '../api/client';
+import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
@@ -12,15 +13,27 @@ import {
   Clock, Code2, Table2,
 } from 'lucide-react';
 
+const CAMPUS_OPTIONS = [
+  { code: 'ALL', name: 'All Colleges' },
+  { code: 'SC',  name: 'Smith College' },
+  { code: 'AC',  name: 'Amherst College' },
+  { code: 'MH',  name: 'Mount Holyoke College' },
+  { code: 'UM',  name: 'University Of Massachusetts' },
+  { code: 'HC',  name: 'Hampshire College' },
+  { code: 'RP',  name: 'Five Colleges Collections' },
+  { code: 'YB',  name: 'National Yiddish Book Center' },
+];
+
 const EXAMPLE_PROMPTS = [
-  'Show all items checked out in the last 30 days with their patron names',
   'Count how many items each location has',
-  'List all loans that are overdue with borrower name and item title',
   'Show the top 10 most popular material types by checkout count',
-  'Find all patrons with more than 5 active loans',
+  'What vendors have we spent the most money with this fiscal year?',
+  'Show materials purchased in the last 90 days grouped by material type',
+  'Which call number ranges have the highest circulation counts?',
 ];
 
 export default function Ask() {
+  const { user, authEnabled } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [nlResult, setNlResult] = useState<NlResponse | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -37,6 +50,27 @@ export default function Ask() {
   const [saveDesc, setSaveDesc] = useState('');
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [lastSavedId, setLastSavedId] = useState<number | null>(null);
+
+  // Campus scope state — initialised from localStorage, synced with auth user preference
+  const [selectedCampus, setSelectedCampus] = useState<string>(
+    () => localStorage.getItem('folio_campus') ?? 'Smith College',
+  );
+
+  // When authenticated user loads/changes, adopt their saved campus preference
+  useEffect(() => {
+    if (user?.defaultCampus) {
+      setSelectedCampus(user.defaultCampus);
+      localStorage.setItem('folio_campus', user.defaultCampus);
+    }
+  }, [user?.defaultCampus]);
+
+  const handleCampusChange = (campus: string) => {
+    setSelectedCampus(campus);
+    localStorage.setItem('folio_campus', campus);
+    if (authEnabled) {
+      saveCampusPreference(campus).catch(() => {});
+    }
+  };
 
   // Correction state
   const [correcting, setCorrecting] = useState(false);
@@ -71,7 +105,7 @@ export default function Ask() {
   });
 
   const askMut = useMutation({
-    mutationFn: (question: string) => askNl(question),
+    mutationFn: (question: string) => askNl(question, selectedCampus === 'All Colleges' ? null : selectedCampus),
     onSuccess: (data: NlResponse, question: string) => {
       setNlResult(data);
       resetJob();
@@ -159,6 +193,26 @@ export default function Ask() {
             <Sparkles size={20} className="text-folio-600" />
             <h2 className="text-lg font-semibold">Ask AI</h2>
           </div>
+
+          {/* Campus scope selector */}
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-xs text-gray-500 font-medium flex-shrink-0">Scope to:</span>
+            <select
+              value={selectedCampus}
+              onChange={(e) => handleCampusChange(e.target.value)}
+              className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 focus:ring-2 focus:ring-folio-300 focus:border-folio-400 outline-none cursor-pointer"
+            >
+              {CAMPUS_OPTIONS.map((c) => (
+                <option key={c.code} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+            {selectedCampus !== 'All Colleges' && (
+              <span className="text-xs text-folio-600">
+                Queries will be filtered to {selectedCampus}
+              </span>
+            )}
+          </div>
+
           <p className="text-sm text-gray-500 mb-4">
             Describe the report you need in plain English. The AI will generate and
             run a query against the FOLIO LDP schema.
