@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS report_expense_allocations (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 ALTER TABLE query_log
-    ADD COLUMN IF NOT EXISTS data_source ENUM('folio', 'local') DEFAULT 'folio' AFTER source;
+    ADD COLUMN data_source ENUM('folio', 'local', 'composite') DEFAULT 'folio' AFTER source;
 
 ALTER TABLE query_jobs
-    ADD COLUMN IF NOT EXISTS data_source ENUM('folio', 'local') DEFAULT 'folio' AFTER source;
+    ADD COLUMN data_source ENUM('folio', 'local', 'composite') DEFAULT 'folio' AFTER source;

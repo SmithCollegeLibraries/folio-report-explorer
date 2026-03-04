@@ -9,4 +9,4 @@ ALTER TABLE report_templates
 
 ALTER TABLE query_jobs
   ADD COLUMN metadata JSON NULL
-    COMMENT 'Extra job metadata (e.g. composite_config for cross-DB reports)' AFTER data_source;
+    COMMENT 'Extra job metadata (e.g. composite_config for cross-DB reports)';
