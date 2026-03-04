@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS query_log (
     sql_text TEXT NOT NULL,
     params JSON,
     source ENUM('builder', 'nl', 'manual', 'report') DEFAULT 'builder',
+    data_source ENUM('folio', 'local') DEFAULT 'folio',
     user_id INT NULL,
     row_count INT,
     execution_time_ms INT,
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS query_jobs (
     sql_hash CHAR(64) NULL COMMENT 'SHA-256 hash for dedup',
     params JSON,
     source ENUM('builder', 'nl', 'manual', 'report') DEFAULT 'builder',
+    data_source ENUM('folio', 'local') DEFAULT 'folio',
     user_id INT NULL,
     status ENUM('pending', 'running', 'completed', 'failed', 'cancelled') DEFAULT 'pending',
     result_columns JSON COMMENT 'Column names array',
@@ -87,6 +89,8 @@ CREATE TABLE IF NOT EXISTS report_templates (
     category ENUM('acquisitions', 'circulation', 'inventory', 'finance', 'users', 'other') DEFAULT 'other',
     sql_template LONGTEXT NOT NULL COMMENT 'SQL with :param placeholders',
     parameters JSON NOT NULL COMMENT 'Array of parameter definitions',
+    data_source ENUM('folio', 'local', 'composite') NOT NULL DEFAULT 'folio' COMMENT 'Which DB this report targets',
+    composite_config JSON NULL COMMENT 'For composite reports: secondary query, merge key, append columns',
     default_limit INT DEFAULT 100,
     is_active TINYINT(1) DEFAULT 1,
     created_by ENUM('manual', 'ai') DEFAULT 'manual',
@@ -116,4 +120,30 @@ CREATE TABLE IF NOT EXISTS ai_training_hints (
     INDEX idx_hint_key (hint_key),
     INDEX idx_user_id (user_id),
     CONSTRAINT fk_training_hints_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS acrl_statistics (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    category VARCHAR(255) NOT NULL,
+    subcategory VARCHAR(255) NOT NULL,
+    year INT NOT NULL,
+    value DECIMAL(18,2) NULL,
+    notes VARCHAR(255) NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_acrl_stat (category, subcategory, year),
+    INDEX idx_acrl_year (year),
+    INDEX idx_acrl_category (category)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS report_expense_allocations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    fiscal_year INT NOT NULL,
+    expense_class_code VARCHAR(10) NOT NULL,
+    allocation_amount DECIMAL(10,2) NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_allocation (fiscal_year, expense_class_code),
+    INDEX idx_alloc_year (fiscal_year),
+    INDEX idx_alloc_code (expense_class_code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

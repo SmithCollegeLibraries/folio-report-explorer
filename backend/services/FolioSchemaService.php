@@ -78,6 +78,36 @@ class FolioSchemaService
     ];
 
     /**
+     * Local supplementary tables stored in MySQL.
+     */
+    const LOCAL_TABLES = [
+        'acrl_statistics' => [
+            'remarks' => 'Historical institutional statistics reported to ACRL',
+            'columns' => [
+                ['name' => 'id', 'type' => 'int'],
+                ['name' => 'category', 'type' => 'varchar'],
+                ['name' => 'subcategory', 'type' => 'varchar'],
+                ['name' => 'year', 'type' => 'int'],
+                ['name' => 'value', 'type' => 'decimal'],
+                ['name' => 'notes', 'type' => 'varchar'],
+                ['name' => 'created_at', 'type' => 'datetime'],
+                ['name' => 'updated_at', 'type' => 'datetime'],
+            ],
+        ],
+        'report_expense_allocations' => [
+            'remarks' => 'Per-fiscal-year expense class allocations for subject librarians',
+            'columns' => [
+                ['name' => 'id', 'type' => 'int'],
+                ['name' => 'fiscal_year', 'type' => 'int'],
+                ['name' => 'expense_class_code', 'type' => 'varchar'],
+                ['name' => 'allocation_amount', 'type' => 'decimal'],
+                ['name' => 'created_at', 'type' => 'datetime'],
+                ['name' => 'updated_at', 'type' => 'datetime'],
+            ],
+        ],
+    ];
+
+    /**
      * Check if a JSON cache file is still valid (exists and within TTL).
      * @param string $path Absolute path to cache file
      * @return array|null Parsed cache data if valid, null if expired/missing
@@ -278,6 +308,24 @@ class FolioSchemaService
             ];
         }
 
+        // Append local supplementary MySQL tables
+        foreach (self::LOCAL_TABLES as $name => $info) {
+            if ($filter !== null && !in_array($name, $filter)) {
+                continue;
+            }
+            $result[$name] = [
+                'name' => $name,
+                'type' => 'LOCAL_TABLE',
+                'primary_key' => 'id',
+                'remarks' => $info['remarks'] ?? null,
+                'column_count' => count($info['columns'] ?? []),
+                'parent_count' => 0,
+                'child_count' => 0,
+                'domain' => 'local',
+                'source' => 'local',
+            ];
+        }
+
         return $result;
     }
 
@@ -325,6 +373,21 @@ class FolioSchemaService
                 'name' => $name,
                 'table' => $table,
                 'relationships' => $schema['relationships'][$name] ?? ['parents' => [], 'children' => []],
+            ];
+        }
+
+        // Local supplementary table metadata
+        if (isset(self::LOCAL_TABLES[$name])) {
+            $local = self::LOCAL_TABLES[$name];
+            return [
+                'name' => $name,
+                'table' => [
+                    'type' => 'LOCAL_TABLE',
+                    'primary_key' => 'id',
+                    'remarks' => $local['remarks'] ?? null,
+                    'columns' => $local['columns'] ?? [],
+                ],
+                'relationships' => ['parents' => [], 'children' => []],
             ];
         }
 
@@ -397,7 +460,9 @@ class FolioSchemaService
             }
         }
 
-        $allNames = array_unique(array_merge($tables, $subtableNames, $metadbDirectNames));
+        $localNames = array_keys(self::LOCAL_TABLES);
+
+        $allNames = array_unique(array_merge($tables, $subtableNames, $metadbDirectNames, $localNames));
 
         // Exact match
         if (in_array($input, $allNames)) {
@@ -1266,7 +1331,10 @@ class FolioSchemaService
     public static function getTableNames()
     {
         $schema = self::loadSchema();
-        return array_keys($schema['tables'] ?? []);
+        $base = array_keys($schema['tables'] ?? []);
+        $subtables = array_keys(self::discoverSubtables());
+        $local = array_keys(self::LOCAL_TABLES);
+        return array_values(array_unique(array_merge($base, $subtables, $local)));
     }
 
     /**
@@ -1453,6 +1521,19 @@ class FolioSchemaService
                 $lines[] = "";
             }
         }
+
+        $lines[] = "\n--- Local Supplementary Tables (MySQL) ---";
+        $lines[] = "These local tables are in a separate MySQL database and support institutional reporting.";
+        $lines[] = "When a user asks about ACRL statistics or local budget allocations, use these tables.";
+        $lines[] = "IMPORTANT: Queries that reference ONLY local tables should be executed with data_source=local.";
+        $lines[] = "";
+        $lines[] = "TABLE acrl_statistics";
+        $lines[] = "  Columns: id:int, category:varchar, subcategory:varchar, year:int, value:decimal, notes:varchar";
+        $lines[] = "  Notes: Historical annual ACRL data; one row per category/subcategory/year.";
+        $lines[] = "";
+        $lines[] = "TABLE report_expense_allocations";
+        $lines[] = "  Columns: id:int, fiscal_year:int, expense_class_code:varchar, allocation_amount:decimal, created_at:datetime, updated_at:datetime";
+        $lines[] = "  Notes: Allocation amounts by fiscal year and expense class code.";
 
         return implode("\n", $lines);
     }

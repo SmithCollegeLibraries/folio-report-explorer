@@ -12,6 +12,7 @@ use yii\db\ActiveRecord;
  * @property string $sql_hash SHA-256 hash for dedup
  * @property string $params JSON
  * @property string $source builder|nl|manual
+ * @property string $data_source folio|local
  * @property string $name  human-readable label
  * @property int    $user_id
  * @property string $status pending|running|completed|failed|cancelled
@@ -37,9 +38,10 @@ class QueryJob extends ActiveRecord
         return [
             [['id', 'sql_text'], 'required'],
             [['sql_text', 'result_rows', 'error_message'], 'string'],
-            [['params', 'result_columns'], 'string'],
+            [['params', 'result_columns', 'metadata'], 'string'],
             [['sql_hash'], 'string', 'max' => 64],
             [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
+            [['data_source'], 'in', 'range' => ['folio', 'local', 'composite']],
             [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
             [['progress_message'], 'string', 'max' => 255],
@@ -56,13 +58,17 @@ class QueryJob extends ActiveRecord
      * @param string $source
      * @return static
      */
-    public static function createJob($sql, $params = [], $source = 'builder')
+    public static function createJob($sql, $params = [], $source = 'builder', $dataSource = 'folio', $metadata = null)
     {
         $job = new static();
         $job->id = self::generateUuid();
         $job->sql_text = $sql;
         $job->params = json_encode($params);
         $job->source = $source;
+        $job->data_source = in_array($dataSource, ['folio', 'local', 'composite']) ? $dataSource : 'folio';
+        if ($metadata !== null) {
+            $job->metadata = is_array($metadata) ? json_encode($metadata) : $metadata;
+        }
         $job->status = 'pending';
         $job->progress_message = 'Queued';
         return $job;
@@ -164,6 +170,7 @@ class QueryJob extends ActiveRecord
             'jobId' => $this->id,
             'status' => $this->status,
             'sql' => $this->sql_text,
+            'dataSource' => $this->data_source ?: 'folio',
             'progressMessage' => $this->progress_message,
             'createdAt' => $this->created_at,
             'startedAt' => $this->started_at,

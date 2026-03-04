@@ -44,8 +44,11 @@ export default function Explorer() {
 
   return (
     <div className="flex h-[calc(100vh-56px)]">
-      {/* Left: table list */}
-      <div className="w-80 border-r bg-white flex-shrink-0">
+      {/* Left: table list — full-width on mobile when no table selected, else hidden */}
+      <div className={`
+        ${selectedTable ? 'hidden md:flex' : 'flex'}
+        md:w-80 w-full border-r bg-white flex-shrink-0 flex-col
+      `}>
         <TableList
           tables={tables}
           selectedTable={selectedTable}
@@ -53,8 +56,20 @@ export default function Explorer() {
         />
       </div>
 
-      {/* Right: detail panel */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Right: detail panel — hidden on mobile when no table selected */}
+      <div className={`
+        ${selectedTable ? 'flex' : 'hidden md:flex'}
+        flex-1 overflow-y-auto flex-col
+      `}>
+        {/* Back button — mobile only */}
+        {selectedTable && (
+          <button
+            onClick={() => setSelectedTable(null)}
+            className="md:hidden flex items-center gap-2 px-4 py-2.5 text-sm text-folio-700 border-b bg-white flex-shrink-0"
+          >
+            ← All Tables
+          </button>
+        )}
         {!selectedTable ? (
           <div className="flex items-center justify-center h-full text-gray-400">
             <div className="text-center">

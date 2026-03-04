@@ -67,7 +67,7 @@ export default function Users() {
   };
 
   return (
-    <div className="max-w-screen-xl mx-auto p-6">
+    <div className="max-w-screen-xl mx-auto p-4 sm:p-6">
       <div className="flex items-center gap-3 mb-6">
         <UsersIcon className="text-folio-600" size={24} />
         <h1 className="text-2xl font-bold text-gray-800">User Management</h1>
@@ -84,7 +84,7 @@ export default function Users() {
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-folio-600" />
         </div>
       ) : (
-        <div className="bg-white rounded-lg border shadow-sm overflow-hidden">
+        <div className="bg-white rounded-lg border shadow-sm overflow-hidden overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b">
               <tr>

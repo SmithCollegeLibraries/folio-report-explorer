@@ -15,6 +15,8 @@ use yii\db\ActiveRecord;
  * @property string $category
  * @property string $sql_template
  * @property string $parameters   JSON array of parameter definitions
+ * @property string $data_source  folio|local|composite
+ * @property string $composite_config JSON config for cross-DB reports
  * @property int $default_limit
  * @property int $is_active
  * @property string $created_by   'manual' or 'ai'
@@ -43,12 +45,13 @@ class ReportTemplate extends ActiveRecord
             [['slug'], 'string', 'max' => 100],
             [['slug'], 'unique', 'filter' => ['is_active' => 1]],
             [['name'], 'string', 'max' => 255],
-            [['description', 'sql_template'], 'string'],
+            [['description', 'sql_template', 'composite_config'], 'string'],
             [['category'], 'in', 'range' => [
                 self::CAT_ACQUISITIONS, self::CAT_CIRCULATION,
                 self::CAT_INVENTORY, self::CAT_FINANCE,
                 self::CAT_USERS, self::CAT_OTHER,
             ]],
+            [['data_source'], 'in', 'range' => ['folio', 'local', 'composite']],
             [['default_limit'], 'integer', 'min' => 1, 'max' => 100000],
             [['is_active'], 'boolean'],
             [['created_by'], 'in', 'range' => ['manual', 'ai']],
@@ -208,17 +211,23 @@ class ReportTemplate extends ActiveRecord
 
     /**
      * Fetch dropdown options for 'select' type parameters by running their options_sql.
+     * For local/composite reports, select options run against the local MySQL db.
      * @return array Parameter name => [{value, label}, ...]
      */
     public function fetchSelectOptions()
     {
         $params = $this->getDecodedParameters();
         $options = [];
+        $useLocalDb = in_array($this->data_source, ['local', 'composite']);
 
         foreach ($params as $def) {
             if (($def['type'] ?? '') === 'select' && !empty($def['options_sql'])) {
                 try {
-                    $db = Yii::$app->folioDb;
+                    // For local/composite templates, options that reference local tables come from MySQL.
+                    // Options that explicitly target folio can still use folioDb.
+                    $db = (!empty($def['options_db']) && $def['options_db'] === 'local')
+                        ? Yii::$app->db
+                        : ($useLocalDb ? Yii::$app->db : Yii::$app->folioDb);
                     $rows = $db->createCommand($def['options_sql'])->queryAll();
                     $opts = [];
                     foreach ($rows as $row) {
@@ -240,6 +249,20 @@ class ReportTemplate extends ActiveRecord
     }
 
     /**
+     * Decode the composite_config JSON.
+     * @return array|null
+     */
+    public function getCompositeConfig()
+    {
+        if (empty($this->composite_config)) {
+            return null;
+        }
+        $raw = $this->composite_config;
+        $config = is_array($raw) ? $raw : json_decode($raw, true);
+        return is_array($config) ? $config : null;
+    }
+
+    /**
      * Serialize for API response.
      */
     public function toDetailArray()
@@ -250,6 +273,7 @@ class ReportTemplate extends ActiveRecord
             'name' => $this->name,
             'description' => $this->description,
             'category' => $this->category,
+            'dataSource' => $this->data_source ?: 'folio',
             'sqlTemplate' => $this->sql_template,
             'parameters' => $this->getResolvedParameters(),
             'defaultLimit' => (int) $this->default_limit,
@@ -272,6 +296,7 @@ class ReportTemplate extends ActiveRecord
             'name' => $this->name,
             'description' => $this->description,
             'category' => $this->category,
+            'dataSource' => $this->data_source ?: 'folio',
             'parameterCount' => count($params),
             'defaultLimit' => (int) $this->default_limit,
             'createdBy' => $this->created_by,

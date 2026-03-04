@@ -192,12 +192,14 @@ export interface ExecuteResponse {
   rowCount: number;
   executionTimeMs: number;
   sql: string;
+  dataSource?: 'folio' | 'local';
 }
 
 /** NL→SQL response */
 export interface NlResponse {
   sql: string;
   explanation: string;
+  dataSource?: 'folio' | 'local';
   warnings?: string[];
 }
 
@@ -265,6 +267,7 @@ export interface JobSubmitResponse {
   jobId: string;
   status: JobStatus;
   sql: string;
+  dataSource?: 'folio' | 'local';
   progressMessage: string;
   createdAt: string | null;
   startedAt: string | null;
@@ -276,6 +279,7 @@ export interface JobStatusResponse {
   jobId: string;
   status: JobStatus;
   sql: string;
+  dataSource?: 'folio' | 'local';
   progressMessage: string;
   createdAt: string | null;
   startedAt: string | null;
@@ -455,4 +459,24 @@ export interface HistoryResponse {
   offset: number;
   limit: number;
   items: HistoryItem[];
+}
+
+export interface AcrlStatistic {
+  id: number;
+  category: string;
+  subcategory: string;
+  year: number;
+  value: number | null;
+  notes: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ExpenseAllocation {
+  id: number;
+  fiscal_year: number;
+  expense_class_code: string;
+  allocation_amount: number;
+  created_at?: string;
+  updated_at?: string;
 }

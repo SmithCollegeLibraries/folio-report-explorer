@@ -89,6 +89,20 @@ $config = [
                 'POST reports/generate' => 'folio-query/report-generate',
                 'POST reports/convert' => 'folio-query/report-convert',
 
+                // Local supplementary data (admin)
+                'GET local/acrl' => 'folio-query/local-acrl-list',
+                'GET local/acrl/years' => 'folio-query/local-acrl-years',
+                'POST local/acrl' => 'folio-query/local-acrl-create',
+                'PUT local/acrl/<id:\d+>' => 'folio-query/local-acrl-update',
+                'DELETE local/acrl/<id:\d+>' => 'folio-query/local-acrl-delete',
+                'POST local/acrl/copy-year' => 'folio-query/local-acrl-copy-year',
+
+                'GET local/allocations' => 'folio-query/local-alloc-list',
+                'GET local/allocations/years' => 'folio-query/local-alloc-years',
+                'POST local/allocations' => 'folio-query/local-alloc-upsert',
+                'DELETE local/allocations/<id:\d+>' => 'folio-query/local-alloc-delete',
+                'POST local/allocations/copy-year' => 'folio-query/local-alloc-copy-year',
+
                 // Health check
                 'GET health' => 'folio-query/health',
 

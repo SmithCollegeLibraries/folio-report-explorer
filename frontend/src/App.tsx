@@ -3,7 +3,7 @@ import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import {
   Database, Wrench, MessageSquare, FileBarChart, Bookmark, Settings,
   LayoutDashboard, Brain, History as HistoryIcon, Users as UsersIcon,
-  LogOut, ChevronDown, BookOpen, ShieldCheck,
+  LogOut, ChevronDown, BookOpen, ShieldCheck, Menu, X,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Explorer from './pages/Explorer';
@@ -15,6 +15,7 @@ import SettingsPage from './pages/Settings';
 import Training from './pages/Training';
 import History from './pages/History';
 import UsersPage from './pages/Users';
+import LocalDataPage from './pages/LocalData.tsx';
 import AuthCallback from './pages/AuthCallback';
 import AuthPending from './pages/AuthPending';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -36,6 +37,7 @@ const libraryItems = [
 
 const adminItems = [
   { to: '/training',label: 'AI Training',   icon: Brain,         desc: 'Tune AI query generation' },
+  { to: '/local-data',label: 'Local Data',  icon: Database,      desc: 'Manage ACRL and allocations' },
   { to: '/users',   label: 'Users',         icon: UsersIcon,     desc: 'Manage user access' },
   { to: '/setup',   label: 'Setup',         icon: Settings,      desc: 'System settings' },
 ];
@@ -122,8 +124,67 @@ function NavDropdown({
 
 // ─── App ───────────────────────────────────────────────────────────────────────
 
+function MobileNavGroup({
+  label, icon: GroupIcon, items, color = 'folio',
+}: {
+  label: string;
+  icon: React.ElementType;
+  items: DropdownItem[];
+  color?: 'folio' | 'amber';
+}) {
+  const [open, setOpen] = useState(false);
+  const location = useLocation();
+  const isAnyActive = items.some((item) => location.pathname === item.to);
+  const iconCls = color === 'amber' ? 'text-amber-400' : 'text-folio-400';
+  const groupClsActive = color === 'amber' ? 'text-amber-200' : 'text-folio-200';
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`w-full flex items-center gap-2 px-3 py-2.5 rounded-md text-sm font-medium transition-colors ${
+          isAnyActive ? 'text-white' : 'text-folio-200 hover:bg-folio-700 hover:text-white'
+        }`}
+      >
+        <GroupIcon size={16} className={isAnyActive ? 'text-white' : groupClsActive} />
+        <span>{label}</span>
+        <ChevronDown size={14} className={`ml-auto transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="ml-6 mt-0.5 space-y-0.5">
+          {items.map(({ to, label: itemLabel, icon: Icon }) => (
+            <NavLink
+              key={to}
+              to={to}
+              className={({ isActive }) =>
+                `flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+                  isActive
+                    ? 'bg-folio-600 text-white'
+                    : 'text-folio-300 hover:bg-folio-700 hover:text-white'
+                }`
+              }
+            >
+              <Icon size={14} className={iconCls} />
+              {itemLabel}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const { user, isAdmin, authEnabled, logout } = useAuth();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const location = useLocation();
+
+  // Close mobile menu on navigation
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  const showAdmin = isAdmin || !authEnabled;
 
   const handleLogout = () => {
     logout();
@@ -135,17 +196,18 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Top navigation bar */}
-      <header className="bg-folio-800 text-white shadow-lg">
+      <header className="bg-folio-800 text-white shadow-lg relative z-40">
         <div className="max-w-screen-2xl mx-auto px-4 flex items-center h-14">
           {/* Brand */}
-          <NavLink to="/" className="flex items-center gap-2 mr-6 flex-shrink-0">
+          <NavLink to="/" className="flex items-center gap-2 mr-4 flex-shrink-0">
             <h1 className="text-base font-bold tracking-tight whitespace-nowrap">
-              FOLIO Report Explorer
+              <span className="hidden sm:inline">FOLIO Report Explorer</span>
+              <span className="sm:hidden">FRE</span>
             </h1>
           </NavLink>
 
-          {/* Nav groups */}
-          <nav className="flex items-center gap-1 flex-1">
+          {/* Desktop nav groups — hidden on mobile */}
+          <nav className="hidden md:flex items-center gap-1 flex-1">
             {/* Dashboard — standalone */}
             <NavLink
               to="/"
@@ -162,14 +224,17 @@ export default function App() {
 
             <NavDropdown label="Query" icon={MessageSquare} items={queryItems} />
             <NavDropdown label="Library" icon={BookOpen} items={libraryItems} />
-            {isAdmin && (
+            {showAdmin && (
               <NavDropdown label="Admin" icon={ShieldCheck} items={adminItems} color="amber" />
             )}
           </nav>
 
-          {/* User info / auth controls */}
+          {/* Spacer on mobile */}
+          <div className="flex-1 md:hidden" />
+
+          {/* User info / auth controls — desktop */}
           {authEnabled && user && (
-            <div className="flex items-center gap-3 ml-4 flex-shrink-0">
+            <div className="hidden md:flex items-center gap-3 ml-4 flex-shrink-0">
               <span className="text-folio-200 text-sm">
                 {user.displayName}
                 {isAdmin && (
@@ -187,7 +252,59 @@ export default function App() {
               </button>
             </div>
           )}
+
+          {/* Hamburger button — mobile only */}
+          <button
+            onClick={() => setMobileOpen((o) => !o)}
+            className="md:hidden p-2 rounded text-folio-200 hover:text-white hover:bg-folio-700 ml-2"
+            aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+          >
+            {mobileOpen ? <X size={20} /> : <Menu size={20} />}
+          </button>
         </div>
+
+        {/* Mobile nav drawer */}
+        {mobileOpen && (
+          <div className="md:hidden border-t border-folio-700 bg-folio-800 px-4 py-3 space-y-1">
+            <NavLink
+              to="/"
+              end
+              className={({ isActive }) =>
+                `flex items-center gap-2 px-3 py-2.5 rounded-md text-sm font-medium transition-colors ${
+                  isActive ? 'bg-folio-600 text-white' : 'text-folio-200 hover:bg-folio-700 hover:text-white'
+                }`
+              }
+            >
+              <LayoutDashboard size={16} />
+              Dashboard
+            </NavLink>
+
+            <MobileNavGroup label="Query" icon={MessageSquare} items={queryItems} />
+            <MobileNavGroup label="Library" icon={BookOpen} items={libraryItems} />
+            {showAdmin && (
+              <MobileNavGroup label="Admin" icon={ShieldCheck} items={adminItems} color="amber" />
+            )}
+
+            {authEnabled && user && (
+              <div className="border-t border-folio-700 pt-2 mt-2 flex items-center justify-between">
+                <span className="text-folio-300 text-sm">
+                  {user.displayName}
+                  {isAdmin && (
+                    <span className="ml-1.5 text-xs bg-amber-600 px-1.5 py-0.5 rounded font-medium text-white">
+                      admin
+                    </span>
+                  )}
+                </span>
+                <button
+                  onClick={handleLogout}
+                  className="text-folio-300 hover:text-white p-1 rounded flex items-center gap-1 text-sm"
+                >
+                  <LogOut size={15} /> Logout
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </header>
 
       {/* Main content */}
@@ -208,6 +325,7 @@ export default function App() {
 
           {/* Admin routes */}
           <Route path="/training" element={<ProtectedRoute adminOnly><Training /></ProtectedRoute>} />
+          <Route path="/local-data" element={<ProtectedRoute adminOnly><LocalDataPage /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
           <Route path="/setup" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
         </Routes>

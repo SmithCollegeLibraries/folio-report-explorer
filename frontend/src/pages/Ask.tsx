@@ -100,7 +100,8 @@ export default function Ask() {
   const { job, results, isRunning, error: jobError, cancel: cancelJobFn, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
 
   const execMut = useMutation({
-    mutationFn: (sql: string) => submitQuery(sql, {}, 'nl', prompt.trim() || undefined),
+    mutationFn: ({ sql, dataSource }: { sql: string; dataSource?: 'folio' | 'local' }) =>
+      submitQuery(sql, {}, 'nl', prompt.trim() || undefined, dataSource || 'folio'),
     onSuccess: (data: { jobId: string }) => setActiveJobId(data.jobId),
   });
 
@@ -117,7 +118,7 @@ export default function Ask() {
       setHistory((prev) => [{ prompt: question, result: data }, ...prev].slice(0, 20));
       // Auto-run the generated SQL
       if (data.sql) {
-        execMut.mutate(data.sql);
+        execMut.mutate({ sql: data.sql, dataSource: data.dataSource || 'folio' });
       }
     },
   });
@@ -215,7 +216,7 @@ export default function Ask() {
 
           <p className="text-sm text-gray-500 mb-4">
             Describe the report you need in plain English. The AI will generate and
-            run a query against the FOLIO LDP schema.
+            run a query against the FOLIO LDP schema or local supplementary tables.
           </p>
 
           <div className="flex gap-2">
@@ -493,7 +494,7 @@ export default function Ask() {
                         )}
                         {!isRunning ? (
                           <button
-                            onClick={() => execMut.mutate(nlResult.sql)}
+                            onClick={() => execMut.mutate({ sql: nlResult.sql, dataSource: nlResult.dataSource || 'folio' })}
                             disabled={execMut.isPending}
                             className="flex items-center gap-1 bg-green-600 text-white text-xs px-3 py-1 rounded hover:bg-green-700 disabled:opacity-50"
                           >

@@ -10,7 +10,8 @@ use yii\db\ActiveRecord;
  * @property int $id
  * @property string $sql_text
  * @property string $params JSON
- * @property string $source builder|nl|manual
+ * @property string $source builder|nl|manual|report
+ * @property string $data_source folio|local
  * @property int    $user_id
  * @property int $row_count
  * @property int $execution_time_ms
@@ -36,7 +37,8 @@ class QueryLog extends ActiveRecord
             [['sql_text'], 'required'],
             [['sql_text', 'error_message'], 'string'],
             [['params'], 'string'],
-            [['source'], 'in', 'range' => ['builder', 'nl', 'manual']],
+            [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
+            [['data_source'], 'in', 'range' => ['folio', 'local']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
         ];
     }

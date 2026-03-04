@@ -13,6 +13,8 @@ use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
 use app\models\ReportTemplate;
+use app\models\AcrlStatistic;
+use app\models\ExpenseAllocation;
 use app\models\User;
 use app\models\DummyIdentity;
 use Firebase\JWT\JWT;
@@ -86,6 +88,10 @@ class FolioQueryController extends Controller
                             'training-update', 'training-delete', 'training-correct',
                             'report-create', 'report-update', 'report-delete',
                             'report-generate', 'report-convert',
+                            'local-acrl-list', 'local-acrl-years', 'local-acrl-create',
+                            'local-acrl-update', 'local-acrl-delete', 'local-acrl-copy-year',
+                            'local-alloc-list', 'local-alloc-years', 'local-alloc-upsert',
+                            'local-alloc-delete', 'local-alloc-copy-year',
                             'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
                         ],
                         'roles' => ['@'],
@@ -159,6 +165,26 @@ class FolioQueryController extends Controller
             return false;
         }
         return true;
+    }
+
+    /**
+     * Normalize datasource input to folio|local.
+     * @param mixed $value
+     * @return string
+     */
+    private function normalizeDataSource($value)
+    {
+        return strtolower((string) $value) === 'local' ? 'local' : 'folio';
+    }
+
+    /**
+     * Resolve DB component name for a datasource.
+     * @param string $dataSource
+     * @return string
+     */
+    private function resolveDbComponent($dataSource)
+    {
+        return $this->normalizeDataSource($dataSource) === 'local' ? 'db' : 'folioDb';
     }
 
     // ─── Schema endpoints ─────────────────────────────────────────────
@@ -286,6 +312,7 @@ class FolioQueryController extends Controller
         $sql = $body['sql'] ?? null;
         $params = $body['params'] ?? [];
         $source = $body['source'] ?? 'manual';
+        $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
 
         // If a query definition is provided instead of raw SQL, build it first
         if (!$sql && isset($body['queryDefinition'])) {
@@ -294,6 +321,7 @@ class FolioQueryController extends Controller
                 $sql = $built['sql'];
                 $params = $built['params'];
                 $source = 'builder';
+                $dataSource = 'folio';
             } catch (\InvalidArgumentException $e) {
                 Yii::$app->response->statusCode = 400;
                 return ['error' => $e->getMessage()];
@@ -325,14 +353,18 @@ class FolioQueryController extends Controller
         $log->sql_text = $sql;
         $log->params = json_encode($params);
         $log->source = $source;
+        $log->data_source = $dataSource;
         $log->user_id = $this->getCurrentUserId();
 
         try {
-            $db = Yii::$app->folioDb;
+            $dbComponent = $this->resolveDbComponent($dataSource);
+            $db = Yii::$app->{$dbComponent};
             $transaction = $db->beginTransaction();
 
             try {
-                $db->createCommand("SET TRANSACTION READ ONLY")->execute();
+                if ($dataSource === 'folio') {
+                    $db->createCommand("SET TRANSACTION READ ONLY")->execute();
+                }
                 $command = $db->createCommand($sql);
 
                 foreach ($params as $key => $value) {
@@ -358,6 +390,7 @@ class FolioQueryController extends Controller
                     'rowCount' => count($rows),
                     'executionTimeMs' => $executionTime,
                     'sql' => $sql,
+                    'dataSource' => $dataSource,
                 ];
             } catch (\Exception $e) {
                 $transaction->rollBack();
@@ -374,6 +407,7 @@ class FolioQueryController extends Controller
                 'error' => 'Query execution failed',
                 'message' => $e->getMessage(),
                 'sql' => $sql,
+                'dataSource' => $dataSource,
             ];
         }
     }
@@ -391,6 +425,7 @@ class FolioQueryController extends Controller
         $sql = $body['sql'] ?? null;
         $params = $body['params'] ?? [];
         $source = $body['source'] ?? 'manual';
+        $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
 
         // Build SQL from query definition if provided
         if (!$sql && isset($body['queryDefinition'])) {
@@ -399,6 +434,7 @@ class FolioQueryController extends Controller
                 $sql = $built['sql'];
                 $params = $built['params'];
                 $source = 'builder';
+                $dataSource = 'folio';
             } catch (\InvalidArgumentException $e) {
                 Yii::$app->response->statusCode = 400;
                 return ['error' => $e->getMessage()];
@@ -425,7 +461,7 @@ class FolioQueryController extends Controller
         }
 
         // Create job
-        $job = QueryJob::createJob($sql, $params, $source);
+        $job = QueryJob::createJob($sql, $params, $source, $dataSource);
         $job->user_id = $this->getCurrentUserId();
         $job->name = isset($body['name']) ? substr(trim($body['name']), 0, 255) : null;
         $job->sql_hash = hash('sha256', $sql . json_encode($params));
@@ -520,6 +556,9 @@ class FolioQueryController extends Controller
 
         try {
             $result = GeminiService::generateSql($prompt, $campus ?: null);
+            if (!isset($result['dataSource'])) {
+                $result['dataSource'] = 'folio';
+            }
             return $result;
         } catch (\RuntimeException $e) {
             Yii::$app->response->statusCode = 500;
@@ -827,7 +866,7 @@ class FolioQueryController extends Controller
             return ['error' => 'Saved query has no SQL'];
         }
 
-        $job = QueryJob::createJob($sq->generated_sql, [], $sq->source ?: 'builder');
+        $job = QueryJob::createJob($sq->generated_sql, [], $sq->source ?: 'builder', 'folio');
         $job->name    = $sq->name;
         $job->user_id = $userId;
         if (!$job->save()) {
@@ -1203,8 +1242,28 @@ class FolioQueryController extends Controller
             return ['error' => $e->getMessage()];
         }
 
+        // Determine data source from report template
+        $dataSource = in_array($report->data_source, ['folio', 'local', 'composite'])
+            ? $report->data_source
+            : 'folio';
+
+        // For composite reports, attach the composite_config as job metadata
+        $metadata = null;
+        if ($dataSource === 'composite') {
+            $compositeConfig = $report->getCompositeConfig();
+            if (!$compositeConfig) {
+                Yii::$app->response->statusCode = 400;
+                return ['error' => 'Composite report is missing composite_config'];
+            }
+            // Bind secondary SQL params too (secondary uses same param set)
+            $metadata = [
+                'composite_config' => $compositeConfig,
+                'bound_params' => $bound['params'],
+            ];
+        }
+
         // Create async job
-        $job = QueryJob::createJob($bound['sql'], $bound['params'], 'report');
+        $job = QueryJob::createJob($bound['sql'], $bound['params'], 'report', $dataSource, $metadata);
         $job->user_id = $this->getCurrentUserId();
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
@@ -1216,6 +1275,7 @@ class FolioQueryController extends Controller
             'jobId' => $job->id,
             'reportName' => $report->name,
             'status' => 'pending',
+            'dataSource' => $dataSource,
         ];
     }
 
@@ -1536,6 +1596,353 @@ class FolioQueryController extends Controller
         ];
     }
 
+    // ─── Local supplementary data (admin) ─────────────────────────
+
+    /**
+     * GET /api/local/acrl
+     */
+    public function actionLocalAcrlList()
+    {
+        $year = Yii::$app->request->get('year');
+        $category = Yii::$app->request->get('category');
+
+        $query = AcrlStatistic::find()->orderBy(['year' => SORT_DESC, 'category' => SORT_ASC, 'subcategory' => SORT_ASC]);
+        if ($year !== null && $year !== '') {
+            $query->andWhere(['year' => (int) $year]);
+        }
+        if ($category) {
+            $query->andWhere(['category' => $category]);
+        }
+
+        $rows = $query->asArray()->all();
+        return [
+            'items' => $rows,
+            'years' => AcrlStatistic::getAvailableYears(),
+        ];
+    }
+
+    /**
+     * GET /api/local/acrl/years
+     */
+    public function actionLocalAcrlYears()
+    {
+        return ['years' => AcrlStatistic::getAvailableYears()];
+    }
+
+    /**
+     * POST /api/local/acrl
+     * Body: {rows: [{category, subcategory, year, value, notes}], row?: {...}}
+     */
+    public function actionLocalAcrlCreate()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $rows = $body['rows'] ?? null;
+        if ($rows === null && isset($body['row'])) {
+            $rows = [$body['row']];
+        }
+        if (!is_array($rows) || empty($rows)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'rows is required'];
+        }
+
+        $created = 0;
+        $updated = 0;
+        foreach ($rows as $row) {
+            $category = trim((string) ($row['category'] ?? ''));
+            $subcategory = trim((string) ($row['subcategory'] ?? ''));
+            $year = (int) ($row['year'] ?? 0);
+            if ($category === '' || $subcategory === '' || $year <= 0) {
+                continue;
+            }
+
+            $model = AcrlStatistic::findOne([
+                'category' => $category,
+                'subcategory' => $subcategory,
+                'year' => $year,
+            ]);
+            if (!$model) {
+                $model = new AcrlStatistic();
+                $created++;
+            } else {
+                $updated++;
+            }
+
+            $model->category = $category;
+            $model->subcategory = $subcategory;
+            $model->year = $year;
+            $model->value = array_key_exists('value', $row) ? $row['value'] : null;
+            $model->notes = $row['notes'] ?? null;
+
+            if (!$model->save()) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Validation failed', 'details' => $model->errors];
+            }
+        }
+
+        return ['success' => true, 'created' => $created, 'updated' => $updated];
+    }
+
+    /**
+     * PUT /api/local/acrl/<id>
+     */
+    public function actionLocalAcrlUpdate($id)
+    {
+        $model = AcrlStatistic::findOne((int) $id);
+        if (!$model) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Row not found'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        foreach (['category', 'subcategory', 'year', 'value', 'notes'] as $field) {
+            if (array_key_exists($field, $body)) {
+                $model->{$field} = $body[$field];
+            }
+        }
+
+        if (!$model->save()) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'Validation failed', 'details' => $model->errors];
+        }
+
+        return ['success' => true, 'item' => $model->toArray()];
+    }
+
+    /**
+     * DELETE /api/local/acrl/<id>
+     */
+    public function actionLocalAcrlDelete($id)
+    {
+        $model = AcrlStatistic::findOne((int) $id);
+        if (!$model) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Row not found'];
+        }
+        $model->delete();
+        return ['success' => true];
+    }
+
+    /**
+     * POST /api/local/acrl/copy-year
+     * Body: {fromYear: number, toYear: number, overwrite?: boolean}
+     */
+    public function actionLocalAcrlCopyYear()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $fromYear = (int) ($body['fromYear'] ?? 0);
+        $toYear = (int) ($body['toYear'] ?? 0);
+        $overwrite = !empty($body['overwrite']);
+
+        if ($fromYear <= 0 || $toYear <= 0) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'fromYear and toYear are required'];
+        }
+
+        $sourceRows = AcrlStatistic::find()->where(['year' => $fromYear])->asArray()->all();
+        if (empty($sourceRows)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'No rows found for source year'];
+        }
+
+        $copied = 0;
+        $updated = 0;
+        $skipped = 0;
+        foreach ($sourceRows as $row) {
+            $existing = AcrlStatistic::findOne([
+                'category' => $row['category'],
+                'subcategory' => $row['subcategory'],
+                'year' => $toYear,
+            ]);
+            if ($existing) {
+                if (!$overwrite) {
+                    $skipped++;
+                    continue;
+                }
+                $existing->value = $row['value'];
+                $existing->notes = $row['notes'];
+                $existing->save(false);
+                $updated++;
+                continue;
+            }
+
+            $new = new AcrlStatistic();
+            $new->category = $row['category'];
+            $new->subcategory = $row['subcategory'];
+            $new->year = $toYear;
+            $new->value = $row['value'];
+            $new->notes = $row['notes'];
+            $new->save(false);
+            $copied++;
+        }
+
+        return ['success' => true, 'copied' => $copied, 'updated' => $updated, 'skipped' => $skipped];
+    }
+
+    /**
+     * GET /api/local/allocations
+     */
+    public function actionLocalAllocList()
+    {
+        $fiscalYear = Yii::$app->request->get('fiscalYear');
+        $query = ExpenseAllocation::find()->orderBy(['fiscal_year' => SORT_DESC, 'expense_class_code' => SORT_ASC]);
+        if ($fiscalYear !== null && $fiscalYear !== '') {
+            $query->andWhere(['fiscal_year' => (int) $fiscalYear]);
+        }
+        return [
+            'items' => $query->asArray()->all(),
+            'years' => ExpenseAllocation::getAvailableYears(),
+        ];
+    }
+
+    /**
+     * GET /api/local/allocations/years
+     */
+    public function actionLocalAllocYears()
+    {
+        return ['years' => ExpenseAllocation::getAvailableYears()];
+    }
+
+    private function parseBulkAllocationData($pastedData)
+    {
+        $lines = explode("\n", trim((string) $pastedData));
+        $allocations = [];
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+
+            $parts = preg_split('/\s*\t+\s*|\s{2,}/', $line);
+            if (!is_array($parts) || count($parts) < 2) {
+                continue;
+            }
+
+            $code = strtoupper(trim((string) $parts[count($parts) - 1]));
+            $amounts = [];
+            foreach ($parts as $part) {
+                if (preg_match('/\$?([0-9,]+\.?\d*)/', (string) $part, $matches)) {
+                    $amounts[] = (float) str_replace([',', '$'], '', $matches[1]);
+                }
+            }
+
+            if ($code !== '' && !empty($amounts)) {
+                $allocation = count($amounts) > 1 ? $amounts[1] : $amounts[0];
+                $allocations[$code] = $allocation;
+            }
+        }
+
+        return $allocations;
+    }
+
+    /**
+     * POST /api/local/allocations
+     * Body supports:
+     * - {fiscalYear, code, amount}
+     * - {fiscalYear, rows:[{expense_class_code, allocation_amount}]}
+     * - {fiscalYear, pastedData:"..."}
+     */
+    public function actionLocalAllocUpsert()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $fiscalYear = (int) ($body['fiscalYear'] ?? 0);
+        if ($fiscalYear <= 0) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'fiscalYear is required'];
+        }
+
+        $payload = [];
+        if (!empty($body['pastedData'])) {
+            $parsed = $this->parseBulkAllocationData($body['pastedData']);
+            foreach ($parsed as $code => $amount) {
+                $payload[] = ['expense_class_code' => $code, 'allocation_amount' => $amount];
+            }
+        } elseif (!empty($body['rows']) && is_array($body['rows'])) {
+            $payload = $body['rows'];
+        } elseif (isset($body['code'], $body['amount'])) {
+            $payload = [[
+                'expense_class_code' => $body['code'],
+                'allocation_amount' => $body['amount'],
+            ]];
+        }
+
+        if (empty($payload)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'No allocation data provided'];
+        }
+
+        $inserted = 0;
+        $updated = 0;
+        foreach ($payload as $row) {
+            $code = strtoupper(trim((string) ($row['expense_class_code'] ?? '')));
+            if ($code === '') {
+                continue;
+            }
+            $amount = (float) ($row['allocation_amount'] ?? 0);
+
+            $model = ExpenseAllocation::findOne([
+                'fiscal_year' => $fiscalYear,
+                'expense_class_code' => $code,
+            ]);
+            if (!$model) {
+                $model = new ExpenseAllocation();
+                $model->fiscal_year = $fiscalYear;
+                $model->expense_class_code = $code;
+                $inserted++;
+            } else {
+                $updated++;
+            }
+            $model->allocation_amount = $amount;
+            if (!$model->save()) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Validation failed', 'details' => $model->errors];
+            }
+        }
+
+        return ['success' => true, 'inserted' => $inserted, 'updated' => $updated];
+    }
+
+    /**
+     * DELETE /api/local/allocations/<id>
+     */
+    public function actionLocalAllocDelete($id)
+    {
+        $model = ExpenseAllocation::findOne((int) $id);
+        if (!$model) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Allocation not found'];
+        }
+        $model->delete();
+        return ['success' => true];
+    }
+
+    /**
+     * POST /api/local/allocations/copy-year
+     * Body: {fiscalYear: number}
+     */
+    public function actionLocalAllocCopyYear()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $targetYear = (int) ($body['fiscalYear'] ?? 0);
+        if ($targetYear <= 0) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'fiscalYear is required'];
+        }
+
+        try {
+            $result = ExpenseAllocation::copyFromPreviousYear($targetYear);
+            if (!$result['foundSource']) {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => 'No rows found in previous fiscal year'];
+            }
+
+            return ['success' => true] + $result;
+        } catch (\Throwable $e) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => $e->getMessage()];
+        }
+    }
+
     // ─── Auth endpoints ────────────────────────────────────────────
 
     /**
@@ -1788,6 +2195,7 @@ class FolioQueryController extends Controller
                     'name'           => $job['name'] ?? null,
                     'sql'            => $job['sql_text'],
                     'source'         => $job['source'],
+                    'dataSource'     => $job['data_source'] ?? 'folio',
                     'rowCount'       => (int) ($job['row_count'] ?? 0),
                     'executionTimeMs'=> (int) ($job['execution_time_ms'] ?? 0),
                     'createdAt'      => $job['created_at'],

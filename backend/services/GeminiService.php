@@ -17,7 +17,7 @@ class GeminiService
      * Generate SQL from a natural-language prompt.
      *
      * @param string $prompt User's natural language query description
-     * @return array {sql: string, explanation: string}
+     * @return array {sql: string, explanation: string, dataSource: string}
      * @throws \RuntimeException
      */
     public static function generateSql($prompt, $campus = null)
@@ -68,6 +68,9 @@ RULES:
 12. For item location joins, ALWAYS use inventory.item__t.effective_location_id (NOT
     holdings_record__t.permanent_location_id). The effective location reflects the item's
     current/temporary location and is the correct column for circulation and item-level queries.
+13. If the query references ONLY local supplementary tables (acrl_statistics, report_expense_allocations),
+    generate MySQL-compatible SELECT and set DATA SOURCE to "local".
+14. Otherwise set DATA SOURCE to "folio" and use PostgreSQL syntax.
 {$campusRule}
 
 SCHEMA:
@@ -76,6 +79,7 @@ SCHEMA:
 RESPONSE FORMAT:
 Return the SQL in a ```sql code block, followed by a brief plain-English explanation
 of what the query does and which tables/joins are used.
+Then add a final line exactly like: DATA SOURCE: folio OR DATA SOURCE: local
 PROMPT;
 
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
@@ -122,12 +126,13 @@ PROMPT;
     /**
      * Parse the Gemini response into SQL and explanation.
      * @param string $text Raw Gemini response text
-     * @return array {sql: string, explanation: string}
+      * @return array {sql: string, explanation: string, dataSource: string}
      */
     private static function parseResponse($text)
     {
         $sql = '';
         $explanation = '';
+          $dataSource = 'folio';
 
         // Extract SQL from ```sql ... ``` code block
         if (preg_match('/```sql\s*\n(.*?)```/s', $text, $matches)) {
@@ -145,6 +150,10 @@ PROMPT;
         $explanation = preg_replace('/```(?:sql)?\s*\n.*?```/s', '', $text);
         $explanation = trim($explanation);
 
+        if (preg_match('/DATA\s+SOURCE\s*:\s*(local|folio)/i', $text, $matches)) {
+            $dataSource = strtolower($matches[1]);
+        }
+
         if (empty($sql)) {
             throw new \RuntimeException(
                 'Could not extract SQL from Gemini response. Raw response: ' . substr($text, 0, 500)
@@ -157,9 +166,15 @@ PROMPT;
         // Validate that referenced tables exist
         self::validateTableReferences($sql);
 
+        // Safety net: if SQL clearly uses local tables, force local datasource
+        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
+            $dataSource = 'local';
+        }
+
         return [
             'sql' => $sql,
             'explanation' => $explanation,
+            'dataSource' => $dataSource,
         ];
     }
 
@@ -301,6 +316,7 @@ PROMPT;
         $tableNames = FolioSchemaService::getTableNames();
         $metadbMap = FolioSchemaService::discoverTableMapping();
         $metadbValues = array_flip(array_values($metadbMap));
+        $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];
 
         // Extract table references from FROM and JOIN clauses
         // Handle both plain names and schema-qualified names (schema.table)
@@ -323,6 +339,10 @@ PROMPT;
             $matched = FolioSchemaService::fuzzyMatch($ref);
             if ($matched !== null) {
                 continue; // Valid LDP1 table
+            }
+
+            if (isset($localTables[$ref])) {
+                continue;
             }
 
             $warnings[] = "Table '$ref' not found in schema";

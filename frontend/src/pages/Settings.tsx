@@ -144,7 +144,7 @@ export default function Settings() {
   const hasGeminiSaved = !!current?.gemini_api_key;
 
   return (
-    <div className="max-w-2xl mx-auto p-6">
+    <div className="max-w-2xl mx-auto p-4 sm:p-6">
       <div className="flex items-center gap-3 mb-6">
         <SettingsIcon size={24} className="text-folio-600" />
         <div>
@@ -169,7 +169,7 @@ export default function Settings() {
         </div>
 
         <div className="bg-white border rounded-lg p-5 space-y-4">
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="col-span-2">
               <Label>Host</Label>
               <Input
@@ -197,7 +197,7 @@ export default function Settings() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <Label>Username</Label>
               <Input

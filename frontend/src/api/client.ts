@@ -25,6 +25,8 @@ import type {
   RefreshResponse,
   HistoryResponse,
   DashboardResponse,
+  AcrlStatistic,
+  ExpenseAllocation,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -162,8 +164,9 @@ export async function executeQuery(
   sql: string,
   params: Record<string, string> = {},
   source = 'manual',
+  dataSource: 'folio' | 'local' = 'folio',
 ): Promise<ExecuteResponse> {
-  const { data } = await api.post('/execute', { sql, params, source });
+  const { data } = await api.post('/execute', { sql, params, source, dataSource });
   return data;
 }
 
@@ -278,8 +281,76 @@ export async function submitQuery(
   params: Record<string, string> = {},
   source = 'manual',
   name?: string,
+  dataSource: 'folio' | 'local' = 'folio',
 ): Promise<JobSubmitResponse> {
-  const { data } = await api.post('/query/submit', { sql, params, source, ...(name ? { name } : {}) });
+  const { data } = await api.post('/query/submit', {
+    sql,
+    params,
+    source,
+    dataSource,
+    ...(name ? { name } : {}),
+  });
+  return data;
+}
+
+// ─── Local supplementary data (admin) ────────────────────────────
+
+export async function listAcrl(year?: number): Promise<{ items: AcrlStatistic[]; years: number[] }> {
+  const { data } = await api.get('/local/acrl', { params: year ? { year } : {} });
+  return data;
+}
+
+export async function listAcrlYears(): Promise<number[]> {
+  const { data } = await api.get('/local/acrl/years');
+  return data.years || [];
+}
+
+export async function createAcrlRows(rows: Array<Partial<AcrlStatistic>>): Promise<{ success: boolean; created: number; updated: number }> {
+  const { data } = await api.post('/local/acrl', { rows });
+  return data;
+}
+
+export async function updateAcrlRow(id: number, patch: Partial<AcrlStatistic>): Promise<{ success: boolean; item: AcrlStatistic }> {
+  const { data } = await api.put(`/local/acrl/${id}`, patch);
+  return data;
+}
+
+export async function deleteAcrlRow(id: number): Promise<void> {
+  await api.delete(`/local/acrl/${id}`);
+}
+
+export async function copyAcrlYear(fromYear: number, toYear: number, overwrite = false): Promise<{ success: boolean; copied: number; updated: number; skipped: number }> {
+  const { data } = await api.post('/local/acrl/copy-year', { fromYear, toYear, overwrite });
+  return data;
+}
+
+export async function listAllocations(fiscalYear?: number): Promise<{ items: ExpenseAllocation[]; years: number[] }> {
+  const { data } = await api.get('/local/allocations', { params: fiscalYear ? { fiscalYear } : {} });
+  return data;
+}
+
+export async function listAllocationYears(): Promise<number[]> {
+  const { data } = await api.get('/local/allocations/years');
+  return data.years || [];
+}
+
+export async function upsertAllocations(
+  fiscalYear: number,
+  payload:
+    | { code: string; amount: number }
+    | { rows: Array<{ expense_class_code: string; allocation_amount: number }> }
+    | { pastedData: string },
+): Promise<{ success: boolean; inserted: number; updated: number }> {
+  const { data } = await api.post('/local/allocations', { fiscalYear, ...payload });
+  return data;
+}
+
+export async function deleteAllocation(id: number): Promise<void> {
+  await api.delete(`/local/allocations/${id}`);
+}
+
+export async function copyAllocationYear(fiscalYear: number): Promise<{ success: boolean; copied: number; skipped: number; sourceYear: number }> {
+  const { data } = await api.post('/local/allocations/copy-year', { fiscalYear });
   return data;
 }
 
