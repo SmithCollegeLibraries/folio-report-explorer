@@ -26,7 +26,8 @@ interface ConnectedTable {
   }[];
 }
 
-function extractSchema(name: string): string {
+function extractSchema(name: string, info?: TableSummary): string {
+  if (info?.domain) return info.domain;
   const dotIdx = name.indexOf('.');
   if (dotIdx >= 0) return name.substring(0, dotIdx);
   const parts = name.split('_');
@@ -47,7 +48,7 @@ function buildGroups(tables: Record<string, TableSummary>): SchemaGroup[] {
   for (const [name, info] of Object.entries(tables)) {
     // Skip subtables in builder picker — they can be added but are less common
     if (info.type === 'SUBTABLE') continue;
-    const schema = extractSchema(name);
+    const schema = extractSchema(name, info);
     if (!map[schema]) map[schema] = [];
     map[schema].push({ name, info });
   }

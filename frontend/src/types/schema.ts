@@ -20,6 +20,7 @@ export interface TableSummary {
   parent_count: number;
   child_count: number;
   parent_table?: string;
+  domain?: string;
 }
 
 /** Response from POST /api/schema/ask */

@@ -157,6 +157,21 @@ class FolioSchemaService
      * @param array|null $filter Optional list of table names to include
      * @return array
      */
+    /**
+     * Derive the display domain (group) for a table.
+     * Uses the MetaDB schema name when available (e.g. "orders" from "orders.po_line__t").
+     * Falls back to the LDP1 underscore prefix for legacy table names.
+     */
+    private static function deriveDomain($ldp1Name, $metadbName)
+    {
+        if ($metadbName && strpos($metadbName, '.') !== false) {
+            return explode('.', $metadbName)[0];
+        }
+        // Fallback: first segment before underscore
+        $parts = explode('_', $ldp1Name);
+        return $parts[0] ?? $ldp1Name;
+    }
+
     public static function getTables($filter = null)
     {
         $schema = self::loadSchema();
@@ -185,6 +200,7 @@ class FolioSchemaService
                 'column_count' => $colCount,
                 'parent_count' => count($rels['parents']),
                 'child_count' => count($rels['children']),
+                'domain' => self::deriveDomain($name, $metadbMap[$name] ?? null),
             ];
         }
 
@@ -209,19 +225,30 @@ class FolioSchemaService
                 continue;
             }
             $colCount = isset($allCols[$metadb]) ? count($allCols[$metadb]) : 0;
+            $metadbRels = $relationships[$metadb] ?? ['parents' => [], 'children' => []];
             $result[$metadb] = [
                 'name' => $metadb,
                 'type' => 'TABLE',
                 'primary_key' => 'id',
                 'remarks' => null,
                 'column_count' => $colCount,
-                'parent_count' => 0,
-                'child_count' => 0,
+                'parent_count' => count($metadbRels['parents']),
+                'child_count' => count($metadbRels['children']),
+                'domain' => explode('.', $metadb)[0],
             ];
         }
 
         // Append discovered subtables (flattened array/object columns)
         $subtables = self::discoverSubtables();
+        // Build reverse lookup: MetaDB name -> result key used by frontend list.
+        // Example: orders.po_line__t -> po_lines
+        $metadbToResultKey = [];
+        foreach ($metadbMap as $key => $metadb) {
+            if ($key !== $metadb && isset($result[$key])) {
+                $metadbToResultKey[$metadb] = $key;
+            }
+        }
+
         foreach ($subtables as $fullName => $info) {
             if ($filter !== null && !in_array($fullName, $filter)) {
                 continue;
@@ -229,15 +256,25 @@ class FolioSchemaService
             if (isset($result[$fullName])) {
                 continue; // already present from static schema
             }
+
+            // Parent from discovery is always MetaDB name; translate to the
+            // table key returned in this payload when an LDP1 alias exists.
+            $rawParent = $info['parent'] ?? null;
+            $parentKey = $rawParent;
+            if ($rawParent && isset($metadbToResultKey[$rawParent])) {
+                $parentKey = $metadbToResultKey[$rawParent];
+            }
+
             $result[$fullName] = [
                 'name' => $fullName,
                 'type' => 'SUBTABLE',
                 'primary_key' => 'id',
-                'remarks' => 'Flattened array/object column from ' . ($info['parent'] ?? 'unknown'),
+                'remarks' => 'Flattened array/object column from ' . ($parentKey ?? 'unknown'),
                 'column_count' => count($info['columns'] ?? []),
                 'parent_count' => 1,
                 'child_count' => 0,
-                'parent_table' => $info['parent'] ?? null,
+                'parent_table' => $parentKey,
+                'domain' => explode('.', $fullName)[0],
             ];
         }
 
@@ -287,7 +324,7 @@ class FolioSchemaService
             return [
                 'name' => $name,
                 'table' => $table,
-                'relationships' => ['parents' => [], 'children' => []],
+                'relationships' => $schema['relationships'][$name] ?? ['parents' => [], 'children' => []],
             ];
         }
 

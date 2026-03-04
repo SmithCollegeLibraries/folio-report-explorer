@@ -22,8 +22,9 @@ function shortName(fullName: string): string {
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
 }
 
-/** Extract domain group from table name */
-function domainOf(name: string): string {
+/** Extract domain group from table name, preferring the backend-supplied domain */
+function domainOf(name: string, info?: TableSummary): string {
+  if (info?.domain) return info.domain;
   // Prefixed: "inventory.holdings_record" → "inventory"
   const dot = name.indexOf('.');
   if (dot >= 0) return name.substring(0, dot);
@@ -100,7 +101,7 @@ export default function TableBrowser({
 
     for (const [name, info] of Object.entries(tables)) {
       if (info.type === 'SUBTABLE') continue;
-      const domain = domainOf(name);
+      const domain = domainOf(name, info);
       if (!g.has(domain)) g.set(domain, []);
       g.get(domain)!.push({ name, info });
     }

@@ -27,8 +27,9 @@ function shortName(fullName: string): string {
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
 }
 
-/** Extract schema prefix from a table name */
-function extractSchema(name: string): string {
+/** Extract schema prefix from a table name, preferring the backend-supplied domain */
+function extractSchema(name: string, info?: TableSummary): string {
+  if (info?.domain) return info.domain;
   const dotIdx = name.indexOf('.');
   if (dotIdx >= 0) return name.substring(0, dotIdx);
   // For non-schema-qualified names, group by first word
@@ -48,7 +49,7 @@ function buildHierarchy(tables: Record<string, TableSummary>): SchemaGroup[] {
   // First pass: collect base tables
   for (const [name, info] of Object.entries(tables)) {
     if (info.type === 'SUBTABLE') continue;
-    const schema = extractSchema(name);
+    const schema = extractSchema(name, info);
     if (!schemaMap[schema]) schemaMap[schema] = { baseTables: {} };
     schemaMap[schema].baseTables[name] = { name, info, subtables: [] };
   }
@@ -57,7 +58,7 @@ function buildHierarchy(tables: Record<string, TableSummary>): SchemaGroup[] {
   for (const [name, info] of Object.entries(tables)) {
     if (info.type !== 'SUBTABLE') continue;
     const parentName = info.parent_table;
-    const schema = extractSchema(name);
+    const schema = extractSchema(name, info);
 
     if (!schemaMap[schema]) schemaMap[schema] = { baseTables: {} };
 
@@ -73,7 +74,7 @@ function buildHierarchy(tables: Record<string, TableSummary>): SchemaGroup[] {
     // Find parent in this schema or any schema
     let attached = false;
     if (parentName) {
-      const parentSchema = extractSchema(parentName);
+      const parentSchema = extractSchema(parentName, tables[parentName]);
       if (schemaMap[parentSchema]?.baseTables[parentName]) {
         schemaMap[parentSchema].baseTables[parentName].subtables.push({ name, info, leafName });
         attached = true;
@@ -102,7 +103,7 @@ function buildHierarchy(tables: Record<string, TableSummary>): SchemaGroup[] {
 
 export default function TableList({ tables, selectedTable, onSelectTable }: Props) {
   const [search, setSearch] = useState('');
-  const [showSubtables, setShowSubtables] = useState(false);
+  const [showSubtables, setShowSubtables] = useState(true);
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
 
