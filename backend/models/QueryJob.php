@@ -65,8 +65,10 @@ class QueryJob extends ActiveRecord
         $job->sql_text = $sql;
         $job->params = json_encode($params);
         $job->source = $source;
-        $job->data_source = in_array($dataSource, ['folio', 'local', 'composite']) ? $dataSource : 'folio';
-        if ($metadata !== null) {
+        if ($job->hasAttribute('data_source')) {
+            $job->data_source = in_array($dataSource, ['folio', 'local', 'composite']) ? $dataSource : 'folio';
+        }
+        if ($metadata !== null && $job->hasAttribute('metadata')) {
             $job->metadata = is_array($metadata) ? json_encode($metadata) : $metadata;
         }
         $job->status = 'pending';
@@ -170,7 +172,7 @@ class QueryJob extends ActiveRecord
             'jobId' => $this->id,
             'status' => $this->status,
             'sql' => $this->sql_text,
-            'dataSource' => $this->data_source ?: 'folio',
+            'dataSource' => $this->hasAttribute('data_source') ? ($this->data_source ?: 'folio') : 'folio',
             'progressMessage' => $this->progress_message,
             'createdAt' => $this->created_at,
             'startedAt' => $this->started_at,

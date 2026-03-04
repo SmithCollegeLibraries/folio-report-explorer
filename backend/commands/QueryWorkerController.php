@@ -126,7 +126,7 @@ class QueryWorkerController extends Controller
                 return;
             }
 
-            $dataSource = strtolower((string) ($job->data_source ?? 'folio'));
+            $dataSource = $job->hasAttribute('data_source') ? strtolower((string) ($job->data_source ?: 'folio')) : 'folio';
             if (!in_array($dataSource, ['folio', 'local', 'composite'])) {
                 $dataSource = 'folio';
             }
@@ -198,7 +198,8 @@ class QueryWorkerController extends Controller
             }
 
             // Decode metadata carrying composite_config + bound params
-            $meta = $job->metadata ? json_decode($job->metadata, true) : [];
+            $rawMeta = $job->hasAttribute('metadata') ? $job->metadata : null;
+            $meta = $rawMeta ? json_decode($rawMeta, true) : [];
             $config = $meta['composite_config'] ?? [];
             $secondarySql = $config['secondary_sql'] ?? null;
             $mergeKeyPrimary = $config['merge_key']['primary'] ?? null;   // column alias in FOLIO result
@@ -298,7 +299,9 @@ class QueryWorkerController extends Controller
             $log->sql_text = $job->sql_text;
             $log->params = $job->params;
             $log->source = $job->source;
-            $log->data_source = $job->data_source ?: 'folio';
+            if ($log->hasAttribute('data_source')) {
+                $log->data_source = $job->hasAttribute('data_source') ? ($job->data_source ?: 'folio') : 'folio';
+            }
             $log->row_count = $job->row_count;
             $log->execution_time_ms = $job->execution_time_ms;
             $log->error_message = $job->error_message;

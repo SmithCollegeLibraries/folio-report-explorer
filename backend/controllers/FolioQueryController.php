@@ -353,7 +353,9 @@ class FolioQueryController extends Controller
         $log->sql_text = $sql;
         $log->params = json_encode($params);
         $log->source = $source;
-        $log->data_source = $dataSource;
+        if ($log->hasAttribute('data_source')) {
+            $log->data_source = $dataSource;
+        }
         $log->user_id = $this->getCurrentUserId();
 
         try {
@@ -1243,8 +1245,9 @@ class FolioQueryController extends Controller
         }
 
         // Determine data source from report template
-        $dataSource = in_array($report->data_source, ['folio', 'local', 'composite'])
-            ? $report->data_source
+        $rawDataSource = $report->hasAttribute('data_source') ? $report->data_source : null;
+        $dataSource = in_array($rawDataSource, ['folio', 'local', 'composite'])
+            ? $rawDataSource
             : 'folio';
 
         // For composite reports, attach the composite_config as job metadata

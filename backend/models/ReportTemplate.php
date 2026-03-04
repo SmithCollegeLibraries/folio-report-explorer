@@ -218,7 +218,7 @@ class ReportTemplate extends ActiveRecord
     {
         $params = $this->getDecodedParameters();
         $options = [];
-        $useLocalDb = in_array($this->data_source, ['local', 'composite']);
+        $useLocalDb = $this->hasAttribute('data_source') && in_array($this->data_source, ['local', 'composite']);
 
         foreach ($params as $def) {
             if (($def['type'] ?? '') === 'select' && !empty($def['options_sql'])) {
@@ -254,7 +254,7 @@ class ReportTemplate extends ActiveRecord
      */
     public function getCompositeConfig()
     {
-        if (empty($this->composite_config)) {
+        if (!$this->hasAttribute('composite_config') || empty($this->composite_config)) {
             return null;
         }
         $raw = $this->composite_config;
@@ -273,7 +273,7 @@ class ReportTemplate extends ActiveRecord
             'name' => $this->name,
             'description' => $this->description,
             'category' => $this->category,
-            'dataSource' => $this->data_source ?: 'folio',
+            'dataSource' => $this->hasAttribute('data_source') ? ($this->data_source ?: 'folio') : 'folio',
             'sqlTemplate' => $this->sql_template,
             'parameters' => $this->getResolvedParameters(),
             'defaultLimit' => (int) $this->default_limit,
@@ -296,7 +296,7 @@ class ReportTemplate extends ActiveRecord
             'name' => $this->name,
             'description' => $this->description,
             'category' => $this->category,
-            'dataSource' => $this->data_source ?: 'folio',
+            'dataSource' => $this->hasAttribute('data_source') ? ($this->data_source ?: 'folio') : 'folio',
             'parameterCount' => count($params),
             'defaultLimit' => (int) $this->default_limit,
             'createdBy' => $this->created_by,
