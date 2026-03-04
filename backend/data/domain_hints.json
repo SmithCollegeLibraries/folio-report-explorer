@@ -68,8 +68,18 @@
     "finance.fund_type__t": "Fund type definitions (e.g. Appropriation, Endowment, Gift).",
     "finance.expense_class__t": "Expense class definitions for categorizing spending (e.g. Electronic, Print, Binding).",
     "finance.groups__t": "Fund group definitions for grouping related funds.",
+    "finance.group_fund_fy__t": "Links finance groups to specific funds within a fiscal year. Use this to see which funds belong to which group for a given FY. JOIN to finance.fund__t via fund_id, finance.groups__t via group_id, finance.fiscal_year__t via fiscal_year_id.",
+    "finance.ledger_roll_budget__t": "Budget records created during fiscal year ledger rollover. Shows allocated, available, encumbered, and expended amounts rolled from the prior year. JOIN to finance.budget__t via budget_id, finance.ledger__t via ledger_id.",
+    "finance.fund_code_exp_cla": "Pre-joined view mapping fund codes to expense classes. Useful shortcut for finance queries needing both fund and expense class names without extra JOINs.",
 
     "users.groups__t": "Patron group type definitions (Faculty, Undergraduate, Graduate, Staff, etc.). Use only for labeling/grouping aggregate counts — never select individual patron records.",
+
+    "agreements.sas__t": "Subscription agreement records — tracks active, expired, and in-negotiation agreements with vendors for electronic resources. Key columns: name, agreement_status (Active/Closed/In Negotiation), start_date, end_date, cancellation_deadline. JOIN to agreements.entitlement__t via id to see which resources are covered by each agreement.",
+    "agreements.entitlement__t": "Links an agreement to a specific resource (e-journal title, database, e-book package). Each row is one resource entitlement under an agreement. JOIN to agreements.sas__t via owner__id = sas__t.id. Use for queries like 'what resources are covered under this agreement'.",
+    "agreements.org__t": "Organizations (vendors/publishers) linked to subscription agreements. JOIN to agreements.sas__t via owner__id.",
+    "agreements.refdata_value__t": "Reference data values used by the agreements module — agreement statuses, renewal priorities, content types.",
+
+    "licenses.license__t": "License records for electronic resources. Tracks license status, type, start/end dates, and custom properties such as ILL permissions, perpetual access rights, walk-in user access, and data mining rights. Custom property values are in subtables: licenses.license__t__custom_properties__*.",
 
     "feesfines.feefines__t": "Fee/fine type definitions.",
     "feesfines.owners__t": "Fee/fine owner definitions (which service point/library owns the fee).",
@@ -77,16 +87,16 @@
     "feesfines.overdue_fine_policy__t": "Overdue fine policy definitions.",
     "feesfines.payments__t": "Payment method definitions.",
 
-    "folio_source_record.records__t": "Source bibliographic records (MARC, etc.) in their original format.",
+    "folio_source_record.records__t": "Source bibliographic records in MARC and other formats. Contains record state, suppression status, and linkage to inventory instances via external_id (= instance UUID). Use for queries about MARC record status or batch record provenance.",
 
-    "courses.coursereserves_courselistings__t": "Course reserve listings linking courses to terms and locations.",
-    "courses.coursereserves_terms__t": "Academic term definitions for course reserves.",
+    "courses.coursereserves_courselistings__t": "Course reserve listings linking courses to terms, locations, and instructors.",
+    "courses.coursereserves_courses__t": "Course records — one row per course with name, description, and a reference to its course listing. JOIN to courses.coursereserves_courselistings__t via course_listing_id for term and instructor details.",
+    "courses.coursereserves_reserves__t": "Course reserve items — links a course listing to a specific inventory item placed on reserve. Contains copied item metadata and processing/copyright status. JOIN to courses.coursereserves_courselistings__t via course_listing_id, and to inventory.item__t via item_id.",
+    "courses.coursereserves_terms__t": "Academic term definitions for course reserves (Fall 2025, Spring 2026, etc.).",
     "courses.coursereserves_coursetypes__t": "Course type definitions.",
     "courses.coursereserves_departments__t": "Department definitions for course reserves.",
 
-    "notes.note_data__t": "Notes attached to various FOLIO records.",
-
-    "perms.permissions__t": "Permission definitions in the FOLIO permissions system."
+    "notes.note_data__t": "Notes attached to various FOLIO records."
   },
 
   "vocabulary": {
@@ -97,7 +107,17 @@
     "location": "inventory.location__t.name — specific shelving locations within a library (e.g. Main Stacks, Reserve).",
     "effective location": "inventory.item__t.effective_location_id — ALWAYS use this for location joins on items, NOT permanent_location_id. The effective location reflects temporary/current location overrides.",
     "item location": "inventory.item__t.effective_location_id — join to inventory.location__t.id. NEVER use holdings_record__t.permanent_location_id for circulation or item-level queries.",
-    "vendor": "organizations.organizations__t.name — vendors/suppliers you purchase materials from (EBSCO, GOBI, YBP).",
+    "inventory new tables": "inventory.bound_width_parts__t tracks items physically bound together (JOIN via holdings_record_id to holdings_record__t). inventory.preceding_suceeding_titles__t tracks title changes for serials (JOIN via preceding_instance_id or succeeding_instance_id to instance__t). inventory.subject_sources__t and inventory.subject_types__t are reference tables for subject heading controlled vocabularies.",
+    "marc field tables": "The marctab schema contains one table per MARC field, named marctab.mt000 through marctab.mt999. These are NOT in the standard schema but can be used for MARC-level queries. Each table has: srs_id (UUID), instance_hrid (links to inventory.instance__t.hrid), field (tag), ind1, ind2, ord (occurrence), sf_a through sf_z and sf_0 through sf_9 for subfields. Common fields: marctab.mt020 (ISBN, sf_a), marctab.mt022 (ISSN, sf_a), marctab.mt050 (LC call number, sf_a+sf_b), marctab.mt082 (Dewey, sf_a), marctab.mt100 (main entry name, sf_a), marctab.mt245 (title, sf_a+sf_b), marctab.mt264 (publication, sf_a=place sf_b=publisher sf_c=date), marctab.mt650 (subject topical, sf_a+sf_2), marctab.mt700 (added entry, sf_a), marctab.mt856 (URL, sf_u). JOIN to inventory: JOIN marctab.mtNNN m ON m.instance_hrid = inst.hrid. Only query the specific marctab.mtNNN table needed, never all 1000.",
+    "agreement": "agreements.sas__t — subscription agreements with vendors for electronic resources. Use agreements.entitlement__t to see which specific resources (titles, databases) are covered.",
+    "subscription": "agreements.sas__t — subscription agreements. agreement_status column: 'Active', 'Closed', 'In Negotiation'.",
+    "license": "licenses.license__t — license records for electronic resources. Contains custom properties for ILL terms, perpetual access, and walk-in access stored in licenses.license__t__custom_properties__* subtables.",
+    "perpetual access": "licenses.license__t with custom property subtables for perpetual access terms.",
+    "course reserve": "courses.coursereserves_reserves__t for items on reserve. JOIN to courses.coursereserves_courselistings__t for the course listing, then to courses.coursereserves_courses__t for the course name and courses.coursereserves_terms__t for the term.",
+    "isbn": "marctab.mt020.sf_a — ISBN values. JOIN via instance_hrid to inventory.instance__t.hrid.",
+    "issn": "marctab.mt022.sf_a — ISSN values. JOIN via instance_hrid to inventory.instance__t.hrid.",
+    "fund group": "finance.group_fund_fy__t — links funds to groups within a fiscal year. JOIN to finance.fund__t via fund_id and finance.groups__t via group_id.",
+    "rollover": "finance.ledger_roll_budget__t — fiscal year rollover budget records. Shows what was rolled from the prior fiscal year.",
     "supplier": "organizations.organizations__t.name — same as vendor.",
     "publisher": "inventory.instance__t.index_title or publication fields — NOT organizations.",
     "checkout": "circulation.loan__t — a loan record represents a checkout. loan_date is the checkout date. Always aggregate (COUNT) — do not return individual patron data.",
@@ -127,6 +147,10 @@
   },
 
   "examples": [
+    {
+      "question": "How many items are currently on course reserve this semester?",
+      "sql": "SELECT cr_courses.name AS course_name, cr_terms.name AS term_name, COUNT(cres.id) AS items_on_reserve FROM courses.coursereserves_reserves__t AS cres JOIN courses.coursereserves_courselistings__t AS cl ON cres.course_listing_id = cl.id JOIN courses.coursereserves_courses__t AS cr_courses ON cr_courses.course_listing_id = cl.id JOIN courses.coursereserves_terms__t AS cr_terms ON cl.term_id = cr_terms.id WHERE cr_terms.name ILIKE '%Spring%2026%' GROUP BY cr_courses.name, cr_terms.name ORDER BY items_on_reserve DESC;"
+    },
     {
       "question": "Show me all materials purchased in the last 90 days grouped by material type purchased by Smith College",
       "sql": "SELECT imt.name AS material_type_name, SUM(COALESCE(pol.cost__quantity_physical, 1)) AS total_purchased FROM orders.po_line__t AS pol JOIN orders.purchase_order__t AS po ON pol.purchase_order_id = po.id JOIN inventory.material_type__t AS imt ON pol.physical__material_type = imt.id JOIN inventory.location__t AS loc ON pol.physical__expected_receipt_date IS NOT NULL JOIN inventory.loclibrary__t AS lib ON loc.library_id = lib.id JOIN inventory.loccampus__t AS camp ON lib.campus_id = camp.id WHERE camp.name = 'Smith College' AND po.date_ordered::date >= (CURRENT_DATE - INTERVAL '90 days') GROUP BY imt.name ORDER BY total_purchased DESC;"

@@ -43,6 +43,41 @@ class FolioSchemaService
     const CACHE_TTL = 86400;
 
     /**
+     * Schemas to completely exclude from direct MetaDB discovery.
+     * These are either internal MetaDB/system schemas, test data, or
+     * patron-privacy schemas that must not appear in the table list.
+     */
+    const EXCLUDED_SCHEMAS = [
+        'pg_catalog',
+        'information_schema',
+        'dbsystem',
+        'ldlite_system',
+        'configuration',
+        'public',   // test tables only (user_update_testing, users__testing)
+        'sst',      // no access permissions — consortium internal
+        'marctab',  // 1,002 mt000–mt999 tables; handled via training hint instead
+        'perms',    // permission tables — not needed for reporting
+    ];
+
+    /**
+     * Specific MetaDB tables to exclude from direct discovery (patron PII).
+     * Note: The LDP1 backward-compat entries for these may still exist in the
+     * mapping for Query Builder use, but they are excluded from the AI prompt
+     * and from new MetaDB identity entries.
+     */
+    const EXCLUDED_TABLES = [
+        'users.users__t',
+        'users.proxyfor__t',
+        'users.addresstype__t',
+        'feesfines.accounts__t',
+        'feesfines.feefineactions__t',
+        'feesfines.manualblocks__t',
+        'feesfines.comments__t',
+        'feesfines.actual_cost_record__t',
+        'audit.circulation_logs__t',
+    ];
+
+    /**
      * Check if a JSON cache file is still valid (exists and within TTL).
      * @param string $path Absolute path to cache file
      * @return array|null Parsed cache data if valid, null if expired/missing
@@ -127,17 +162,20 @@ class FolioSchemaService
         $schema = self::loadSchema();
         $tables = $schema['tables'] ?? [];
         $relationships = $schema['relationships'] ?? [];
-        $allCols = self::discoverAllColumns();
+        $allCols = self::discoverAllColumns(); // keyed by MetaDB name
+        $metadbMap = self::discoverTableMapping();
         $result = [];
 
+        // --- LDP1-schema tables (from folio_schema.json, enriched with real columns) ---
         foreach ($tables as $name => $info) {
             if ($filter !== null && !in_array($name, $filter)) {
                 continue;
             }
             $rels = $relationships[$name] ?? ['parents' => [], 'children' => []];
-            // Use discovered column count if available, fall back to static
-            $colCount = isset($allCols[$name])
-                ? count($allCols[$name])
+            // Look up column count via MetaDB name (column cache is MetaDB-keyed now)
+            $metadbName = $metadbMap[$name] ?? null;
+            $colCount = ($metadbName && isset($allCols[$metadbName]))
+                ? count($allCols[$metadbName])
                 : count($info['columns'] ?? []);
             $result[$name] = [
                 'name' => $name,
@@ -147,6 +185,38 @@ class FolioSchemaService
                 'column_count' => $colCount,
                 'parent_count' => count($rels['parents']),
                 'child_count' => count($rels['children']),
+            ];
+        }
+
+        // --- MetaDB-direct tables not in the LDP1 schema ---
+        // These are new tables (agreements, licenses, new finance/inventory tables)
+        // that have no LDP1 counterpart in folio_schema.json.
+        $coveredMetadbs = [];
+        foreach ($tables as $ldp1 => $info) {
+            $metadb = $metadbMap[$ldp1] ?? null;
+            if ($metadb) {
+                $coveredMetadbs[$metadb] = true;
+            }
+        }
+        foreach ($metadbMap as $key => $metadb) {
+            if ($key !== $metadb) {
+                continue; // Skip LDP1 alias entries
+            }
+            if (isset($coveredMetadbs[$metadb]) || isset($result[$metadb])) {
+                continue; // Already covered via LDP1
+            }
+            if ($filter !== null && !in_array($metadb, $filter)) {
+                continue;
+            }
+            $colCount = isset($allCols[$metadb]) ? count($allCols[$metadb]) : 0;
+            $result[$metadb] = [
+                'name' => $metadb,
+                'type' => 'TABLE',
+                'primary_key' => 'id',
+                'remarks' => null,
+                'column_count' => $colCount,
+                'parent_count' => 0,
+                'child_count' => 0,
             ];
         }
 
@@ -190,7 +260,7 @@ class FolioSchemaService
         $table = $schema['tables'][$name] ?? null;
 
         if ($table !== null) {
-            // Static table — replace stale LDP1 columns with actual database columns
+            // LDP1-schema table — replace stale LDP1 columns with actual database columns
             $realCols = self::discoverColumnsFor($name);
             if (!empty($realCols)) {
                 $table['columns'] = $realCols;
@@ -200,6 +270,24 @@ class FolioSchemaService
                 'name' => $name,
                 'table' => $table,
                 'relationships' => $rels,
+            ];
+        }
+
+        // Check MetaDB-direct tables (new tables not in LDP1 schema)
+        // fuzzyMatch returns the MetaDB name directly for these
+        $metadbMap = self::discoverTableMapping();
+        if (isset($metadbMap[$name]) && $metadbMap[$name] === $name) {
+            $realCols = self::discoverColumnsFor($name);
+            $table = [
+                'type' => 'TABLE',
+                'primary_key' => 'id',
+                'remarks' => null,
+                'columns' => $realCols,
+            ];
+            return [
+                'name' => $name,
+                'table' => $table,
+                'relationships' => ['parents' => [], 'children' => []],
             ];
         }
 
@@ -260,9 +348,19 @@ class FolioSchemaService
         $schema = self::loadSchema();
         $tables = array_keys($schema['tables'] ?? []);
 
-        // Also include discovered subtable names
+        // Include discovered subtable names
         $subtableNames = array_keys(self::discoverSubtables());
-        $allNames = array_merge($tables, $subtableNames);
+
+        // Include MetaDB-direct names (agreements.sas__t, licenses.license__t, etc.)
+        $metadbMap = self::discoverTableMapping();
+        $metadbDirectNames = [];
+        foreach ($metadbMap as $key => $value) {
+            if ($key === $value) {
+                $metadbDirectNames[] = $key;
+            }
+        }
+
+        $allNames = array_unique(array_merge($tables, $subtableNames, $metadbDirectNames));
 
         // Exact match
         if (in_array($input, $allNames)) {
@@ -527,11 +625,19 @@ class FolioSchemaService
         try {
             $db = Yii::$app->folioDb;
 
-            // Get all __t tables grouped by schema
+            // Build SQL exclusion list for schemas from the constant
+            $excludedSchemaSql = implode(',', array_map(function ($s) use ($db) {
+                return $db->quoteValue($s);
+            }, self::EXCLUDED_SCHEMAS));
+
+            // Get all __t base tables, excluding noise/privacy/internal schemas,
+            // MetaDB catalog tables (__tcatalog), and legacy hyphenated tables (loc-*)
             $rows = $db->createCommand(
                 "SELECT table_schema, table_name FROM information_schema.tables
-                 WHERE table_name ~ '__t$'
-                 AND table_schema NOT IN ('information_schema', 'pg_catalog', 'public')
+                 WHERE table_name ~ '__t\$'
+                 AND table_name !~ 'catalog\$'
+                 AND table_name NOT LIKE 'loc-%'
+                 AND table_schema NOT IN ({$excludedSchemaSql})
                  ORDER BY table_schema, table_name"
             )->queryAll();
 
@@ -547,18 +653,23 @@ class FolioSchemaService
             $staticMap = self::getMetadbMapping();
             $mapping = [];
 
-            // Known LDP1 → actual overrides for tables that can't be matched heuristically
+            // Known LDP1 → actual overrides for tables that can't be matched heuristically.
+            // FIXED mappings are annotated with their previous incorrect value.
             $knownOverrides = [
-                'course_copyrightstatuses'      => 'courses.coursereserves_copyrightstates__t',
-                'course_processingstatuses'      => 'courses.coursereserves_processingstates__t',
-                'feesfines_lost_item_fees_policies' => 'feesfines.lost_item_fee_policy__t',
-                'feesfines_overdue_fines_policies'  => 'feesfines.overdue_fine_policy__t',
-                'inventory_holdings'             => 'inventory.holdings_record__t',
-                'inventory_modes_of_issuance'    => 'inventory.mode_of_issuance__t',
-                'notes'                          => 'notes.note_data__t',
-                'organization_categories'        => 'organizations.categories__t',
-                'po_order_invoice_relns'         => 'orders.order_invoice_relationship__t',
-                'user_proxiesfor'                => 'users.proxyfor__t',
+                'course_copyrightstatuses'           => 'courses.coursereserves_copyrightstates__t',
+                'course_courses'                     => 'courses.coursereserves_courses__t',   // was: coursereserves_terms__t
+                'course_processingstatuses'          => 'courses.coursereserves_processingstates__t',
+                'course_reserves'                    => 'courses.coursereserves_reserves__t',  // was: coursereserves_terms__t
+                'feesfines_lost_item_fees_policies'  => 'feesfines.lost_item_fee_policy__t',
+                'feesfines_overdue_fines_policies'   => 'feesfines.overdue_fine_policy__t',
+                'finance_group_fund_fiscal_years'    => 'finance.group_fund_fy__t',            // was: fiscal_year__t
+                'inventory_holdings'                 => 'inventory.holdings_record__t',
+                'inventory_modes_of_issuance'        => 'inventory.mode_of_issuance__t',
+                'inventory_service_points_users'     => 'inventory.service_point_user__t',    // was: service_point__t
+                'notes'                              => 'notes.note_data__t',
+                'organization_categories'            => 'organizations.categories__t',
+                'po_order_invoice_relns'             => 'orders.order_invoice_relationship__t',
+                'user_proxiesfor'                    => 'users.proxyfor__t',
             ];
 
             foreach ($staticMap as $ldp1 => $metadb) {
@@ -671,12 +782,29 @@ class FolioSchemaService
                 }
             }
 
+            // --- Part 2: Direct MetaDB identity entries for all remaining tables ---
+            // Any table that was discovered in the DB but has no LDP1 mapping gets a
+            // MetaDB→MetaDB identity entry so it can be discovered and queried directly.
+            // This covers: agreements, licenses, new finance tables, new inventory tables, etc.
+            $coveredMetadbs = array_flip(array_values($mapping)); // metadb => true
+            foreach ($allActual as $fullName => $_) {
+                // Skip tables that are in the privacy exclusion list
+                if (in_array($fullName, self::EXCLUDED_TABLES)) {
+                    continue;
+                }
+                // Only add identity entry if not already covered by an LDP1 mapping
+                if (!isset($coveredMetadbs[$fullName])) {
+                    $mapping[$fullName] = $fullName;
+                }
+            }
+
             // Cache to file
             @file_put_contents($cachePath, json_encode([
-                '_note' => 'Auto-discovered LDP1 to actual database table mapping',
+                '_note' => 'LDP1 backward-compat + direct MetaDB table mapping',
                 '_discovered_at' => date('c'),
-                '_matched' => count($mapping),
-                '_total' => count($staticMap),
+                '_ldp1_entries' => count($staticMap),
+                '_metadb_direct' => count(array_filter($mapping, function ($v, $k) { return $k === $v; }, ARRAY_FILTER_USE_BOTH)),
+                '_total' => count($mapping),
                 'mapping' => $mapping,
             ], JSON_PRETTY_PRINT));
 
@@ -750,12 +878,12 @@ class FolioSchemaService
             return self::$discoveredColumns;
         }
 
-        // Build reverse mapping: "schema.table" => ldp1Name
+        // Build the set of schemas to query from the discovered table mapping.
+        // We use MetaDB names as keys in the column cache (not LDP1 names),
+        // so new tables like agreements.sas__t are discovered automatically.
         $tableMapping = self::discoverTableMapping();
-        $reverse = [];
         $schemasUsed = [];
-        foreach ($tableMapping as $ldp1 => $actual) {
-            $reverse[$actual] = $ldp1;
+        foreach (array_values($tableMapping) as $actual) {
             $parts = explode('.', $actual, 2);
             if (count($parts) === 2) {
                 $schemasUsed[$parts[0]] = true;
@@ -770,7 +898,8 @@ class FolioSchemaService
         try {
             $db = Yii::$app->folioDb;
 
-            // Query all columns for __t tables in relevant schemas
+            // Query all columns for __t base tables in all relevant schemas.
+            // Keys in the result are MetaDB names (schema.table__t) not LDP1 names.
             $schemaList = implode(',', array_map(function ($s) use ($db) {
                 return $db->quoteValue($s);
             }, array_keys($schemasUsed)));
@@ -781,27 +910,24 @@ class FolioSchemaService
                         is_nullable, column_default, ordinal_position
                  FROM information_schema.columns
                  WHERE table_schema IN ({$schemaList})
-                   AND table_name ~ '__t$'
+                   AND table_name ~ '__t\$'
+                   AND table_name !~ 'catalog\$'
+                   AND table_name NOT LIKE 'loc-%'
                  ORDER BY table_schema, table_name, ordinal_position"
             )->queryAll();
 
             $columns = [];
             foreach ($rows as $r) {
+                // Key by MetaDB name directly (schema.table__t)
                 $fullName = $r['table_schema'] . '.' . $r['table_name'];
-                $ldp1 = $reverse[$fullName] ?? null;
-                if ($ldp1 === null) {
-                    continue;
+
+                if (!isset($columns[$fullName])) {
+                    $columns[$fullName] = [];
                 }
 
-                if (!isset($columns[$ldp1])) {
-                    $columns[$ldp1] = [];
-                }
+                $displayType = self::mapPgType($r['data_type']);
 
-                // Map Postgres types to simpler display types
-                $pgType = $r['data_type'];
-                $displayType = self::mapPgType($pgType);
-
-                $columns[$ldp1][] = [
+                $columns[$fullName][] = [
                     'name' => $r['column_name'],
                     'type' => $displayType,
                     'size' => $r['character_maximum_length'] ? (int)$r['character_maximum_length'] : null,
@@ -814,7 +940,7 @@ class FolioSchemaService
 
             // Cache to file
             @file_put_contents($cachePath, json_encode([
-                '_note' => 'Auto-discovered columns from actual database',
+                '_note' => 'Auto-discovered columns keyed by MetaDB table name (schema.table__t)',
                 '_discovered_at' => date('c'),
                 '_tables_with_columns' => count($columns),
                 'columns' => $columns,
@@ -831,14 +957,25 @@ class FolioSchemaService
 
     /**
      * Discover actual columns for a single table.
+     * Accepts either a MetaDB name ('agreements.sas__t') or an LDP1 name ('inventory_items').
      *
-     * @param string $ldp1Name
+     * @param string $name MetaDB schema.table__t name or LDP1 name
      * @return array ColumnDef[] or empty
      */
-    public static function discoverColumnsFor($ldp1Name)
+    public static function discoverColumnsFor($name)
     {
         $all = self::discoverAllColumns();
-        return $all[$ldp1Name] ?? [];
+        // Try direct MetaDB key first (e.g. 'agreements.sas__t')
+        if (isset($all[$name])) {
+            return $all[$name];
+        }
+        // Translate LDP1 name → MetaDB name, then look up
+        $map = self::discoverTableMapping();
+        $metadb = $map[$name] ?? null;
+        if ($metadb && isset($all[$metadb])) {
+            return $all[$metadb];
+        }
+        return [];
     }
 
     /**
@@ -868,12 +1005,16 @@ class FolioSchemaService
             $db = Yii::$app->folioDb;
 
             // Find all subtables: contain __t__ but exclude __tcatalog metadata tables
+            $excludedSchemaSql = implode(',', array_map(function ($s) use ($db) {
+                return $db->quoteValue($s);
+            }, self::EXCLUDED_SCHEMAS));
+
             $rows = $db->createCommand(
                 "SELECT table_schema, table_name
                  FROM information_schema.tables
                  WHERE table_name ~ '__t__'
                    AND table_name !~ 'catalog$'
-                   AND table_schema NOT IN ('information_schema', 'pg_catalog', 'public')
+                   AND table_schema NOT IN ({$excludedSchemaSql})
                  ORDER BY table_schema, table_name"
             )->queryAll();
 
@@ -1118,9 +1259,39 @@ class FolioSchemaService
             }
         }
 
+        // Build a reverse map from MetaDB name back to LDP1 name for FK lookups.
+        // (FK relationships in folio_schema.json are keyed by LDP1 names.)
+        $reverseMetadb = [];
+        foreach ($metadbMap as $ldp1 => $metadb) {
+            if (!isset($reverseMetadb[$metadb])) {
+                $reverseMetadb[$metadb] = $ldp1;
+            }
+        }
+
+        // Build the ordered, deduplicated list of MetaDB tables to emit.
+        // LDP1-schema tables come first (preserving existing order), then
+        // MetaDB-direct tables for newly discovered schemas.
+        $coveredInLdp1 = [];
+        $orderedMetadbs = [];
+        foreach ($tables as $ldp1 => $tinfo) {
+            $metadb = $metadbMap[$ldp1] ?? null;
+            if ($metadb && !isset($coveredInLdp1[$metadb])) {
+                $coveredInLdp1[$metadb] = true;
+                $orderedMetadbs[] = $metadb;
+            }
+        }
+        foreach ($metadbMap as $key => $metadb) {
+            if ($key === $metadb && !isset($coveredInLdp1[$metadb])) {
+                $orderedMetadbs[] = $metadb;
+            }
+        }
+
+        // Deduplicate preserving first occurrence
+        $orderedMetadbs = array_values(array_unique($orderedMetadbs));
+
         $lines = [];
 
-        $totalTables = count($tables) + count($subtables);
+        $totalTables = count($orderedMetadbs) + count($subtables);
         $lines[] = "=== FOLIO MetaDB/LDLite Database Schema ===";
         $lines[] = "Database: PostgreSQL, {$totalTables} tables (including " . count($subtables) . " subtables)";
         $lines[] = "IMPORTANT: Table names are schema-qualified (e.g. inventory.item__t).";
@@ -1129,10 +1300,27 @@ class FolioSchemaService
         $lines[] = "  They join to their parent on parent__t.id = parent__t__child.id.";
         $lines[] = "  ALWAYS prefer subtables over JSONB queries — e.g. use invoice.invoice_lines__t__fund_distributions instead of data->'fundDistributions'.\n";
 
-        foreach ($tables as $tname => $tinfo) {
-            $metadbName = $metadbMap[$tname] ?? $tname;
-            // Use discovered columns if available, else fall back to static
-            $colSource = $allCols[$tname] ?? $tinfo['columns'] ?? [];
+        foreach ($orderedMetadbs as $metadbName) {
+            // Skip privacy-excluded tables from the AI prompt entirely
+            if (in_array($metadbName, self::EXCLUDED_TABLES)) {
+                continue;
+            }
+            // Skip perms schema (privacy) from the AI prompt
+            $schemaPrefix = explode('.', $metadbName, 2)[0];
+            if (in_array($schemaPrefix, ['perms', 'users']) &&
+                !in_array($metadbName, ['users.groups__t'])) {
+                continue;
+            }
+
+            // Columns: from MetaDB-keyed column cache
+            $colSource = $allCols[$metadbName] ?? [];
+            // Fallback for LDP1 tables: use static column definitions
+            if (empty($colSource)) {
+                $ldp1 = $reverseMetadb[$metadbName] ?? null;
+                if ($ldp1 && isset($tables[$ldp1]['columns'])) {
+                    $colSource = $tables[$ldp1]['columns'];
+                }
+            }
 
             // Add table description if available
             $desc = $tableDescs[$metadbName] ?? '';
@@ -1142,11 +1330,10 @@ class FolioSchemaService
                 $lines[] = "TABLE {$metadbName}";
             }
 
-            // Column list — annotate key ID/FK columns with derived comments (limit to avoid bloating prompt)
+            // Column list — annotate key ID/FK columns with derived comments
             $annotatedCols = [];
             foreach ($colSource as $col) {
                 $colStr = $col['name'] . ':' . $col['type'];
-                // Only annotate columns that match specific useful patterns
                 $cname = $col['name'];
                 $shouldAnnotate = (
                     substr($cname, -3) === '_id' ||
@@ -1163,8 +1350,9 @@ class FolioSchemaService
             }
             $lines[] = "  Columns: " . implode(', ', $annotatedCols);
 
-            // FK relationships — also translate table names
-            foreach ($rels[$tname]['parents'] ?? [] as $p) {
+            // FK relationships — look up via reverse map to find LDP1 name in $rels
+            $ldp1ForRel = $reverseMetadb[$metadbName] ?? null;
+            foreach ($rels[$ldp1ForRel]['parents'] ?? [] as $p) {
                 $parentMetadb = $metadbMap[$p['parent_table']] ?? $p['parent_table'];
                 $lines[] = "  FK: {$metadbName}.{$p['local_column']} → {$parentMetadb}.{$p['parent_column']}";
             }

@@ -18016,6 +18016,167 @@
           "foreign_key": "user_proxiesfor_user_id_fkey"
         }
       ]
+    },
+    "agreements.sas__t": {
+      "parents": [],
+      "children": [
+        {
+          "child_table": "agreements.entitlement__t",
+          "child_column": "owner__id",
+          "local_column": "id",
+          "foreign_key": "implied_agreements_entitlement_owner"
+        },
+        {
+          "child_table": "agreements.org__t",
+          "child_column": "owner__id",
+          "local_column": "id",
+          "foreign_key": "implied_agreements_org_owner"
+        }
+      ]
+    },
+    "agreements.entitlement__t": {
+      "parents": [
+        {
+          "parent_table": "agreements.sas__t",
+          "parent_column": "id",
+          "local_column": "owner__id",
+          "foreign_key": "implied_agreements_entitlement_owner"
+        }
+      ],
+      "children": []
+    },
+    "agreements.org__t": {
+      "parents": [
+        {
+          "parent_table": "agreements.sas__t",
+          "parent_column": "id",
+          "local_column": "owner__id",
+          "foreign_key": "implied_agreements_org_owner"
+        }
+      ],
+      "children": []
+    },
+    "agreements.refdata_value__t": {
+      "parents": [],
+      "children": []
+    },
+    "licenses.license__t": {
+      "parents": [],
+      "children": []
+    },
+    "finance.group_fund_fy__t": {
+      "parents": [
+        {
+          "parent_table": "finance_funds",
+          "parent_column": "id",
+          "local_column": "fund_id",
+          "foreign_key": "implied_group_fund_fy_fund"
+        },
+        {
+          "parent_table": "finance_groups",
+          "parent_column": "id",
+          "local_column": "group_id",
+          "foreign_key": "implied_group_fund_fy_group"
+        },
+        {
+          "parent_table": "finance_fiscal_years",
+          "parent_column": "id",
+          "local_column": "fiscal_year_id",
+          "foreign_key": "implied_group_fund_fy_fy"
+        }
+      ],
+      "children": []
+    },
+    "finance.ledger_roll_budget__t": {
+      "parents": [
+        {
+          "parent_table": "finance_budgets",
+          "parent_column": "id",
+          "local_column": "budget_id",
+          "foreign_key": "implied_ledger_roll_budget"
+        },
+        {
+          "parent_table": "finance_ledgers",
+          "parent_column": "id",
+          "local_column": "ledger_id",
+          "foreign_key": "implied_ledger_roll_ledger"
+        }
+      ],
+      "children": []
+    },
+    "inventory.bound_width_parts__t": {
+      "parents": [
+        {
+          "parent_table": "inventory_holdings",
+          "parent_column": "id",
+          "local_column": "holdings_record_id",
+          "foreign_key": "implied_bound_with_holdings"
+        }
+      ],
+      "children": []
+    },
+    "inventory.preceding_suceeding_titles__t": {
+      "parents": [
+        {
+          "parent_table": "inventory_instances",
+          "parent_column": "id",
+          "local_column": "preceding_instance_id",
+          "foreign_key": "implied_preceding_instance"
+        }
+      ],
+      "children": []
+    },
+    "inventory.service_point_user__t": {
+      "parents": [
+        {
+          "parent_table": "inventory_service_points",
+          "parent_column": "id",
+          "local_column": "service_point_id",
+          "foreign_key": "implied_service_point_user_sp"
+        },
+        {
+          "parent_table": "user_users",
+          "parent_column": "id",
+          "local_column": "user_id",
+          "foreign_key": "implied_service_point_user_user"
+        }
+      ],
+      "children": []
+    },
+    "courses.coursereserves_courses__t": {
+      "parents": [
+        {
+          "parent_table": "course_courselistings",
+          "parent_column": "id",
+          "local_column": "course_listing_id",
+          "foreign_key": "implied_courses_to_courselistings"
+        }
+      ],
+      "children": [
+        {
+          "child_table": "courses.coursereserves_reserves__t",
+          "child_column": "course_listing_id",
+          "local_column": "course_listing_id",
+          "foreign_key": "implied_courses_reserves_to_courses"
+        }
+      ]
+    },
+    "courses.coursereserves_reserves__t": {
+      "parents": [
+        {
+          "parent_table": "course_courselistings",
+          "parent_column": "id",
+          "local_column": "course_listing_id",
+          "foreign_key": "implied_reserves_to_courselistings"
+        },
+        {
+          "parent_table": "inventory_items",
+          "parent_column": "id",
+          "local_column": "item_id",
+          "foreign_key": "implied_reserves_to_item"
+        }
+      ],
+      "children": []
     }
   }
 }
