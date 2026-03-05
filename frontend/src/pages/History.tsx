@@ -3,10 +3,11 @@ import {
   History as HistoryIcon, Clock, Database, Eye, ChevronLeft, ChevronRight,
   User, Search, X, Download, Copy, Check, ChevronDown, ChevronUp,
   Loader2, Code2, Pencil, Bookmark, LayoutDashboard, CheckCircle2,
+  XCircle, AlertCircle, Activity, StopCircle,
 } from 'lucide-react';
-import { fetchQueryHistory, checkJobStatus, renameHistoryJob, saveQuery } from '../api/client';
+import { fetchQueryHistory, checkJobStatus, renameHistoryJob, saveQuery, cancelJob } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
-import type { HistoryItem, JobStatusResponse, SavedQuery } from '../types';
+import type { HistoryItem, JobStatus, JobStatusResponse, SavedQuery } from '../types';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,27 @@ function fmtDate(iso: string) {
     d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) +
     ' ' +
     d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  );
+}
+
+// ─── Status badge ─────────────────────────────────────────────────────────────
+
+const STATUS_CONFIG: Record<JobStatus, { label: string; cls: string; icon: React.ElementType }> = {
+  pending:   { label: 'Queued',    cls: 'bg-amber-100 text-amber-700',   icon: Clock },
+  running:   { label: 'Running',   cls: 'bg-blue-100 text-blue-700',     icon: Loader2 },
+  completed: { label: 'Completed', cls: 'bg-green-100 text-green-700',   icon: CheckCircle2 },
+  failed:    { label: 'Failed',    cls: 'bg-red-100 text-red-700',       icon: XCircle },
+  cancelled: { label: 'Cancelled', cls: 'bg-gray-100 text-gray-500',     icon: StopCircle },
+};
+
+function StatusBadge({ status }: { status: JobStatus }) {
+  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.cancelled;
+  const Icon = cfg.icon;
+  return (
+    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded ${cfg.cls}`}>
+      <Icon size={11} className={status === 'running' ? 'animate-spin' : ''} />
+      {cfg.label}
+    </span>
   );
 }
 
@@ -267,7 +289,9 @@ function ResultsModal({
               )}
             </div>
             <div className="flex items-center gap-4 mt-1.5 text-xs text-gray-400 flex-wrap">
-              <span className="flex items-center gap-1"><Clock size={11} />{fmtDate(item.completedAt)}</span>
+              {(item.completedAt ?? item.createdAt) && (
+                <span className="flex items-center gap-1"><Clock size={11} />{fmtDate(item.completedAt ?? item.createdAt!)}</span>
+              )}
               <span>{item.rowCount.toLocaleString()} rows</span>
               <span>{fmtTime(item.executionTimeMs)}</span>
               {item.runBy && (
@@ -398,6 +422,13 @@ function ResultsModal({
 
 type SortKey = 'completedAt' | 'rowCount' | 'executionTimeMs';
 
+const STATUS_TABS: { value: string; label: string; icon: React.ElementType }[] = [
+  { value: 'all',       label: 'All',       icon: HistoryIcon },
+  { value: 'active',    label: 'Active',     icon: Activity },
+  { value: 'completed', label: 'Completed',  icon: CheckCircle2 },
+  { value: 'failed',    label: 'Failed',     icon: AlertCircle },
+];
+
 export default function History() {
   const { isAdmin } = useAuth();
   const [items, setItems] = useState<HistoryItem[]>([]);
@@ -407,6 +438,7 @@ export default function History() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState<string>('');
+  const [statusTab, setStatusTab] = useState<string>('all');
   const [sortKey, setSortKey] = useState<SortKey>('completedAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [modalItem, setModalItem] = useState<HistoryItem | null>(null);
@@ -419,6 +451,12 @@ export default function History() {
   // Save-to-library dialog
   const [savingItem, setSavingItem] = useState<HistoryItem | null>(null);
   const [saveInitialPin, setSaveInitialPin] = useState(false);
+  // Cancel state
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  // Inline error expansion
+  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  // Copy-SQL feedback
+  const [copiedSqlId, setCopiedSqlId] = useState<string | null>(null);
 
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -427,7 +465,7 @@ export default function History() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await fetchQueryHistory(limit, offset);
+      const data = await fetchQueryHistory(limit, offset, statusTab);
       setItems(data.items);
       setTotal(data.total);
       setError(null);
@@ -436,11 +474,34 @@ export default function History() {
     } finally {
       setLoading(false);
     }
-  }, [offset]);
+  }, [offset, statusTab]);
 
   useEffect(() => { load(); }, [load]);
 
+  // Auto-refresh every 5 s while there are pending/running jobs on the current page
+  const hasActive = items.some((i) => i.status === 'pending' || i.status === 'running');
+  useEffect(() => {
+    if (!hasActive) return;
+    const timer = setInterval(() => { load(); }, 5000);
+    return () => clearInterval(timer);
+  }, [hasActive, load]);
+
+  const handleTabChange = (tab: string) => {
+    setStatusTab(tab);
+    setOffset(0);
+    // When leaving the failed tab, collapse all error rows
+    if (tab !== 'failed') setExpandedErrors(new Set());
+  };
+
+  // Auto-expand error rows when Failed tab loads
+  useEffect(() => {
+    if (statusTab === 'failed') {
+      setExpandedErrors(new Set(items.filter((i) => i.errorMessage).map((i) => i.jobId)));
+    }
+  }, [statusTab, items]);
+
   const openModal = async (item: HistoryItem) => {
+    if (item.status !== 'completed') return;
     setModalItem(item);
     setModalJob(null);
     setModalLoading(true);
@@ -452,6 +513,37 @@ export default function History() {
     } finally {
       setModalLoading(false);
     }
+  };
+
+  const handleCancel = async (jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCancellingId(jobId);
+    try {
+      await cancelJob(jobId);
+      await load();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Cancel failed');
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
+  const toggleError = (jobId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpandedErrors((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId); else next.add(jobId);
+      return next;
+    });
+  };
+
+  const copySql = async (jobId: string, sql: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(sql);
+      setCopiedSqlId(jobId);
+      setTimeout(() => setCopiedSqlId((prev) => (prev === jobId ? null : prev)), 2000);
+    } catch { /* ignore */ }
   };
 
   const closeModal = useCallback(() => { setModalItem(null); setModalJob(null); }, []);
@@ -507,10 +599,15 @@ export default function History() {
       return true;
     })
     .sort((a, b) => {
-      const av = a[sortKey] as string | number;
-      const bv = b[sortKey] as string | number;
-      const al = typeof av === 'string' ? av.toLowerCase() : av;
-      const bl = typeof bv === 'string' ? bv.toLowerCase() : bv;
+      // completedAt may be null for pending/running — fall back to createdAt
+      const getVal = (item: HistoryItem) => {
+        if (sortKey === 'completedAt') return item.completedAt ?? item.createdAt;
+        return item[sortKey] as string | number;
+      };
+      const av = getVal(a);
+      const bv = getVal(b);
+      const al = typeof av === 'string' ? av.toLowerCase() : (av ?? 0);
+      const bl = typeof bv === 'string' ? bv.toLowerCase() : (bv ?? 0);
       if (al < bl) return sortDir === 'asc' ? -1 : 1;
       if (al > bl) return sortDir === 'asc' ? 1 : -1;
       return 0;
@@ -536,6 +633,29 @@ export default function History() {
         <HistoryIcon className="text-folio-600 flex-shrink-0" size={22} />
         <h1 className="text-2xl font-bold text-gray-800">Query History</h1>
         <span className="text-sm text-gray-400 ml-1">{total} {total === 1 ? 'query' : 'queries'}</span>
+        {hasActive && (
+          <span className="ml-2 flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium animate-pulse">
+            <Activity size={11} /> Live
+          </span>
+        )}
+      </div>
+
+      {/* Status tabs */}
+      <div className="flex gap-1 mb-4 border-b border-gray-200">
+        {STATUS_TABS.map(({ value, label, icon: Icon }) => (
+          <button
+            key={value}
+            onClick={() => handleTabChange(value)}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+              statusTab === value
+                ? 'border-folio-600 text-folio-700'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            <Icon size={13} />
+            {label}
+          </button>
+        ))}
       </div>
 
       {error && (
@@ -602,7 +722,8 @@ export default function History() {
           <table className="w-full text-sm border-separate border-spacing-0">
             <thead>
               <tr className="bg-gray-50 text-left">
-                <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 w-[38%]">Query</th>
+                <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 w-[34%]">Query</th>
+                <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap">Status</th>
                 <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap">Source</th>
                 <th
                   className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap cursor-pointer select-none hover:text-folio-700"
@@ -623,94 +744,165 @@ export default function History() {
                   className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap cursor-pointer select-none hover:text-folio-700"
                   onClick={() => toggleSort('completedAt')}
                 >
-                  <span className="flex items-center gap-1">Completed <SortIcon col="completedAt" /></span>
+                  <span className="flex items-center gap-1">Date <SortIcon col="completedAt" /></span>
                 </th>
                 <th className="px-4 py-3 border-b border-gray-200 w-16" />
               </tr>
             </thead>
             <tbody>
-              {filtered.map((item, i) => (
-                <tr
-                  key={item.jobId}
-                  className={`group cursor-pointer transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'} hover:bg-folio-50`}
-                  onClick={() => renamingId !== item.jobId && openModal(item)}
-                >
-                  {/* Query name + SQL preview */}
-                  <td className="px-4 py-3 border-b border-gray-100">
-                    {renamingId === item.jobId ? (
-                      <form
-                        onSubmit={(e) => { e.preventDefault(); commitRename(item.jobId); }}
+              {filtered.map((item, i) => {
+                const isActive = item.status === 'pending' || item.status === 'running';
+                const isFailed = item.status === 'failed';
+                const isCompleted = item.status === 'completed';
+                const errExpanded = expandedErrors.has(item.jobId);
+                const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40';
+                const colSpan = isAdmin ? 8 : 7;
+                return (
+                  <>
+                    <tr
+                      key={item.jobId}
+                      className={`group transition-colors ${rowBg} ${
+                        isCompleted ? 'cursor-pointer hover:bg-folio-50' : 'cursor-default'
+                      }`}
+                      onClick={() => renamingId !== item.jobId && isCompleted && openModal(item)}
+                    >
+                      {/* Query name + SQL preview */}
+                      <td className="px-4 py-3 border-b border-gray-100">
+                        {renamingId === item.jobId ? (
+                          <form
+                            onSubmit={(e) => { e.preventDefault(); commitRename(item.jobId); }}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              autoFocus
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onBlur={() => commitRename(item.jobId)}
+                              onKeyDown={(e) => { if (e.key === 'Escape') cancelRename(); }}
+                              disabled={renameSaving}
+                              placeholder="Query name…"
+                              className="w-full px-2 py-1 text-sm border rounded border-folio-400 focus:ring-1 focus:ring-folio-300 outline-none font-medium"
+                            />
+                          </form>
+                        ) : (
+                          <>
+                            {item.name
+                              ? <span className="font-medium text-gray-800 line-clamp-1">{item.name}</span>
+                              : <span className="italic text-gray-400 text-xs">Unnamed query</span>}
+                            <p className="text-xs text-gray-400 font-mono mt-0.5 line-clamp-1 truncate">{item.sql}</p>
+                          </>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 border-b border-gray-100 whitespace-nowrap">
+                        <StatusBadge status={item.status} />
+                      </td>
+                      <td className="px-4 py-3 border-b border-gray-100"><SourceBadge source={item.source} /></td>
+                      <td className="px-4 py-3 border-b border-gray-100 text-gray-600 tabular-nums whitespace-nowrap">
+                        {isCompleted ? item.rowCount.toLocaleString() : '—'}
+                      </td>
+                      <td className="px-4 py-3 border-b border-gray-100 text-gray-600 tabular-nums whitespace-nowrap">
+                        {item.executionTimeMs > 0 ? fmtTime(item.executionTimeMs) : '—'}
+                      </td>
+                      {isAdmin && (
+                        <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">
+                          {item.runBy
+                            ? <span className="flex items-center gap-1"><User size={11} />{item.runBy}</span>
+                            : '—'}
+                        </td>
+                      )}
+                      <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">
+                        {item.completedAt
+                          ? fmtDate(item.completedAt)
+                          : item.startedAt
+                            ? <span className="text-blue-500">{fmtDate(item.startedAt)}</span>
+                            : <span className="text-amber-500">{fmtDate(item.createdAt)}</span>}
+                      </td>
+                      {/* Row action buttons */}
+                      <td
+                        className="px-3 py-3 border-b border-gray-100"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <input
-                          autoFocus
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onBlur={() => commitRename(item.jobId)}
-                          onKeyDown={(e) => { if (e.key === 'Escape') cancelRename(); }}
-                          disabled={renameSaving}
-                          placeholder="Query name…"
-                          className="w-full px-2 py-1 text-sm border rounded border-folio-400 focus:ring-1 focus:ring-folio-300 outline-none font-medium"
-                        />
-                      </form>
-                    ) : (
-                      <>
-                        {item.name
-                          ? <span className="font-medium text-gray-800 line-clamp-1">{item.name}</span>
-                          : <span className="italic text-gray-400 text-xs">Unnamed query</span>}
-                        <p className="text-xs text-gray-400 font-mono mt-0.5 line-clamp-1 truncate">{item.sql}</p>
-                      </>
+                        <div className="flex items-center justify-end gap-0.5">
+                          {isActive && (
+                            <button
+                              onClick={(e) => handleCancel(item.jobId, e)}
+                              disabled={cancellingId === item.jobId}
+                              title="Cancel query"
+                              className="flex items-center gap-1 px-2 py-1 text-xs rounded text-red-600 hover:bg-red-50 border border-red-200 transition-colors disabled:opacity-50"
+                            >
+                              {cancellingId === item.jobId
+                                ? <Loader2 size={11} className="animate-spin" />
+                                : <XCircle size={11} />}
+                              Cancel
+                            </button>
+                          )}
+                          {isFailed && (
+                            <button
+                              onClick={(e) => toggleError(item.jobId, e)}
+                              title={errExpanded ? 'Hide SQL and error' : 'Show SQL and error details'}
+                              className="flex items-center gap-1 px-2 py-1 text-xs rounded text-red-600 hover:bg-red-50 border border-red-200 transition-colors"
+                            >
+                              <AlertCircle size={11} />
+                              {errExpanded ? 'Hide details' : 'Details'}
+                            </button>
+                          )}
+                          {isCompleted && (
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button onClick={(e) => startRename(item, e)} title="Rename"
+                                className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors">
+                                <Pencil size={13} />
+                              </button>
+                              <button onClick={(e) => openSaveDialog(item, false, e)} title="Save to Library"
+                                className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors">
+                                <Bookmark size={13} />
+                              </button>
+                              <button onClick={(e) => openSaveDialog(item, true, e)} title="Add to Dashboard"
+                                className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors">
+                                <LayoutDashboard size={13} />
+                              </button>
+                              <button onClick={() => openModal(item)} title="View results"
+                                className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors">
+                                <Eye size={13} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {/* Inline error row — full SQL + error message */}
+                    {isFailed && errExpanded && (
+                      <tr key={`${item.jobId}-err`} className={rowBg}>
+                        <td colSpan={colSpan} className="px-4 pb-4 border-b border-gray-100">
+                          <div className="mt-1 space-y-3">
+                            {/* Full SQL */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">SQL</span>
+                                <button
+                                  onClick={(e) => copySql(item.jobId, item.sql, e)}
+                                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-folio-600 px-2 py-0.5 rounded hover:bg-folio-50 transition-colors"
+                                >
+                                  {copiedSqlId === item.jobId
+                                    ? <><Check size={11} className="text-green-500" /> Copied</>  
+                                    : <><Copy size={11} /> Copy SQL</>}
+                                </button>
+                              </div>
+                              <pre className="bg-gray-900 text-green-300 text-xs font-mono rounded p-3 whitespace-pre-wrap break-all max-h-48 overflow-y-auto leading-relaxed">{item.sql}</pre>
+                            </div>
+                            {/* Error message */}
+                            {item.errorMessage && (
+                              <div>
+                                <div className="text-xs font-semibold text-red-500 uppercase tracking-wide mb-1">Error</div>
+                                <pre className="bg-red-50 border border-red-200 text-red-700 text-xs font-mono rounded p-3 whitespace-pre-wrap break-all max-h-40 overflow-y-auto leading-relaxed">{item.errorMessage}</pre>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
                     )}
-                  </td>
-                  <td className="px-4 py-3 border-b border-gray-100"><SourceBadge source={item.source} /></td>
-                  <td className="px-4 py-3 border-b border-gray-100 text-gray-600 tabular-nums whitespace-nowrap">{item.rowCount.toLocaleString()}</td>
-                  <td className="px-4 py-3 border-b border-gray-100 text-gray-600 tabular-nums whitespace-nowrap">{fmtTime(item.executionTimeMs)}</td>
-                  {isAdmin && (
-                    <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">
-                      {item.runBy
-                        ? <span className="flex items-center gap-1"><User size={11} />{item.runBy}</span>
-                        : '—'}
-                    </td>
-                  )}
-                  <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">{fmtDate(item.completedAt)}</td>
-                  {/* Row action buttons */}
-                  <td
-                    className="px-3 py-3 border-b border-gray-100"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => startRename(item, e)}
-                        title="Rename"
-                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
-                      >
-                        <Pencil size={13} />
-                      </button>
-                      <button
-                        onClick={(e) => openSaveDialog(item, false, e)}
-                        title="Save to Library"
-                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
-                      >
-                        <Bookmark size={13} />
-                      </button>
-                      <button
-                        onClick={(e) => openSaveDialog(item, true, e)}
-                        title="Add to Dashboard"
-                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
-                      >
-                        <LayoutDashboard size={13} />
-                      </button>
-                      <button
-                        onClick={() => openModal(item)}
-                        title="View results"
-                        className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
-                      >
-                        <Eye size={13} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                  </>
+                );
+              })}
             </tbody>
           </table>
         </div>
