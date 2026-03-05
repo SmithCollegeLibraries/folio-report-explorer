@@ -160,8 +160,8 @@
       "sql": "SELECT lib.name AS library_name, COUNT(ii.id) AS item_count FROM inventory.item__t AS ii JOIN inventory.location__t AS loc ON ii.effective_location_id = loc.id JOIN inventory.loclibrary__t AS lib ON loc.library_id = lib.id GROUP BY lib.name ORDER BY item_count DESC;"
     },
     {
-      "question": "What vendors have we spent the most money with this fiscal year?",
-      "sql": "SELECT org.name AS vendor_name, SUM(inv.total) AS total_spent FROM invoice.invoices__t AS inv JOIN organizations.organizations__t AS org ON inv.vendor_id = org.id WHERE inv.status = 'Paid' AND inv.invoice_date >= (SELECT start_date FROM finance.fiscal_year__t WHERE code = 'FY2026') GROUP BY org.name ORDER BY total_spent DESC LIMIT 20;"
+      "question": "What vendors have we spent the most money with this fiscal year for Smith College?",
+      "sql": "SELECT org.name AS vendor_name, ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * 0.01)), 2) AS total_spent FROM invoice.invoice_lines__t__fund_distributions iltfd INNER JOIN invoice.invoices__t inv ON inv.id = iltfd.invoice_id AND inv.payment_date::date BETWEEN (SELECT period_start FROM finance.fiscal_year__t WHERE code = 'FY2026') AND (SELECT period_end FROM finance.fiscal_year__t WHERE code = 'FY2026') INNER JOIN organizations.organizations__t org ON org.id = inv.vendor_id INNER JOIN orders.po_line__t plt ON iltfd.po_line_id = plt.id INNER JOIN orders.purchase_order__t__acq_unit_ids potaui ON potaui.id = plt.purchase_order_id INNER JOIN orders.acquisitions_unit__t au ON au.id = potaui.acq_unit_ids AND LOWER(au.name) = LOWER('Smith College') WHERE iltfd.invoice_line_status = 'Paid' GROUP BY org.name ORDER BY total_spent DESC LIMIT 20;"
     },
     {
       "question": "Show me the top 10 highest circulating books from Smith College between June 2024 and June 2025",

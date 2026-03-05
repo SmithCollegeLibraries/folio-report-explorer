@@ -36,7 +36,13 @@ class GeminiService
         $campusRule = '';
         if ($campus && $campus !== 'All Colleges') {
             $safe = addslashes($campus);
-            $campusRule = "13. CAMPUS SCOPE: The user's home institution is {$campus}. Unless the query explicitly mentions a different campus or asks about all colleges, queries involving items, holdings, locations, loans, orders, or invoices MUST filter to this campus by joining to inventory.loccampus__t (via location \xe2\x86\x92 loclibrary \xe2\x86\x92 loccampus) and adding WHERE LOWER(camp.name) = LOWER('{$safe}'). System-wide reference data (material types, loan types, instance types, fund types, expense classes, etc.) does NOT need campus filtering.";
+            $campusRule = "13. CAMPUS SCOPE: The user's home institution is {$campus}. Unless the query explicitly mentions a different campus or asks about all colleges, campus filtering is REQUIRED. The correct join method depends on the domain:
+
+  a) INVENTORY / CIRCULATION (items, holdings, locations, loans): Join through the location hierarchy — inventory.location__t → inventory.loclibrary__t → inventory.loccampus__t (alias: camp) — then add WHERE LOWER(camp.name) = LOWER('{$safe}').
+
+  b) FINANCE / ACQUISITIONS (invoices, purchase orders, vouchers, expense classes, fund payments): Campus scope is via the acquisitions unit, NOT location. Join orders.purchase_order__t__acq_unit_ids (alias: potaui) ON potaui.id = [purchase_order_id from orders.po_line__t], then join orders.acquisitions_unit__t (alias: au) ON au.id = potaui.acq_unit_ids AND LOWER(au.name) = LOWER('{$safe}'). For vendor/invoice queries that start from invoice.invoices__t, you must go through invoice.invoice_lines__t → orders.po_line__t → orders.purchase_order__t__acq_unit_ids → orders.acquisitions_unit__t to apply the campus filter. This changes the aggregation from per-invoice totals to per-invoice-line totals (SUM of line amounts rather than SUM of invoice header totals).
+
+  System-wide reference data (material types, instance types, fund types, fiscal years, etc.) does NOT need campus filtering.";
         }
 
         $systemPrompt = <<<PROMPT
