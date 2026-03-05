@@ -36,11 +36,22 @@ class GeminiService
         $campusRule = '';
         if ($campus && $campus !== 'All Colleges') {
             $safe = addslashes($campus);
-            $campusRule = "15. CAMPUS SCOPE — MANDATORY: The user's home institution is {$campus}. EVERY query MUST be scoped to this campus unless the user explicitly asks about all colleges or a different campus. Choose the correct join path based on the query domain:
+            $acqUnitCodes = [
+                'Smith College'               => 'SC',
+                'Amherst College'             => 'AC',
+                'Mount Holyoke College'       => 'MH',
+                'University Of Massachusetts' => 'UM',
+                'Hampshire College'           => 'HC',
+                'Five Colleges Collections'   => 'RP',
+                'National Yiddish Book Center'=> 'YB',
+            ];
+            $acqCode = $acqUnitCodes[$campus] ?? strtoupper(substr($campus, 0, 2));
+            $campusRule = "15. CAMPUS SCOPE — MANDATORY: The user's home institution is {$campus} (acquisitions unit code: {$acqCode}). EVERY query MUST be scoped to this campus unless the user explicitly asks about all colleges or a different campus. Choose the correct join path based on the query domain:
 
   a) INVENTORY / CIRCULATION (items, holdings, locations, loans): Join through the location hierarchy — inventory.location__t → inventory.loclibrary__t → inventory.loccampus__t (alias: camp) — then add WHERE LOWER(camp.name) = LOWER('{$safe}').
 
-  b) FINANCE / ACQUISITIONS (invoices, purchase orders, vouchers, expense classes, fund distributions, vendor spending): Campus scope is via the ACQUISITIONS UNIT, NOT location. The join chain is: orders.po_line__t (alias: plt) → orders.purchase_order__t__acq_unit_ids (alias: potaui) ON potaui.id = plt.purchase_order_id → orders.acquisitions_unit__t (alias: au) ON au.id = potaui.acq_unit_ids AND LOWER(au.name) = LOWER('{$safe}'). For queries starting from invoice tables, the full path is: invoice.invoice_lines__t__fund_distributions → orders.po_line__t → orders.purchase_order__t__acq_unit_ids → orders.acquisitions_unit__t. Aggregate line-level amounts (SUM of iltfd.total * iltfd.fund_distributions__value * 0.01), NOT invoice-header totals (inv.total).
+  b) FINANCE / ACQUISITIONS (invoices, purchase orders, vouchers, expense classes, fund distributions, vendor spending): Campus scope is via the ACQUISITIONS UNIT, NOT location. The join chain is: orders.po_line__t (alias: plt) → orders.purchase_order__t__acq_unit_ids (alias: potaui) ON potaui.id = plt.purchase_order_id → orders.acquisitions_unit__t (alias: au) ON au.id = potaui.acq_unit_ids AND au.name = '{$acqCode}'. For queries starting from invoice tables, the full path is: invoice.invoice_lines__t__fund_distributions → orders.po_line__t → orders.purchase_order__t__acq_unit_ids → orders.acquisitions_unit__t. Aggregate line-level amounts (SUM of iltfd.total * iltfd.fund_distributions__value * 0.01), NOT invoice-header totals (inv.total).
+  IMPORTANT: acquisitions_unit__t.name stores 2-letter abbreviation codes (SC, AC, MH, UM, HC, RP, YB) — NOT full campus names. Use au.name = '{$acqCode}' (exact string match). Never use LOWER(au.name) = LOWER('Smith College') or any full-name comparison.
 
   NEVER skip campus filtering for finance/acquisitions queries. Do not omit the acquisitions unit join.
   System-wide reference data (material types, instance types, fund types, fiscal years, etc.) does NOT need campus filtering.";
