@@ -89,6 +89,9 @@ RULES:
 13. If the query references ONLY local supplementary tables (acrl_statistics, report_expense_allocations),
     generate MySQL-compatible SELECT and set DATA SOURCE to "local".
 14. Otherwise set DATA SOURCE to "folio" and use PostgreSQL syntax.
+15. NEVER use the PostgreSQL ? operator (JSONB key-exists). Our query layer treats ? as a bind-parameter
+    placeholder and it causes a fatal syntax error. Instead use jsonb_exists(jsonb_val, 'key'),
+    jsonb_typeof(), or jsonb_each(). The same applies to ?| and ?& — use jsonb_exists_any / jsonb_exists_all.
 {$campusRule}
 
 SCHEMA:
