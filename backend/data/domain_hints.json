@@ -135,9 +135,11 @@
     "title": "inventory.instance__t.title — bibliographic title.",
     "fund": "finance.fund__t.name — budget fund name.",
     "budget": "finance.budget__t — budget allocations per fund per fiscal year.",
-    "invoice": "invoice.invoices__t — vendor invoices. Use invoice_lines__t for line items.",
+    "invoice": "invoice.invoices__t — vendor invoices. Use invoice_lines__t for line items. For campus-scoped spending, join through invoice_lines__t__fund_distributions → orders.po_line__t → orders.purchase_order__t__acq_unit_ids → orders.acquisitions_unit__t.",
     "fiscal year": "finance.fiscal_year__t.name or .code — fiscal year definition.",
     "expense class": "finance.expense_class__t.name — spending category (Electronic, Print, etc.).",
+    "vendor spending": "Campus-scoped vendor spending: start from invoice.invoice_lines__t__fund_distributions, join invoices__t for dates and vendor_id, join organizations__t for vendor name, join po_line__t → purchase_order__t__acq_unit_ids → acquisitions_unit__t for campus filter. Aggregate line-level amounts (iltfd.total * fund_distributions__value * 0.01), never invoice header totals.",
+    "acquisitions unit": "orders.acquisitions_unit__t — identifies which campus owns a purchase order. Used to campus-scope ALL finance and acquisitions queries. Join via orders.purchase_order__t__acq_unit_ids on purchase_order_id.",
     "service point": "inventory.service_point__t.name — circulation desk / service location.",
     "patron group": "users.groups__t.group — patron type label (Faculty, Undergraduate, Graduate, Staff). Use only as a GROUP BY label for aggregate counts.",
     "course reserve": "courses.coursereserves_courselistings__t — course reserve listings.",
@@ -153,7 +155,7 @@
     },
     {
       "question": "Show me all materials purchased in the last 90 days grouped by material type purchased by Smith College",
-      "sql": "SELECT imt.name AS material_type_name, SUM(COALESCE(pol.cost__quantity_physical, 1)) AS total_purchased FROM orders.po_line__t AS pol JOIN orders.purchase_order__t AS po ON pol.purchase_order_id = po.id JOIN inventory.material_type__t AS imt ON pol.physical__material_type = imt.id JOIN inventory.location__t AS loc ON pol.physical__expected_receipt_date IS NOT NULL JOIN inventory.loclibrary__t AS lib ON loc.library_id = lib.id JOIN inventory.loccampus__t AS camp ON lib.campus_id = camp.id WHERE camp.name = 'Smith College' AND po.date_ordered::date >= (CURRENT_DATE - INTERVAL '90 days') GROUP BY imt.name ORDER BY total_purchased DESC;"
+      "sql": "SELECT imt.name AS material_type_name, COUNT(plt.id) AS total_purchased FROM orders.po_line__t AS plt JOIN orders.purchase_order__t AS po ON plt.purchase_order_id = po.id JOIN orders.purchase_order__t__acq_unit_ids AS potaui ON potaui.id = po.id JOIN orders.acquisitions_unit__t AS au ON au.id = potaui.acq_unit_ids AND LOWER(au.name) = LOWER('Smith College') LEFT JOIN inventory.material_type__t AS imt ON imt.id = COALESCE(plt.eresource__material_type, plt.physical__material_type) WHERE po.date_ordered::date >= (CURRENT_DATE - INTERVAL '90 days') GROUP BY imt.name ORDER BY total_purchased DESC;"
     },
     {
       "question": "How many items does each library have?",
