@@ -46,6 +46,8 @@ class QueryJob extends ActiveRecord
             [['progress_message'], 'string', 'max' => 255],
             [['name'], 'string', 'max' => 255],
             [['id'], 'string', 'max' => 36],
+            [['pg_backend_pid'], 'integer'],
+            [['pg_backend_pid'], 'default', 'value' => null],
         ];
     }
 
@@ -141,6 +143,9 @@ class QueryJob extends ActiveRecord
         $this->execution_time_ms = $executionTimeMs;
         $this->completed_at = date('Y-m-d H:i:s');
         $this->progress_message = 'Completed';
+        if ($this->hasAttribute('pg_backend_pid')) {
+            $this->pg_backend_pid = null;
+        }
         $this->save(false);
     }
 
@@ -157,6 +162,9 @@ class QueryJob extends ActiveRecord
         $this->execution_time_ms = $executionTimeMs;
         $this->completed_at = date('Y-m-d H:i:s');
         $this->progress_message = 'Failed';
+        if ($this->hasAttribute('pg_backend_pid')) {
+            $this->pg_backend_pid = null;
+        }
         $this->save(false);
     }
 
@@ -168,14 +176,16 @@ class QueryJob extends ActiveRecord
     public function toStatusArray($includeResults = false)
     {
         $data = [
-            'jobId' => $this->id,
-            'status' => $this->status,
-            'sql' => $this->sql_text,
-            'dataSource' => $this->hasAttribute('data_source') ? ($this->data_source ?: 'folio') : 'folio',
+            'jobId'           => $this->id,
+            'name'            => $this->name ?? null,
+            'status'          => $this->status,
+            'source'          => $this->source,
+            'sql'             => $this->sql_text,
+            'dataSource'      => $this->hasAttribute('data_source') ? ($this->data_source ?: 'folio') : 'folio',
             'progressMessage' => $this->progress_message,
-            'createdAt' => $this->created_at,
-            'startedAt' => $this->started_at,
-            'completedAt' => $this->completed_at,
+            'createdAt'       => $this->created_at,
+            'startedAt'       => $this->started_at,
+            'completedAt'     => $this->completed_at,
         ];
 
         if ($this->status === 'completed' && $includeResults) {

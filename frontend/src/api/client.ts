@@ -532,8 +532,11 @@ export async function toggleUserNotifications(
 export async function fetchQueryHistory(
   limit = 50,
   offset = 0,
+  status?: string,
 ): Promise<HistoryResponse> {
-  const { data } = await api.get('/query/history', { params: { limit, offset } });
+  const params: Record<string, string | number> = { limit, offset };
+  if (status && status !== 'all') params.status = status;
+  const { data } = await api.get('/query/history', { params });
   return data;
 }
 

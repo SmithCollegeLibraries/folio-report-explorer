@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS query_jobs (
     execution_time_ms INT,
     error_message TEXT,
     progress_message VARCHAR(255) DEFAULT 'Queued',
+    pg_backend_pid INT NULL COMMENT 'Postgres backend PID while query is executing',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     started_at DATETIME NULL,
     completed_at DATETIME NULL,

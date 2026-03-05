@@ -507,9 +507,30 @@ class FolioQueryController extends Controller
             return ['error' => "Cannot cancel job with status '{$job->status}'"];
         }
 
+        // If a Postgres backend PID is tracked, issue a hard cancel signal
+        $pgKilled = false;
+        if ($job->status === 'running'
+            && $job->hasAttribute('pg_backend_pid')
+            && $job->pg_backend_pid
+        ) {
+            try {
+                $pid = (int)$job->pg_backend_pid;
+                $result = Yii::$app->folioDb->createCommand(
+                    'SELECT pg_cancel_backend(:pid)',
+                    [':pid' => $pid]
+                )->queryScalar();
+                $pgKilled = (bool)$result;
+            } catch (\Exception $e) {
+                Yii::error('pg_cancel_backend failed: ' . $e->getMessage(), 'query');
+            }
+        }
+
         $job->status = 'cancelled';
         $job->completed_at = date('Y-m-d H:i:s');
-        $job->progress_message = 'Cancelled by user';
+        $job->progress_message = $pgKilled ? 'Cancelled (query terminated)' : 'Cancelled by user';
+        if ($job->hasAttribute('pg_backend_pid')) {
+            $job->pg_backend_pid = null;
+        }
         $job->save(false);
 
         return $job->toStatusArray();
@@ -2168,17 +2189,31 @@ class FolioQueryController extends Controller
         $userId = $this->getCurrentUserId();
         $identity = $this->getAppIdentity();
         $isAdmin = $identity && $identity->isAdmin();
-        $limit  = (int) (Yii::$app->request->get('limit', 50));
-        $offset = (int) (Yii::$app->request->get('offset', 0));
+        $limit        = (int) (Yii::$app->request->get('limit', 50));
+        $offset       = (int) (Yii::$app->request->get('offset', 0));
+        $statusFilter = Yii::$app->request->get('status', 'all');
+
+        // Resolve requested statuses
+        $validStatuses = ['pending', 'running', 'completed', 'failed', 'cancelled'];
+        if ($statusFilter === 'active') {
+            $statuses = ['pending', 'running'];
+        } elseif (in_array($statusFilter, $validStatuses, true)) {
+            $statuses = [$statusFilter];
+        } else {
+            $statuses = null; // 'all' — no status filter
+        }
 
         $query = QueryJob::find()
             ->select(['qj.*', 'u.email AS runBy'])
             ->alias('qj')
             ->leftJoin('users u', 'u.id = qj.user_id')
-            ->where(['qj.status' => 'completed'])
-            ->orderBy(['qj.completed_at' => SORT_DESC])
+            ->orderBy(['qj.created_at' => SORT_DESC])
             ->limit(min($limit, 100))
             ->offset($offset);
+
+        if ($statuses !== null) {
+            $query->where(['qj.status' => $statuses]);
+        }
 
         // Non-admins see only their own jobs
         if ($userId && !$isAdmin) {
@@ -2193,18 +2228,23 @@ class FolioQueryController extends Controller
             'offset' => $offset,
             'limit'  => $limit,
             'items'  => array_map(function ($job) use ($isAdmin) {
-                return [
+                $item = [
                     'jobId'          => $job['id'],
                     'name'           => $job['name'] ?? null,
+                    'status'         => $job['status'],
                     'sql'            => $job['sql_text'],
                     'source'         => $job['source'],
                     'dataSource'     => $job['data_source'] ?? 'folio',
+                    'progressMessage'=> $job['progress_message'] ?? null,
                     'rowCount'       => (int) ($job['row_count'] ?? 0),
                     'executionTimeMs'=> (int) ($job['execution_time_ms'] ?? 0),
+                    'errorMessage'   => $job['error_message'] ?? null,
                     'createdAt'      => $job['created_at'],
+                    'startedAt'      => $job['started_at'] ?? null,
                     'completedAt'    => $job['completed_at'],
                     'runBy'          => $isAdmin ? ($job['runBy'] ?? null) : null,
                 ];
+                return $item;
             }, $jobs),
         ];
     }

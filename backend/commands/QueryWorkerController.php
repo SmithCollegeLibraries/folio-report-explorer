@@ -144,6 +144,17 @@ class QueryWorkerController extends Controller
             try {
                 if ($dataSource === 'folio') {
                     $db->createCommand("SET TRANSACTION READ ONLY")->execute();
+                    // Store Postgres backend PID so cancel endpoint can issue pg_cancel_backend()
+                    if ($job->hasAttribute('pg_backend_pid')) {
+                        $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
+                        if ($pidRow !== false) {
+                            Yii::$app->db->createCommand()->update(
+                                'query_jobs',
+                                ['pg_backend_pid' => (int)$pidRow['pg_backend_pid']],
+                                ['id' => $job->id]
+                            )->execute();
+                        }
+                    }
                 }
                 $command = $db->createCommand($job->sql_text);
 
@@ -153,6 +164,13 @@ class QueryWorkerController extends Controller
 
                 $rows = $command->queryAll();
                 $transaction->commit();
+
+                // Check if the job was cancelled while the query was running
+                $job->refresh();
+                if ($job->status === 'cancelled') {
+                    $this->stdout("Job {$job->id} was cancelled during execution, discarding results.\n");
+                    return;
+                }
 
                 $executionTime = round((microtime(true) - $startTime) * 1000);
                 $columns = !empty($rows) ? array_keys($rows[0]) : [];

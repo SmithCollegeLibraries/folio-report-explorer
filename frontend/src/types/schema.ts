@@ -445,12 +445,17 @@ export interface RefreshResponse {
 export interface HistoryItem {
   jobId: string;
   name: string | null;
+  status: JobStatus;
   sql: string;
   source: string;
+  dataSource: string;
+  progressMessage: string | null;
   rowCount: number;
   executionTimeMs: number;
+  errorMessage: string | null;
   createdAt: string;
-  completedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
   runBy: string | null;
 }
 
