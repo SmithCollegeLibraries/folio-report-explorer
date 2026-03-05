@@ -38,10 +38,9 @@ class QueryJob extends ActiveRecord
         return [
             [['id', 'sql_text'], 'required'],
             [['sql_text', 'result_rows', 'error_message'], 'string'],
-            [['params', 'result_columns', 'metadata'], 'string'],
+            [['params', 'result_columns'], 'string'],
             [['sql_hash'], 'string', 'max' => 64],
             [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
-            [['data_source'], 'in', 'range' => ['folio', 'local', 'composite']],
             [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
             [['progress_message'], 'string', 'max' => 255],
