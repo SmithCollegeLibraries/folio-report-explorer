@@ -192,7 +192,9 @@ export interface ExecuteResponse {
   rowCount: number;
   executionTimeMs: number;
   sql: string;
-  dataSource?: 'folio' | 'local';
+  dataSource?: 'folio' | 'local' | 'composite';
+  outputMode?: 'table' | 'file';
+  downloadUrl?: string;
 }
 
 /** NL→SQL response */
@@ -260,14 +262,18 @@ export interface HealthResponse {
 
 // ─── Async Job types ──────────────────────────────────────────────
 
-export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type JobStatus = 'pending' | 'pending_export' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 /** Response from POST /query/submit */
 export interface JobSubmitResponse {
   jobId: string;
   status: JobStatus;
+  requiresConfirmation?: boolean;
+  estimatedRows?: number;
+  estimatedCost?: number;
+  outputMode?: 'table' | 'file';
   sql: string;
-  dataSource?: 'folio' | 'local';
+  dataSource?: 'folio' | 'local' | 'composite';
   progressMessage: string;
   createdAt: string | null;
   startedAt: string | null;
@@ -278,8 +284,12 @@ export interface JobSubmitResponse {
 export interface JobStatusResponse {
   jobId: string;
   status: JobStatus;
+  outputMode?: 'table' | 'file';
+  estimatedRows?: number;
+  estimatedCost?: number;
+  downloadUrl?: string;
   sql: string;
-  dataSource?: 'folio' | 'local';
+  dataSource?: 'folio' | 'local' | 'composite';
   progressMessage: string;
   createdAt: string | null;
   startedAt: string | null;

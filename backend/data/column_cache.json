@@ -1,6 +1,6 @@
 {
     "_note": "Auto-discovered columns keyed by MetaDB table name (schema.table__t)",
-    "_discovered_at": "2026-03-05T20:10:32+00:00",
+    "_discovered_at": "2026-03-06T20:26:54+00:00",
     "_tables_with_columns": 114,
     "columns": {
         "agreements.entitlement__t": [
@@ -2209,6 +2209,15 @@
                 "digits": 0
             },
             {
+                "name": "session_id",
+                "type": "text",
+                "size": null,
+                "nullable": true,
+                "auto_updated": false,
+                "default": null,
+                "digits": 0
+            },
+            {
                 "name": "action_type",
                 "type": "text",
                 "size": null,
@@ -2974,6 +2983,15 @@
             },
             {
                 "name": "request_id",
+                "type": "text",
+                "size": null,
+                "nullable": true,
+                "auto_updated": false,
+                "default": null,
+                "digits": 0
+            },
+            {
+                "name": "fee_fine_action_id",
                 "type": "text",
                 "size": null,
                 "nullable": true,

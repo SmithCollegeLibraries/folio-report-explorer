@@ -12,16 +12,20 @@ use yii\db\ActiveRecord;
  * @property string $sql_hash SHA-256 hash for dedup
  * @property string $params JSON
  * @property string $source builder|nl|manual
- * @property string $data_source folio|local
+ * @property string $data_source folio|local|composite
  * @property string $name  human-readable label
  * @property int    $user_id
- * @property string $status pending|running|completed|failed|cancelled
+ * @property string $status pending|running|completed|failed|cancelled|pending_export
  * @property string $result_columns JSON column names
  * @property string $result_rows JSON row data
  * @property int $row_count
  * @property int $execution_time_ms
  * @property string $error_message
  * @property string $progress_message
+ * @property string $output_mode table|file
+ * @property string|null $export_file_path
+ * @property int|null $estimated_rows
+ * @property float|null $estimated_cost
  * @property string $created_at
  * @property string $started_at
  * @property string $completed_at
@@ -41,11 +45,15 @@ class QueryJob extends ActiveRecord
             [['params', 'result_columns'], 'string'],
             [['sql_hash'], 'string', 'max' => 64],
             [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
-            [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled']],
+            [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled', 'pending_export']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
+            [['estimated_rows'], 'integer'],
+            [['estimated_cost'], 'number'],
             [['progress_message'], 'string', 'max' => 255],
             [['name'], 'string', 'max' => 255],
             [['id'], 'string', 'max' => 36],
+            [['output_mode'], 'in', 'range' => ['table', 'file']],
+            [['export_file_path'], 'string', 'max' => 500],
             [['pg_backend_pid'], 'integer'],
             [['pg_backend_pid'], 'default', 'value' => null],
         ];
@@ -74,6 +82,9 @@ class QueryJob extends ActiveRecord
         }
         $job->status = 'pending';
         $job->progress_message = 'Queued';
+        if ($job->hasAttribute('output_mode')) {
+            $job->output_mode = 'table';
+        }
         return $job;
     }
 
@@ -150,6 +161,34 @@ class QueryJob extends ActiveRecord
     }
 
     /**
+     * Transition to completed state for file exports.
+     *
+     * @param string $filePath
+     * @param int $rowCount
+     * @param int $executionTimeMs
+     */
+    public function markExportCompleted($filePath, $rowCount, $executionTimeMs)
+    {
+        $this->status = 'completed';
+        if ($this->hasAttribute('output_mode')) {
+            $this->output_mode = 'file';
+        }
+        if ($this->hasAttribute('export_file_path')) {
+            $this->export_file_path = $filePath;
+        }
+        $this->result_columns = null;
+        $this->result_rows = null;
+        $this->row_count = (int) $rowCount;
+        $this->execution_time_ms = $executionTimeMs;
+        $this->completed_at = date('Y-m-d H:i:s');
+        $this->progress_message = 'Completed';
+        if ($this->hasAttribute('pg_backend_pid')) {
+            $this->pg_backend_pid = null;
+        }
+        $this->save(false);
+    }
+
+    /**
      * Transition to failed state.
      *
      * @param string $error
@@ -175,6 +214,7 @@ class QueryJob extends ActiveRecord
      */
     public function toStatusArray($includeResults = false)
     {
+        $outputMode = $this->hasAttribute('output_mode') ? ($this->output_mode ?: 'table') : 'table';
         $data = [
             'jobId'           => $this->id,
             'name'            => $this->name ?? null,
@@ -182,17 +222,29 @@ class QueryJob extends ActiveRecord
             'source'          => $this->source,
             'sql'             => $this->sql_text,
             'dataSource'      => $this->hasAttribute('data_source') ? ($this->data_source ?: 'folio') : 'folio',
+            'outputMode'      => $outputMode,
             'progressMessage' => $this->progress_message,
             'createdAt'       => $this->created_at,
             'startedAt'       => $this->started_at,
             'completedAt'     => $this->completed_at,
         ];
 
-        if ($this->status === 'completed' && $includeResults) {
+        if ($this->hasAttribute('estimated_rows') && $this->estimated_rows !== null) {
+            $data['estimatedRows'] = (int) $this->estimated_rows;
+        }
+        if ($this->hasAttribute('estimated_cost') && $this->estimated_cost !== null) {
+            $data['estimatedCost'] = (float) $this->estimated_cost;
+        }
+
+        if ($this->status === 'completed' && $includeResults && $outputMode !== 'file') {
             $data['columns'] = $this->getDecodedColumns();
             $data['rows'] = $this->getDecodedRows();
             $data['rowCount'] = (int)$this->row_count;
             $data['executionTimeMs'] = (int)$this->execution_time_ms;
+        }
+
+        if ($this->status === 'completed' && $outputMode === 'file' && $this->hasAttribute('export_file_path')) {
+            $data['downloadUrl'] = '/api/query/export/' . $this->id;
         }
 
         if ($this->status === 'failed') {

@@ -40,6 +40,11 @@ class CleanupController extends Controller
     public $maxResultSize = 10485760;
 
     /**
+     * @var int Days to retain generated CSV export files (default: 7).
+     */
+    public $exportFileRetentionDays = 7;
+
+    /**
      * @inheritdoc
      */
     public function options($actionID)
@@ -49,6 +54,7 @@ class CleanupController extends Controller
             'jobRetentionDays',
             'logRetentionDays',
             'maxResultSize',
+            'exportFileRetentionDays',
         ]);
     }
 
@@ -74,6 +80,8 @@ class CleanupController extends Controller
         $this->actionLogs();
         $this->stdout("\n");
         $this->actionTruncate();
+        $this->stdout("\n");
+        $this->actionExports();
         $this->stdout("\n");
         $this->actionStats();
 
@@ -165,6 +173,65 @@ class CleanupController extends Controller
             )->execute();
             $this->stdout("  Truncated {$count} result sets\n");
         }
+
+        return ExitCode::OK;
+    }
+
+    /**
+     * Delete old CSV export files and clear stale export paths from jobs.
+     */
+    public function actionExports()
+    {
+        $db = Yii::$app->db;
+        $cutoff = strtotime("-{$this->exportFileRetentionDays} days");
+        $exportDir = Yii::getAlias('@runtime/exports');
+
+        $this->stdout("Cleaning export files older than {$this->exportFileRetentionDays} days...\n");
+
+        if (!is_dir($exportDir)) {
+            $this->stdout("  No export directory found\n");
+            return ExitCode::OK;
+        }
+
+        $files = glob($exportDir . DIRECTORY_SEPARATOR . '*.csv') ?: [];
+        $removed = 0;
+        $candidates = 0;
+
+        foreach ($files as $file) {
+            $mtime = @filemtime($file);
+            if ($mtime === false || $mtime >= $cutoff) {
+                continue;
+            }
+
+            $candidates++;
+            if (!$this->dryRun) {
+                @unlink($file);
+            }
+            $removed++;
+        }
+
+        $this->stdout("  Found {$candidates} stale files\n");
+        if (!$this->dryRun) {
+            $this->stdout("  Removed {$removed} files\n");
+        }
+
+        // Clear paths that no longer exist.
+        $jobs = $db->createCommand(
+            'SELECT id, export_file_path FROM query_jobs WHERE export_file_path IS NOT NULL'
+        )->queryAll();
+
+        $stalePaths = 0;
+        foreach ($jobs as $job) {
+            $path = $job['export_file_path'];
+            if ($path && !is_file($path)) {
+                $stalePaths++;
+                if (!$this->dryRun) {
+                    $db->createCommand()->update('query_jobs', ['export_file_path' => null], ['id' => $job['id']])->execute();
+                }
+            }
+        }
+
+        $this->stdout("  Cleared {$stalePaths} stale export file references\n");
 
         return ExitCode::OK;
     }

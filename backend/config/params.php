@@ -14,4 +14,8 @@ return [
     'maxQueryRows' => 10000,
     'defaultQueryLimit' => 100,
     'queryTimeoutMs' => 1800000,
+    'exportRowThreshold' => 10000,
+    'exportCostThreshold' => 500000,
+    'exportRowLimit' => 500000,
+    'exportFileRetentionDays' => 7,
 ];

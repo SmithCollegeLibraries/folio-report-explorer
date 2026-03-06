@@ -1,6 +1,6 @@
 {
     "_note": "LDP1 backward-compat + direct MetaDB table mapping",
-    "_discovered_at": "2026-03-05T20:10:32+00:00",
+    "_discovered_at": "2026-03-06T20:26:54+00:00",
     "_ldp1_entries": 115,
     "_metadb_direct": 16,
     "_total": 114,

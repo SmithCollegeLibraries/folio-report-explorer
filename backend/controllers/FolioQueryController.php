@@ -187,7 +187,14 @@ class FolioQueryController extends Controller
      */
     private function normalizeDataSource($value)
     {
-        return strtolower((string) $value) === 'local' ? 'local' : 'folio';
+        $normalized = strtolower((string) $value);
+        if ($normalized === 'local') {
+            return 'local';
+        }
+        if ($normalized === 'composite') {
+            return 'composite';
+        }
+        return 'folio';
     }
 
     /**
@@ -198,6 +205,61 @@ class FolioQueryController extends Controller
     private function resolveDbComponent($dataSource)
     {
         return $this->normalizeDataSource($dataSource) === 'local' ? 'db' : 'folioDb';
+    }
+
+    /**
+     * Estimate query complexity using EXPLAIN (FORMAT JSON).
+     * Returns null when estimation is unavailable.
+     *
+     * @param string $sql
+     * @param string $dataSource
+     * @return array|null ['rows' => int|null, 'cost' => float|null]
+     */
+    private function estimateQueryComplexity($sql, $dataSource)
+    {
+        if ($this->normalizeDataSource($dataSource) !== 'folio') {
+            return null;
+        }
+
+        try {
+            $db = Yii::$app->folioDb;
+            $db->createCommand("SET statement_timeout = 10000")->execute();
+            try {
+                $row = $db->createCommand('EXPLAIN (FORMAT JSON) ' . $sql)->queryOne();
+            } finally {
+                $db->createCommand("SET statement_timeout = " . (int) Yii::$app->params['queryTimeoutMs'])->execute();
+            }
+
+            if ($row === false || empty($row)) {
+                return null;
+            }
+
+            $first = array_values($row)[0] ?? null;
+            if ($first === null) {
+                return null;
+            }
+
+            if (is_string($first)) {
+                $decoded = json_decode($first, true);
+            } elseif (is_array($first)) {
+                $decoded = $first;
+            } else {
+                return null;
+            }
+
+            if (!is_array($decoded) || empty($decoded[0]['Plan'])) {
+                return null;
+            }
+
+            $plan = $decoded[0]['Plan'];
+
+            return [
+                'rows' => isset($plan['Plan Rows']) ? (int) $plan['Plan Rows'] : null,
+                'cost' => isset($plan['Total Cost']) ? (float) $plan['Total Cost'] : null,
+            ];
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     // ─── Schema endpoints ─────────────────────────────────────────────
@@ -441,6 +503,8 @@ class FolioQueryController extends Controller
         $params = $body['params'] ?? [];
         $source = $body['source'] ?? 'manual';
         $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
+        $outputMode = strtolower((string)($body['outputMode'] ?? 'table')) === 'file' ? 'file' : 'table';
+        $confirmed = !empty($body['confirmed']);
 
         // Build SQL from query definition if provided
         if (!$sql && isset($body['queryDefinition'])) {
@@ -469,10 +533,34 @@ class FolioQueryController extends Controller
             return ['error' => $e->getMessage()];
         }
 
-        // Enforce LIMIT
-        $maxRows = Yii::$app->params['maxQueryRows'];
-        if (!preg_match('/\bLIMIT\s+\d+/i', $sql)) {
-            $sql = rtrim($sql, "; \n") . "\nLIMIT {$maxRows}";
+        $estimate = null;
+        if ($outputMode !== 'file' && !$confirmed && $dataSource === 'folio') {
+            $estimate = $this->estimateQueryComplexity($sql, $dataSource);
+            $thresholdRows = (int) (Yii::$app->params['exportRowThreshold'] ?? Yii::$app->params['maxQueryRows']);
+            $thresholdCost = (float) (Yii::$app->params['exportCostThreshold'] ?? 500000);
+            $estimatedRows = $estimate['rows'] ?? null;
+            $estimatedCost = $estimate['cost'] ?? null;
+
+            $isLarge = ($estimatedRows !== null && $estimatedRows > $thresholdRows)
+                || ($estimatedCost !== null && $estimatedCost > $thresholdCost);
+
+            if ($isLarge) {
+                return [
+                    'requiresConfirmation' => true,
+                    'estimatedRows' => $estimatedRows,
+                    'estimatedCost' => $estimatedCost,
+                    'sql' => $sql,
+                    'dataSource' => $dataSource,
+                ];
+            }
+        }
+
+        // Enforce LIMIT for table mode; export mode gets its own cap in export worker.
+        if ($outputMode !== 'file') {
+            $maxRows = (int) Yii::$app->params['maxQueryRows'];
+            if (!preg_match('/\bLIMIT\s+\d+/i', $sql)) {
+                $sql = rtrim($sql, "; \n") . "\nLIMIT {$maxRows}";
+            }
         }
 
         // Create job
@@ -480,6 +568,21 @@ class FolioQueryController extends Controller
         $job->user_id = $this->getCurrentUserId();
         $job->name = isset($body['name']) ? substr(trim($body['name']), 0, 255) : null;
         $job->sql_hash = hash('sha256', $sql . json_encode($params));
+        if ($job->hasAttribute('output_mode')) {
+            $job->output_mode = $outputMode;
+        }
+        if ($outputMode === 'file') {
+            $job->status = 'pending_export';
+            $job->progress_message = 'Queued for CSV export';
+        }
+        if ($estimate !== null) {
+            if ($job->hasAttribute('estimated_rows')) {
+                $job->estimated_rows = $estimate['rows'] ?? null;
+            }
+            if ($job->hasAttribute('estimated_cost')) {
+                $job->estimated_cost = $estimate['cost'] ?? null;
+            }
+        }
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
             return ['error' => 'Failed to create job', 'details' => $job->errors];
@@ -515,7 +618,7 @@ class FolioQueryController extends Controller
             return ['error' => 'Job not found'];
         }
 
-        if (!in_array($job->status, ['pending', 'running'])) {
+        if (!in_array($job->status, ['pending', 'pending_export', 'running'])) {
             Yii::$app->response->statusCode = 409;
             return ['error' => "Cannot cancel job with status '{$job->status}'"];
         }
@@ -526,6 +629,40 @@ class FolioQueryController extends Controller
         $job->save(false);
 
         return $job->toStatusArray();
+    }
+
+    /**
+     * GET /api/query/export/<id> — download completed CSV export for a job.
+     */
+    public function actionQueryExport($id)
+    {
+        $job = QueryJob::findOne($id);
+        if (!$job) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Job not found'];
+        }
+
+        if (($job->hasAttribute('output_mode') ? $job->output_mode : 'table') !== 'file') {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Job is not a file export'];
+        }
+
+        if ($job->status !== 'completed') {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Export is not completed'];
+        }
+
+        $path = $job->hasAttribute('export_file_path') ? $job->export_file_path : null;
+        if (!$path || !is_file($path)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Export file not found'];
+        }
+
+        Yii::$app->response->format = Response::FORMAT_RAW;
+        return Yii::$app->response->sendFile($path, basename($path), [
+            'mimeType' => 'text/csv',
+            'inline' => false,
+        ]);
     }
 
     /**
@@ -2195,7 +2332,7 @@ class FolioQueryController extends Controller
             ->offset($offset);
 
         if ($statusFilter === 'active') {
-            $query->andWhere(['qj.status' => ['pending', 'running']]);
+            $query->andWhere(['qj.status' => ['pending', 'pending_export', 'running']]);
         } elseif ($statusFilter === 'completed') {
             $query->andWhere(['qj.status' => 'completed']);
         } elseif ($statusFilter === 'failed') {

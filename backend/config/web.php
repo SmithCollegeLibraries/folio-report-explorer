@@ -59,6 +59,7 @@ $config = [
                 'POST query/submit' => 'folio-query/query-submit',
                 'GET query/status/<id:[\w-]+>' => 'folio-query/query-status',
                 'POST query/cancel/<id:[\w-]+>' => 'folio-query/query-cancel',
+                'GET query/export/<id:[\w-]+>' => 'folio-query/query-export',
                 'GET query/jobs' => 'folio-query/query-list',
 
                 // Saved queries

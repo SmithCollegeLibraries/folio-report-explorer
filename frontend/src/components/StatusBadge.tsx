@@ -3,6 +3,7 @@ import type { JobStatus } from '../types';
 
 export const STATUS_CONFIG: Record<JobStatus, { label: string; cls: string; icon: React.ElementType }> = {
   pending:   { label: 'Queued',    cls: 'bg-amber-100 text-amber-700',  icon: Clock },
+  pending_export: { label: 'Queued for export', cls: 'bg-indigo-100 text-indigo-700', icon: Clock },
   running:   { label: 'Running',   cls: 'bg-blue-100 text-blue-700',    icon: Loader2 },
   completed: { label: 'Completed', cls: 'bg-green-100 text-green-700',  icon: CheckCircle2 },
   failed:    { label: 'Failed',    cls: 'bg-red-100 text-red-700',      icon: XCircle },

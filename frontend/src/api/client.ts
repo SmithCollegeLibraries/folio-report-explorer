@@ -282,15 +282,35 @@ export async function submitQuery(
   source = 'manual',
   name?: string,
   dataSource: 'folio' | 'local' = 'folio',
+  options?: { confirmed?: boolean; outputMode?: 'table' | 'file' },
 ): Promise<JobSubmitResponse> {
   const { data } = await api.post('/query/submit', {
     sql,
     params,
     source,
     dataSource,
+    ...(options?.confirmed ? { confirmed: true } : {}),
+    ...(options?.outputMode ? { outputMode: options.outputMode } : {}),
     ...(name ? { name } : {}),
   });
   return data;
+}
+
+export function getExportDownloadUrl(jobId: string): string {
+  return `${apiBase}/query/export/${jobId}`;
+}
+
+export async function downloadExportCsv(jobId: string): Promise<void> {
+  const response = await api.get(`/query/export/${jobId}`, { responseType: 'blob' });
+  const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', `${jobId}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
 }
 
 // ─── Local supplementary data (admin) ────────────────────────────

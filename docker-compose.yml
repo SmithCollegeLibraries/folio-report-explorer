@@ -98,6 +98,33 @@ services:
     networks:
       - app-network
 
+  export-worker:
+    image: folio-report-explorer-php
+    volumes:
+      - ./backend:/var/www/html
+    environment:
+      - FOLIO_PG_HOST=${FOLIO_PG_HOST}
+      - FOLIO_PG_PORT=${FOLIO_PG_PORT:-25060}
+      - FOLIO_PG_DB=${FOLIO_PG_DB:-ldplite}
+      - FOLIO_PG_USER=${FOLIO_PG_USER}
+      - FOLIO_PG_PASS=${FOLIO_PG_PASS}
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
+      - MYSQL_USER=${MYSQL_USER:-folio_app}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - YII_ENV=${YII_ENV:-dev}
+    depends_on:
+      php:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+    entrypoint: ["php", "/var/www/html/yii", "export-worker/run"]
+    restart: unless-stopped
+    networks:
+      - app-network
+
 volumes:
   mysql-data:
   frontend-node-modules:

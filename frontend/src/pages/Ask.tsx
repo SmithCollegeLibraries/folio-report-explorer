@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
@@ -101,9 +101,35 @@ export default function Ask() {
   const { job, results, isRunning, error: jobError, cancel: cancelJobFn, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
 
   const execMut = useMutation({
-    mutationFn: ({ sql, dataSource }: { sql: string; dataSource?: 'folio' | 'local' }) =>
-      submitQuery(sql, {}, 'nl', prompt.trim() || undefined, dataSource || 'folio'),
-    onSuccess: (data: { jobId: string }) => setActiveJobId(data.jobId),
+    mutationFn: ({
+      sql,
+      dataSource,
+      options,
+    }: {
+      sql: string;
+      dataSource?: 'folio' | 'local';
+      options?: { confirmed?: boolean; outputMode?: 'table' | 'file' };
+    }) => submitQuery(sql, {}, 'nl', prompt.trim() || undefined, dataSource || 'folio', options),
+    onSuccess: (data, vars) => {
+      if (data.requiresConfirmation) {
+        const rowText = data.estimatedRows != null ? `~${data.estimatedRows.toLocaleString()} rows` : 'unknown row count';
+        const costText = data.estimatedCost != null ? `${Math.round(data.estimatedCost).toLocaleString()} cost` : 'unknown cost';
+        const shouldExport = window.confirm(
+          `This query is estimated as large (${rowText}, ${costText}).\n\nClick OK to run as CSV export in the background.\nClick Cancel to run in-browser with normal row limits.`,
+        );
+
+        execMut.mutate({
+          sql: vars.sql,
+          dataSource: vars.dataSource,
+          options: shouldExport ? { outputMode: 'file' } : { confirmed: true, outputMode: 'table' },
+        });
+        return;
+      }
+
+      if (data.jobId) {
+        setActiveJobId(data.jobId);
+      }
+    },
   });
 
   const askMut = useMutation({
@@ -347,7 +373,11 @@ export default function Ask() {
                   <Loader2 size={20} className="animate-spin text-blue-600 mt-0.5 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-semibold text-blue-800">
-                      {job?.status === 'pending' ? 'Queued — waiting for worker…' : 'Running query…'}
+                      {job?.status === 'pending'
+                        ? 'Queued — waiting for worker…'
+                        : job?.status === 'pending_export'
+                          ? 'Queued for CSV export…'
+                          : 'Running query…'}
                     </div>
                     <div className="text-sm text-blue-600 mt-1">
                       Elapsed: <span className="font-mono font-medium">
@@ -428,15 +458,32 @@ export default function Ask() {
                         >
                           <Code2 size={12} /> View SQL
                         </button>
-                        <button
-                          onClick={() => setModalOpen(true)}
-                          className="flex items-center gap-1 text-xs text-folio-600 hover:text-folio-800"
-                        >
-                          <Maximize2 size={12} /> Expand
-                        </button>
+                        {results.outputMode !== 'file' && (
+                          <button
+                            onClick={() => setModalOpen(true)}
+                            className="flex items-center gap-1 text-xs text-folio-600 hover:text-folio-800"
+                          >
+                            <Maximize2 size={12} /> Expand
+                          </button>
+                        )}
                       </div>
                     </div>
-                    <ResultsTable data={results} />
+                    {results.outputMode === 'file' ? (
+                      <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 text-sm text-blue-800">
+                        <div className="font-medium mb-1">Export complete</div>
+                        <div className="mb-3">This query was exported as CSV in the background.</div>
+                        {results.downloadUrl && activeJobId && (
+                          <button
+                            onClick={() => downloadExportCsv(activeJobId)}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                          >
+                            Download CSV
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <ResultsTable data={results} />
+                    )}
                   </div>
                 ) : (
                   <div className="flex items-center justify-center h-32 text-gray-400 text-sm">

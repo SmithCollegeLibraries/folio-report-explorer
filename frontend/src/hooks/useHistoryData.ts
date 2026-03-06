@@ -57,7 +57,7 @@ export function useHistoryData(): UseHistoryDataReturn {
 
   useEffect(() => { load(); }, [load]);
 
-  const hasActive = items.some((i) => i.status === 'pending' || i.status === 'running');
+  const hasActive = items.some((i) => i.status === 'pending' || i.status === 'pending_export' || i.status === 'running');
 
   // Auto-refresh while there are active jobs on this page
   useEffect(() => {

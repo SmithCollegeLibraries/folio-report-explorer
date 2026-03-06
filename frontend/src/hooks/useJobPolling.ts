@@ -102,14 +102,26 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
 
         if (status.status === 'completed') {
           stopPolling();
-          // Convert to ExecuteResponse
-          setResults({
-            columns: status.columns || [],
-            rows: status.rows || [],
-            rowCount: status.rowCount || 0,
-            executionTimeMs: status.executionTimeMs || 0,
-            sql: status.sql,
-          });
+          if (status.outputMode === 'file') {
+            setResults({
+              columns: [],
+              rows: [],
+              rowCount: status.rowCount || 0,
+              executionTimeMs: status.executionTimeMs || 0,
+              sql: status.sql,
+              outputMode: 'file',
+              downloadUrl: status.downloadUrl,
+            });
+          } else {
+            // Convert to ExecuteResponse
+            setResults({
+              columns: status.columns || [],
+              rows: status.rows || [],
+              rowCount: status.rowCount || 0,
+              executionTimeMs: status.executionTimeMs || 0,
+              sql: status.sql,
+            });
+          }
         } else if (status.status === 'failed') {
           stopPolling();
           setError(status.error || 'Query execution failed');
@@ -132,7 +144,7 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
     };
   }, [jobId, stopPolling]);
 
-  const isRunning = job?.status === 'pending' || job?.status === 'running';
+  const isRunning = job?.status === 'pending' || job?.status === 'pending_export' || job?.status === 'running';
 
   return { job, results, isRunning, error, elapsedSeconds, cancel: cancelCurrent, reset };
 }

@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listSaved, deleteSaved, executeQuery, togglePin, promoteToReport } from '../api/client';
+import { listSaved, deleteSaved, togglePin, promoteToReport, refreshDashboardCard, checkJobStatus } from '../api/client';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import type { SavedQuery, ExecuteResponse } from '../types';
@@ -13,6 +13,15 @@ export default function SavedQueries() {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, ExecuteResponse>>({});
+  const [runningIds, setRunningIds] = useState<Set<number>>(new Set());
+  const pollingTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    return () => {
+      Object.values(pollingTimersRef.current).forEach((timer) => clearTimeout(timer));
+      pollingTimersRef.current = {};
+    };
+  }, []);
 
   const { data: queries, isLoading, error } = useQuery({
     queryKey: ['savedQueries'],
@@ -24,10 +33,110 @@ export default function SavedQueries() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['savedQueries'] }),
   });
 
-  const execMut = useMutation({
-    mutationFn: ({ id: _id, sql }: { id: number; sql: string }) => executeQuery(sql),
-    onSuccess: (data, { id }) => setResults((prev) => ({ ...prev, [id]: data })),
-  });
+  const pollJobUntilDone = async (savedQueryId: number, jobId: string) => {
+    const poll = async (): Promise<void> => {
+      try {
+        const status = await checkJobStatus(jobId);
+
+        if (status.status === 'completed') {
+          setResults((prev) => ({
+            ...prev,
+            [savedQueryId]: {
+              columns: status.columns || [],
+              rows: status.rows || [],
+              rowCount: status.rowCount || 0,
+              executionTimeMs: status.executionTimeMs || 0,
+              sql: status.sql || '',
+              outputMode: status.outputMode,
+              downloadUrl: status.downloadUrl,
+            },
+          }));
+          setRunningIds((prev) => {
+            const next = new Set(prev);
+            next.delete(savedQueryId);
+            return next;
+          });
+          delete pollingTimersRef.current[savedQueryId];
+          void queryClient.invalidateQueries({ queryKey: ['savedQueries'] });
+          return;
+        }
+
+        if (status.status === 'failed' || status.status === 'cancelled') {
+          setRunningIds((prev) => {
+            const next = new Set(prev);
+            next.delete(savedQueryId);
+            return next;
+          });
+          delete pollingTimersRef.current[savedQueryId];
+          return;
+        }
+
+        pollingTimersRef.current[savedQueryId] = setTimeout(() => {
+          void poll();
+        }, 2000);
+      } catch {
+        setRunningIds((prev) => {
+          const next = new Set(prev);
+          next.delete(savedQueryId);
+          return next;
+        });
+        delete pollingTimersRef.current[savedQueryId];
+      }
+    };
+
+    await poll();
+  };
+
+  const loadCachedResults = async (q: SavedQuery) => {
+    if (!q.last_job_id) return;
+    try {
+      const status = await checkJobStatus(q.last_job_id);
+      if (status.status === 'completed') {
+        setResults((prev) => ({
+          ...prev,
+          [q.id]: {
+            columns: status.columns || [],
+            rows: status.rows || [],
+            rowCount: status.rowCount || 0,
+            executionTimeMs: status.executionTimeMs || 0,
+            sql: status.sql || q.generated_sql || '',
+            outputMode: status.outputMode,
+            downloadUrl: status.downloadUrl,
+          },
+        }));
+      }
+    } catch {
+      // ignore stale job IDs
+    }
+  };
+
+  const runSavedQuery = async (q: SavedQuery) => {
+    setExpanded(q.id);
+
+    if (q.last_job_id) {
+      const rerun = window.confirm(
+        'This saved query already has stored results.\n\nClick OK to re-run for the latest data.\nClick Cancel to use the saved results.',
+      );
+
+      if (!rerun) {
+        await loadCachedResults(q);
+        return;
+      }
+    }
+
+    setRunningIds((prev) => new Set(prev).add(q.id));
+
+    try {
+      const { jobId } = await refreshDashboardCard(q.id);
+      await pollJobUntilDone(q.id, jobId);
+    } catch {
+      setRunningIds((prev) => {
+        const next = new Set(prev);
+        next.delete(q.id);
+        return next;
+      });
+    }
+  };
 
   const pinMut = useMutation({
     mutationFn: (id: number) => togglePin(id),
@@ -75,13 +184,20 @@ export default function SavedQueries() {
           {items.map((q) => {
             const isExpanded = expanded === q.id;
             const qResults = results[q.id];
+            const isRunning = runningIds.has(q.id);
 
             return (
               <div key={q.id} className="border rounded-lg bg-white">
                 {/* Header */}
                 <div className="flex items-center gap-3 px-4 py-3">
                   <button
-                    onClick={() => setExpanded(isExpanded ? null : q.id)}
+                    onClick={() => {
+                      const nextExpanded = isExpanded ? null : q.id;
+                      setExpanded(nextExpanded);
+                      if (nextExpanded === q.id && !results[q.id] && q.last_job_id) {
+                        void loadCachedResults(q);
+                      }
+                    }}
                     className="text-gray-500 hover:text-gray-700"
                   >
                     {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
@@ -138,13 +254,11 @@ export default function SavedQueries() {
                     </button>
                     {q.generated_sql && (
                       <button
-                        onClick={() =>
-                          execMut.mutate({ id: q.id, sql: q.generated_sql! })
-                        }
-                        disabled={execMut.isPending}
+                        onClick={() => void runSavedQuery(q)}
+                        disabled={isRunning}
                         className="flex items-center gap-1 bg-green-600 text-white text-xs px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50"
                       >
-                        <Play size={12} /> Run
+                        <Play size={12} /> {isRunning ? 'Running…' : 'Run'}
                       </button>
                     )}
                     <button
@@ -193,6 +307,24 @@ export default function SavedQueries() {
                     {/* SQL preview */}
                     {q.generated_sql && (
                       <SqlPreview sql={q.generated_sql} height="140px" />
+                    )}
+
+                    {!qResults && q.last_job_id && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => void loadCachedResults(q)}
+                          className="flex items-center gap-1 bg-gray-100 text-gray-700 text-xs px-2 py-1 rounded hover:bg-gray-200"
+                        >
+                          <Clock size={12} /> Load saved result
+                        </button>
+                        <button
+                          onClick={() => void runSavedQuery(q)}
+                          disabled={isRunning}
+                          className="flex items-center gap-1 bg-green-600 text-white text-xs px-2 py-1 rounded hover:bg-green-700 disabled:opacity-50"
+                        >
+                          <Play size={12} /> {isRunning ? 'Running…' : 'Re-run latest'}
+                        </button>
+                      </div>
                     )}
 
                     {/* Results */}

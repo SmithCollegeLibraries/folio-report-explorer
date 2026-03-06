@@ -242,7 +242,7 @@ export default function HistoryTable({
       header: () => null,
       cell: ({ row }) => {
         const item = row.original;
-        const isActive = item.status === 'pending' || item.status === 'running';
+        const isActive = item.status === 'pending' || item.status === 'pending_export' || item.status === 'running';
         const isFailed = item.status === 'failed';
         const isCompleted = item.status === 'completed';
         const isCancelling = cancellingId === item.jobId;
