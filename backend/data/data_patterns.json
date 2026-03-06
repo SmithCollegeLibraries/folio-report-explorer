@@ -1,6 +1,6 @@
 {
     "_note": "Auto-generated column type warnings and sample values for AI prompt context. Edit preferredApproach entries manually.",
-    "_discovered_at": "2026-03-06T17:08:58+00:00",
+    "_discovered_at": "2026-03-06T18:58:23+00:00",
     "_tables_with_patterns": 35,
     "tables": {
         "folio_source_record.records__t": {
@@ -17,14 +17,16 @@
                 ]
             },
             "preferredApproach": [
-                "For MARC field-level queries (find by subject, title, ISBN, check field existence), ALWAYS use folio_source_record.marctab (field + sf rows) instead of parsing records__t JSON content.",
+                "Contains the full MARC source record in parsed_record__content (JSON with 'leader' and 'fields' keys).",
+                "Join to instances via: records__t.external_id = instance__t.id AND records__t.state = 'ACTUAL'.",
+                "ALWAYS include parsed_record__content in SELECT when user asks for MARC record data, source records, full MARC, or raw MARC.",
+                "For field-level MARC queries (check existence, extract subfield, filter by field value), prefer folio_source_record.marctab instead.",
+                "Use records__t when user wants the complete record; use marctab when user wants specific fields.",
+                "For MARC field-level queries (find by subject, title, ISBN, check field existence), ALWAYS use marctab.mtNNN tables — e.g. marctab.mt245 for title, marctab.mt300 for physical description. marctab tables are faster and avoid JSON.",
                 "Use records__t ONLY for record-level status queries: checking deleted=true, additional_info__suppress_discovery, or record_type.",
                 "NEVER use -> or ->> JSONB operators on parsed_record__content — it is a TEXT column. It stores a JSON string that must be cast with ::jsonb before JSON extraction, but prefer marctab over ever doing this.",
-                "To find records MISSING a MARC field: LEFT JOIN folio_source_record.marctab m ON m.instance_hrid = inst.hrid AND m.field = 'NNN', then WHERE m.srs_id IS NULL.",
-                "To join records__t to inventory: external_ids_holder__instance_id = inventory.instance__t.id (UUID stored as text).",
-                "To combine record-level metadata with MARC field rows: records__t.id = marctab.srs_id (use this only when deleted/suppressed/record_type filters are needed).",
-                "For MARC field-level queries (find by subject, title, ISBN, check field existence), ALWAYS use marctab.mtNNN tables — e.g. marctab.mt245 for title, marctab.mt300 for physical description. marctab tables are faster and avoid JSON.",
-                "To find records MISSING a MARC field: LEFT JOIN marctab.mtNNN m ON m.instance_hrid = inst.hrid, then WHERE m.srs_id IS NULL."
+                "To find records MISSING a MARC field: LEFT JOIN marctab.mtNNN m ON m.instance_hrid = inst.hrid, then WHERE m.srs_id IS NULL.",
+                "To join records__t to inventory: external_ids_holder__instance_id = inventory.instance__t.id (UUID stored as text)."
             ]
         },
         "folio_source_record.marctab": {
@@ -365,8 +367,11 @@
         },
         "inventory.item__t": {
             "preferredApproach": [
-                "For location-based queries, ALWAYS join through inventory.item__t.effective_location_id (not holdings permanent location).",
-                "Join path for campus scoping: item__t.effective_location_id -> location__t.library_id -> loclibrary__t.campus_id -> loccampus__t.",
+                "item__t has 10M+ rows. Available indexes: item__t_id_idx (id), item__t___id_idx (__id), idx_item_holdings_material (holdings_record_id, material_type_id).",
+                "ALWAYS access items through holdings_record_id to use the composite index. Never scan item__t first and join back to holdings.",
+                "There is NO index on effective_location_id. For location-based queries, scope through holdings permanent_location_id first, then check items.",
+                "For material type filtering, use the composite index: WHERE ii.holdings_record_id = hr.id AND ii.material_type_id = <uuid>.",
+                "Use nested EXISTS from holdings to items: EXISTS (SELECT 1 FROM inventory.item__t ii WHERE ii.holdings_record_id = hr.id AND ii.material_type_id = ...).",
                 "Use inventory.item__t for current item status and availability snapshots; use circulation tables for loan events."
             ]
         },
@@ -374,7 +379,10 @@
             "preferredApproach": [
                 "Use inventory.instance__t as the bibliographic anchor for title-level inventory queries.",
                 "Join to holdings via holdings_record__t.instance_id = instance__t.id, then to items via item__t.holdings_record_id = holdings_record__t.id.",
-                "For MARC field-level extraction, prefer folio_source_record.marctab instead of parsing source-record JSON text."
+                "For MARC field-level extraction, prefer folio_source_record.marctab instead of parsing source-record JSON text.",
+                "For full MARC record output, ALWAYS include folio_source_record.records__t.parsed_record__content joined via records__t.external_id = instance__t.id AND records__t.state = 'ACTUAL'.",
+                "PERFORMANCE: When building instance-level CTEs with item-level filters (material type, item status), ALWAYS use nested EXISTS with AS MATERIALIZED. Never use JOIN + DISTINCT.",
+                "PERFORMANCE: Resolve material_type_id via scalar subquery: ii.material_type_id = (SELECT id FROM inventory.material_type__t WHERE LOWER(name) = 'book' LIMIT 1). Do not JOIN material_type__t in the main query."
             ]
         },
         "inventory.holdings_record__t": {
