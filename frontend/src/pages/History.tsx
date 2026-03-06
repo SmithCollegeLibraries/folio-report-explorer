@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   History as HistoryIcon, ChevronLeft, ChevronRight, Activity,
   CheckCircle2, AlertCircle,
@@ -26,6 +27,8 @@ const STATUS_TABS: { value: string; label: string; icon: React.ElementType }[] =
 
 export default function History() {
   const { isAdmin } = useAuth();
+  const navigate = useNavigate();
+  const { jobId: jobIdParam } = useParams<{ jobId: string }>();
 
   // ── Server data, pagination, tab, auto-refresh ───────────────────
   const {
@@ -164,8 +167,9 @@ export default function History() {
   const [modalJob, setModalJob] = useState<JobStatusResponse | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
 
-  const openModal = async (item: HistoryItem) => {
+  const openModal = useCallback(async (item: HistoryItem) => {
     if (item.status !== 'completed') return;
+    navigate(`/history/${item.jobId}`, { replace: true });
     setModalItem(item);
     setModalJob(null);
     setModalLoading(true);
@@ -177,9 +181,22 @@ export default function History() {
     } finally {
       setModalLoading(false);
     }
-  };
+  }, [navigate]);
 
-  const closeModal = useCallback(() => { setModalItem(null); setModalJob(null); }, []);
+  // Open modal when navigating directly to /history/:jobId
+  useEffect(() => {
+    if (jobIdParam && items.length > 0 && !modalItem) {
+      const target = items.find((i) => i.jobId === jobIdParam);
+      if (target) openModal(target);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobIdParam, items]);
+
+  const closeModal = useCallback(() => {
+    setModalItem(null);
+    setModalJob(null);
+    navigate('/history', { replace: true });
+  }, [navigate]);
 
   const handleModalRename = (newName: string) => {
     if (!modalItem) return;

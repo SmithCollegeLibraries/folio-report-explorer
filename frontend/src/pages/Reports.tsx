@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   listReports,
@@ -45,11 +46,16 @@ const CATEGORIES: { key: ReportCategory | 'all'; label: string }[] = [
 
 export default function Reports() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { id: reportIdParam } = useParams<{ id: string }>();
+
   const [activeCategory, setActiveCategory] = useState<ReportCategory | 'all'>('all');
-  const [expandedReportId, setExpandedReportId] = useState<number | null>(null);
+  const [expandedReportId, setExpandedReportId] = useState<number | null>(
+    reportIdParam ? Number(reportIdParam) : null,
+  );
   const [showGenerate, setShowGenerate] = useState(false);
 
-  // Load report list
+  // Sync URL → expanded state when the list loads (covers direct-link navigation)
   const { data: groupedReports, isLoading } = useQuery({
     queryKey: ['reports'],
     queryFn: listReports,
@@ -77,11 +83,34 @@ export default function Reports() {
     return counts;
   }, [groupedReports]);
 
+  // Open the right report when data arrives after a direct-link navigation
+  useEffect(() => {
+    if (reportIdParam && groupedReports) {
+      const targetId = Number(reportIdParam);
+      setExpandedReportId(targetId);
+      // Switch to the correct category tab so the report is visible
+      const allItems = Object.values(groupedReports).flat();
+      const match = allItems.find((r) => r.id === targetId);
+      if (match) setActiveCategory(match.category as ReportCategory);
+    }
+  }, [reportIdParam, groupedReports]);
+
+  const handleToggleReport = (id: number) => {
+    if (expandedReportId === id) {
+      setExpandedReportId(null);
+      navigate('/reports', { replace: true });
+    } else {
+      setExpandedReportId(id);
+      navigate(`/reports/${id}`, { replace: true });
+    }
+  };
+
   const deleteMut = useMutation({
     mutationFn: (id: number) => deleteReport(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['reports'] });
       setExpandedReportId(null);
+      navigate('/reports', { replace: true });
     },
   });
 
@@ -155,11 +184,7 @@ export default function Reports() {
               <div key={report.id} className="border rounded-lg bg-white">
                 {/* Report card header */}
                 <button
-                  onClick={() =>
-                    setExpandedReportId(
-                      expandedReportId === report.id ? null : report.id,
-                    )
-                  }
+                  onClick={() => handleToggleReport(report.id)}
                   className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors"
                 >
                   {expandedReportId === report.id ? (
