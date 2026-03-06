@@ -32,21 +32,20 @@ class GeminiService
         $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
         $schemaContext = FolioSchemaService::buildSchemaContext();
 
-        // Build optional campus-scope rule (injected as Rule 13 in the system prompt)
+        // Load acqUnit codes from settings.json (campus full name → 2-letter abbreviation)
+        // Maintained in backend/data/settings.json under "acqUnitCodes" — configurable
+        $settingsPath = Yii::getAlias('@app/data/settings.json');
+        $acqUnitCodes = [];
+        if (file_exists($settingsPath)) {
+            $settings = json_decode(file_get_contents($settingsPath), true);
+            $acqUnitCodes = $settings['acqUnitCodes'] ?? [];
+        }
+        // Build optional campus-scope rule (injected as Rule 17 in the system prompt)
         $campusRule = '';
         if ($campus && $campus !== 'All Colleges') {
             $safe = addslashes($campus);
-            $acqUnitCodes = [
-                'Smith College'               => 'SC',
-                'Amherst College'             => 'AC',
-                'Mount Holyoke College'       => 'MH',
-                'University Of Massachusetts' => 'UM',
-                'Hampshire College'           => 'HC',
-                'Five Colleges Collections'   => 'RP',
-                'National Yiddish Book Center'=> 'YB',
-            ];
             $acqCode = $acqUnitCodes[$campus] ?? strtoupper(substr($campus, 0, 2));
-            $campusRule = "15. CAMPUS SCOPE — MANDATORY: The user's home institution is {$campus} (acquisitions unit code: {$acqCode}). EVERY query MUST be scoped to this campus unless the user explicitly asks about all colleges or a different campus. Choose the correct join path based on the query domain:
+            $campusRule = "17. CAMPUS SCOPE — MANDATORY: The user's home institution is {$campus} (acquisitions unit code: {$acqCode}). EVERY query MUST be scoped to this campus unless the user explicitly asks about all colleges or a different campus. Choose the correct join path based on the query domain:
 
   a) INVENTORY / CIRCULATION (items, holdings, locations, loans): Join through the location hierarchy — inventory.location__t → inventory.loclibrary__t → inventory.loccampus__t (alias: camp) — then add WHERE LOWER(camp.name) = LOWER('{$safe}').
 
@@ -92,6 +91,12 @@ RULES:
 15. NEVER use the PostgreSQL ? operator (JSONB key-exists). Our query layer treats ? as a bind-parameter
     placeholder and it causes a fatal syntax error. Instead use jsonb_exists(jsonb_val, 'key'),
     jsonb_typeof(), or jsonb_each(). The same applies to ?| and ?& — use jsonb_exists_any / jsonb_exists_all.
+16. CRITICAL — COLUMN TYPE WARNINGS: Before writing any column expression, check the
+    COLUMN TYPE WARNINGS & SAMPLE VALUES section below. Many columns that look like they should
+    be JSONB are actually TEXT (stored JSON strings). Do NOT use ->, ->>, or @> on TEXT columns.
+    If a column is marked as TEXT containing JSON, prefer an alternative table listed under PREFER,
+    or cast explicitly with ::jsonb only as a last resort. Sample values listed for enum-like columns
+    show the exact casing stored in the database — always match that casing (ILIKE or LOWER()).
 {$campusRule}
 
 SCHEMA:
@@ -284,10 +289,12 @@ PROMPT;
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
         $client = new Client();
+        $client->transport = 'yii\\httpclient\\CurlTransport';
         $response = $client->createRequest()
             ->setMethod('POST')
             ->setUrl($url)
             ->setHeaders(['Content-Type' => 'application/json'])
+            ->addOptions([CURLOPT_TIMEOUT => 120])
             ->setContent(json_encode([
                 'contents' => [
                     [
@@ -341,6 +348,8 @@ PROMPT;
         $tableNames = FolioSchemaService::getTableNames();
         $metadbMap = FolioSchemaService::discoverTableMapping();
         $metadbValues = array_flip(array_values($metadbMap));
+        $subtableMap = FolioSchemaService::discoverSubtables();
+        $subtableNames = array_flip(array_keys($subtableMap));
         $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];
 
         // Extract table references from FROM and JOIN clauses
@@ -358,6 +367,11 @@ PROMPT;
             // Check if it's a known MetaDB name (schema.table format)
             if (isset($metadbValues[$ref])) {
                 continue; // Valid MetaDB table
+            }
+
+            // Check if it's a known subtable (schema.parent__t__child)
+            if (isset($subtableNames[$ref])) {
+                continue;
             }
 
             // Check if it's a known LDP1 name
@@ -421,20 +435,20 @@ RULES:
    For text/name comparisons, use case-insensitive matching (LOWER() or ILIKE). Database values are often Title Case.
    For item location joins, ALWAYS use item__t.effective_location_id (NOT holdings_record__t.permanent_location_id).
 7. For parameters that users should fill in, use :paramName placeholders (PDO bind syntax).
-7. Choose appropriate parameter types: date, text, select, number, boolean.
-8. For text filters that should do partial matching, add "wrap": "like" to the parameter definition.
-9. For select parameters, include "options_sql" — a small SQL query to populate the dropdown.
-10. NEVER use the PostgreSQL ? operator for JSONB queries — PDO treats ? as a positional parameter placeholder.
+8. Choose appropriate parameter types: date, text, select, number, boolean.
+9. For text filters that should do partial matching, add "wrap": "like" to the parameter definition.
+10. For select parameters, include "options_sql" — a small SQL query to populate the dropdown.
+11. NEVER use the PostgreSQL ? operator for JSONB queries — PDO treats ? as a positional parameter placeholder.
     Instead of: data->'key' ? :param  use: po.acq_unit_ids = :param (LDLite tables have denormalized columns).
     If you must query JSONB, use jsonb_exists(data->'key', :param) instead of the ? operator.
-11. ALWAYS prefer SUBTABLES over JSONB/data column queries. Subtables (pattern: schema.parent__t__child) are
+12. ALWAYS prefer SUBTABLES over JSONB/data column queries. Subtables (pattern: schema.parent__t__child) are
     flattened versions of nested JSON arrays. They join to their parent on id.
     Examples:
     - Use invoice.invoice_lines__t__fund_distributions instead of data->'fundDistributions' or jsonb_array_elements()
     - Use orders.purchase_order__t__acq_unit_ids instead of data->'acqUnitIds'
     - Use finance.fund__t__acq_unit_ids instead of data->'acqUnitIds'
     NEVER use data-> column references or jsonb_array_elements() — these do not exist in __t tables.
-12. Use smart default macros where appropriate:
+13. Use smart default macros where appropriate:
     - \$fiscal_year_start — July 1 of current fiscal year
     - \$fiscal_year_end — June 30 of current fiscal year  
     - \$today — current date
@@ -470,10 +484,12 @@ PROMPT;
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
         $client = new \yii\httpclient\Client();
+        $client->transport = 'yii\\httpclient\\CurlTransport';
         $response = $client->createRequest()
             ->setMethod('POST')
             ->setUrl($url)
             ->setHeaders(['Content-Type' => 'application/json'])
+            ->addOptions([CURLOPT_TIMEOUT => 120])
             ->setContent(json_encode([
                 'system_instruction' => [
                     'parts' => [['text' => $systemPrompt]],
@@ -607,10 +623,12 @@ PROMPT;
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
         $client = new \yii\httpclient\Client();
+        $client->transport = 'yii\\httpclient\\CurlTransport';
         $response = $client->createRequest()
             ->setMethod('POST')
             ->setUrl($url)
             ->setHeaders(['Content-Type' => 'application/json'])
+            ->addOptions([CURLOPT_TIMEOUT => 120])
             ->setContent(json_encode([
                 'system_instruction' => [
                     'parts' => [['text' => $systemPrompt]],

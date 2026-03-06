@@ -1,0 +1,978 @@
+{
+    "_note": "Auto-generated column type warnings and sample values for AI prompt context. Edit preferredApproach entries manually.",
+    "_discovered_at": "2026-03-06T17:08:58+00:00",
+    "_tables_with_patterns": 35,
+    "tables": {
+        "folio_source_record.records__t": {
+            "columnWarnings": {
+                "metadata__created_date": "NUMERIC type — epoch milliseconds, not a standard timestamp. Do not use DATE() or INTERVAL arithmetic directly; convert with: to_timestamp(metadata__created_date::bigint / 1000)",
+                "metadata__updated_date": "NUMERIC type — epoch milliseconds, not a standard timestamp. Do not use DATE() or INTERVAL arithmetic directly; convert with: to_timestamp(metadata__updated_date::bigint / 1000)",
+                "parsed_record__id": "TEXT type (UUID stored as text string, NOT a uuid type — do not cast or use uuid operators, join directly with =)",
+                "external_ids_holder__instance_id": "TEXT type (UUID stored as text string, NOT a uuid type — do not cast or use uuid operators, join directly with =)",
+                "parsed_record__content": "TEXT type containing JSON string content (NOT jsonb). Do NOT use ->, ->>, ?, ?|, ?& or @> directly. Prefer marctab for field-level queries; cast to ::jsonb only as a last resort."
+            },
+            "sampleValues": {
+                "record_type": [
+                    "MARC_BIB"
+                ]
+            },
+            "preferredApproach": [
+                "For MARC field-level queries (find by subject, title, ISBN, check field existence), ALWAYS use folio_source_record.marctab (field + sf rows) instead of parsing records__t JSON content.",
+                "Use records__t ONLY for record-level status queries: checking deleted=true, additional_info__suppress_discovery, or record_type.",
+                "NEVER use -> or ->> JSONB operators on parsed_record__content — it is a TEXT column. It stores a JSON string that must be cast with ::jsonb before JSON extraction, but prefer marctab over ever doing this.",
+                "To find records MISSING a MARC field: LEFT JOIN folio_source_record.marctab m ON m.instance_hrid = inst.hrid AND m.field = 'NNN', then WHERE m.srs_id IS NULL.",
+                "To join records__t to inventory: external_ids_holder__instance_id = inventory.instance__t.id (UUID stored as text).",
+                "To combine record-level metadata with MARC field rows: records__t.id = marctab.srs_id (use this only when deleted/suppressed/record_type filters are needed).",
+                "For MARC field-level queries (find by subject, title, ISBN, check field existence), ALWAYS use marctab.mtNNN tables — e.g. marctab.mt245 for title, marctab.mt300 for physical description. marctab tables are faster and avoid JSON.",
+                "To find records MISSING a MARC field: LEFT JOIN marctab.mtNNN m ON m.instance_hrid = inst.hrid, then WHERE m.srs_id IS NULL."
+            ]
+        },
+        "folio_source_record.marctab": {
+            "columnWarnings": {
+                "instance_id": "UUID type — inventory.instance__t.id may be stored as TEXT in this environment. Prefer joining on hrid to avoid uuid=text errors: marctab.instance_hrid = inventory.instance__t.hrid."
+            },
+            "sampleValues": {
+                "field": [
+                    "001",
+                    "005",
+                    "008",
+                    "020",
+                    "035",
+                    "100",
+                    "245",
+                    "246",
+                    "260",
+                    "264",
+                    "300",
+                    "490",
+                    "500",
+                    "505",
+                    "520",
+                    "600",
+                    "650",
+                    "655",
+                    "700",
+                    "856",
+                    "999"
+                ],
+                "sf": [
+                    "",
+                    "a",
+                    "b",
+                    "c",
+                    "d",
+                    "e",
+                    "u",
+                    "z",
+                    "0",
+                    "2"
+                ]
+            },
+            "preferredApproach": [
+                "PREFERRED table for MARC field-level queries. Use field + sf filters instead of parsing records__t.parsed_record__content.",
+                "Join to inventory via hrid for type safety: marctab.instance_hrid = inventory.instance__t.hrid.",
+                "Avoid marctab.instance_id = instance__t.id unless types are explicitly cast and verified.",
+                "To combine with record-level metadata, join marctab.srs_id = folio_source_record.records__t.id.",
+                "To find records missing a field, LEFT JOIN marctab on instance_hrid and field then filter where marctab row is NULL.",
+                "Control fields (001-009) typically use sf = empty string.",
+                "Each row is one field+subfield occurrence; use DISTINCT or aggregation when combining multiple MARC fields."
+            ]
+        },
+        "circulation.loan__t": {
+            "sampleValues": {
+                "action": [
+                    "",
+                    "checkedin",
+                    "checkedInFoundByLibrary",
+                    "checkedInReturnedByPatron",
+                    "checkedout",
+                    "checkedOutThroughOverride",
+                    "claimedReturned",
+                    "closedLoan",
+                    "declaredLost",
+                    "dueDateChanged",
+                    "markedMissing",
+                    "recallrequested",
+                    "renewed",
+                    "renewedThroughOverride",
+                    "staffInfoAdded"
+                ],
+                "item_status": [
+                    "Aged to lost",
+                    "Available",
+                    "Awaiting pickup",
+                    "Checked out",
+                    "Claimed returned",
+                    "Declared lost",
+                    "In transit",
+                    "Lost and paid",
+                    "Missing"
+                ]
+            },
+            "preferredApproach": [
+                "Use ONLY for current-state queries — e.g. what is checked out RIGHT NOW (WHERE status__name = 'Open').",
+                "For counting historical checkouts, returns, or renewals, use circulation.audit_loan__t instead. loan__t stores one row per loan that is updated in place.",
+                "Do NOT use for historic circulation statistics — the return_date and renewal_count only reflect the current/final state."
+            ]
+        },
+        "circulation.audit_loan__t": {
+            "sampleValues": {
+                "loan__action": [
+                    "",
+                    "checkedin",
+                    "checkedInFoundByLibrary",
+                    "checkedInReturnedByPatron",
+                    "checkedout",
+                    "checkedOutThroughOverride",
+                    "claimedReturned",
+                    "closedLoan",
+                    "declaredLost",
+                    "deleted",
+                    "dueDateChanged",
+                    "itemAgedToLost",
+                    "markedMissing",
+                    "patronInfoAdded",
+                    "recallrequested",
+                    "renewed",
+                    "renewedThroughOverride",
+                    "staffInfoAdded"
+                ]
+            },
+            "preferredApproach": [
+                "PREFERRED for all circulation counts and statistics. One row per loan action.",
+                "Filter by loan__action: 'checkedout' or 'checkedOutThroughOverride' for checkouts; 'checkedin' for returns; 'renewed' for renewals.",
+                "Join to items: JOIN inventory.item__t AS ii ON al.loan__item_id = ii.id.",
+                "Use loan__loan_date for checkout date. Use created_date for the audit event timestamp."
+            ]
+        },
+        "circulation.request__t": {
+            "sampleValues": {
+                "status": [
+                    "Closed - Cancelled",
+                    "Closed - Filled",
+                    "Closed - Pickup expired",
+                    "Closed - Unfilled",
+                    "Open - Awaiting pickup",
+                    "Open - In transit",
+                    "Open - Not yet filled"
+                ],
+                "request_type": [
+                    "Hold",
+                    "Page",
+                    "Recall"
+                ]
+            }
+        },
+        "invoice.invoices__t": {
+            "sampleValues": {
+                "status": [
+                    "Approved",
+                    "Cancelled",
+                    "Open",
+                    "Paid"
+                ]
+            }
+        },
+        "invoice.invoice_lines__t": {
+            "sampleValues": {
+                "invoice_line_status": [
+                    "Approved",
+                    "Cancelled",
+                    "Open",
+                    "Paid"
+                ]
+            },
+            "preferredApproach": [
+                "For campus-scoped financial queries, ALWAYS work via the subtable chain:",
+                "invoice.invoice_lines__t__fund_distributions → orders.po_line__t → orders.purchase_order__t__acq_unit_ids → orders.acquisitions_unit__t.",
+                "Aggregate iltfd.total * (iltfd.fund_distributions__value * 0.01) for actual spend amount. Never sum invoice header totals (inv.total)."
+            ]
+        },
+        "finance.transaction__t": {
+            "sampleValues": {
+                "transaction_type": [
+                    "Allocation",
+                    "Credit",
+                    "Encumbrance",
+                    "Payment",
+                    "Pending payment",
+                    "Transfer"
+                ]
+            },
+            "preferredApproach": [
+                "Each financial transaction has a transaction_type (Encumbrance, Payment, Credit, Pending payment, Rollover encumbrance) and an amount.",
+                "For actual spending, filter transaction_type = 'Payment' or use invoice tables which are pre-joined."
+            ]
+        },
+        "finance.budget__t": {
+            "sampleValues": {
+                "name": [
+                    "ACBE-AC2023",
+                    "ACBE-ACFY2024",
+                    "ACBE-ACFY2025",
+                    "ACBE-ACFY2026",
+                    "ACBEP-AC2023",
+                    "ACBEP-ACFY2024",
+                    "ACBEP-ACFY2025",
+                    "ACBEP-ACFY2026",
+                    "ACBIN-AC2023",
+                    "ACBIN-ACFY2024",
+                    "ACBIN-ACFY2025",
+                    "ACBIN-ACFY2026",
+                    "ACBP-AC2023",
+                    "ACBP-ACFY2024",
+                    "ACBP-ACFY2025",
+                    "ACBP-ACFY2026",
+                    "ACDAT-AC2023",
+                    "ACDAT-ACFY2024",
+                    "ACDAT-ACFY2025",
+                    "ACDAT-ACFY2026",
+                    "ACECW-AC2023",
+                    "ACECW-ACFY2024",
+                    "ACECW-ACFY2025",
+                    "ACECW-ACFY2026",
+                    "ACEMA-AC2023"
+                ]
+            }
+        },
+        "finance.fund__t": {
+            "sampleValues": {
+                "code": [
+                    "ACBE",
+                    "ACBEP",
+                    "ACBIN",
+                    "ACBP",
+                    "ACDAT",
+                    "ACECW",
+                    "ACEMA",
+                    "ACEPE",
+                    "ACEPP",
+                    "ACESA",
+                    "ACESK",
+                    "ACEST",
+                    "ACETC",
+                    "ACEWI",
+                    "ACEWL",
+                    "ACJE",
+                    "ACJEP",
+                    "ACJP",
+                    "ACMEM",
+                    "ACNED",
+                    "ACNEO",
+                    "ACOAF",
+                    "ACOAP",
+                    "ACOTH",
+                    "ACOVER"
+                ],
+                "name": [
+                    "AC Binding",
+                    "AC Book Electronic",
+                    "AC Book Electronic Package",
+                    "AC Book Physical",
+                    "AC Cowles",
+                    "AC Database",
+                    "AC Journal Electronic",
+                    "AC Journal Electronic Package",
+                    "AC Journal Physical",
+                    "AC Maurer",
+                    "AC Memberships",
+                    "AC NEH Digital",
+                    "AC NEH OCLC",
+                    "AC OA Fees",
+                    "AC OA Pledges",
+                    "AC Other",
+                    "AC OverDrive",
+                    "AC Pease RESTRICTED",
+                    "AC Phi Psi",
+                    "AC Saglio",
+                    "AC Skolnick",
+                    "AC Standing Order Electronic",
+                    "AC Standing Order Physical",
+                    "AC Stitt RESTRICTED",
+                    "AC Tokens"
+                ]
+            }
+        },
+        "finance.fiscal_year__t": {
+            "sampleValues": {
+                "code": [
+                    "ACFY2023",
+                    "ACFY2024",
+                    "ACFY2025",
+                    "ACFY2026",
+                    "HCFY2023",
+                    "HCFY2024",
+                    "HCFY2025",
+                    "HCFY2026",
+                    "MHFY2023",
+                    "MHFY2024",
+                    "MHFY2025",
+                    "MHFY2026",
+                    "SCFY2023",
+                    "SCFY2024",
+                    "SCFY2025",
+                    "SCFY2026",
+                    "UMFY2023",
+                    "UMFY2024",
+                    "UMFY2025",
+                    "UMFY2026"
+                ],
+                "name": [
+                    "AC Amherst College Fiscal Year 2023",
+                    "AC Amherst College Fiscal Year 2024",
+                    "AC Amherst College Fiscal Year 2025",
+                    "AC Amherst College Fiscal Year 2026",
+                    "HC Hampshire College Library Fiscal Year 2023",
+                    "HC Hampshire College Library Fiscal Year 2024",
+                    "HC Hampshire College Library Fiscal Year 2025",
+                    "HC Hampshire College Library Fiscal Year 2026",
+                    "MH Mount Holyoke College Fiscal Year 2023",
+                    "MH Mount Holyoke College Fiscal Year 2024",
+                    "MH Mount Holyoke College Fiscal Year 2025",
+                    "MH Mount Holyoke College Fiscal Year 2026",
+                    "SC Smith College FY2023",
+                    "SC Smith College FY2024",
+                    "SC Smith College FY2025",
+                    "SC Smith College FY2026",
+                    "UM Fiscal Year 2023",
+                    "UM Fiscal Year 2024",
+                    "UM Fiscal Year 2025",
+                    "UM Fiscal Year 2026"
+                ]
+            }
+        },
+        "orders.po_line__t": {
+            "sampleValues": {
+                "payment_status": [
+                    "Awaiting Payment",
+                    "Cancelled",
+                    "Fully Paid",
+                    "Ongoing",
+                    "Partially Paid",
+                    "Payment Not Required",
+                    "Pending"
+                ]
+            }
+        },
+        "orders.purchase_order__t": {
+            "sampleValues": {
+                "workflow_status": [
+                    "Closed",
+                    "Open",
+                    "Pending"
+                ]
+            }
+        },
+        "inventory.item__t": {
+            "preferredApproach": [
+                "For location-based queries, ALWAYS join through inventory.item__t.effective_location_id (not holdings permanent location).",
+                "Join path for campus scoping: item__t.effective_location_id -> location__t.library_id -> loclibrary__t.campus_id -> loccampus__t.",
+                "Use inventory.item__t for current item status and availability snapshots; use circulation tables for loan events."
+            ]
+        },
+        "inventory.instance__t": {
+            "preferredApproach": [
+                "Use inventory.instance__t as the bibliographic anchor for title-level inventory queries.",
+                "Join to holdings via holdings_record__t.instance_id = instance__t.id, then to items via item__t.holdings_record_id = holdings_record__t.id.",
+                "For MARC field-level extraction, prefer folio_source_record.marctab instead of parsing source-record JSON text."
+            ]
+        },
+        "inventory.holdings_record__t": {
+            "preferredApproach": [
+                "Use holdings_record__t as the bridge between instance and item; do not treat it as final location authority.",
+                "For item-level current location and circulation reporting, prefer item__t.effective_location_id over holdings permanent location columns."
+            ]
+        },
+        "inventory.material_type__t": {
+            "sampleValues": {
+                "name": [
+                    "Admin",
+                    "Analog Game",
+                    "Archival material",
+                    "Artifact/Object",
+                    "Audiocassette",
+                    "Audio CD",
+                    "Book",
+                    "CD-ROM",
+                    "Database",
+                    "Data File",
+                    "DVD/Blu-ray",
+                    "E-Book",
+                    "E-Book Package",
+                    "E-Journal",
+                    "E-Journal Package",
+                    "E-Newspaper",
+                    "Equipment",
+                    "E-Score",
+                    "E-Thesis/Dissertation",
+                    "Film",
+                    "Government Publication",
+                    "Image",
+                    "Journal",
+                    "LP Phonorecord",
+                    "Map"
+                ]
+            }
+        },
+        "inventory.instance_type__t": {
+            "sampleValues": {
+                "code": [
+                    "cod",
+                    "cop",
+                    "crd",
+                    "crf",
+                    "cri",
+                    "crm",
+                    "crn",
+                    "crt",
+                    "ntm",
+                    "ntv",
+                    "prm",
+                    "snd",
+                    "spw",
+                    "sti",
+                    "tcf",
+                    "tci",
+                    "tcm",
+                    "tcn",
+                    "tct",
+                    "tdf",
+                    "tdi",
+                    "tdm",
+                    "txt",
+                    "xxx",
+                    "zzz"
+                ],
+                "name": [
+                    "cartographic dataset",
+                    "cartographic image",
+                    "cartographic moving image",
+                    "cartographic tactile image",
+                    "cartographic tactile three-dimensional form",
+                    "cartographic three-dimensional form",
+                    "computer dataset",
+                    "computer program",
+                    "notated movement",
+                    "notated music",
+                    "other",
+                    "performed music",
+                    "sounds",
+                    "spoken word",
+                    "still image",
+                    "tactile image",
+                    "tactile notated movement",
+                    "tactile notated music",
+                    "tactile text",
+                    "tactile three-dimensional form",
+                    "text",
+                    "three-dimensional form",
+                    "three-dimensional moving image",
+                    "two-dimensional moving image",
+                    "unspecified"
+                ]
+            }
+        },
+        "inventory.instance_status__t": {
+            "sampleValues": {
+                "code": [
+                    "batch",
+                    "cat",
+                    "null",
+                    "other",
+                    "temp",
+                    "uncat"
+                ],
+                "name": [
+                    "Batch Loaded",
+                    "Cataloged",
+                    "Not yet assigned",
+                    "Other",
+                    "Temporary",
+                    "Uncataloged"
+                ]
+            }
+        },
+        "inventory.instance_format__t": {
+            "sampleValues": {
+                "code": [
+                    "ca",
+                    "cb",
+                    "cd",
+                    "ce",
+                    "cf",
+                    "ch",
+                    "ck",
+                    "cr",
+                    "cz",
+                    "eh",
+                    "es",
+                    "ez",
+                    "gc",
+                    "gd",
+                    "gf",
+                    "gs",
+                    "gt",
+                    "ha",
+                    "hb",
+                    "hc",
+                    "hd",
+                    "he",
+                    "hf",
+                    "hg",
+                    "hh"
+                ],
+                "name": [
+                    "audio -- audio belt",
+                    "audio -- audio cartridge",
+                    "audio -- audiocassette",
+                    "audio -- audio cylinder",
+                    "audio -- audio disc",
+                    "audio -- audio roll",
+                    "audio -- audiotape reel",
+                    "audio -- audio wire reel",
+                    "audio --other",
+                    "audio -- sound track reel",
+                    "computer -- computer card",
+                    "computer -- computer chip cartridge",
+                    "computer -- computer disc",
+                    "computer -- computer disc cartridge",
+                    "computer -- computer tape cartridge",
+                    "computer -- computer tape cassette",
+                    "computer -- computer tape reel",
+                    "computer -- online resource",
+                    "computer -- other",
+                    "microform -- aperture card",
+                    "microform -- microfiche",
+                    "microform -- microfiche cassette",
+                    "microform -- microfilm cartridge",
+                    "microform -- microfilm cassette",
+                    "microform -- microfilm reel"
+                ]
+            }
+        },
+        "inventory.loan_type__t": {
+            "sampleValues": {
+                "name": [
+                    "1 Week",
+                    "1 Year",
+                    "2 Week",
+                    "4 Week",
+                    "Comm Catalog",
+                    "Equipment 1 Day",
+                    "Equipment 1 Hour",
+                    "Equipment 1 Week",
+                    "Equipment 1 Week, fined",
+                    "Equipment 3 Day",
+                    "Equipment 3 Day, fined",
+                    "Equipment 4 Hour",
+                    "Equipment 4 Hour, due at closing",
+                    "Equipment 4 Hour, renewable",
+                    "Internet",
+                    "Limited",
+                    "Migration-technical",
+                    "Non-circulating",
+                    "Reserve 1 Day",
+                    "Reserve 1 Week",
+                    "Reserve 3 Day",
+                    "Reserve 4 Hour",
+                    "Reserve 4 Hour, due at closing",
+                    "Semester",
+                    "Standard Loan"
+                ]
+            }
+        },
+        "inventory.holdings_type__t": {
+            "sampleValues": {
+                "name": [
+                    "Electronic",
+                    "Monograph",
+                    "Multi-part monograph",
+                    "Physical",
+                    "Serial",
+                    "Unknown"
+                ]
+            }
+        },
+        "inventory.call_number_type__t": {
+            "sampleValues": {
+                "name": [
+                    "Dewey Decimal classification",
+                    "LC Modified",
+                    "Library of Congress classification",
+                    "MOYS",
+                    "National Library of Medicine classification",
+                    "Other scheme",
+                    "Shelved separately",
+                    "Shelving control number",
+                    "Source specified in subfield $2",
+                    "Superintendent of Documents classification",
+                    "Title",
+                    "UDC",
+                    "Unmapped"
+                ]
+            }
+        },
+        "inventory.location__t": {
+            "sampleValues": {
+                "code": [
+                    "AAFRI",
+                    "AASLV",
+                    "ACAMB",
+                    "ACBD",
+                    "ACDEP",
+                    "ACDPM",
+                    "ACFAY",
+                    "ACFPS",
+                    "ACFRR",
+                    "ACMEAD",
+                    "ACMMS",
+                    "ACMSD",
+                    "ACNBS",
+                    "ACRAC",
+                    "ACRCP",
+                    "ACRHC",
+                    "ACRSC",
+                    "AEBEBL",
+                    "AEVANS",
+                    "AFAS",
+                    "AFASD",
+                    "AFASF",
+                    "AFASH",
+                    "AFASL",
+                    "AFASO"
+                ],
+                "name": [
+                    "AC African Writers eBooks",
+                    "AC American Slavery Collection",
+                    "AC Archives & Special Collections",
+                    "AC Archives & Special Collections Depository",
+                    "AC Archives & Special Collections Exhibit",
+                    "AC Archives & Special Collections File",
+                    "AC Archives & Special Collections Fitch",
+                    "AC Archives & Special Collections Higgins",
+                    "AC Archives & Special Collections Original Library",
+                    "AC Archives & Special Collections Reference",
+                    "AC Archives & Special Collections Theses",
+                    "AC Archives & Special Collections Vault",
+                    "AC Archives & Special Collections Wordsworth",
+                    "AC Cambridge Companions eBooks",
+                    "AC Center for Russian Culture",
+                    "AC Center for Russian Culture Afferica Collection",
+                    "AC Center for Russian Culture Allen Collection",
+                    "AC Center for Russian Culture Alma Law Theater Collection",
+                    "AC Center for Russian Culture Anti-Racism Library",
+                    "AC Center for Russian Culture Art Collection",
+                    "AC Center for Russian Culture Contemporary Poetry Collection",
+                    "AC Center for Russian Culture Fleishman Collection",
+                    "AC Center for Russian Culture Greenleaf Collection",
+                    "AC Center for Russian Culture Hughes Collection",
+                    "AC Center for Russian Culture Ivas"
+                ]
+            }
+        },
+        "inventory.loclibrary__t": {
+            "sampleValues": {
+                "code": [
+                    "ACASP",
+                    "ACDEP",
+                    "ACFAY",
+                    "ACFST",
+                    "ACMED",
+                    "ACMUS",
+                    "ACRUS",
+                    "ACSCI",
+                    "FCANN",
+                    "FCDPT",
+                    "FCWWW",
+                    "HCASC",
+                    "HCLIB",
+                    "HCMED",
+                    "MHASC",
+                    "MHLIB",
+                    "MHLRC",
+                    "MHPSL",
+                    "MHSKM",
+                    "REN",
+                    "SCANN",
+                    "SCHIL",
+                    "SCJOS",
+                    "SCNLS",
+                    "SCPC"
+                ],
+                "name": [
+                    "AC Archives & Special Coll.",
+                    "AC Center for Russian Culture",
+                    "AC Depository",
+                    "AC Fayerweather Equipment",
+                    "AC Frost Library",
+                    "AC Multimedia Services Equipment",
+                    "AC Music Library",
+                    "AC Science Library",
+                    "FC Depository",
+                    "FC Repository Annex",
+                    "Five Colleges eresources",
+                    "HC Archives & Special Collections",
+                    "HC Harold Johnson Library",
+                    "HC Media",
+                    "MH Archives & Special Collections",
+                    "MH Language Resource Center",
+                    "MH Main Library",
+                    "MH Pierce Stevens Lib-Pratt",
+                    "MH Skinner Museum",
+                    "RC Rennisance Center",
+                    "SC Annex",
+                    "SC Hillyer Art Library",
+                    "SC Josten Library",
+                    "SC Neilson Library",
+                    "SC Special Collections"
+                ]
+            }
+        },
+        "inventory.loccampus__t": {
+            "sampleValues": {
+                "code": [
+                    "AC",
+                    "HC",
+                    "MH",
+                    "RP",
+                    "SC",
+                    "UM",
+                    "YB"
+                ],
+                "name": [
+                    "Amherst College",
+                    "Five Colleges Collections",
+                    "Hampshire College",
+                    "Mount Holyoke College",
+                    "National Yiddish Book Center",
+                    "Smith College",
+                    "University Of Massachusetts "
+                ]
+            }
+        },
+        "inventory.locinstitution__t": {
+            "sampleValues": {
+                "code": [
+                    "FC"
+                ],
+                "name": [
+                    "Five Colleges"
+                ]
+            }
+        },
+        "users.groups__t": {
+            "sampleValues": {
+                "group": [
+                    "AC Resident",
+                    "Faculty",
+                    "Folio Integrations",
+                    "Graduate",
+                    "Graduate/SC SSW",
+                    "Group for tenant fs00001006 admin",
+                    "Group for tenant fs00001006 fs00001006",
+                    "Group for tenant fs00001006 fseAdmin",
+                    "HC Resident/Alum",
+                    "Institution",
+                    "MH Affiliate",
+                    "MH Alumna",
+                    "MH Resident",
+                    "SC Affiliate/Alum",
+                    "SC Resident",
+                    "Staff",
+                    "UM Affiliate",
+                    "UM Comm Cat",
+                    "UM Resident/Alum",
+                    "UM Resident/Alum Temp Card",
+                    "Undergraduate",
+                    "Unmapped",
+                    "zEBSCO Support Group"
+                ]
+            }
+        },
+        "finance.expense_class__t": {
+            "sampleValues": {
+                "code": [
+                    "ACFC",
+                    "ACGP",
+                    "ACNR",
+                    "ACOP",
+                    "ACRE",
+                    "HC01",
+                    "HC02",
+                    "HC03",
+                    "HC04",
+                    "HC06",
+                    "HC08",
+                    "HC13",
+                    "HC17",
+                    "HC18",
+                    "HC19",
+                    "HC20",
+                    "HC29",
+                    "HC31",
+                    "HC40",
+                    "HC50",
+                    "HC52",
+                    "HC55",
+                    "HC99",
+                    "HCMB",
+                    "HCSS"
+                ],
+                "name": [
+                    "AC FC Shared Approval Plan",
+                    "AC GOBI Print",
+                    "AC Non-Reserves",
+                    "AC Other Print",
+                    "AC Reserves",
+                    "HC Audio Recordings HC08",
+                    "HC Contract Services HC29",
+                    "HC EBooks HC03",
+                    "HC EJournals HC04",
+                    "HC Films HC06",
+                    "HC Games Collection HC19",
+                    "HC Memberships and Consortial Fees HCMB",
+                    "HC Miscellaneous HC99",
+                    "HC Office Supplies HC40",
+                    "HC Other Digital Purchases HC17",
+                    "HC Other Digital Subscriptions HC18",
+                    "HC Postage and Mailings HC55",
+                    "HC Print Books HC01",
+                    "HC Print Periodicals HC02",
+                    "HC Professional Services HC20",
+                    "HC Prof Literature and Media HC52",
+                    "HC Programs and Materials HC50",
+                    "HC Small Equipment/Furnishings HC31",
+                    "HC Software HCSW",
+                    "HC Staff Training/Development HCTR"
+                ]
+            }
+        },
+        "finance.fund_type__t": {
+            "sampleValues": {
+                "name": [
+                    "operational ",
+                    "restricted"
+                ]
+            }
+        },
+        "finance.ledger__t": {
+            "sampleValues": {
+                "code": [
+                    "ACCB",
+                    "HCLIBFIN",
+                    "MHLITSLIBMAT",
+                    "SCCOLMGT",
+                    "UMENDGIFLEDGE",
+                    "UMGENLEDGE"
+                ],
+                "name": [
+                    "AC Collections Budget",
+                    "HC Hampshire College Library Finances",
+                    "MH Mount Holyoke College LITS Library Materials",
+                    "SC Collections Management Ledger",
+                    "UM Endowments and Gifts Ledger",
+                    "UM General Ledger"
+                ]
+            }
+        },
+        "orders.acquisitions_unit__t": {
+            "columnWarnings": {
+                "name": "Stores 2-letter campus codes (SC, AC, MH, UM, HC, RP, YB); some rows may include trailing whitespace. Prefer TRIM(au.name) = :code for robust matching."
+            },
+            "sampleValues": {
+                "name": [
+                    "AC ",
+                    "HC",
+                    "MH",
+                    "SC",
+                    "UM"
+                ]
+            },
+            "preferredApproach": [
+                "The name column stores 2-letter ABBREVIATION CODES (SC, AC, MH, UM, HC, RP, YB) — NOT full campus names.",
+                "Always filter with exact match: au.name = 'SC' for Smith College. Never LOWER(au.name) = LOWER('Smith College')."
+            ]
+        },
+        "users.users__t": {
+            "sampleValues": {
+                "active": [
+                    "false",
+                    "true"
+                ]
+            },
+            "preferredApproach": [
+                "Join patron groups with users.users__t.patron_group = users.groups__t.id.",
+                "Join loans via circulation.loan__t.user_id or circulation.audit_loan__t.loan__user_id."
+            ]
+        },
+        "subtable_join_patterns": {
+            "preferredApproach": [
+                "For __t__ subtables, subtable.id joins to parent.id; the other subtable column joins to child lookup table id.",
+                "Example: orders.purchase_order__t.id = orders.purchase_order__t__acq_unit_ids.id and orders.purchase_order__t__acq_unit_ids.acq_unit_ids = orders.acquisitions_unit__t.id.",
+                "Never join subtable.id directly to the child table id."
+            ]
+        },
+        "organizations.organizations__t": {
+            "sampleValues": {
+                "code": [
+                    "AC404",
+                    "ACAAA",
+                    "ACAAAS",
+                    "ACAABMB",
+                    "ACAAE",
+                    "ACAAI",
+                    "ACABC",
+                    "ACABE",
+                    "ACABING",
+                    "ACABREVIS",
+                    "ACACADE",
+                    "ACACADRIGHTS",
+                    "ACACCES",
+                    "ACACFIMF",
+                    "ACACFINTERNETARCHIVE",
+                    "ACACFIOP",
+                    "ACACFMLIN",
+                    "ACACFPLOS",
+                    "ACACFUNIWORLD",
+                    "ACACLS",
+                    "ACACM",
+                    "ACACRL",
+                    "ACACS",
+                    "ACADMCARD",
+                    "ACAFRICACONF"
+                ],
+                "name": [
+                    "AC 404 Media",
+                    "AC A&A ePortal",
+                    "AC ABC-Clio Inc.",
+                    "AC AbeBooks",
+                    "AC Abingdon Press",
+                    "AC Academic International Press",
+                    "AC Academic Intl./Harcourt Serials",
+                    "AC Academic Rights Press",
+                    "AC Accessible Archives, Inc.",
+                    "AC ACM",
+                    "AC Adam Matthew Digital",
+                    "AC Admin MasterCard",
+                    "AC Africa Confidential",
+                    "AC Africa Resource Center",
+                    "AC Alexander Street Press div of Proquest",
+                    "AC allAfrica.com",
+                    "AC All China Marketing Research LLC",
+                    "AC Allen Press",
+                    "AC Al-Monitor",
+                    "AC Aluka",
+                    "AC AMALIVRE",
+                    "AC AMALIVRE approval",
+                    "AC AMALIVRE (formerly Aux Amateurs) Serials",
+                    "AC Amazon Punchout",
+                    "AC American Anthropological Association"
+                ],
+                "status": [
+                    "Active",
+                    "Inactive"
+                ]
+            }
+        }
+    }
+}
