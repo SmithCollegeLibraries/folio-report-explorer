@@ -1,6 +1,21 @@
 -- Add support for large-query file exports and export queueing.
 -- Safe to re-run due to information_schema guards.
 
+-- Ensure query_jobs.data_source exists (older installs may have missed migration 010)
+SET @has_data_source := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'query_jobs'
+    AND COLUMN_NAME = 'data_source'
+);
+SET @sql := IF(
+  @has_data_source > 0,
+  'SELECT 1',
+  "ALTER TABLE query_jobs ADD COLUMN data_source ENUM('folio','local','composite') DEFAULT 'folio' AFTER source"
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- Expand data_source enum to include composite (needed for report composite jobs)
 SET @has_composite := (
   SELECT IF(LOCATE("'composite'", COLUMN_TYPE) > 0, 1, 0)

@@ -39,7 +39,7 @@ class QueryJob extends ActiveRecord
 
     public function rules()
     {
-        return [
+        $rules = [
             [['id', 'sql_text'], 'required'],
             [['sql_text', 'result_rows', 'error_message'], 'string'],
             [['params', 'result_columns'], 'string'],
@@ -47,8 +47,6 @@ class QueryJob extends ActiveRecord
             [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
             [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled', 'pending_export']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
-            [['estimated_rows'], 'integer'],
-            [['estimated_cost'], 'number'],
             [['progress_message'], 'string', 'max' => 255],
             [['name'], 'string', 'max' => 255],
             [['id'], 'string', 'max' => 36],
@@ -57,6 +55,15 @@ class QueryJob extends ActiveRecord
             [['pg_backend_pid'], 'integer'],
             [['pg_backend_pid'], 'default', 'value' => null],
         ];
+
+        if ($this->hasAttribute('estimated_rows')) {
+            $rules[] = [['estimated_rows'], 'integer'];
+        }
+        if ($this->hasAttribute('estimated_cost')) {
+            $rules[] = [['estimated_cost'], 'number'];
+        }
+
+        return $rules;
     }
 
     /**

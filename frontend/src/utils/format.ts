@@ -16,7 +16,14 @@ export function fmtTime(ms: number): string {
  * Format an ISO date string to a localised "Mon DD, YYYY HH:MM" string.
  */
 export function fmtDate(iso: string): string {
-  const d = new Date(iso);
+  const raw = (iso || '').trim();
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw);
+  const normalized = raw.includes(' ') ? raw.replace(' ', 'T') : raw;
+  const parseValue = hasTimezone ? normalized : `${normalized}Z`;
+  const d = new Date(parseValue);
+
+  if (Number.isNaN(d.getTime())) return iso;
+
   return (
     d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) +
     ' ' +

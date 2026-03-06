@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listSaved, deleteSaved, togglePin, promoteToReport, refreshDashboardCard, checkJobStatus } from '../api/client';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
+import { fmtDate } from '../utils/format';
 import type { SavedQuery, ExecuteResponse } from '../types';
 import {
   Trash2, Play, ChevronDown, ChevronRight, Clock,
@@ -232,7 +233,7 @@ export default function SavedQueries() {
 
                   <div className="flex items-center gap-1 text-xs text-gray-400">
                     <Clock size={12} />
-                    {new Date(q.created_at).toLocaleDateString()}
+                    {fmtDate(q.created_at)}
                   </div>
 
                   <div className="flex gap-1">
