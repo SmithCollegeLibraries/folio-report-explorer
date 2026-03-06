@@ -249,25 +249,23 @@ export default function HistoryTable({
         const isDeleting = deletingId === item.jobId;
         const confirmingDelete = confirmDeleteId === item.jobId;
         return (
-          <div className="flex items-center justify-end gap-0.5 min-w-[170px]" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-end gap-1 w-[210px]" onClick={(e) => e.stopPropagation()}>
             {isActive && (
               <>
                 <button
                   onClick={(e) => onToggleSql(item.jobId, e)}
                   title={expandedSql.has(item.jobId) ? 'Hide SQL' : 'View SQL'}
-                  className="flex items-center gap-1 px-2 py-1 text-xs rounded text-folio-700 hover:bg-folio-50 border border-folio-200 transition-colors"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-folio-200 text-folio-700 hover:bg-folio-50 transition-colors"
                 >
                   <Code size={11} />
-                  {expandedSql.has(item.jobId) ? 'Hide SQL' : 'View SQL'}
                 </button>
                 <button
                   onClick={(e) => onCancel(item.jobId, e)}
                   disabled={isCancelling}
                   title="Cancel query"
-                  className="flex items-center gap-1 px-2 py-1 text-xs rounded text-red-600 hover:bg-red-50 border border-red-200 transition-colors disabled:opacity-50"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
                 >
                   {isCancelling ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />}
-                  Cancel
                 </button>
               </>
             )}
@@ -276,48 +274,46 @@ export default function HistoryTable({
               <button
                 onClick={(e) => onToggleError(item.jobId, e)}
                 title={expandedErrors.has(item.jobId) ? 'Hide SQL and error' : 'Show SQL and error details'}
-                className="flex items-center gap-1 px-2 py-1 text-xs rounded text-red-600 hover:bg-red-50 border border-red-200 transition-colors"
+                className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors"
               >
                 <AlertCircle size={11} />
-                {expandedErrors.has(item.jobId) ? 'Hide details' : 'Details'}
               </button>
             )}
 
             {isCompleted && (
-              <div className="hidden group-hover:flex items-center gap-0.5">
+              <div className="flex items-center gap-1">
                 <button
                   onClick={(e) => onToggleSql(item.jobId, e)}
                   title={expandedSql.has(item.jobId) ? 'Hide SQL' : 'View SQL'}
-                  className="flex items-center gap-1 px-2 py-1 text-xs rounded text-folio-700 hover:bg-folio-50 border border-folio-200 transition-colors"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-folio-200 text-folio-700 hover:bg-folio-50 transition-colors"
                 >
                   <Code size={11} />
-                  {expandedSql.has(item.jobId) ? 'Hide SQL' : 'View SQL'}
                 </button>
                 <button
                   onClick={(e) => onStartRename(item, e)}
                   title="Rename"
-                  className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-500 hover:text-folio-600 hover:bg-folio-50 transition-colors"
                 >
                   <Pencil size={13} />
                 </button>
                 <button
                   onClick={(e) => onSave(item, false, e)}
                   title="Save to Library"
-                  className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-500 hover:text-folio-600 hover:bg-folio-50 transition-colors"
                 >
                   <Bookmark size={13} />
                 </button>
                 <button
                   onClick={(e) => onSave(item, true, e)}
                   title="Add to Dashboard"
-                  className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-500 hover:text-folio-600 hover:bg-folio-50 transition-colors"
                 >
                   <LayoutDashboard size={13} />
                 </button>
                 <button
                   onClick={() => onOpen(item)}
                   title="View results"
-                  className="p-1.5 rounded text-gray-400 hover:text-folio-600 hover:bg-folio-50 transition-colors"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-500 hover:text-folio-600 hover:bg-folio-50 transition-colors"
                 >
                   <Eye size={13} />
                 </button>
@@ -346,16 +342,12 @@ export default function HistoryTable({
                   onClick={(e) => { e.stopPropagation(); onConfirmDelete(item.jobId); }}
                   disabled={isDeleting}
                   title="Delete from history"
-                  className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 ml-1"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
                 >
                   {isDeleting ? (
-                    <span className="flex items-center gap-1">
-                      <Loader2 size={11} className="animate-spin" /> Deleting…
-                    </span>
+                    <Loader2 size={11} className="animate-spin" />
                   ) : (
-                    <span className="flex items-center gap-1">
-                      <Trash2 size={11} /> Delete
-                    </span>
+                    <Trash2 size={11} />
                   )}
                 </button>
               )
