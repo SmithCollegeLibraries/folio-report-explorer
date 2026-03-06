@@ -175,6 +175,10 @@ PROMPT;
             $dataSource = strtolower($matches[1]);
         }
 
+        // Strip DATA SOURCE directive if Gemini included it inside the SQL block
+        $sql = preg_replace('/^\s*DATA\s+SOURCE\s*:\s*(local|folio)\s*\n?/im', '', $sql);
+        $sql = trim($sql);
+
         if (empty($sql)) {
             throw new \RuntimeException(
                 'Could not extract SQL from Gemini response. Raw response: ' . substr($text, 0, 500)
