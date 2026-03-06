@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-table';
 import { ArrowUpDown, Download, BarChart3, Table2 } from 'lucide-react';
 import type { ExecuteResponse } from '../types';
+import { downloadCsv } from '../utils/csv';
 import ChartPanel from './ChartPanel';
 
 interface Props {
@@ -51,29 +52,7 @@ export default function ResultsTable({ data }: Props) {
     getSortedRowModel: getSortedRowModel(),
   });
 
-  const exportCsv = () => {
-    const header = data.columns.join(',');
-    const rows = data.rows.map((row) =>
-      data.columns
-        .map((col) => {
-          const val = row[col];
-          if (val === null || val === undefined) return '';
-          const str = String(val);
-          return str.includes(',') || str.includes('"')
-            ? `"${str.replace(/"/g, '""')}"`
-            : str;
-        })
-        .join(','),
-    );
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'query-results.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const exportCsv = () => downloadCsv(data.columns, data.rows, 'query-results');
 
   return (
     <div>

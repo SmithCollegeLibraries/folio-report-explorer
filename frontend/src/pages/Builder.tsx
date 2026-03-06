@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import {
   fetchSchema,
@@ -545,7 +546,7 @@ export default function Builder() {
                     </div>
                     <div className="mt-2 text-xs text-blue-500">
                       You can navigate away — the query will keep running.{' '}
-                      <a href="/history" className="underline font-medium hover:text-blue-700">Check History →</a>
+                      <Link to="/history" className="underline font-medium hover:text-blue-700">Check History →</Link>
                     </div>
                   </div>
                   <button

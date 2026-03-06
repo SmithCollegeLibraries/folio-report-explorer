@@ -457,6 +457,7 @@ export interface HistoryItem {
   startedAt: string | null;
   completedAt: string | null;
   runBy: string | null;
+  canDelete: boolean;
 }
 
 export interface HistoryResponse {

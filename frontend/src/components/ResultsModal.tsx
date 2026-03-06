@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useCallback } from 'react';
 import { X } from 'lucide-react';
 import ResultsTable from './ResultsTable';
+import { useEscapeKey } from '../hooks/useEscapeKey';
 import type { ExecuteResponse } from '../types';
 
 interface Props {
@@ -10,14 +11,7 @@ interface Props {
 }
 
 export default function ResultsModal({ data, onClose, title }: Props) {
-  // Close on Escape key
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  useEscapeKey(useCallback(() => onClose(), [onClose]));
 
   return (
     <div

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
@@ -358,7 +359,7 @@ export default function Ask() {
                     </div>
                     <div className="mt-3 text-xs text-blue-500">
                       You can navigate away — the query will keep running.{' '}
-                      <a href="/history" className="underline font-medium hover:text-blue-700">Check History →</a>
+                      <Link to="/history" className="underline font-medium hover:text-blue-700">Check History →</Link>
                     </div>
                   </div>
                   <button

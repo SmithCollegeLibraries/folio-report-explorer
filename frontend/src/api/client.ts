@@ -545,6 +545,10 @@ export async function renameHistoryJob(jobId: string, name: string): Promise<{ j
   return data;
 }
 
+export async function deleteHistoryJob(jobId: string): Promise<void> {
+  await api.delete(`/query/history/${jobId}`);
+}
+
 // ─── Per-user Dashboard ───────────────────────────────────────────
 
 export async function fetchDashboard(): Promise<DashboardResponse> {
