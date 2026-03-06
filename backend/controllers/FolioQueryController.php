@@ -138,15 +138,19 @@ class FolioQueryController extends Controller
     }
 
     /**
-     * Get the current authenticated user's ID (null in dev mode or if not authenticated).
+     * Get the current authenticated user's ID.
+     *
+     * Uses authenticated identity when available in all environments.
+     * Falls back to null when unauthenticated.
      * @return int|null
      */
     private function getCurrentUserId()
     {
-        if (YII_ENV === 'dev') {
-            return 1; // stable dev admin seeded by migration 007
+        if (!Yii::$app->user->isGuest && Yii::$app->user->id !== null) {
+            return (int) Yii::$app->user->id;
         }
-        return Yii::$app->user->isGuest ? null : Yii::$app->user->id;
+
+        return null;
     }
 
     /**
@@ -2171,6 +2175,7 @@ class FolioQueryController extends Controller
         $limit        = (int) (Yii::$app->request->get('limit', 50));
         $offset       = (int) (Yii::$app->request->get('offset', 0));
         $statusFilter = Yii::$app->request->get('status', 'all');
+        $mineOnly     = filter_var(Yii::$app->request->get('mine', false), FILTER_VALIDATE_BOOLEAN);
 
         $query = QueryJob::find()
             ->select(['qj.*', 'u.email AS runBy'])
@@ -2189,8 +2194,16 @@ class FolioQueryController extends Controller
         }
         // 'all' — no status restriction
 
-        // Non-admins see only their own jobs
-        if ($userId && !$isAdmin) {
+        if ($mineOnly) {
+            if ($userId) {
+                $query->andWhere(['qj.user_id' => $userId]);
+            } else {
+                $query->andWhere('1=0');
+            }
+        }
+
+        // Non-admins see only their own jobs (unless already constrained above)
+        if (!$mineOnly && $userId && !$isAdmin) {
             $query->andWhere(['qj.user_id' => $userId]);
         }
 
@@ -2218,7 +2231,7 @@ class FolioQueryController extends Controller
                     'createdAt'       => $job['created_at'],
                     'startedAt'       => $job['started_at'] ?? null,
                     'completedAt'     => $job['completed_at'],
-                    'runBy'           => $isAdmin ? ($job['runBy'] ?? null) : null,
+                    'runBy'           => $job['runBy'] ?? null,
                     'canDelete'       => $canDelete,
                 ];
             }, $jobs),

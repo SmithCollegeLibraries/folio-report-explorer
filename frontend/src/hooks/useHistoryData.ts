@@ -16,6 +16,8 @@ export interface UseHistoryDataReturn {
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   statusTab: string;
   handleTabChange: (tab: string) => void;
+  mineOnly: boolean;
+  handleMineOnlyChange: (mineOnly: boolean) => void;
   hasActive: boolean;
   load: () => Promise<void>;
   limit: number;
@@ -36,12 +38,13 @@ export function useHistoryData(): UseHistoryDataReturn {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusTab, setStatusTab] = useState<string>('all');
+  const [mineOnly, setMineOnly] = useState(false);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await fetchQueryHistory(PAGE_LIMIT, offset, statusTab);
+      const data = await fetchQueryHistory(PAGE_LIMIT, offset, statusTab, mineOnly);
       setItems(data.items);
       setTotal(data.total);
       setError(null);
@@ -50,7 +53,7 @@ export function useHistoryData(): UseHistoryDataReturn {
     } finally {
       setLoading(false);
     }
-  }, [offset, statusTab]);
+  }, [offset, statusTab, mineOnly]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -67,6 +70,11 @@ export function useHistoryData(): UseHistoryDataReturn {
     setStatusTab(tab);
     setOffset(0);
     if (tab !== 'failed') setExpandedErrors(new Set());
+  }, []);
+
+  const handleMineOnlyChange = useCallback((next: boolean) => {
+    setMineOnly(next);
+    setOffset(0);
   }, []);
 
   // Auto-expand error rows when the Failed tab loads
@@ -94,6 +102,7 @@ export function useHistoryData(): UseHistoryDataReturn {
     loading,
     error, setError,
     statusTab, handleTabChange,
+    mineOnly, handleMineOnlyChange,
     hasActive,
     load,
     limit: PAGE_LIMIT,

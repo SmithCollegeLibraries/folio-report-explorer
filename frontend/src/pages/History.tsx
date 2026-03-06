@@ -5,7 +5,6 @@ import {
   CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { checkJobStatus, cancelJob, deleteHistoryJob } from '../api/client';
-import { useAuth } from '../hooks/useAuth';
 import { useHistoryData } from '../hooks/useHistoryData';
 import { useSelectionManager } from '../hooks/useSelectionManager';
 import { useInlineRename } from '../hooks/useInlineRename';
@@ -26,16 +25,18 @@ const STATUS_TABS: { value: string; label: string; icon: React.ElementType }[] =
 ];
 
 export default function History() {
-  const { isAdmin } = useAuth();
   const navigate = useNavigate();
   const { jobId: jobIdParam } = useParams<{ jobId: string }>();
 
   // ── Server data, pagination, tab, auto-refresh ───────────────────
   const {
     items, setItems, total, setTotal, offset, setOffset, loading, error, setError,
-    statusTab, handleTabChange, hasActive, load, limit, totalPages, currentPage,
+    statusTab, handleTabChange, mineOnly, handleMineOnlyChange,
+    hasActive, load, limit, totalPages, currentPage,
     expandedErrors, toggleExpandError,
   } = useHistoryData();
+
+  const [expandedSql, setExpandedSql] = useState<Set<string>>(new Set());
 
   // ── Client-side filtering & sorting ─────────────────────────────
   const [search, setSearch] = useState('');
@@ -263,6 +264,8 @@ export default function History() {
         onSearchChange={setSearch}
         sourceFilter={sourceFilter}
         onSourceFilterChange={setSourceFilter}
+        mineOnly={mineOnly}
+        onMineOnlyChange={handleMineOnlyChange}
         filteredCount={filteredItems.length}
         selectedCount={selection.selectedCount}
         batchDeleting={batchDeleting}
@@ -277,7 +280,6 @@ export default function History() {
         items={items}
         filteredItems={filteredItems}
         loading={loading}
-        isAdmin={isAdmin}
         sortKey={sortKey}
         sortDir={sortDir}
         onToggleSort={toggleSort}
@@ -292,11 +294,20 @@ export default function History() {
         deletingId={deletingId}
         confirmDeleteId={confirmDeleteId}
         expandedErrors={expandedErrors}
+        expandedSql={expandedSql}
         copiedSqlId={copiedSqlId}
         selectedIds={selection.selectedIds}
         onOpen={openModal}
         onCancel={handleCancel}
         onToggleError={(jobId, e) => { e.stopPropagation(); toggleExpandError(jobId); }}
+        onToggleSql={(jobId, e) => {
+          e.stopPropagation();
+          setExpandedSql((prev) => {
+            const next = new Set(prev);
+            if (next.has(jobId)) next.delete(jobId); else next.add(jobId);
+            return next;
+          });
+        }}
         onCopySql={handleCopySql}
         onStartRename={(item, e) => rename.start(item.jobId, item.name, e)}
         onCommitRename={(jobId, originalName) => rename.commit(jobId, originalName)}

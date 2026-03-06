@@ -8,7 +8,6 @@ interface Props {
   items: HistoryItem[];
   filteredItems: HistoryItem[];
   loading: boolean;
-  isAdmin: boolean;
   // Sort
   sortKey: SortKey;
   sortDir: 'asc' | 'desc';
@@ -26,12 +25,14 @@ interface Props {
   deletingId: string | null;
   confirmDeleteId: string | null;
   expandedErrors: Set<string>;
+  expandedSql: Set<string>;
   copiedSqlId: string | null;
   selectedIds: Set<string>;
   // Per-row callbacks (item is provided by the table, jobId baked in by caller)
   onOpen: (item: HistoryItem) => void;
   onCancel: (jobId: string, e: React.MouseEvent) => void;
   onToggleError: (jobId: string, e: React.MouseEvent) => void;
+  onToggleSql: (jobId: string, e: React.MouseEvent) => void;
   onCopySql: (jobId: string, sql: string, e: React.MouseEvent) => void;
   onStartRename: (item: HistoryItem, e: React.MouseEvent) => void;
   onCommitRename: (jobId: string, originalName: string | null) => void;
@@ -49,12 +50,12 @@ function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; s
 }
 
 export default function HistoryTable({
-  items, filteredItems, loading, isAdmin,
+  items, filteredItems, loading,
   sortKey, sortDir, onToggleSort,
   allSelectableChecked, hasSelectableItems, onToggleSelectAll,
   renamingId, renameValue, onRenameValueChange, renameSaving,
-  cancellingId, deletingId, confirmDeleteId, expandedErrors, copiedSqlId, selectedIds,
-  onOpen, onCancel, onToggleError, onCopySql,
+  cancellingId, deletingId, confirmDeleteId, expandedErrors, expandedSql, copiedSqlId, selectedIds,
+  onOpen, onCancel, onToggleError, onToggleSql, onCopySql,
   onStartRename, onCommitRename, onCancelRename,
   onConfirmDelete, onCancelDelete, onDelete, onSave, onToggleSelect,
 }: Props) {
@@ -126,11 +127,9 @@ export default function HistoryTable({
                 Time <SortIcon col="executionTimeMs" sortKey={sortKey} sortDir={sortDir} />
               </span>
             </th>
-            {isAdmin && (
-              <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap">
-                Run by
-              </th>
-            )}
+            <th className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap">
+              Run by
+            </th>
             <th
               className="px-4 py-3 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap cursor-pointer select-none hover:text-folio-700"
               onClick={() => onToggleSort('completedAt')}
@@ -148,7 +147,6 @@ export default function HistoryTable({
               key={item.jobId}
               item={item}
               index={i}
-              isAdmin={isAdmin}
               isRenaming={renamingId === item.jobId}
               renameValue={renameValue}
               onRenameValueChange={onRenameValueChange}
@@ -160,11 +158,13 @@ export default function HistoryTable({
               isDeleting={deletingId === item.jobId}
               confirmingDelete={confirmDeleteId === item.jobId}
               errExpanded={expandedErrors.has(item.jobId)}
+              sqlExpanded={expandedSql.has(item.jobId)}
               sqlCopied={copiedSqlId === item.jobId}
               isSelected={selectedIds.has(item.jobId)}
               onOpen={() => onOpen(item)}
               onCancel={(e) => onCancel(item.jobId, e)}
               onToggleError={(e) => onToggleError(item.jobId, e)}
+              onToggleSql={(e) => onToggleSql(item.jobId, e)}
               onCopySql={(e) => onCopySql(item.jobId, item.sql, e)}
               onConfirmDelete={() => onConfirmDelete(item.jobId)}
               onCancelDelete={onCancelDelete}

@@ -1,6 +1,6 @@
 import {
   Loader2, XCircle, AlertCircle, Eye, Pencil, Bookmark,
-  LayoutDashboard, Trash2, Copy, Check, User,
+  LayoutDashboard, Trash2, Copy, Check, User, Code,
 } from 'lucide-react';
 import StatusBadge from '../../components/StatusBadge';
 import SourceBadge from '../../components/SourceBadge';
@@ -11,7 +11,6 @@ export interface HistoryRowProps {
   item: HistoryItem;
   /** Zero-based row index used for alternating background. */
   index: number;
-  isAdmin: boolean;
 
   // ── Rename state (item-scoped booleans come from useInlineRename) ──
   isRenaming: boolean;
@@ -27,6 +26,7 @@ export interface HistoryRowProps {
   isDeleting: boolean;
   confirmingDelete: boolean;
   errExpanded: boolean;
+  sqlExpanded: boolean;
   sqlCopied: boolean;
   isSelected: boolean;
 
@@ -34,6 +34,7 @@ export interface HistoryRowProps {
   onOpen: () => void;
   onCancel: (e: React.MouseEvent) => void;
   onToggleError: (e: React.MouseEvent) => void;
+  onToggleSql: (e: React.MouseEvent) => void;
   onCopySql: (e: React.MouseEvent) => void;
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
@@ -43,18 +44,18 @@ export interface HistoryRowProps {
 }
 
 export default function HistoryRow({
-  item, index, isAdmin,
+  item, index,
   isRenaming, renameValue, onRenameValueChange, renameSaving,
   onStartRename, onCommitRename, onCancelRename,
-  isCancelling, isDeleting, confirmingDelete, errExpanded, sqlCopied, isSelected,
-  onOpen, onCancel, onToggleError, onCopySql,
+  isCancelling, isDeleting, confirmingDelete, errExpanded, sqlExpanded, sqlCopied, isSelected,
+  onOpen, onCancel, onToggleError, onToggleSql, onCopySql,
   onConfirmDelete, onCancelDelete, onDelete, onSave, onToggleSelect,
 }: HistoryRowProps) {
   const isActive = item.status === 'pending' || item.status === 'running';
   const isFailed = item.status === 'failed';
   const isCompleted = item.status === 'completed';
   const rowBg = index % 2 === 0 ? 'bg-white' : 'bg-gray-50/40';
-  const colSpan = isAdmin ? 9 : 8;
+  const colSpan = 9;
 
   return (
     <>
@@ -132,14 +133,12 @@ export default function HistoryRow({
           {item.executionTimeMs > 0 ? fmtTime(item.executionTimeMs) : '—'}
         </td>
 
-        {/* Run by (admin only) */}
-        {isAdmin && (
-          <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">
-            {item.runBy
-              ? <span className="flex items-center gap-1"><User size={11} />{item.runBy}</span>
-              : '—'}
-          </td>
-        )}
+        {/* Run by */}
+        <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">
+          {item.runBy
+            ? <span className="flex items-center gap-1"><User size={11} />{item.runBy}</span>
+            : '—'}
+        </td>
 
         {/* Date */}
         <td className="px-4 py-3 border-b border-gray-100 text-gray-500 text-xs whitespace-nowrap">
@@ -157,17 +156,27 @@ export default function HistoryRow({
         >
           <div className="flex items-center justify-end gap-0.5 min-w-[240px]">
             {isActive && (
-              <button
-                onClick={(e) => onCancel(e)}
-                disabled={isCancelling}
-                title="Cancel query"
-                className="flex items-center gap-1 px-2 py-1 text-xs rounded text-red-600 hover:bg-red-50 border border-red-200 transition-colors disabled:opacity-50"
-              >
-                {isCancelling
-                  ? <Loader2 size={11} className="animate-spin" />
-                  : <XCircle size={11} />}
-                Cancel
-              </button>
+              <>
+                <button
+                  onClick={(e) => onToggleSql(e)}
+                  title={sqlExpanded ? 'Hide SQL' : 'View SQL'}
+                  className="flex items-center gap-1 px-2 py-1 text-xs rounded text-folio-700 hover:bg-folio-50 border border-folio-200 transition-colors"
+                >
+                  <Code size={11} />
+                  {sqlExpanded ? 'Hide SQL' : 'View SQL'}
+                </button>
+                <button
+                  onClick={(e) => onCancel(e)}
+                  disabled={isCancelling}
+                  title="Cancel query"
+                  className="flex items-center gap-1 px-2 py-1 text-xs rounded text-red-600 hover:bg-red-50 border border-red-200 transition-colors disabled:opacity-50"
+                >
+                  {isCancelling
+                    ? <Loader2 size={11} className="animate-spin" />
+                    : <XCircle size={11} />}
+                  Cancel
+                </button>
+              </>
             )}
 
             {isFailed && (
@@ -285,6 +294,30 @@ export default function HistoryRow({
                   </pre>
                 </div>
               )}
+            </div>
+          </td>
+        </tr>
+      )}
+
+      {/* Inline active SQL expansion */}
+      {isActive && sqlExpanded && (
+        <tr className={rowBg}>
+          <td colSpan={colSpan} className="px-4 pb-4 border-b border-gray-100">
+            <div className="mt-1">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">SQL</span>
+                <button
+                  onClick={(e) => onCopySql(e)}
+                  className="flex items-center gap-1 text-xs text-gray-400 hover:text-folio-600 px-2 py-0.5 rounded hover:bg-folio-50 transition-colors"
+                >
+                  {sqlCopied
+                    ? <><Check size={11} className="text-green-500" /> Copied</>
+                    : <><Copy size={11} /> Copy SQL</>}
+                </button>
+              </div>
+              <pre className="bg-gray-900 text-green-300 text-xs font-mono rounded p-3 whitespace-pre-wrap break-all max-h-56 overflow-y-auto leading-relaxed">
+                {item.sql}
+              </pre>
             </div>
           </td>
         </tr>

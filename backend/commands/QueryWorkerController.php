@@ -314,6 +314,9 @@ class QueryWorkerController extends Controller
     {
         try {
             $log = new \app\models\QueryLog();
+            if ($log->hasAttribute('user_id')) {
+                $log->user_id = $job->user_id;
+            }
             $log->sql_text = $job->sql_text;
             $log->params = $job->params;
             $log->source = $job->source;

@@ -533,9 +533,11 @@ export async function fetchQueryHistory(
   limit = 50,
   offset = 0,
   status?: string,
+  mine = false,
 ): Promise<HistoryResponse> {
   const params: Record<string, string | number> = { limit, offset };
   if (status && status !== 'all') params.status = status;
+  if (mine) params.mine = 1;
   const { data } = await api.get('/query/history', { params });
   return data;
 }

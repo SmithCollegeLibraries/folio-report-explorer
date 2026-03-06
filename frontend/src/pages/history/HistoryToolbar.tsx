@@ -1,11 +1,13 @@
 import { useRef } from 'react';
-import { Search, X, Loader2 } from 'lucide-react';
+import { Search, X, Loader2, User } from 'lucide-react';
 
 interface Props {
   search: string;
   onSearchChange: (v: string) => void;
   sourceFilter: string;
   onSourceFilterChange: (v: string) => void;
+  mineOnly: boolean;
+  onMineOnlyChange: (v: boolean) => void;
   filteredCount: number;
   // Batch delete
   selectedCount: number;
@@ -19,6 +21,7 @@ interface Props {
 export default function HistoryToolbar({
   search, onSearchChange,
   sourceFilter, onSourceFilterChange,
+  mineOnly, onMineOnlyChange,
   filteredCount,
   selectedCount, batchDeleting, confirmBatchDelete,
   onConfirmBatchDelete, onCancelBatchDelete, onDeleteSelected,
@@ -60,6 +63,20 @@ export default function HistoryToolbar({
         <option value="manual">Manual</option>
         <option value="report">Report</option>
       </select>
+
+      <button
+        type="button"
+        onClick={() => onMineOnlyChange(!mineOnly)}
+        className={`inline-flex items-center gap-1.5 text-sm border rounded-lg px-3 py-2 transition-colors ${
+          mineOnly
+            ? 'border-folio-300 bg-folio-50 text-folio-700'
+            : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+        }`}
+        title="Show only queries I ran"
+      >
+        <User size={13} />
+        My Queries
+      </button>
 
       {/* Match count */}
       {(search || sourceFilter) && (
