@@ -2160,25 +2160,34 @@ class FolioQueryController extends Controller
     }
 
     /**
-     * GET /api/query/history — list the current user's completed jobs with results.
-     * Optional: ?limit=20&offset=0
+     * GET /api/query/history — list jobs, optionally filtered by status.
+     * Optional: ?limit=50&offset=0&status=all|active|completed|failed
      */
     public function actionQueryHistory()
     {
         $userId = $this->getCurrentUserId();
         $identity = $this->getAppIdentity();
         $isAdmin = $identity && $identity->isAdmin();
-        $limit  = (int) (Yii::$app->request->get('limit', 50));
-        $offset = (int) (Yii::$app->request->get('offset', 0));
+        $limit        = (int) (Yii::$app->request->get('limit', 50));
+        $offset       = (int) (Yii::$app->request->get('offset', 0));
+        $statusFilter = Yii::$app->request->get('status', 'all');
 
         $query = QueryJob::find()
             ->select(['qj.*', 'u.email AS runBy'])
             ->alias('qj')
             ->leftJoin('users u', 'u.id = qj.user_id')
-            ->where(['qj.status' => 'completed'])
-            ->orderBy(['qj.completed_at' => SORT_DESC])
+            ->orderBy(['qj.completed_at' => SORT_DESC, 'qj.created_at' => SORT_DESC])
             ->limit(min($limit, 100))
             ->offset($offset);
+
+        if ($statusFilter === 'active') {
+            $query->andWhere(['qj.status' => ['pending', 'running']]);
+        } elseif ($statusFilter === 'completed') {
+            $query->andWhere(['qj.status' => 'completed']);
+        } elseif ($statusFilter === 'failed') {
+            $query->andWhere(['qj.status' => 'failed']);
+        }
+        // 'all' — no status restriction
 
         // Non-admins see only their own jobs
         if ($userId && !$isAdmin) {
@@ -2192,21 +2201,57 @@ class FolioQueryController extends Controller
             'total'  => (int) $total,
             'offset' => $offset,
             'limit'  => $limit,
-            'items'  => array_map(function ($job) use ($isAdmin) {
+            'items'  => array_map(function ($job) use ($isAdmin, $userId) {
+                $canDelete = $isAdmin
+                    || ($userId && isset($job['user_id']) && (int) $job['user_id'] === (int) $userId);
                 return [
-                    'jobId'          => $job['id'],
-                    'name'           => $job['name'] ?? null,
-                    'sql'            => $job['sql_text'],
-                    'source'         => $job['source'],
-                    'dataSource'     => $job['data_source'] ?? 'folio',
-                    'rowCount'       => (int) ($job['row_count'] ?? 0),
-                    'executionTimeMs'=> (int) ($job['execution_time_ms'] ?? 0),
-                    'createdAt'      => $job['created_at'],
-                    'completedAt'    => $job['completed_at'],
-                    'runBy'          => $isAdmin ? ($job['runBy'] ?? null) : null,
+                    'jobId'           => $job['id'],
+                    'name'            => $job['name'] ?? null,
+                    'status'          => $job['status'],
+                    'sql'             => $job['sql_text'],
+                    'source'          => $job['source'],
+                    'dataSource'      => $job['data_source'] ?? 'folio',
+                    'progressMessage' => $job['progress_message'] ?? null,
+                    'rowCount'        => (int) ($job['row_count'] ?? 0),
+                    'executionTimeMs' => (int) ($job['execution_time_ms'] ?? 0),
+                    'errorMessage'    => $job['error_message'] ?? null,
+                    'createdAt'       => $job['created_at'],
+                    'startedAt'       => $job['started_at'] ?? null,
+                    'completedAt'     => $job['completed_at'],
+                    'runBy'           => $isAdmin ? ($job['runBy'] ?? null) : null,
+                    'canDelete'       => $canDelete,
                 ];
             }, $jobs),
         ];
+    }
+
+    /**
+     * DELETE /api/query/history/<id> — remove a single job from history.
+     * Admins may delete any job; regular users only their own.
+     */
+    public function actionDeleteHistoryJob($id)
+    {
+        $userId   = $this->getCurrentUserId();
+        $identity = $this->getAppIdentity();
+        $isAdmin  = $identity && $identity->isAdmin();
+
+        $job = QueryJob::findOne((int) $id);
+        if (!$job) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Job not found'];
+        }
+
+        if (!$isAdmin && (int) $job->user_id !== (int) $userId) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Forbidden'];
+        }
+
+        if (!$job->delete()) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => 'Failed to delete job'];
+        }
+
+        return ['success' => true, 'jobId' => (int) $id];
     }
 
     /**

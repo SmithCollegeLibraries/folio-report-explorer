@@ -29,8 +29,8 @@ export default function History() {
 
   // ── Server data, pagination, tab, auto-refresh ───────────────────
   const {
-    items, setItems, total, offset, setOffset, loading, error, setError,
-    statusTab, handleTabChange, hasActive, limit, totalPages, currentPage,
+    items, setItems, total, setTotal, offset, setOffset, loading, error, setError,
+    statusTab, handleTabChange, hasActive, load, limit, totalPages, currentPage,
     expandedErrors, toggleExpandError,
   } = useHistoryData();
 
@@ -96,6 +96,7 @@ export default function History() {
       if (deletedIds.length) {
         const deletedSet = new Set(deletedIds);
         setItems((prev) => prev.filter((i) => !deletedSet.has(i.jobId)));
+        setTotal((prev) => prev - deletedIds.length);
         selection.removeIds(deletedIds);
       }
       if (failedCount > 0) {
@@ -133,6 +134,7 @@ export default function History() {
     try {
       await deleteHistoryJob(jobId);
       setItems((prev) => prev.filter((i) => i.jobId !== jobId));
+      setTotal((prev) => prev - 1);
       selection.removeIds([jobId]);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Delete failed');
@@ -149,8 +151,7 @@ export default function History() {
     setCancellingId(jobId);
     try {
       await cancelJob(jobId);
-      // Trigger an immediate reload by nudging the offset setter
-      setOffset((o) => o);
+      await load();
     } catch (err: any) {
       setError(err.response?.data?.error || 'Cancel failed');
     } finally {
