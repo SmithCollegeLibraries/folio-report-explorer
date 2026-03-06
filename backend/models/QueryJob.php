@@ -174,7 +174,7 @@ class QueryJob extends ActiveRecord
      * @param int $rowCount
      * @param int $executionTimeMs
      */
-    public function markExportCompleted($filePath, $rowCount, $executionTimeMs)
+    public function markExportCompleted($filePath, $rowCount, $executionTimeMs, array $previewColumns = [], array $previewRows = [])
     {
         $this->status = 'completed';
         if ($this->hasAttribute('output_mode')) {
@@ -183,12 +183,14 @@ class QueryJob extends ActiveRecord
         if ($this->hasAttribute('export_file_path')) {
             $this->export_file_path = $filePath;
         }
-        $this->result_columns = null;
-        $this->result_rows = null;
+        $this->result_columns = !empty($previewColumns) ? json_encode($previewColumns) : null;
+        $this->result_rows = !empty($previewRows) ? json_encode($previewRows) : null;
         $this->row_count = (int) $rowCount;
         $this->execution_time_ms = $executionTimeMs;
         $this->completed_at = date('Y-m-d H:i:s');
-        $this->progress_message = 'Completed';
+        $this->progress_message = !empty($previewRows)
+            ? 'Completed — preview available below. Download CSV for full results.'
+            : 'Completed — download CSV for full results.';
         if ($this->hasAttribute('pg_backend_pid')) {
             $this->pg_backend_pid = null;
         }
@@ -243,14 +245,15 @@ class QueryJob extends ActiveRecord
             $data['estimatedCost'] = (float) $this->estimated_cost;
         }
 
-        if ($this->status === 'completed' && $includeResults && $outputMode !== 'file') {
+        $hasPreview = !empty($this->result_columns) && !empty($this->result_rows);
+        if ($this->status === 'completed' && $includeResults && ($outputMode !== 'file' || $hasPreview)) {
             $data['columns'] = $this->getDecodedColumns();
             $data['rows'] = $this->getDecodedRows();
             $data['rowCount'] = (int)$this->row_count;
             $data['executionTimeMs'] = (int)$this->execution_time_ms;
         }
 
-        if ($this->status === 'completed' && $outputMode === 'file' && $this->hasAttribute('export_file_path')) {
+        if ($this->status === 'completed' && $outputMode === 'file') {
             $data['downloadUrl'] = '/api/query/export/' . $this->id;
         }
 

@@ -104,8 +104,8 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
           stopPolling();
           if (status.outputMode === 'file') {
             setResults({
-              columns: [],
-              rows: [],
+              columns: status.columns || [],
+              rows: status.rows || [],
               rowCount: status.rowCount || 0,
               executionTimeMs: status.executionTimeMs || 0,
               sql: status.sql,

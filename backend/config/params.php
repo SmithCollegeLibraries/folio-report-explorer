@@ -17,5 +17,6 @@ return [
     'exportRowThreshold' => 10000,
     'exportCostThreshold' => 500000,
     'exportRowLimit' => 500000,
+    'exportPreviewRows' => 200,
     'exportFileRetentionDays' => 7,
 ];

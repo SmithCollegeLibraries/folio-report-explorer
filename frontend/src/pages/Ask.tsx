@@ -211,6 +211,7 @@ export default function Ask() {
   const isGenerating = askMut.isPending;
   const isExecuting = execMut.isPending || isRunning;
   const isLoading = isGenerating || isExecuting;
+  const hasFilePreview = !!(results?.outputMode === 'file' && results.columns.length > 0 && results.rows.length > 0);
 
   return (
     <div className="flex flex-col h-[calc(100vh-56px)]">
@@ -469,17 +470,24 @@ export default function Ask() {
                       </div>
                     </div>
                     {results.outputMode === 'file' ? (
-                      <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 text-sm text-blue-800">
-                        <div className="font-medium mb-1">Export complete</div>
-                        <div className="mb-3">This query was exported as CSV in the background.</div>
-                        {results.downloadUrl && activeJobId && (
-                          <button
-                            onClick={() => downloadExportCsv(activeJobId)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
-                          >
-                            Download CSV
-                          </button>
-                        )}
+                      <div className="space-y-3">
+                        <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 text-sm text-blue-800">
+                          <div className="font-medium mb-1">Export complete</div>
+                          <div className="mb-3">
+                            {hasFilePreview
+                              ? 'Preview shown below. Download CSV for the full result set.'
+                              : 'This query was exported as CSV in the background. Download the file to view all data.'}
+                          </div>
+                          {results.downloadUrl && activeJobId && (
+                            <button
+                              onClick={() => downloadExportCsv(activeJobId)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                            >
+                              Download full CSV
+                            </button>
+                          )}
+                        </div>
+                        {hasFilePreview && <ResultsTable data={results} />}
                       </div>
                     ) : (
                       <ResultsTable data={results} />

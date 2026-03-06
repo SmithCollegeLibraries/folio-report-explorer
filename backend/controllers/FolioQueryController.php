@@ -653,6 +653,9 @@ class FolioQueryController extends Controller
         }
 
         $path = $job->hasAttribute('export_file_path') ? $job->export_file_path : null;
+        if (!$path) {
+            $path = Yii::getAlias('@runtime/exports/' . $job->id . '.csv');
+        }
         if (!$path || !is_file($path)) {
             Yii::$app->response->statusCode = 404;
             return ['error' => 'Export file not found'];

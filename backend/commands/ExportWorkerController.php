@@ -172,9 +172,15 @@ class ExportWorkerController extends Controller
             fputcsv($fileHandle, $headers);
 
             $rowCount = 0;
+            $previewLimit = max(0, (int) (Yii::$app->params['exportPreviewRows'] ?? 200));
+            $previewRows = [];
             while (($row = $stmt->fetch(\PDO::FETCH_ASSOC)) !== false) {
                 fputcsv($fileHandle, $row);
                 $rowCount++;
+
+                if ($previewLimit > 0 && count($previewRows) < $previewLimit) {
+                    $previewRows[] = $row;
+                }
 
                 if ($rowCount % 10000 === 0) {
                     Yii::$app->db->createCommand()->update(
@@ -196,7 +202,7 @@ class ExportWorkerController extends Controller
             fclose($fileHandle);
 
             $executionTime = (int) round((microtime(true) - $startTime) * 1000);
-            $job->markExportCompleted($filePath, $rowCount, $executionTime);
+            $job->markExportCompleted($filePath, $rowCount, $executionTime, $headers, $previewRows);
             $this->stdout("Export job {$job->id} completed: {$rowCount} rows in {$executionTime}ms\n");
 
             $this->logQuery($job);

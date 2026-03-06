@@ -7,6 +7,7 @@ import SourceBadge from '../../components/SourceBadge';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
 import { useCopyToClipboard } from '../../hooks/useCopyToClipboard';
 import { useInlineRename } from '../../hooks/useInlineRename';
+import { downloadExportCsv } from '../../api/client';
 import { downloadCsv } from '../../utils/csv';
 import { fmtDate, fmtTime } from '../../utils/format';
 import type { HistoryItem, JobStatusResponse } from '../../types';
@@ -26,6 +27,7 @@ export default function HistoryResultsModal({
   item, job, loading, onClose, onRename, onSave,
 }: Props) {
   const [sqlOpen, setSqlOpen] = useState(false);
+  const hasFilePreview = !!(job?.outputMode === 'file' && (job.columns?.length || 0) > 0 && (job.rows?.length || 0) > 0);
 
   const { copiedId, copy } = useCopyToClipboard();
 
@@ -43,6 +45,10 @@ export default function HistoryResultsModal({
   };
 
   const handleCsvDownload = () => {
+    if (job?.outputMode === 'file' || job?.downloadUrl) {
+      void downloadExportCsv(item.jobId);
+      return;
+    }
     if (job?.columns && job?.rows) {
       downloadCsv(job.columns, job.rows, item.name || 'query');
     }
@@ -133,7 +139,7 @@ export default function HistoryResultsModal({
                 onClick={handleCsvDownload}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-folio-600 text-white rounded hover:bg-folio-700 transition-colors"
               >
-                <Download size={14} /> CSV
+                <Download size={14} /> Download CSV
               </button>
             )}
             <button
@@ -183,6 +189,61 @@ export default function HistoryResultsModal({
             <div className="flex items-center justify-center h-48 gap-3 text-gray-400">
               <Loader2 size={20} className="animate-spin text-folio-600" />
               <span className="text-sm">Loading results…</span>
+            </div>
+          ) : hasFilePreview ? (
+            <>
+              <div className="px-4 py-3 border-b bg-blue-50 text-xs text-blue-800 flex items-center justify-between gap-3">
+                <span>Preview shown below. Download CSV for the full exported result set.</span>
+                <button
+                  onClick={handleCsvDownload}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                >
+                  <Download size={12} /> Download full CSV
+                </button>
+              </div>
+              <table className="w-full text-xs border-separate border-spacing-0">
+                <thead className="bg-gray-50 sticky top-0 z-10">
+                  <tr>
+                    {job.columns!.map((col) => (
+                      <th
+                        key={col}
+                        className="text-left px-3 py-2 font-semibold text-gray-600 border-b border-gray-200 whitespace-nowrap"
+                      >
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {job.rows!.map((row, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                      {job.columns!.map((col) => (
+                        <td
+                          key={col}
+                          className="px-3 py-1.5 text-gray-700 whitespace-nowrap max-w-xs truncate border-b border-gray-100"
+                          title={row[col] != null ? String(row[col]) : ''}
+                        >
+                          {row[col] != null
+                            ? String(row[col])
+                            : <span className="text-gray-300 italic">null</span>}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          ) : (job?.outputMode === 'file' || job?.downloadUrl) ? (
+            <div className="flex h-48 items-center justify-center">
+              <div className="text-center">
+                <div className="text-sm text-gray-600 mb-3">This result is stored as a CSV export file. Download to view data.</div>
+                <button
+                  onClick={handleCsvDownload}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm bg-folio-600 text-white rounded hover:bg-folio-700 transition-colors"
+                >
+                  <Download size={14} /> Download CSV
+                </button>
+              </div>
             </div>
           ) : job?.columns && job?.rows ? (
             <>
