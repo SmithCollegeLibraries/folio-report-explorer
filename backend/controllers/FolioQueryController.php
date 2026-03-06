@@ -134,6 +134,11 @@ class FolioQueryController extends Controller
         if ($identity instanceof User || $identity instanceof DummyIdentity) {
             return $identity;
         }
+
+        if (YII_ENV === 'dev') {
+            return new DummyIdentity();
+        }
+
         return null;
     }
 
@@ -148,6 +153,10 @@ class FolioQueryController extends Controller
     {
         if (!Yii::$app->user->isGuest && Yii::$app->user->id !== null) {
             return (int) Yii::$app->user->id;
+        }
+
+        if (YII_ENV === 'dev') {
+            return (int) (new DummyIdentity())->getId();
         }
 
         return null;

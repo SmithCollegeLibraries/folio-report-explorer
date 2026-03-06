@@ -15,8 +15,6 @@ import HistoryResultsModal from './history/HistoryResultsModal';
 import SaveQueryDialog from '../components/SaveQueryDialog';
 import type { HistoryItem, JobStatusResponse } from '../types';
 
-type SortKey = 'completedAt' | 'rowCount' | 'executionTimeMs';
-
 const STATUS_TABS: { value: string; label: string; icon: React.ElementType }[] = [
   { value: 'all',       label: 'All',       icon: HistoryIcon },
   { value: 'active',    label: 'Active',     icon: Activity },
@@ -41,8 +39,6 @@ export default function History() {
   // ── Client-side filtering & sorting ─────────────────────────────
   const [search, setSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('completedAt');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
   const filteredItems = useMemo(() => {
     return items
@@ -55,24 +51,8 @@ export default function History() {
         )) return false;
         if (sourceFilter && item.source !== sourceFilter) return false;
         return true;
-      })
-      .sort((a, b) => {
-        const getVal = (i: HistoryItem) =>
-          sortKey === 'completedAt' ? (i.completedAt ?? i.createdAt) : i[sortKey] as string | number;
-        const av = getVal(a);
-        const bv = getVal(b);
-        const al = typeof av === 'string' ? av.toLowerCase() : (av ?? 0);
-        const bl = typeof bv === 'string' ? bv.toLowerCase() : (bv ?? 0);
-        if (al < bl) return sortDir === 'asc' ? -1 : 1;
-        if (al > bl) return sortDir === 'asc' ? 1 : -1;
-        return 0;
       });
-  }, [items, search, sourceFilter, sortKey, sortDir]);
-
-  const toggleSort = (key: SortKey) => {
-    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    else { setSortKey(key); setSortDir('desc'); }
-  };
+  }, [items, search, sourceFilter]);
 
   // ── Selection ────────────────────────────────────────────────────
   const selectableIds = useMemo(
@@ -280,9 +260,6 @@ export default function History() {
         items={items}
         filteredItems={filteredItems}
         loading={loading}
-        sortKey={sortKey}
-        sortDir={sortDir}
-        onToggleSort={toggleSort}
         allSelectableChecked={selection.allChecked}
         hasSelectableItems={selectableIds.length > 0}
         onToggleSelectAll={selection.toggleAll}
