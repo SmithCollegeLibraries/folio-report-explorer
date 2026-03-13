@@ -71,13 +71,13 @@
                 ]
             },
             "preferredApproach": [
-                "PREFERRED table for MARC field-level queries. Use field + sf filters instead of parsing records__t.parsed_record__content.",
+                "WARNING: folio_source_record.marctab is a VIEW that unions ~1000 underlying tables. PostgreSQL can sometimes prune this to a single table when field='NNN' is a constant predicate, but performance is not guaranteed.",
+                "PREFER marctab.mtNNN per-field tables directly (e.g. marctab.mt245, marctab.mt300) for guaranteed Index Only Scan performance (~0.74/probe, EXPLAIN-verified 2026-03-13).",
+                "Column structure (same for both the VIEW and per-field tables): srs_id, instance_hrid, instance_id, field, ind1, ind2, ord, sf (subfield code), content (subfield value). There are NO sf_a, sf_b, sf_c columns — subfields are rows, not columns.",
+                "To extract a subfield, filter by sf and read content: (SELECT m.content FROM marctab.mt245 m WHERE m.instance_hrid = inst.hrid AND m.sf = 'a' LIMIT 1)",
+                "For multiple subfields, use scalar subqueries (one per subfield) — NOT LEFT JOIN + GROUP BY + MAX(CASE WHEN sf=...). LEFT JOIN pattern costs ~2.1M vs scalar subqueries at ~16K overhead for 257K instances.",
                 "Join to inventory via hrid for type safety: marctab.instance_hrid = inventory.instance__t.hrid.",
-                "Avoid marctab.instance_id = instance__t.id unless types are explicitly cast and verified.",
-                "To combine with record-level metadata, join marctab.srs_id = folio_source_record.records__t.id.",
-                "To find records missing a field, LEFT JOIN marctab on instance_hrid and field then filter where marctab row is NULL.",
-                "Control fields (001-009) typically use sf = empty string.",
-                "Each row is one field+subfield occurrence; use DISTINCT or aggregation when combining multiple MARC fields."
+                "Each row is one subfield occurrence. ord column distinguishes repeated fields (e.g. multiple 650 entries)."
             ]
         },
         "circulation.loan__t": {
