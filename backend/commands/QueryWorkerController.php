@@ -70,8 +70,23 @@ class QueryWorkerController extends Controller
     }
 
     /**
+     * Check whether a FOLIO query is already running (across both workers).
+     * Prevents concurrent heavy queries against the shared Postgres database.
+     *
+     * @return bool
+     */
+    private function isFolioQueryRunning()
+    {
+        return (int) QueryJob::find()
+            ->where(['status' => 'running'])
+            ->andWhere(['or', ['data_source' => 'folio'], ['data_source' => null], ['data_source' => '']])
+            ->count() > 0;
+    }
+
+    /**
      * Atomically claim the next pending job.
      * Uses UPDATE ... WHERE to prevent double-claiming.
+     * Skips FOLIO jobs while another FOLIO query is already running.
      *
      * @return QueryJob|null
      */
@@ -84,6 +99,12 @@ class QueryWorkerController extends Controller
             ->one();
 
         if (!$job) {
+            return null;
+        }
+
+        // If this job targets FOLIO Postgres, wait until no other FOLIO query is running
+        $jobDataSource = $job->hasAttribute('data_source') ? strtolower((string) ($job->data_source ?: 'folio')) : 'folio';
+        if ($jobDataSource === 'folio' && $this->isFolioQueryRunning()) {
             return null;
         }
 
