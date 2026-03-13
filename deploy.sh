@@ -127,6 +127,10 @@ if (file_exists($envFile)) {
         }
     }
 }
+// Always force production mode on bare-metal — JWT auth must never be bypassed.
+putenv('YII_ENV=prod');
+$_ENV['YII_ENV'] = 'prod';
+$_SERVER['YII_ENV'] = 'prod';
 ENVPHP
 echo "→ Generated env.php loader"
 
