@@ -2351,10 +2351,9 @@ class FolioQueryController extends Controller
             }
         }
 
-        // Non-admins see only their own jobs (unless already constrained above)
-        if (!$mineOnly && $userId && !$isAdmin) {
-            $query->andWhere(['qj.user_id' => $userId]);
-        }
+        // All authenticated users can see the full history.
+        // The 'Mine Only' toggle above lets users filter to their own jobs.
+        // Deletion is still restricted: canDelete checks ownership or admin role.
 
         $total = (clone $query)->count();
         $jobs  = $query->asArray()->all();
