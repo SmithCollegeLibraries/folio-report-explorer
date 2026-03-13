@@ -7,6 +7,7 @@ import {
   buildQuery,
   submitQuery,
   saveQuery,
+  downloadExportCsv,
 } from '../api/client';
 import { useJobPolling } from '../hooks/useJobPolling';
 import RelationshipPanel from '../components/RelationshipPanel';
@@ -128,13 +129,29 @@ export default function Builder() {
   });
 
   const execMut = useMutation({
-    mutationFn: (sql: string) => {
+    mutationFn: ({ sql, options }: { sql: string; options?: { confirmed?: boolean; outputMode?: 'table' | 'file' } }) => {
       const jobName = selectedTables.length > 0
         ? `Builder: ${selectedTables.slice(0, 3).join(', ')}${selectedTables.length > 3 ? ` +${selectedTables.length - 3} more` : ''}`
         : undefined;
-      return submitQuery(sql, {}, 'builder', jobName, 'folio', { confirmed: true, outputMode: 'table' });
+      return submitQuery(sql, {}, 'builder', jobName, 'folio', options);
     },
-    onSuccess: (data: { jobId: string }) => setActiveJobId(data.jobId),
+    onSuccess: (data, vars) => {
+      if (data.requiresConfirmation) {
+        const rowText = data.estimatedRows != null ? `~${data.estimatedRows.toLocaleString()} rows` : 'unknown row count';
+        const costText = data.estimatedCost != null ? `${Math.round(data.estimatedCost).toLocaleString()} cost` : 'unknown cost';
+        const shouldExport = window.confirm(
+          `This query is estimated as large (${rowText}, ${costText}).\n\nClick OK to run as CSV export in the background.\nClick Cancel to run in-browser with normal row limits.`,
+        );
+        execMut.mutate({
+          sql: vars.sql,
+          options: shouldExport ? { outputMode: 'file' } : { confirmed: true, outputMode: 'table' },
+        });
+        return;
+      }
+      if (data.jobId) {
+        setActiveJobId(data.jobId);
+      }
+    },
   });
 
   const saveMut = useMutation({
@@ -303,7 +320,7 @@ export default function Builder() {
           </button>
           {canRun && (
             <button
-              onClick={() => execMut.mutate(effectiveSql)}
+              onClick={() => execMut.mutate({ sql: effectiveSql })}
               disabled={execMut.isPending}
               className="flex items-center gap-1 bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700 disabled:opacity-50"
             >
@@ -534,7 +551,11 @@ export default function Builder() {
                   <Loader2 size={18} className="animate-spin text-blue-600 mt-0.5 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-semibold text-blue-800">
-                      {job.status === 'pending' ? 'Queued — waiting for worker…' : 'Running query…'}
+                      {job.status === 'pending'
+                        ? 'Queued — waiting for worker…'
+                        : job.status === 'pending_export'
+                          ? 'Queued for CSV export…'
+                          : 'Running query…'}
                     </div>
                     <div className="text-sm text-blue-600 mt-0.5">
                       Elapsed: <span className="font-mono font-medium">
@@ -563,7 +584,31 @@ export default function Builder() {
             {/* Results */}
             {results && (
               <div className="flex-1 overflow-auto p-4">
-                <ResultsTable data={results} />
+                {results.outputMode === 'file' ? (
+                  <div className="border border-blue-200 bg-blue-50 rounded-lg p-4 text-sm text-blue-800">
+                    <div className="font-medium mb-1">Export complete</div>
+                    <div className="mb-3">
+                      {results.columns.length > 0 && results.rows.length > 0
+                        ? 'Preview shown below. Download CSV for the full result set.'
+                        : 'This query was exported as CSV in the background. Download the file to view all data.'}
+                    </div>
+                    {results.downloadUrl && activeJobId && (
+                      <button
+                        onClick={() => downloadExportCsv(activeJobId)}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
+                      >
+                        Download full CSV
+                      </button>
+                    )}
+                    {results.columns.length > 0 && results.rows.length > 0 && (
+                      <div className="mt-4">
+                        <ResultsTable data={results} />
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <ResultsTable data={results} />
+                )}
               </div>
             )}
           </div>
