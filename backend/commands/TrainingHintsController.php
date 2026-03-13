@@ -54,9 +54,18 @@ class TrainingHintsController extends Controller
         $this->stdout("Exporting " . count($rows) . " training hints...\n");
 
         // --- 1. Write mysql/seed_training_hints.sql ---
+        // Note: in Docker only the backend/ directory is mounted, so @app/../mysql/
+        // may not be accessible. We skip gracefully and log a warning instead of
+        // crashing so that sync-json still runs successfully in Docker.
         $sqlPath = Yii::getAlias(self::SEED_SQL_PATH);
-        $this->writeSeedSql($rows, $sqlPath);
-        $this->stdout("  → " . realpath($sqlPath) . " (" . count($rows) . " rows)\n");
+        $sqlDir  = dirname($sqlPath);
+        if (is_writable($sqlDir) || (is_dir($sqlDir) && is_writable($sqlDir))) {
+            $this->writeSeedSql($rows, $sqlPath);
+            $this->stdout("  → " . realpath($sqlPath) . " (" . count($rows) . " rows)\n");
+        } else {
+            $this->stdout("  ⚠ Skipping seed SQL (target directory not accessible: {$sqlDir})\n");
+            $this->stdout("    Regenerate from host with: php /tmp/gen_seed.php\n");
+        }
 
         // --- 2. Write domain_hints.json ---
         $jsonPath = Yii::getAlias(self::DOMAIN_HINTS_PATH);
@@ -88,39 +97,62 @@ class TrainingHintsController extends Controller
         }
 
         $this->stdout("Reading dump: {$dumpPath}\n");
-        $sql = file_get_contents($dumpPath);
+        $rawSql = file_get_contents($dumpPath);
 
-        // Extract individual INSERT/REPLACE statements (handles both formats)
-        $insertPattern = '/(?:INSERT INTO|REPLACE INTO)\s+`?ai_training_hints`?\s*\([^)]+\)\s*VALUES\s*\([^;]+\);/i';
-        preg_match_all($insertPattern, $sql, $matches);
-
-        if (empty($matches[0])) {
-            $this->stderr("No INSERT/REPLACE statements found in dump.\n");
-            return ExitCode::UNSPECIFIED_ERROR;
-        }
-
-        $this->stdout("Found " . count($matches[0]) . " hint rows to import...\n");
+        // Detect format: Sequel Ace produces a single multi-row INSERT; the
+        // seed file produces individual REPLACE INTO statements per row.
+        //
+        // For single-statement format (Sequel Ace), we locate the INSERT block
+        // by finding the start of the INSERT INTO and the UNLOCK TABLES line
+        // that follows it, then execute the whole block as one REPLACE INTO.
+        //
+        // For per-row format (seed file), we extract each REPLACE INTO line.
+        //
+        // NOTE: we cannot use [^;]+ to find the end of an INSERT statement
+        // because SQL example values often contain embedded semicolons.
 
         $db = Yii::$app->db;
         $imported = 0;
         $errors = 0;
 
-        // Parse each row by re-reading the dump as structured data
-        // We use mysqli-style re-execution: convert INSERT INTO → REPLACE INTO
-        foreach ($matches[0] as $stmt) {
-            // Normalise to REPLACE INTO so existing rows are updated
-            $stmt = preg_replace('/^INSERT INTO/i', 'REPLACE INTO', $stmt);
-            // Strip backtick table name quoting issues
-            $stmt = preg_replace('/`ai_training_hints`/', 'ai_training_hints', $stmt);
-            // Remove backtick column name quoting
-            $stmt = preg_replace('/`(\w+)`/', '$1', $stmt);
+        // --- Attempt 1: per-row REPLACE INTO lines (seed file format) ---
+        preg_match_all('/^REPLACE INTO\s+`?ai_training_hints`?[^\n]+;/im', $rawSql, $perRow);
 
+        if (!empty($perRow[0])) {
+            $this->stdout("Found " . count($perRow[0]) . " per-row statements to import...\n");
+            foreach ($perRow[0] as $stmt) {
+                try {
+                    $db->createCommand($stmt)->execute();
+                    $imported++;
+                } catch (\Exception $e) {
+                    $this->stderr("  Error: " . $e->getMessage() . "\n");
+                    $errors++;
+                }
+            }
+        } else {
+            // --- Attempt 2: multi-row INSERT block (Sequel Ace format) ---
+            // Find the INSERT INTO...VALUES block and execute it as REPLACE INTO.
+            $insertStart = stripos($rawSql, 'INSERT INTO');
+            $unlockPos   = stripos($rawSql, 'UNLOCK TABLES', $insertStart !== false ? $insertStart : 0);
+
+            if ($insertStart === false || $unlockPos === false) {
+                $this->stderr("No INSERT/REPLACE statements found in dump.\n");
+                return ExitCode::UNSPECIFIED_ERROR;
+            }
+
+            // Extract from INSERT INTO up to (but not including) UNLOCK TABLES
+            $block = rtrim(substr($rawSql, $insertStart, $unlockPos - $insertStart));
+            // Convert INSERT INTO → REPLACE INTO
+            $block = preg_replace('/^INSERT INTO/i', 'REPLACE INTO', $block);
+
+            $this->stdout("Importing multi-row INSERT block (" . strlen($block) . " bytes)...\n");
             try {
-                $db->createCommand($stmt)->execute();
-                $imported++;
+                $db->createCommand($block)->execute();
+                // Count affected rows by querying the table after import
+                $imported = (int) $db->createCommand('SELECT COUNT(*) FROM ai_training_hints')->queryScalar();
+                $this->stdout("Import succeeded — {$imported} total rows now in table.\n");
             } catch (\Exception $e) {
-                $this->stderr("  Error on row: " . substr($stmt, 0, 100) . "...\n");
-                $this->stderr("  " . $e->getMessage() . "\n");
+                $this->stderr("  Error executing block: " . $e->getMessage() . "\n");
                 $errors++;
             }
         }

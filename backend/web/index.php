@@ -11,7 +11,11 @@ if (file_exists($envLoader)) {
     require $envLoader;
 }
 
-// In production, set YII_DEBUG=false and YII_ENV=prod in your .env file
+// In Docker the PHP-FPM process clears environment variables (clear_env = yes),
+// so getenv('YII_ENV') returns false even when docker-compose injects YII_ENV=dev.
+// The fallback is 'dev' so Docker development works without any extra config.
+// On bare-metal production, deploy.sh generates backend/config/env.php which
+// calls putenv('YII_ENV=prod') *before* this define(), so production is secure.
 defined('YII_DEBUG') or define('YII_DEBUG', getenv('YII_DEBUG') !== 'false');
 defined('YII_ENV') or define('YII_ENV', getenv('YII_ENV') ?: 'dev');
 

@@ -3,7 +3,7 @@ import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import {
   Database, Wrench, MessageSquare, FileBarChart, Bookmark, Settings,
   LayoutDashboard, Brain, History as HistoryIcon, Users as UsersIcon,
-  LogOut, ChevronDown, BookOpen, ShieldCheck, Menu, X,
+  LogOut, ChevronDown, BookOpen, ShieldCheck, Menu, X, Terminal,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Explorer from './pages/Explorer';
@@ -14,6 +14,7 @@ import Reports from './pages/Reports';
 import SettingsPage from './pages/Settings';
 import Training from './pages/Training';
 import History from './pages/History';
+import Console from './pages/Console';
 import UsersPage from './pages/Users';
 import LocalDataPage from './pages/LocalData.tsx';
 import AuthCallback from './pages/AuthCallback';
@@ -26,6 +27,7 @@ import { useAuth, getShibbolethLoginUrl } from './hooks/useAuth';
 const queryItems = [
   { to: '/ask',     label: 'Ask AI',        icon: MessageSquare, desc: 'Natural-language query' },
   { to: '/builder', label: 'Query Builder', icon: Wrench,        desc: 'Drag-and-drop SQL builder' },
+  { to: '/console', label: 'SQL Console',   icon: Terminal,      desc: 'Run raw SQL queries' },
   { to: '/explorer',label: 'Schema Explorer',icon: Database,     desc: 'Browse FOLIO tables' },
 ];
 
@@ -307,6 +309,13 @@ export default function App() {
         )}
       </header>
 
+      {/* Development environment banner */}
+      {import.meta.env.VITE_APP_ENV === 'development' && (
+        <div className="bg-amber-400 text-amber-900 text-xs font-semibold text-center py-1 px-3 tracking-wide z-30">
+          ⚠ DEVELOPMENT — Docker local environment
+        </div>
+      )}
+
       {/* Main content */}
       <main className="flex-1">
         <Routes>
@@ -324,6 +333,7 @@ export default function App() {
           <Route path="/saved" element={<ProtectedRoute><SavedQueries /></ProtectedRoute>} />
           <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
           <Route path="/history/:jobId" element={<ProtectedRoute><History /></ProtectedRoute>} />
+          <Route path="/console" element={<ProtectedRoute><Console /></ProtectedRoute>} />
 
           {/* Admin routes */}
           <Route path="/training" element={<ProtectedRoute adminOnly><Training /></ProtectedRoute>} />

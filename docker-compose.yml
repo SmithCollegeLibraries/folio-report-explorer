@@ -68,6 +68,7 @@ services:
       - frontend-node-modules:/app/node_modules
     environment:
       - VITE_API_URL=http://localhost:${NGINX_PORT:-8090}/api
+      - VITE_APP_ENV=development
     networks:
       - app-network
 
