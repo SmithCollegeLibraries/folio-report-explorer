@@ -263,7 +263,7 @@
         },
         {
             "question": "Smith instances missing MARC field 300",
-            "sql": "WITH sc_instances AS MATERIALIZED (\n    SELECT inst.id, inst.hrid, inst.title\n    FROM inventory.instance__t inst\n    WHERE EXISTS (\n        SELECT 1\n        FROM inventory.holdings_record__t hr\n        JOIN inventory.location__t loc ON loc.id = hr.permanent_location_id\n        JOIN inventory.loclibrary__t lib ON lib.id = loc.library_id\n        JOIN inventory.loccampus__t camp ON camp.id = lib.campus_id\n        WHERE hr.instance_id = inst.id AND camp.code = 'SC'\n    )\n)\nSELECT si.hrid, si.title\nFROM sc_instances si\nWHERE NOT EXISTS (\n    SELECT 1 FROM marctab.mt300 m\n    WHERE m.instance_hrid = si.hrid\n)\nLIMIT 100"
+            "sql": "WITH sc_instances AS MATERIALIZED (\n    SELECT inst.id, inst.hrid, inst.title\n    FROM inventory.instance__t inst\n    WHERE EXISTS (\n        SELECT 1\n        FROM inventory.holdings_record__t hr\n        JOIN inventory.location__t loc ON loc.id = hr.permanent_location_id\n        JOIN inventory.loclibrary__t lib ON lib.id = loc.library_id\n        JOIN inventory.loccampus__t camp ON camp.id = lib.campus_id\n        WHERE hr.instance_id = inst.id AND camp.code = 'SC'\n    )\n)\nSELECT si.hrid, si.title,\n    sr.parsed_record__content AS raw_marc\nFROM sc_instances si\nLEFT JOIN folio_source_record.records__t sr\n    ON sr.external_id = si.id::text AND sr.state = 'ACTUAL'\nWHERE NOT EXISTS (\n    SELECT 1 FROM marctab.mt300 m\n    WHERE m.instance_hrid = si.hrid\n)\nLIMIT 100"
         }
     ]
 }
