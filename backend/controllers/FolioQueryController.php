@@ -251,11 +251,35 @@ class FolioQueryController extends Controller
                 return null;
             }
 
-            $plan = $decoded[0]['Plan'];
+            // Walk the full plan tree to find the maximum cost across all nodes.
+            // A top-level LIMIT node can have a tiny cost even when an underlying
+            // Materialize/CTE node is enormously expensive — reading only the root
+            // would cause us to miss the real cost.
+            $stack = [$decoded[0]['Plan']];
+            $maxCost = 0.0;
+            $topRows = null;
+            $first = true;
+            while (!empty($stack)) {
+                $node = array_pop($stack);
+                if ($first) {
+                    $topRows = isset($node['Plan Rows']) ? (int) $node['Plan Rows'] : null;
+                    $first = false;
+                }
+                if (isset($node['Total Cost'])) {
+                    $maxCost = max($maxCost, (float) $node['Total Cost']);
+                }
+                foreach (['Plans', 'InitPlans'] as $key) {
+                    if (!empty($node[$key]) && is_array($node[$key])) {
+                        foreach ($node[$key] as $child) {
+                            $stack[] = $child;
+                        }
+                    }
+                }
+            }
 
             return [
-                'rows' => isset($plan['Plan Rows']) ? (int) $plan['Plan Rows'] : null,
-                'cost' => isset($plan['Total Cost']) ? (float) $plan['Total Cost'] : null,
+                'rows' => $topRows,
+                'cost' => $maxCost > 0 ? $maxCost : null,
             ];
         } catch (\Throwable $e) {
             return null;
