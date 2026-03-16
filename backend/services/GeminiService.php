@@ -40,6 +40,19 @@ class GeminiService
             $settings = json_decode(file_get_contents($settingsPath), true);
             $acqUnitCodes = $settings['acqUnitCodes'] ?? [];
         }
+        // Fallback defaults if settings file is missing or key not present
+        if (empty($acqUnitCodes)) {
+            $acqUnitCodes = [
+                'Smith College'               => 'SC',
+                'Amherst College'             => 'AC',
+                'Mount Holyoke College'       => 'MH',
+                'University Of Massachusetts' => 'UM',
+                'Hampshire College'           => 'HC',
+                'Five Colleges Collections'   => 'RP',
+                'National Yiddish Book Center'=> 'YB',
+            ];
+        }
+
         // Build optional campus-scope rule (injected as Rule 17 in the system prompt)
         $campusRule = '';
         if ($campus && $campus !== 'All Colleges') {
@@ -97,6 +110,15 @@ RULES:
     If a column is marked as TEXT containing JSON, prefer an alternative table listed under PREFER,
     or cast explicitly with ::jsonb only as a last resort. Sample values listed for enum-like columns
     show the exact casing stored in the database — always match that casing (ILIKE or LOWER()).
+18. PERFORMANCE — ORDER BY: Do NOT add ORDER BY unless the user explicitly requests sorted or
+    ranked results (keywords: "top N", "highest", "lowest", "sorted by", "alphabetical").
+    ORDER BY forces PostgreSQL to materialize and sort the ENTIRE result set before returning
+    the first row — even with LIMIT 100 the planner must find and sort all matching rows first.
+    On large datasets (10K+ rows) this adds massive overhead with no benefit to the user.
+    OMIT ORDER BY for: listing queries, existence checks, missing-field reports, any general
+    "show me records" query where the user did not ask for a specific order.
+    KEEP ORDER BY only for: ranking queries (ORDER BY count DESC LIMIT 20), explicit top-N
+    requests, or when the user specifically asks for a sorted result.
 {$campusRule}
 
 SCHEMA:
@@ -289,12 +311,10 @@ PROMPT;
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
         $client = new Client();
-        $client->transport = 'yii\\httpclient\\CurlTransport';
         $response = $client->createRequest()
             ->setMethod('POST')
             ->setUrl($url)
             ->setHeaders(['Content-Type' => 'application/json'])
-            ->addOptions([CURLOPT_TIMEOUT => 120])
             ->setContent(json_encode([
                 'contents' => [
                     [
@@ -348,8 +368,6 @@ PROMPT;
         $tableNames = FolioSchemaService::getTableNames();
         $metadbMap = FolioSchemaService::discoverTableMapping();
         $metadbValues = array_flip(array_values($metadbMap));
-        $subtableMap = FolioSchemaService::discoverSubtables();
-        $subtableNames = array_flip(array_keys($subtableMap));
         $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];
 
         // Extract table references from FROM and JOIN clauses
@@ -367,11 +385,6 @@ PROMPT;
             // Check if it's a known MetaDB name (schema.table format)
             if (isset($metadbValues[$ref])) {
                 continue; // Valid MetaDB table
-            }
-
-            // Check if it's a known subtable (schema.parent__t__child)
-            if (isset($subtableNames[$ref])) {
-                continue;
             }
 
             // Check if it's a known LDP1 name
@@ -435,25 +448,30 @@ RULES:
    For text/name comparisons, use case-insensitive matching (LOWER() or ILIKE). Database values are often Title Case.
    For item location joins, ALWAYS use item__t.effective_location_id (NOT holdings_record__t.permanent_location_id).
 7. For parameters that users should fill in, use :paramName placeholders (PDO bind syntax).
-8. Choose appropriate parameter types: date, text, select, number, boolean.
-9. For text filters that should do partial matching, add "wrap": "like" to the parameter definition.
-10. For select parameters, include "options_sql" — a small SQL query to populate the dropdown.
-11. NEVER use the PostgreSQL ? operator for JSONB queries — PDO treats ? as a positional parameter placeholder.
+7. Choose appropriate parameter types: date, text, select, number, boolean.
+8. For text filters that should do partial matching, add "wrap": "like" to the parameter definition.
+9. For select parameters, include "options_sql" — a small SQL query to populate the dropdown.
+10. NEVER use the PostgreSQL ? operator for JSONB queries — PDO treats ? as a positional parameter placeholder.
     Instead of: data->'key' ? :param  use: po.acq_unit_ids = :param (LDLite tables have denormalized columns).
     If you must query JSONB, use jsonb_exists(data->'key', :param) instead of the ? operator.
-12. ALWAYS prefer SUBTABLES over JSONB/data column queries. Subtables (pattern: schema.parent__t__child) are
+11. ALWAYS prefer SUBTABLES over JSONB/data column queries. Subtables (pattern: schema.parent__t__child) are
     flattened versions of nested JSON arrays. They join to their parent on id.
     Examples:
     - Use invoice.invoice_lines__t__fund_distributions instead of data->'fundDistributions' or jsonb_array_elements()
     - Use orders.purchase_order__t__acq_unit_ids instead of data->'acqUnitIds'
     - Use finance.fund__t__acq_unit_ids instead of data->'acqUnitIds'
     NEVER use data-> column references or jsonb_array_elements() — these do not exist in __t tables.
-13. Use smart default macros where appropriate:
+12. Use smart default macros where appropriate:
     - \$fiscal_year_start — July 1 of current fiscal year
     - \$fiscal_year_end — June 30 of current fiscal year  
     - \$today — current date
     - \$30_days_ago — 30 days before today
     - \$90_days_ago — 90 days before today
+13. PERFORMANCE — ORDER BY: Do NOT add ORDER BY unless the user explicitly requests sorted or
+    ranked results (e.g. "top N", "highest", "sorted by"). ORDER BY forces PostgreSQL to
+    materialize the ENTIRE result set before returning any rows — even with LIMIT 100.
+    OMIT ORDER BY for listing/existence/missing-field queries. KEEP it only for ranking
+    (ORDER BY count DESC) or when the user explicitly asks for sorted output.
 
 SCHEMA:
 {$schemaContext}
@@ -484,12 +502,10 @@ PROMPT;
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
         $client = new \yii\httpclient\Client();
-        $client->transport = 'yii\\httpclient\\CurlTransport';
         $response = $client->createRequest()
             ->setMethod('POST')
             ->setUrl($url)
             ->setHeaders(['Content-Type' => 'application/json'])
-            ->addOptions([CURLOPT_TIMEOUT => 120])
             ->setContent(json_encode([
                 'system_instruction' => [
                     'parts' => [['text' => $systemPrompt]],
@@ -591,6 +607,11 @@ CONVERSION RULES:
    - \$today — current date
    - \$30_days_ago — 30 days before today
    - \$90_days_ago — 90 days before today
+12. PERFORMANCE — ORDER BY: Do NOT add ORDER BY unless the user explicitly requests sorted or
+   ranked results (e.g. "top N", "highest", "sorted by"). ORDER BY forces PostgreSQL to
+   materialize the ENTIRE result set before returning any rows — even with LIMIT 100.
+   OMIT ORDER BY for listing/existence/missing-field queries. KEEP it only for ranking
+   (ORDER BY count DESC) or when the user explicitly asks for sorted output.
 
 AVAILABLE SCHEMA (use these exact table/column names):
 {$schemaContext}
@@ -623,12 +644,10 @@ PROMPT;
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
         $client = new \yii\httpclient\Client();
-        $client->transport = 'yii\\httpclient\\CurlTransport';
         $response = $client->createRequest()
             ->setMethod('POST')
             ->setUrl($url)
             ->setHeaders(['Content-Type' => 'application/json'])
-            ->addOptions([CURLOPT_TIMEOUT => 120])
             ->setContent(json_encode([
                 'system_instruction' => [
                     'parts' => [['text' => $systemPrompt]],
