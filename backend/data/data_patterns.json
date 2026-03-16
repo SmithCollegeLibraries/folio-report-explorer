@@ -25,7 +25,7 @@
                 "For MARC field-level queries (find by subject, title, ISBN, check field existence), ALWAYS use marctab.mtNNN tables — e.g. marctab.mt245 for title, marctab.mt300 for physical description. marctab tables are faster and avoid JSON.",
                 "Use records__t ONLY for record-level status queries: checking deleted=true, additional_info__suppress_discovery, or record_type.",
                 "NEVER use -> or ->> JSONB operators on parsed_record__content — it is a TEXT column. It stores a JSON string that must be cast with ::jsonb before JSON extraction, but prefer marctab over ever doing this.",
-                "To find records MISSING a MARC field: LEFT JOIN marctab.mtNNN m ON m.instance_hrid = inst.hrid, then WHERE m.srs_id IS NULL.",
+                "To find records MISSING a MARC field: NOT EXISTS (SELECT 1 FROM marctab.mtNNN m WHERE m.instance_hrid = inst.hrid). Do NOT use LEFT JOIN ... WHERE m.srs_id IS NULL — NOT EXISTS is cleaner and lets PostgreSQL use Index Only Scan.",
                 "To join records__t to inventory: external_ids_holder__instance_id = inventory.instance__t.id (UUID stored as text)."
             ]
         },
@@ -366,13 +366,21 @@
             }
         },
         "inventory.item__t": {
+            "columnWarnings": {
+                "holdings_record_id": "TEXT type — target holdings_record__t.id is UUID. Cast the UUID side: ii.holdings_record_id = hr.id::text",
+                "effective_location_id": "TEXT type — target location__t.id is UUID. Cast the UUID side: ii.effective_location_id = loc.id::text",
+                "permanent_location_id": "TEXT type — target location__t.id is UUID. Cast the UUID side: ii.permanent_location_id = loc.id::text",
+                "material_type_id": "TEXT type — target material_type__t.id is UUID. Filter with subquery: ii.material_type_id = (SELECT id::text FROM inventory.material_type__t WHERE LOWER(name) = 'book' LIMIT 1)"
+            },
             "preferredApproach": [
                 "item__t has 10M+ rows. Available indexes: item__t_id_idx (id), item__t___id_idx (__id), idx_item_holdings_material (holdings_record_id, material_type_id).",
                 "ALWAYS access items through holdings_record_id to use the composite index. Never scan item__t first and join back to holdings.",
                 "There is NO index on effective_location_id. For location-based queries, scope through holdings permanent_location_id first, then check items.",
                 "For material type filtering, use the composite index: WHERE ii.holdings_record_id = hr.id AND ii.material_type_id = <uuid>.",
                 "Use nested EXISTS from holdings to items: EXISTS (SELECT 1 FROM inventory.item__t ii WHERE ii.holdings_record_id = hr.id AND ii.material_type_id = ...).",
-                "Use inventory.item__t for current item status and availability snapshots; use circulation tables for loan events."
+                "Use inventory.item__t for current item status and availability snapshots; use circulation tables for loan events.",
+                "CRITICAL TYPE CAST: item__t FK columns (holdings_record_id, effective_location_id, permanent_location_id, material_type_id) are stored as TEXT in LDP. Target table PKs are UUID. ALWAYS cast the UUID side to TEXT: hr.id::text, loc.id::text. Lookup-to-lookup joins on small reference tables (e.g. loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID natively — no cast needed.",
+                "SINGLE-PASS CTE: When the query needs item-level detail columns in output (call_number, barcode, location name) — not just instance-level (hrid, title) — use one MATERIALIZED CTE that joins item→holdings→instance→location in a single pass, collecting both filter matches and output columns. Then apply NOT EXISTS and other filters against the small CTE result. This avoids scanning item__t twice (single-pass 474K cost vs nested EXISTS + re-join 971K cost). Pattern: WITH items AS MATERIALIZED (SELECT inst.hrid, inst.title, ii.effective_call_number_components__call_number, loc.name FROM item__t ii JOIN holdings_record__t hr ON ii.holdings_record_id = hr.id::text JOIN instance__t inst ON hr.instance_id = inst.id::text JOIN location__t loc ON ii.effective_location_id = loc.id::text WHERE ...filter...) SELECT ... FROM items WHERE NOT EXISTS (SELECT 1 FROM marctab.mtNNN m WHERE m.instance_hrid = items.instance_hrid);"
             ]
         },
         "inventory.instance__t": {

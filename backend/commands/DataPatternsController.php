@@ -106,7 +106,7 @@ class DataPatternsController extends Controller
             'For MARC field-level queries (find by subject, title, ISBN, check field existence), ALWAYS use marctab.mtNNN tables — e.g. marctab.mt245 for title, marctab.mt300 for physical description. marctab tables are faster and avoid JSON.',
             'Use records__t ONLY for record-level status queries: checking deleted=true, additional_info__suppress_discovery, or record_type.',
             'NEVER use -> or ->> JSONB operators on parsed_record__content — it is a TEXT column. It stores a JSON string that must be cast with ::jsonb before JSON extraction, but prefer marctab over ever doing this.',
-            'To find records MISSING a MARC field: LEFT JOIN marctab.mtNNN m ON m.instance_hrid = inst.hrid, then WHERE m.srs_id IS NULL.',
+            'To find records MISSING a MARC field: NOT EXISTS (SELECT 1 FROM marctab.mtNNN m WHERE m.instance_hrid = inst.hrid). Do NOT use LEFT JOIN ... WHERE m.srs_id IS NULL — NOT EXISTS is cleaner and lets PostgreSQL use Index Only Scan.',
             'To join records__t to inventory: external_ids_holder__instance_id = inventory.instance__t.id (UUID stored as text).',
         ],
         'circulation.loan__t' => [
