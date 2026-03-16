@@ -239,7 +239,9 @@ class ExportWorkerController extends Controller
     }
 
     /**
-     * Replace/append top-level LIMIT for export mode.
+     * Replace/append top-level LIMIT for export mode, and strip any top-level
+     * ORDER BY clause (sorting all rows before streaming is extremely expensive
+     * and unnecessary for a CSV download).
      *
      * @param string $sql
      * @param int $maxRows
@@ -248,10 +250,50 @@ class ExportWorkerController extends Controller
     private function applyExportLimit($sql, $maxRows)
     {
         $trimmed = rtrim($sql, "; \n\t");
+        $trimmed = $this->stripTopLevelOrderBy($trimmed);
         if (preg_match('/\bLIMIT\s+\d+\s*$/i', $trimmed)) {
             return preg_replace('/\bLIMIT\s+\d+\s*$/i', 'LIMIT ' . (int)$maxRows, $trimmed);
         }
         return $trimmed . "\nLIMIT " . (int)$maxRows;
+    }
+
+    /**
+     * Remove the outermost ORDER BY clause from a SQL string without touching
+     * ORDER BY clauses inside subqueries or CTEs.
+     *
+     * @param string $sql
+     * @return string
+     */
+    private function stripTopLevelOrderBy(string $sql): string
+    {
+        $depth = 0;
+        $len = strlen($sql);
+        $lastOrderByPos = -1;
+
+        for ($i = 0; $i < $len; $i++) {
+            $c = $sql[$i];
+            if ($c === '(') {
+                $depth++;
+            } elseif ($c === ')') {
+                $depth--;
+            } elseif ($depth === 0 && strtoupper(substr($sql, $i, 5)) === 'ORDER') {
+                if (preg_match('/^ORDER\s+BY\b/i', substr($sql, $i))) {
+                    $lastOrderByPos = $i;
+                }
+            }
+        }
+
+        if ($lastOrderByPos === -1) {
+            return $sql;
+        }
+
+        $before = rtrim(substr($sql, 0, $lastOrderByPos));
+        $after = substr($sql, $lastOrderByPos);
+
+        // Strip "ORDER BY ..." up to the LIMIT clause or end of string
+        $after = preg_replace('/^ORDER\s+BY\b.+?(?=\s*\bLIMIT\b|\s*$)/is', '', $after);
+
+        return $before . $after;
     }
 
     /**
