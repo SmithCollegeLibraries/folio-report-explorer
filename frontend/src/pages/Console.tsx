@@ -17,6 +17,9 @@ export default function Console() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [outputPref, setOutputPref] = useState<'preview' | 'full'>(
+    () => (localStorage.getItem('folio_output_pref') as 'preview' | 'full') ?? 'preview',
+  );
 
   const {
     results,
@@ -33,29 +36,9 @@ export default function Console() {
       options,
     }: {
       sqlToRun: string;
-      options?: { confirmed?: boolean; outputMode?: 'table' | 'file' };
+      options?: { outputMode?: 'table' | 'file' };
     }) => submitQuery(sqlToRun, {}, 'manual', undefined, dataSource, options),
-    onSuccess: (data, vars) => {
-      if (data.requiresConfirmation) {
-        const rowText =
-          data.estimatedRows != null
-            ? `~${data.estimatedRows.toLocaleString()} rows`
-            : 'unknown row count';
-        const costText =
-          data.estimatedCost != null
-            ? `${Math.round(data.estimatedCost).toLocaleString()} cost`
-            : 'unknown cost';
-        const shouldExport = window.confirm(
-          `This query is estimated as large (${rowText}, ${costText}).\n\nClick OK to run as CSV export in the background.\nClick Cancel to run in-browser with normal row limits.`,
-        );
-        execMut.mutate({
-          sqlToRun: vars.sqlToRun,
-          options: shouldExport
-            ? { outputMode: 'file' }
-            : { confirmed: true, outputMode: 'table' },
-        });
-        return;
-      }
+    onSuccess: (data) => {
       if (data.jobId) {
         setActiveJobId(data.jobId);
       }
@@ -67,7 +50,7 @@ export default function Console() {
     if (!trimmed || trimmed === '--') return;
     resetJob();
     setActiveJobId(null);
-    execMut.mutate({ sqlToRun: trimmed });
+    execMut.mutate({ sqlToRun: trimmed, options: { outputMode: outputPref === 'full' ? 'file' : 'table' } });
   };
 
   const handleExplain = () => {
@@ -121,30 +104,59 @@ export default function Console() {
             </span>
           </div>
 
-          {/* Data source toggle */}
-          <div className="flex items-center gap-3 mb-3">
-            <span className="text-xs font-medium text-gray-500">Data source:</span>
-            <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
-              <button
-                onClick={() => setDataSource('folio')}
-                className={`px-3 py-1.5 transition-colors ${
-                  dataSource === 'folio'
-                    ? 'bg-folio-600 text-white'
-                    : 'text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                FOLIO (PostgreSQL)
-              </button>
-              <button
-                onClick={() => setDataSource('local')}
-                className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
-                  dataSource === 'local'
-                    ? 'bg-folio-600 text-white'
-                    : 'text-gray-600 hover:bg-gray-50'
-                }`}
-              >
-                Local (MySQL)
-              </button>
+          {/* Data source + output preference toggles */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-3">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-medium text-gray-500">Data source:</span>
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                <button
+                  onClick={() => setDataSource('folio')}
+                  className={`px-3 py-1.5 transition-colors ${
+                    dataSource === 'folio'
+                      ? 'bg-folio-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  FOLIO (PostgreSQL)
+                </button>
+                <button
+                  onClick={() => setDataSource('local')}
+                  className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
+                    dataSource === 'local'
+                      ? 'bg-folio-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Local (MySQL)
+                </button>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-medium text-gray-500">Results:</span>
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                <button
+                  onClick={() => { setOutputPref('preview'); localStorage.setItem('folio_output_pref', 'preview'); }}
+                  className={`px-3 py-1.5 transition-colors ${
+                    outputPref === 'preview'
+                      ? 'bg-folio-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                  title="Show up to 100 rows in the browser"
+                >
+                  Preview (100 rows)
+                </button>
+                <button
+                  onClick={() => { setOutputPref('full'); localStorage.setItem('folio_output_pref', 'full'); }}
+                  className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
+                    outputPref === 'full'
+                      ? 'bg-folio-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                  title="Export all rows as a downloadable CSV"
+                >
+                  All results (CSV)
+                </button>
+              </div>
             </div>
           </div>
 
@@ -236,6 +248,7 @@ export default function Console() {
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 font-mono whitespace-pre-wrap">
               <strong className="font-sans font-semibold">Error: </strong>
               {jobError ||
+                ((execMut.error as any)?.response?.data?.error) ||
                 (execMut.error instanceof Error
                   ? execMut.error.message
                   : String(execMut.error))}

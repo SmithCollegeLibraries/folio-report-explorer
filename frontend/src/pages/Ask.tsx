@@ -73,6 +73,16 @@ export default function Ask() {
     }
   };
 
+  // Output preference state — persisted across sessions
+  const [outputPref, setOutputPref] = useState<'preview' | 'full'>(
+    () => (localStorage.getItem('folio_output_pref') as 'preview' | 'full') ?? 'preview',
+  );
+
+  const handleOutputPrefChange = (pref: 'preview' | 'full') => {
+    setOutputPref(pref);
+    localStorage.setItem('folio_output_pref', pref);
+  };
+
   // Correction state
   const [correcting, setCorrecting] = useState(false);
   const [correctedSql, setCorrectedSql] = useState('');
@@ -108,24 +118,9 @@ export default function Ask() {
     }: {
       sql: string;
       dataSource?: 'folio' | 'local';
-      options?: { confirmed?: boolean; outputMode?: 'table' | 'file' };
+      options?: { outputMode?: 'table' | 'file' };
     }) => submitQuery(sql, {}, 'nl', prompt.trim() || undefined, dataSource || 'folio', options),
-    onSuccess: (data, vars) => {
-      if (data.requiresConfirmation) {
-        const rowText = data.estimatedRows != null ? `~${data.estimatedRows.toLocaleString()} rows` : 'unknown row count';
-        const costText = data.estimatedCost != null ? `${Math.round(data.estimatedCost).toLocaleString()} cost` : 'unknown cost';
-        const shouldExport = window.confirm(
-          `This query is estimated as large (${rowText}, ${costText}).\n\nClick OK to run as CSV export in the background.\nClick Cancel to run in-browser with normal row limits.`,
-        );
-
-        execMut.mutate({
-          sql: vars.sql,
-          dataSource: vars.dataSource,
-          options: shouldExport ? { outputMode: 'file' } : { confirmed: true, outputMode: 'table' },
-        });
-        return;
-      }
-
+    onSuccess: (data) => {
       if (data.jobId) {
         setActiveJobId(data.jobId);
       }
@@ -145,7 +140,11 @@ export default function Ask() {
       setHistory((prev) => [{ prompt: question, result: data }, ...prev].slice(0, 20));
       // Auto-run the generated SQL
       if (data.sql) {
-        execMut.mutate({ sql: data.sql, dataSource: data.dataSource || 'folio' });
+        execMut.mutate({
+          sql: data.sql,
+          dataSource: data.dataSource || 'folio',
+          options: { outputMode: outputPref === 'full' ? 'file' : 'table' },
+        });
       }
     },
   });
@@ -223,23 +222,52 @@ export default function Ask() {
             <h2 className="text-lg font-semibold">Ask AI</h2>
           </div>
 
-          {/* Campus scope selector */}
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-xs text-gray-500 font-medium flex-shrink-0">Scope to:</span>
-            <select
-              value={selectedCampus}
-              onChange={(e) => handleCampusChange(e.target.value)}
-              className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 focus:ring-2 focus:ring-folio-300 focus:border-folio-400 outline-none cursor-pointer"
-            >
-              {CAMPUS_OPTIONS.map((c) => (
-                <option key={c.code} value={c.name}>{c.name}</option>
-              ))}
-            </select>
-            {selectedCampus !== 'All Colleges' && (
-              <span className="text-xs text-folio-600">
-                Queries will be filtered to {selectedCampus}
-              </span>
-            )}
+          {/* Campus scope selector + output preference */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 font-medium flex-shrink-0">Scope to:</span>
+              <select
+                value={selectedCampus}
+                onChange={(e) => handleCampusChange(e.target.value)}
+                className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 focus:ring-2 focus:ring-folio-300 focus:border-folio-400 outline-none cursor-pointer"
+              >
+                {CAMPUS_OPTIONS.map((c) => (
+                  <option key={c.code} value={c.name}>{c.name}</option>
+                ))}
+              </select>
+              {selectedCampus !== 'All Colleges' && (
+                <span className="text-xs text-folio-600">
+                  Queries will be filtered to {selectedCampus}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 font-medium flex-shrink-0">Results:</span>
+              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                <button
+                  onClick={() => handleOutputPrefChange('preview')}
+                  className={`px-3 py-1.5 transition-colors ${
+                    outputPref === 'preview'
+                      ? 'bg-folio-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                  title="Show up to 100 rows in the browser"
+                >
+                  Preview (100 rows)
+                </button>
+                <button
+                  onClick={() => handleOutputPrefChange('full')}
+                  className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
+                    outputPref === 'full'
+                      ? 'bg-folio-600 text-white'
+                      : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                  title="Export all rows as a downloadable CSV"
+                >
+                  All results (CSV)
+                </button>
+              </div>
+            </div>
           </div>
 
           <p className="text-sm text-gray-500 mb-4">
@@ -351,7 +379,9 @@ export default function Ask() {
         )}
         {nlResult && execMut.isError && (
           <div className="max-w-4xl mx-auto mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-            Submit error: {String(execMut.error)}
+            {(execMut.error as any)?.response?.data?.error
+              ? `Query error: ${(execMut.error as any).response.data.error}`
+              : `Submit error: ${String(execMut.error)}`}
           </div>
         )}
         {nlResult && jobError && (

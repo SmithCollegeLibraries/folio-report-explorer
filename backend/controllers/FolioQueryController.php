@@ -282,7 +282,17 @@ class FolioQueryController extends Controller
                 'cost' => $maxCost > 0 ? $maxCost : null,
             ];
         } catch (\Throwable $e) {
-            return null;
+            $msg = $e->getMessage();
+            // Statement timeout means EXPLAIN itself was cut short — can't validate but not necessarily invalid SQL.
+            if (stripos($msg, 'statement timeout') !== false || stripos($msg, 'canceling statement') !== false) {
+                return null;
+            }
+            // Extract the useful part of PostgreSQL error messages.
+            // Yii wraps them as: "SQLSTATE[42601]: Syntax error: 7 ERROR:  syntax error at or near ..."
+            if (preg_match('/ERROR:\s*(.+?)(?:\n|HINT:|DETAIL:|$)/s', $msg, $m)) {
+                return ['error' => trim($m[1])];
+            }
+            return ['error' => $msg];
         }
     }
 
@@ -558,24 +568,24 @@ class FolioQueryController extends Controller
         }
 
         $estimate = null;
-        if ($outputMode !== 'file' && !$confirmed && $dataSource === 'folio') {
+        if ($dataSource === 'folio') {
             $estimate = $this->estimateQueryComplexity($sql, $dataSource);
-            $thresholdRows = (int) (Yii::$app->params['exportRowThreshold'] ?? Yii::$app->params['maxQueryRows']);
-            $thresholdCost = (float) (Yii::$app->params['exportCostThreshold'] ?? 500000);
-            $estimatedRows = $estimate['rows'] ?? null;
-            $estimatedCost = $estimate['cost'] ?? null;
-
-            $isLarge = ($estimatedRows !== null && $estimatedRows > $thresholdRows)
-                || ($estimatedCost !== null && $estimatedCost > $thresholdCost);
-
-            if ($isLarge) {
-                return [
-                    'requiresConfirmation' => true,
-                    'estimatedRows' => $estimatedRows,
-                    'estimatedCost' => $estimatedCost,
-                    'sql' => $sql,
-                    'dataSource' => $dataSource,
-                ];
+            // Surface PostgreSQL validation errors immediately instead of queuing a doomed 30-minute job.
+            if (isset($estimate['error'])) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => $estimate['error']];
+            }
+            // Auto-route large queries to file export so the user gets all rows without a truncated table.
+            if ($outputMode !== 'file' && $estimate !== null) {
+                $thresholdRows = (int) (Yii::$app->params['exportRowThreshold'] ?? Yii::$app->params['maxQueryRows']);
+                $thresholdCost = (float) (Yii::$app->params['exportCostThreshold'] ?? 500000);
+                $estimatedRows = $estimate['rows'] ?? null;
+                $estimatedCost = $estimate['cost'] ?? null;
+                $isLarge = ($estimatedRows !== null && $estimatedRows > $thresholdRows)
+                    || ($estimatedCost !== null && $estimatedCost > $thresholdCost);
+                if ($isLarge) {
+                    $outputMode = 'file';
+                }
             }
         }
 
