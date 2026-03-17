@@ -5,12 +5,13 @@ import {
   fetchExpenseMonitorCodes,
   saveExpenseMonitors,
   refreshExpenseMonitor,
+  checkJobStatus,
 } from '../api/client';
 import { useJobPolling } from '../hooks/useJobPolling';
 import type { ExpenseMonitorCode, ExecuteResponse } from '../types';
 import {
   DollarSign, Settings, RefreshCw, Loader2, AlertCircle,
-  X, Check, ChevronRight, ChevronLeft, Info,
+  X, Check, ChevronRight, ChevronLeft, Info, GripVertical, PinOff,
 } from 'lucide-react';
 
 // ── Row type for the results table ────────────────────────────────
@@ -174,9 +175,13 @@ function CodeSelector({ available, selected, loading, onSave, onClose }: CodeSel
 interface Props {
   /** Initial fiscal year (defaults to current). Managed internally after mount. */
   fiscalYear?: number;
+  /** Job ID from the last completed run; used to load cached results on mount without re-running. */
+  initialJobId?: string | null;
+  /** Called when the user clicks the remove-from-dashboard button. */
+  onRemove?: () => void;
 }
 
-export default function ExpenseMonitorCard({ fiscalYear }: Props) {
+export default function ExpenseMonitorCard({ fiscalYear, initialJobId, onRemove }: Props) {
   const navigate = useNavigate();
 
   const [activeYear, setActiveYear] = useState<number>(
@@ -199,6 +204,7 @@ export default function ExpenseMonitorCard({ fiscalYear }: Props) {
   // Async job polling
   const [pollingJobId, setPollingJobId] = useState<string | null>(null);
   const { results: polledResults, isRunning, error: pollError, reset: resetPoll } = useJobPolling(pollingJobId);
+  const [loadingCache, setLoadingCache] = useState(false);
 
   // Load the user's monitored codes on mount
   const loadMonitoredCodes = useCallback(async () => {
@@ -215,21 +221,36 @@ export default function ExpenseMonitorCard({ fiscalYear }: Props) {
 
   useEffect(() => { loadMonitoredCodes(); }, [loadMonitoredCodes]);
 
-  // When polling finishes, update results
+  // On mount: load cached results from the last completed job (no auto-run)
+  useEffect(() => {
+    if (!initialJobId) return;
+    setLoadingCache(true);
+    checkJobStatus(initialJobId)
+      .then((job) => {
+        if (job.status === 'completed' && job.columns && job.rows) {
+          setResults(parseResults({
+            columns: job.columns,
+            rows: job.rows,
+            rowCount: job.rowCount ?? job.rows.length,
+            executionTimeMs: job.executionTimeMs ?? 0,
+            sql: '',
+          } as ExecuteResponse));
+          setLastRefreshed('Cached');
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoadingCache(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When polling finishes: update results and persist job id so next load shows cached data
   useEffect(() => {
     if (polledResults) {
+      if (pollingJobId) localStorage.setItem('bm_last_job_id', pollingJobId);
       setResults(parseResults(polledResults));
       setLastRefreshed(new Date().toLocaleTimeString());
     }
-  }, [polledResults]);
-
-  // Auto-run once we have codes (on mount / after codes change)
-  useEffect(() => {
-    if (monitoredCodes.length > 0 && !isRunning && results === null) {
-      handleRefresh();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monitoredCodes]);
+  }, [polledResults, pollingJobId]);
 
   // Re-run when the user changes the fiscal year
   useEffect(() => {
@@ -309,10 +330,11 @@ export default function ExpenseMonitorCard({ fiscalYear }: Props) {
 
   return (
     <>
-      <div className="border rounded-xl bg-white shadow-sm flex flex-col col-span-full">
+      <div className="border rounded-xl bg-white shadow-sm flex flex-col">
         {/* Header */}
-        <div className="px-4 py-3 border-b">
-          <div className="flex items-center gap-3">
+        <div className="px-3 py-2.5 border-b">
+          <div className="flex items-center gap-2">
+            <GripVertical size={14} className="text-gray-300 flex-shrink-0 cursor-grab active:cursor-grabbing" />
             <div className="p-1.5 bg-folio-50 rounded-lg flex-shrink-0">
               <DollarSign size={16} className="text-folio-600" />
             </div>
@@ -343,32 +365,41 @@ export default function ExpenseMonitorCard({ fiscalYear }: Props) {
                 <ChevronRight size={14} />
               </button>
             </div>
-            <div className="flex items-center gap-1 flex-shrink-0">
+            <div className="flex items-center gap-0.5 flex-shrink-0">
               {isRunning ? (
-                <Loader2 size={14} className="animate-spin text-folio-600 mx-1" />
+                <Loader2 size={13} className="animate-spin text-folio-600 mx-1" />
               ) : (
                 <button
                   onClick={handleRefresh}
                   title="Refresh budget data"
-                  className="p-1.5 text-gray-400 hover:text-folio-600 rounded transition-colors"
+                  className="p-1 text-gray-400 hover:text-folio-600 rounded transition-colors"
                 >
-                  <RefreshCw size={14} />
+                  <RefreshCw size={13} />
                 </button>
               )}
               <button
                 onClick={openSelector}
                 title="Configure monitored expense classes"
-                className="p-1.5 text-gray-400 hover:text-folio-600 rounded transition-colors"
+                className="p-1 text-gray-400 hover:text-folio-600 rounded transition-colors"
               >
-                <Settings size={14} />
+                <Settings size={13} />
               </button>
               <button
                 onClick={() => navigate('/reports/36')}
                 title="Open Budget Year Expense Class Report"
-                className="flex items-center gap-1 px-2 py-1 text-xs text-folio-600 hover:text-folio-700 border border-folio-200 rounded-lg hover:bg-folio-50 transition-colors"
+                className="flex items-center gap-1 px-2 py-0.5 text-xs text-folio-600 hover:text-folio-700 border border-folio-200 rounded-lg hover:bg-folio-50 transition-colors"
               >
-                Full Report <ChevronRight size={12} />
+                Full Report <ChevronRight size={11} />
               </button>
+              {onRemove && (
+                <button
+                  onClick={onRemove}
+                  title="Remove from dashboard"
+                  className="p-1 text-gray-300 hover:text-red-500 rounded transition-colors"
+                >
+                  <PinOff size={13} />
+                </button>
+              )}
             </div>
           </div>
           {/* Info strip: tracked codes */}
@@ -427,10 +458,10 @@ export default function ExpenseMonitorCard({ fiscalYear }: Props) {
 
         {/* Body */}
         <div className="overflow-x-auto">
-          {(isRunning && !results) ? (
+          {(loadingCache || (isRunning && !results)) ? (
             <div className="flex items-center justify-center py-10 gap-2 text-gray-400">
               <Loader2 size={18} className="animate-spin text-folio-600" />
-              <span className="text-sm">Loading budget data…</span>
+              <span className="text-sm">{isRunning ? 'Loading budget data…' : 'Loading…'}</span>
             </div>
           ) : pollError ? (
             <div className="flex items-center gap-2 text-sm text-red-600 p-4">

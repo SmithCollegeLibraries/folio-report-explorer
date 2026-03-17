@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   fetchDashboard, reorderDashboard, hideDashboardItem, showDashboardItem,
   toggleGlobal, togglePin, checkJobStatus, refreshDashboardCard, saveDashboardDisplay,
-  fetchDashboardWidgets,
+  fetchDashboardWidgets, removeDashboardWidget,
 } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
@@ -15,7 +15,7 @@ import DashboardWidgetGallery from '../components/DashboardWidgetGallery';
 import type { ChartType } from '../components/ChartPanel';
 import type { DashboardItem, ExecuteResponse, ChartConfig } from '../types';
 import {
-  LayoutDashboard, PinOff, Maximize2, Wrench, MessageSquare, FileBarChart,
+  LayoutDashboard, PinOff, Maximize2, Wrench, MessageSquare,
   Loader2, AlertCircle, Sparkles, Globe, EyeOff, Eye, GripVertical,
   ChevronDown, ChevronUp, RefreshCw, Play, Table, BarChart3, TrendingUp,
   PieChart, AreaChart, Plus,
@@ -340,12 +340,17 @@ function HiddenItems({ items, onRestore }: { items: DashboardItem[]; onRestore: 
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+/** A single cell in the unified dashboard grid */
+type GridEntry =
+  | { kind: 'query'; item: DashboardItem }
+  | { kind: 'budget_monitor'; widgetTemplateId: number; lastJobId: string | null };
+
 export default function Dashboard() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
 
-  const [items, setItems] = useState<DashboardItem[]>([]);
+  const [grid, setGrid] = useState<GridEntry[]>([]);
   const [hiddenItems, setHiddenItems] = useState<DashboardItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -353,17 +358,6 @@ export default function Dashboard() {
 
   // Widget gallery
   const [galleryOpen, setGalleryOpen] = useState(false);
-  const [hasBudgetMonitor, setHasBudgetMonitor] = useState(false);
-
-  const loadWidgetStatus = useCallback(async () => {
-    try {
-      const list = await fetchDashboardWidgets();
-      const bm = list.find((w) => w.widget_type === 'budget_monitor');
-      setHasBudgetMonitor(bm?.is_added ?? false);
-    } catch { /* non-critical */ }
-  }, []);
-
-  useEffect(() => { loadWidgetStatus(); }, [loadWidgetStatus]);
 
   // Drag-and-drop
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -373,9 +367,21 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetchDashboard();
-      setItems(res.items);
+      const [res, widgetList] = await Promise.all([fetchDashboard(), fetchDashboardWidgets()]);
       setHiddenItems(res.hidden);
+      const queryEntries: GridEntry[] = res.items.map((it) => ({ kind: 'query' as const, item: it }));
+      const bmTemplate = widgetList.find((w) => w.widget_type === 'budget_monitor' && w.is_added);
+      if (bmTemplate) {
+        const storedPos = localStorage.getItem('bm_position');
+        const bmPos = storedPos !== null ? parseInt(storedPos, 10) : queryEntries.length;
+        const bmLastJobId = localStorage.getItem('bm_last_job_id');
+        const bmEntry: GridEntry = { kind: 'budget_monitor', widgetTemplateId: bmTemplate.id, lastJobId: bmLastJobId };
+        const combined = [...queryEntries];
+        combined.splice(Math.min(Math.max(0, bmPos), combined.length), 0, bmEntry);
+        setGrid(combined);
+      } else {
+        setGrid(queryEntries);
+      }
       setLoadError(null);
     } catch (e: any) {
       setLoadError(e.response?.data?.error || 'Failed to load dashboard');
@@ -397,7 +403,7 @@ export default function Dashboard() {
     e.preventDefault();
     const from = dragIdxRef.current;
     if (from === null || from === i) return;
-    setItems((prev) => {
+    setGrid((prev) => {
       const next = [...prev];
       const [moved] = next.splice(from, 1);
       next.splice(i, 0, moved);
@@ -407,12 +413,19 @@ export default function Dashboard() {
     setDragIdx(i);
   };
 
-  const handleDrop = (currentItems: DashboardItem[]) => {
+  const handleDrop = (currentGrid: GridEntry[]) => {
     setDragIdx(null);
     dragIdxRef.current = null;
+    // Persist budget monitor position
+    const bmIdx = currentGrid.findIndex((e) => e.kind === 'budget_monitor');
+    if (bmIdx >= 0) localStorage.setItem('bm_position', String(bmIdx));
+    // Save real-item order to server
+    const realIds = currentGrid
+      .filter((e): e is { kind: 'query'; item: DashboardItem } => e.kind === 'query')
+      .map((e) => e.item.id);
     if (reorderTimer.current) clearTimeout(reorderTimer.current);
     reorderTimer.current = setTimeout(() => {
-      reorderDashboard(currentItems.map((it) => it.id)).catch(() => {});
+      reorderDashboard(realIds).catch(() => {});
     }, 400);
   };
 
@@ -425,16 +438,35 @@ export default function Dashboard() {
 
   const handleUnpin = async (item: DashboardItem) => {
     try {
+      if (item.source === 'report') {
+        // Widget-gallery report card: use the gallery remove API for proper cleanup
+        const wtId = (item.query_definition as Record<string, unknown>)?.widget_template_id as number | undefined;
+        if (wtId) {
+          await removeDashboardWidget(wtId);
+          setGrid((prev) => prev.filter((e) => e.kind !== 'query' || e.item.id !== item.id));
+          queryClient.invalidateQueries({ queryKey: ['pinnedQueries'] });
+          return;
+        }
+      }
       await togglePin(item.id);
-      setItems((prev) => prev.filter((it) => it.id !== item.id));
+      setGrid((prev) => prev.filter((e) => e.kind !== 'query' || e.item.id !== item.id));
       queryClient.invalidateQueries({ queryKey: ['pinnedQueries'] });
+    } catch { /* ignore */ }
+  };
+
+  const handleRemoveBudgetMonitor = async (widgetTemplateId: number) => {
+    try {
+      await removeDashboardWidget(widgetTemplateId);
+      setGrid((prev) => prev.filter((e) => e.kind !== 'budget_monitor'));
+      localStorage.removeItem('bm_position');
+      localStorage.removeItem('bm_last_job_id');
     } catch { /* ignore */ }
   };
 
   const handleHide = async (item: DashboardItem) => {
     try {
       await hideDashboardItem(item.id);
-      setItems((prev) => prev.filter((it) => it.id !== item.id));
+      setGrid((prev) => prev.filter((e) => e.kind !== 'query' || e.item.id !== item.id));
       setHiddenItems((prev) => [{ ...item }, ...prev]);
     } catch { /* ignore */ }
   };
@@ -444,18 +476,18 @@ export default function Dashboard() {
       await showDashboardItem(id);
       const restored = hiddenItems.find((it) => it.id === id);
       setHiddenItems((prev) => prev.filter((it) => it.id !== id));
-      if (restored) setItems((prev) => [...prev, restored]);
+      if (restored) setGrid((prev) => [...prev, { kind: 'query', item: restored }]);
     } catch { /* ignore */ }
   };
 
   const handleToggleGlobal = async (item: DashboardItem) => {
     try {
       const updated = await toggleGlobal(item.id);
-      setItems((prev) =>
-        prev.map((it) =>
-          it.id === item.id
-            ? { ...it, is_global: updated.is_global, source_type: updated.is_global ? 'global' : 'personal' }
-            : it,
+      setGrid((prev) =>
+        prev.map((e) =>
+          e.kind === 'query' && e.item.id === item.id
+            ? { ...e, item: { ...e.item, is_global: updated.is_global, source_type: updated.is_global ? 'global' : 'personal' } }
+            : e,
         ),
       );
     } catch { /* ignore */ }
@@ -463,7 +495,7 @@ export default function Dashboard() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  const globalCount = items.filter((it) => it.is_global).length;
+  const globalCount = grid.filter((e) => e.kind === 'query' && e.item.is_global).length;
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-gray-50">
@@ -476,16 +508,16 @@ export default function Dashboard() {
               <div>
                 <h1 className="text-xl font-bold">Dashboard</h1>
                 <p className="text-sm text-gray-500">
-                  Pinned queries run automatically.{' '}
+                  Results cache until you refresh.{' '}
                   {isAdmin
                     ? <span className="text-amber-600">Drag to reorder · <Globe size={11} className="inline" /> pushes a card to all users.</span>
                     : 'Drag to reorder · hide admin items with the eye icon.'}
                 </p>
               </div>
             </div>
-            {items.length > 0 && (
+            {grid.length > 0 && (
               <div className="flex items-center gap-2 text-xs text-gray-400">
-                <span>{items.length} item{items.length !== 1 ? 's' : ''}</span>
+                <span>{grid.length} item{grid.length !== 1 ? 's' : ''}</span>
                 {globalCount > 0 && (
                   <span className="flex items-center gap-1 bg-amber-50 text-amber-600 border border-amber-200 px-2 py-0.5 rounded">
                     <Globe size={10} /> {globalCount} global
@@ -521,35 +553,52 @@ export default function Dashboard() {
         {/* Cards */}
         {!loading && (
           <>
-            {/* Budget monitor — only shown when the user has added it via the gallery */}
-            {hasBudgetMonitor && (
-              <div className="mb-4">
-                <ExpenseMonitorCard />
-              </div>
-            )}
-
-            {items.length > 0 && (
+            {grid.length > 0 && (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {items.map((item, i) => (
-                    <DashboardCard
-                      key={item.id}
-                      item={item}
-                      isAdmin={isAdmin}
-                      isDragging={dragIdx === i}
-                      isDragOver={dragIdxRef.current !== i && dragIdx !== null && dragIdx === i}
-                      onDragStart={() => handleDragStart(i)}
-                      onDragOver={(e) => handleDragOver(e, i)}
-                      onDrop={() => handleDrop(items)}
-                      onDragEnd={handleDragEnd}
-                      onUnpin={() => handleUnpin(item)}
-                      onHide={() => handleHide(item)}
-                      onToggleGlobal={() => handleToggleGlobal(item)}
-                      onExpand={(data, title) => setModalData({ data, title })}
-                    />
-                  ))}
+                  {grid.map((entry, i) => {
+                    if (entry.kind === 'budget_monitor') {
+                      return (
+                        <div
+                          key="budget_monitor"
+                          draggable
+                          onDragStart={() => handleDragStart(i)}
+                          onDragOver={(e) => handleDragOver(e, i)}
+                          onDrop={() => handleDrop(grid)}
+                          onDragEnd={handleDragEnd}
+                          className={`col-span-full select-none transition-all
+                            ${dragIdx === i ? 'opacity-40 scale-[0.97] shadow-inner' : ''}
+                            ${dragIdxRef.current !== i && dragIdx !== null && dragIdx === i ? 'ring-2 ring-folio-400 ring-offset-1 rounded-xl' : ''}
+                          `}
+                        >
+                          <ExpenseMonitorCard
+                            initialJobId={entry.lastJobId}
+                            onRemove={() => handleRemoveBudgetMonitor(entry.widgetTemplateId)}
+                          />
+                        </div>
+                      );
+                    }
+                    const item = entry.item;
+                    return (
+                      <DashboardCard
+                        key={item.id}
+                        item={item}
+                        isAdmin={isAdmin}
+                        isDragging={dragIdx === i}
+                        isDragOver={dragIdxRef.current !== i && dragIdx !== null && dragIdx === i}
+                        onDragStart={() => handleDragStart(i)}
+                        onDragOver={(e) => handleDragOver(e, i)}
+                        onDrop={() => handleDrop(grid)}
+                        onDragEnd={handleDragEnd}
+                        onUnpin={() => handleUnpin(item)}
+                        onHide={() => handleHide(item)}
+                        onToggleGlobal={() => handleToggleGlobal(item)}
+                        onExpand={(data, title) => setModalData({ data, title })}
+                      />
+                    );
+                  })}
                 </div>
-                {items.length > 1 && (
+                {grid.length > 1 && (
                   <p className="mt-4 text-center text-xs text-gray-400 flex items-center justify-center gap-1">
                     <GripVertical size={11} /> Drag cards to reorder — order is saved per user
                   </p>
@@ -560,7 +609,7 @@ export default function Dashboard() {
         )}
 
         {/* Empty state */}
-        {!loading && !loadError && items.length === 0 && (
+        {!loading && !loadError && grid.length === 0 && (
           <div className="text-center py-20">
             <LayoutDashboard size={40} className="mx-auto text-gray-300 mb-4" />
             <h2 className="text-lg font-semibold text-gray-600 mb-2">Dashboard is empty</h2>
@@ -604,10 +653,7 @@ export default function Dashboard() {
         <DashboardWidgetGallery
           isAdmin={isAdmin}
           onClose={() => setGalleryOpen(false)}
-          onChanged={() => {
-            loadWidgetStatus();
-            load();
-          }}
+          onChanged={() => load()}
         />
       )}
     </div>

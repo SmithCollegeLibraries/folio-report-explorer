@@ -212,7 +212,7 @@ export interface SavedQuery {
   description: string | null;
   query_definition?: Record<string, unknown>;
   generated_sql?: string;
-  source: 'builder' | 'nl';
+  source: 'builder' | 'nl' | 'report';
   nl_prompt?: string | null;
   is_pinned: boolean;
   is_global: boolean;
