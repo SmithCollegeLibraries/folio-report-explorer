@@ -258,7 +258,12 @@ class QueryWorkerController extends Controller
                 $folio->createCommand("SET TRANSACTION READ ONLY")->execute();
                 $cmd = $folio->createCommand($job->sql_text);
                 foreach ($primaryParams as $key => $value) {
-                    $cmd->bindValue($key, $value);
+                    // Bind only params that appear in the primary SQL to avoid
+                    // "Invalid parameter number" errors when shared params (like
+                    // :fiscalYear) are present only in the secondary SQL.
+                    if (strpos($job->sql_text, $key) !== false) {
+                        $cmd->bindValue($key, $value);
+                    }
                 }
                 $primaryRows = $cmd->queryAll();
                 $transaction->commit();
@@ -288,6 +293,10 @@ class QueryWorkerController extends Controller
                 }
             }
 
+            // Computed column definitions (simple arithmetic over merged columns).
+            // Each entry: {"name": "Remaining", "formula": "Allocation - Total Payments - Total Encumbrances"}
+            $computedColumns = $config['computed_columns'] ?? [];
+
             // --- Merge: append secondary columns to primary rows ---
             $mergedRows = [];
             foreach ($primaryRows as $primary) {
@@ -308,6 +317,19 @@ class QueryWorkerController extends Controller
                     }
                     $merged[$destCol] = $secondary[$srcCol] ?? null;
                 }
+
+                // Evaluate computed columns against the fully-merged row.
+                // Formulas are restricted to column references + arithmetic (+, -, *, /).
+                // Example: "Allocation - Total Payments - Total Encumbrances"
+                foreach ($computedColumns as $computed) {
+                    $destCol = $computed['name'] ?? null;
+                    $formula = $computed['formula'] ?? null;
+                    if ($destCol === null || $formula === null) {
+                        continue;
+                    }
+                    $value = $this->evaluateFormula($formula, $merged);
+                    $merged[$destCol] = is_float($value) ? round($value, 2) : $value;
+                }
                 $mergedRows[] = $merged;
             }
 
@@ -324,6 +346,72 @@ class QueryWorkerController extends Controller
             $this->stderr("Composite job {$job->id} failed: {$e->getMessage()}\n");
             $this->logQuery($job);
         }
+    }
+
+    /**
+     * Evaluate a simple arithmetic formula against a row of data.
+     *
+     * Formulas consist of column-name tokens separated by +, -, *, / operators.
+     * Column names may contain spaces and are matched case-sensitively against
+     * the keys in $row.  Tokens that don't match a column are treated as 0.
+     *
+     * Example: "Allocation - Total Payments - Total Encumbrances"
+     *
+     * For safety only numeric values (and null/missing → 0) are used; the
+     * formula string itself must contain only alphanumeric characters, spaces,
+     * and the four arithmetic operators — anything else causes a 0 result.
+     *
+     * @param string $formula
+     * @param array  $row  Fully-merged row keyed by column name
+     * @return float|null  null when the formula cannot be evaluated
+     */
+    private function evaluateFormula($formula, array $row)
+    {
+        // Guard: only allow the characters we expect
+        if (!preg_match('/^[\w\s\+\-\*\/\.]+$/', $formula)) {
+            return null;
+        }
+
+        // Tokenise on operators, preserving the operator itself
+        // We walk the formula left to right accumulating a running value.
+        $pattern = '/(\s*[\+\-\*\/]\s*)/';
+        $parts = preg_split($pattern, $formula, -1, PREG_SPLIT_DELIM_CAPTURE);
+        if (!$parts) {
+            return null;
+        }
+
+        $resolve = function ($token) use ($row) {
+            $token = trim($token);
+            if (isset($row[$token])) {
+                return (float) $row[$token];
+            }
+            // Also try numeric literal
+            if (is_numeric($token)) {
+                return (float) $token;
+            }
+            return 0.0;
+        };
+
+        $result = $resolve(array_shift($parts));
+
+        while (!empty($parts)) {
+            $op    = trim(array_shift($parts));  // operator
+            $right = $resolve(array_shift($parts)); // operand
+
+            switch ($op) {
+                case '+': $result += $right; break;
+                case '-': $result -= $right; break;
+                case '*': $result *= $right; break;
+                case '/': $result  = ($right != 0) ? $result / $right : null; break;
+                default:  return null;
+            }
+
+            if ($result === null) {
+                return null;
+            }
+        }
+
+        return $result;
     }
 
     /**

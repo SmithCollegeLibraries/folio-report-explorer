@@ -104,6 +104,23 @@ $config = [
                 'DELETE local/allocations/<id:\d+>' => 'folio-query/local-alloc-delete',
                 'POST local/allocations/copy-year' => 'folio-query/local-alloc-copy-year',
 
+                // Expense class monitor (per-user budget tracking)
+                'GET expense-monitor/codes' => 'folio-query/expense-monitor-codes',
+                'GET expense-monitor' => 'folio-query/expense-monitor-list',
+                'POST expense-monitor' => 'folio-query/expense-monitor-save',
+                'DELETE expense-monitor/<code:[\w]+>' => 'folio-query/expense-monitor-remove',
+                'POST expense-monitor/refresh' => 'folio-query/expense-monitor-refresh',
+
+                // Dashboard widget gallery
+                'GET dashboard/widgets' => 'folio-query/dashboard-widgets',
+                'POST dashboard/widgets/<id:\d+>/add' => 'folio-query/dashboard-widget-add',
+                'DELETE dashboard/widgets/<id:\d+>/remove' => 'folio-query/dashboard-widget-remove',
+
+                // Admin: manage widget templates
+                'POST admin/dashboard-widgets' => 'folio-query/admin-widget-create',
+                'PUT admin/dashboard-widgets/<id:\d+>' => 'folio-query/admin-widget-update',
+                'DELETE admin/dashboard-widgets/<id:\d+>' => 'folio-query/admin-widget-delete',
+
                 // Health check
                 'GET health' => 'folio-query/health',
 

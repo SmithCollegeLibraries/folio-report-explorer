@@ -93,6 +93,7 @@ class FolioQueryController extends Controller
                             'local-alloc-list', 'local-alloc-years', 'local-alloc-upsert',
                             'local-alloc-delete', 'local-alloc-copy-year',
                             'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
+                            'admin-widget-create', 'admin-widget-update', 'admin-widget-delete',
                         ],
                         'roles' => ['@'],
                         'matchCallback' => function ($rule, $action) {
@@ -1055,7 +1056,29 @@ class FolioQueryController extends Controller
             return ['error' => 'Saved query has no SQL'];
         }
 
-        $job = QueryJob::createJob($sq->generated_sql, [], $sq->source ?: 'builder', 'folio');
+        // For widget-gallery report queries the SQL contains named placeholders;
+        // the resolved values are stored in query_definition['bound_params'].
+        // Fall back to re-running bindParams if that field is absent (legacy row).
+        $jobParams = [];
+        if ($sq->source === 'report') {
+            $def = json_decode($sq->query_definition ?: '{}', true);
+            if (isset($def['bound_params']) && is_array($def['bound_params'])) {
+                $jobParams = $def['bound_params'];
+            } elseif (!empty($def['report_template_id'])) {
+                // Legacy row: re-derive bound_params from the stored user params
+                $rt = ReportTemplate::findOne((int)$def['report_template_id']);
+                if ($rt) {
+                    $bound = $rt->bindParams($def['params'] ?? []);
+                    $jobParams = $bound['params'];
+                    // Back-fill so future refreshes skip this work
+                    $def['bound_params'] = $jobParams;
+                    $sq->query_definition = json_encode($def);
+                    $sq->save(false);
+                }
+            }
+        }
+
+        $job = QueryJob::createJob($sq->generated_sql, $jobParams, $sq->source ?: 'builder', 'folio');
         $job->name    = $sq->name;
         $job->user_id = $userId;
         if (!$job->save()) {
@@ -2448,6 +2471,676 @@ class FolioQueryController extends Controller
 
         return ['success' => true, 'jobId' => (int) $id];
     }
+
+    // ─── Expense Class Monitor endpoints ──────────────────────────
+
+    /**
+     * GET /api/expense-monitor/codes
+     * Returns all SC-prefixed expense classes available in FOLIO, ordered by name.
+     * Used to populate the code-selection UI.
+     */
+    public function actionExpenseMonitorCodes()
+    {
+        try {
+            $rows = Yii::$app->folioDb->createCommand(
+                "SELECT code, name FROM finance.expense_class__t
+                  WHERE name LIKE 'SC%'
+                  ORDER BY name ASC"
+            )->queryAll();
+            return ['codes' => $rows];
+        } catch (\Exception $e) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => 'Failed to fetch expense class codes: ' . $e->getMessage()];
+        }
+    }
+
+    /**
+     * GET /api/expense-monitor
+     * Returns the current user's monitored expense class codes.
+     */
+    public function actionExpenseMonitorList()
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+
+        $rows = Yii::$app->db->createCommand(
+            'SELECT expense_class_code FROM user_expense_monitors
+              WHERE user_id = :uid ORDER BY expense_class_code ASC',
+            [':uid' => $userId]
+        )->queryAll();
+
+        return ['codes' => array_column($rows, 'expense_class_code')];
+    }
+
+    /**
+     * POST /api/expense-monitor
+     * Replace the current user's entire set of monitored codes.
+     * Body: {codes: string[]}
+     */
+    public function actionExpenseMonitorSave()
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+
+        $body  = Yii::$app->request->getBodyParams();
+        $codes = $body['codes'] ?? [];
+
+        if (!is_array($codes)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'codes must be an array'];
+        }
+
+        // Sanitise: uppercase, non-empty, max 20 chars
+        $codes = array_values(array_unique(array_filter(
+            array_map(function ($c) { return strtoupper(trim((string) $c)); }, $codes),
+            function ($c) { return $c !== '' && strlen($c) <= 20; }
+        )));
+
+        $db = Yii::$app->db;
+        $transaction = $db->beginTransaction();
+        try {
+            $db->createCommand(
+                'DELETE FROM user_expense_monitors WHERE user_id = :uid',
+                [':uid' => $userId]
+            )->execute();
+
+            foreach ($codes as $code) {
+                $db->createCommand(
+                    'INSERT INTO user_expense_monitors (user_id, expense_class_code) VALUES (:uid, :code)',
+                    [':uid' => $userId, ':code' => $code]
+                )->execute();
+            }
+
+            $transaction->commit();
+        } catch (\Exception $e) {
+            $transaction->rollBack();
+            Yii::$app->response->statusCode = 500;
+            return ['error' => 'Failed to save monitored codes: ' . $e->getMessage()];
+        }
+
+        return ['success' => true, 'codes' => $codes];
+    }
+
+    /**
+     * DELETE /api/expense-monitor/<code>
+     * Remove a single expense class code from the current user's monitor list.
+     */
+    public function actionExpenseMonitorRemove($code)
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+
+        $code = strtoupper(trim((string) $code));
+        Yii::$app->db->createCommand(
+            'DELETE FROM user_expense_monitors WHERE user_id = :uid AND expense_class_code = :code',
+            [':uid' => $userId, ':code' => $code]
+        )->execute();
+
+        return ['success' => true];
+    }
+
+    /**
+     * POST /api/expense-monitor/refresh
+     * Enqueue a composite budget-vs-actual job scoped to the user's monitored codes.
+     * Returns {jobId} for polling via GET /api/query/status/{jobId}.
+     * Optional body: {fiscalYear: number} — defaults to the current fiscal year.
+     */
+    public function actionExpenseMonitorRefresh()
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+
+        // Fetch the user's monitored codes
+        $rows = Yii::$app->db->createCommand(
+            'SELECT expense_class_code FROM user_expense_monitors
+              WHERE user_id = :uid ORDER BY expense_class_code ASC',
+            [':uid' => $userId]
+        )->queryAll();
+
+        $monitoredCodes = array_column($rows, 'expense_class_code');
+
+        if (empty($monitoredCodes)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'No expense classes are being monitored. Add codes first.'];
+        }
+
+        // Resolve fiscal year and date range
+        $body = Yii::$app->request->getBodyParams();
+        $requestedFy = isset($body['fiscalYear']) ? (int) $body['fiscalYear'] : 0;
+
+        $startDate = ReportTemplate::resolveDefaultMacro('$fiscal_year_start');
+        $endDate   = ReportTemplate::resolveDefaultMacro('$fiscal_year_end');
+
+        if ($requestedFy > 0) {
+            $startDate = ($requestedFy - 1) . '-07-01';
+            $endDate   = $requestedFy . '-06-30';
+            $fiscalYear = $requestedFy;
+        } else {
+            // Derive fiscal year from resolved dates (year of the June 30 end date)
+            $fiscalYear = (int) substr($endDate, 0, 4);
+        }
+
+        // Build the SQL: same template as migration 015 but with an IN-list filter
+        // for the user's monitored expense class codes appended to the WHERE clause.
+        // We add a separate CTE-level filter so the expensive cross-join is still
+        // driven by the ect rows first.
+        $placeholders = implode(', ', array_map(
+            function ($i) { return ':monCode' . $i; },
+            array_keys($monitoredCodes)
+        ));
+
+        $sql = <<<SQL
+WITH fiscal_years AS (
+    SELECT id
+    FROM finance.fiscal_year__t
+    WHERE series = 'SCFY'
+      AND (
+          (:startDate::date BETWEEN period_start::date AND period_end::date)
+          OR
+          (:endDate::date BETWEEN period_start::date AND period_end::date)
+      )
+),
+encumbrances AS (
+    SELECT
+        tt.encumbrance__source_po_line_id AS po_line_id,
+        tt.expense_class_id,
+        tt.from_fund_id,
+        SUM(
+            tt.encumbrance__initial_amount_encumbered
+            - tt.encumbrance__amount_expended
+            - tt.encumbrance__amount_awaiting_payment
+        ) AS current_encumbrance
+    FROM finance.transaction__t tt
+    WHERE tt.transaction_type = 'Encumbrance'
+      AND tt.encumbrance__status IN ('Unreleased', 'Active')
+      AND tt.fiscal_year_id IN (SELECT id FROM fiscal_years)
+      AND tt.from_fund_id IN (
+          '6330d805-1772-4c14-b25d-5f4599964dd9',
+          '83d5d13c-8c9a-4ff2-89dc-e61120f5025f'
+      )
+    GROUP BY tt.encumbrance__source_po_line_id, tt.expense_class_id, tt.from_fund_id
+),
+payments AS (
+    SELECT
+        SUM(iltfd.total * (iltfd.fund_distributions__value * 0.01)) AS payment,
+        iltfd.po_line_id,
+        iltfd.fund_distributions__expense_class_id AS expense_class_id,
+        iltfd.fund_distributions__fund_id AS fund_id
+    FROM invoice.invoice_lines__t__fund_distributions iltfd
+    INNER JOIN invoice.invoices__t it ON it.id = iltfd.invoice_id
+    WHERE iltfd.invoice_line_status = 'Paid'
+      AND it.payment_date::date BETWEEN :startDate::date AND :endDate::date
+      AND iltfd.fund_distributions__fund_id IN (
+          '6330d805-1772-4c14-b25d-5f4599964dd9',
+          '83d5d13c-8c9a-4ff2-89dc-e61120f5025f'
+      )
+    GROUP BY iltfd.po_line_id, iltfd.fund_distributions__expense_class_id, iltfd.fund_distributions__fund_id
+),
+po_lines AS (
+    SELECT plt.*, potaui.acq_unit_ids
+    FROM orders.po_line__t plt
+    INNER JOIN orders.purchase_order__t__acq_unit_ids potaui
+        ON plt.purchase_order_id = potaui.id
+    WHERE potaui.acq_unit_ids = 'b17b9e6b-82bb-4f97-b3e7-757e4e5aeb61'
+),
+material_types AS (
+    SELECT id, name FROM inventory.material_type__t
+)
+SELECT
+    ect.name AS "Expense Class Name",
+    ect.code AS "Expense Class Code",
+    ROUND(COALESCE(SUM(CASE
+        WHEN COALESCE(mtte.name, mttp.name, '') = 'Book'
+             AND payments.fund_id = '6330d805-1772-4c14-b25d-5f4599964dd9'
+        THEN payments.payment ELSE 0 END), 0), 2) AS "Book Payments",
+    ROUND(COALESCE(SUM(CASE
+        WHEN COALESCE(mtte.name, mttp.name, '') = 'E-Book'
+             AND payments.fund_id = '83d5d13c-8c9a-4ff2-89dc-e61120f5025f'
+        THEN payments.payment ELSE 0 END), 0), 2) AS "E-Book Payments",
+    ROUND(COALESCE(SUM(payments.payment), 0), 2) AS "Total Payments",
+    ROUND(COALESCE(SUM(CASE
+        WHEN COALESCE(mtte.name, mttp.name, '') = 'Book'
+             AND encumbrances.from_fund_id = '6330d805-1772-4c14-b25d-5f4599964dd9'
+        THEN encumbrances.current_encumbrance ELSE 0 END), 0), 2) AS "Book Encumbrances",
+    ROUND(COALESCE(SUM(CASE
+        WHEN COALESCE(mtte.name, mttp.name, '') = 'E-Book'
+             AND encumbrances.from_fund_id = '83d5d13c-8c9a-4ff2-89dc-e61120f5025f'
+        THEN encumbrances.current_encumbrance ELSE 0 END), 0), 2) AS "E-Book Encumbrances",
+    ROUND(COALESCE(SUM(encumbrances.current_encumbrance), 0), 2) AS "Total Encumbrances",
+    ROUND(
+        COALESCE(SUM(payments.payment), 0)
+        + COALESCE(SUM(encumbrances.current_encumbrance), 0)
+    , 2) AS "Total Spent"
+FROM finance.expense_class__t ect
+LEFT JOIN po_lines plt ON 1=1
+LEFT JOIN payments
+    ON plt.id = payments.po_line_id
+    AND payments.expense_class_id = ect.id
+LEFT JOIN encumbrances
+    ON plt.id = encumbrances.po_line_id
+    AND encumbrances.expense_class_id = ect.id
+LEFT JOIN material_types mtte ON mtte.id = plt.eresource__material_type
+LEFT JOIN material_types mttp ON mttp.id = plt.physical__material_type
+WHERE ect.code IN ({$placeholders})
+GROUP BY ect.name, ect.code
+ORDER BY ect.name ASC
+SQL;
+
+        $params = [
+            ':startDate'  => $startDate,
+            ':endDate'    => $endDate,
+            ':fiscalYear' => $fiscalYear,
+        ];
+        foreach ($monitoredCodes as $i => $code) {
+            $params[':monCode' . $i] = $code;
+        }
+
+        $compositeConfig = [
+            'secondary_sql'    => 'SELECT expense_class_code, allocation_amount FROM report_expense_allocations WHERE fiscal_year = :fiscalYear',
+            'secondary_db'     => 'local',
+            'merge_key'        => ['primary' => 'Expense Class Code', 'secondary' => 'expense_class_code'],
+            'append_columns'   => ['allocation_amount AS Allocation'],
+            'computed_columns' => [['name' => 'Remaining', 'formula' => 'Allocation - Total Payments - Total Encumbrances']],
+        ];
+
+        $metadata = ['composite_config' => $compositeConfig, 'bound_params' => $params];
+
+        $job = QueryJob::createJob($sql, $params, 'report', 'composite', $metadata);
+        $job->user_id = $userId;
+        if (!$job->save()) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => 'Failed to create job', 'details' => $job->errors];
+        }
+
+        Yii::$app->response->statusCode = 202;
+        return [
+            'jobId'      => $job->id,
+            'fiscalYear' => $fiscalYear,
+            'codes'      => $monitoredCodes,
+            'status'     => 'pending',
+        ];
+    }
+
+    // ─── Dashboard Widget Catalog ─────────────────────────────────────
+
+    /**
+     * GET /api/dashboard/widgets
+     * Returns the full widget catalog (enabled templates), each annotated with
+     * whether the current user has already added it (is_added).
+     * For 'report' widget types the report template's required parameters are
+     * included so the frontend can render a setup form.
+     */
+    public function actionDashboardWidgets()
+    {
+        $userId = $this->getCurrentUserId();
+
+        // Fetch all enabled templates ordered by sort_order
+        $templates = Yii::$app->db->createCommand(
+            'SELECT id, name, description, category, icon, widget_type,
+                    report_template_id, default_params, sort_order
+             FROM dashboard_widget_templates
+             WHERE is_enabled = 1
+             ORDER BY sort_order ASC, id ASC'
+        )->queryAll();
+
+        // Determine which templates this user has already added
+        $addedIds = [];
+        if ($userId && !empty($templates)) {
+            $rows = Yii::$app->db->createCommand(
+                'SELECT widget_template_id FROM user_dashboard_widgets WHERE user_id = :uid',
+                [':uid' => $userId]
+            )->queryAll();
+            foreach ($rows as $r) {
+                $addedIds[(int)$r['widget_template_id']] = true;
+            }
+        }
+
+        // For report widgets, attach required non-date parameters so the frontend
+        // can render a compact setup form before the widget is added.
+        $result = [];
+        foreach ($templates as $tpl) {
+            $tpl['id']       = (int)$tpl['id'];
+            $tpl['sort_order'] = (int)$tpl['sort_order'];
+            $tpl['is_added'] = isset($addedIds[$tpl['id']]);
+            $tpl['default_params'] = $tpl['default_params']
+                ? json_decode($tpl['default_params'], true)
+                : [];
+            $tpl['setup_params'] = [];
+
+            if ($tpl['widget_type'] === 'report' && $tpl['report_template_id']) {
+                $rt = ReportTemplate::findOne((int)$tpl['report_template_id']);
+                if ($rt) {
+                    // Only surface required select/text params that are NOT date or
+                    // fiscal-year params (those are auto-filled from academic year defaults).
+                    $setupParams = [];
+                    foreach ($rt->getResolvedParameters() as $def) {
+                        if (empty($def['required'])) {
+                            continue;
+                        }
+                        $skipTypes = ['date'];
+                        if (in_array($def['type'] ?? 'text', $skipTypes, true)) {
+                            continue;
+                        }
+                        // Skip $current_year / $fiscal_year_* defaulted number params
+                        $default = $def['default'] ?? '';
+                        if (strpos($default, '$fiscal_year') === 0 || $default === '$current_year') {
+                            continue;
+                        }
+                        $param = [
+                            'name'      => $def['name'],
+                            'label'     => $def['label'],
+                            'type'      => $def['type'],
+                            'required'  => true,
+                            'placeholder' => $def['placeholder'] ?? '',
+                            'description' => $def['description'] ?? '',
+                            'options'   => [],
+                        ];
+                        // For select params, fetch options from FOLIO immediately so
+                        // the UI doesn't need an extra round-trip.
+                        if ($def['type'] === 'select' && !empty($def['options_sql'])) {
+                            try {
+                                $db = !empty($def['options_db']) && $def['options_db'] === 'folio'
+                                    ? Yii::$app->folioDb
+                                    : Yii::$app->folioDb; // report widgets are FOLIO by default
+                                $opts = $db->createCommand($def['options_sql'])->queryAll();
+                                $param['options'] = $opts;
+                            } catch (\Exception $e) {
+                                // Let the frontend fall back to manual input
+                            }
+                        }
+                        $setupParams[] = $param;
+                    }
+                    $tpl['setup_params'] = $setupParams;
+                }
+            }
+
+            $result[] = $tpl;
+        }
+
+        return ['widgets' => $result];
+    }
+
+    /**
+     * POST /api/dashboard/widgets/:id/add
+     * Adds a widget to the current user's dashboard.
+     *
+     * For 'report' widgets: creates a SavedQuery with SQL resolved from the
+     * report template (using supplied params + academic-year defaults), pins it,
+     * and records the link in user_dashboard_widgets.
+     *
+     * For 'budget_monitor' widgets: just inserts the user_dashboard_widgets row.
+     *
+     * Request body: { params: { paramName: value, ... } }
+     */
+    public function actionDashboardWidgetAdd($id)
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+
+        $tpl = Yii::$app->db->createCommand(
+            'SELECT * FROM dashboard_widget_templates WHERE id = :id AND is_enabled = 1',
+            [':id' => (int)$id]
+        )->queryOne();
+
+        if (!$tpl) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Widget template not found'];
+        }
+
+        // Idempotent: already added
+        $existing = Yii::$app->db->createCommand(
+            'SELECT id FROM user_dashboard_widgets WHERE user_id = :uid AND widget_template_id = :wid',
+            [':uid' => $userId, ':wid' => (int)$id]
+        )->queryOne();
+        if ($existing) {
+            return ['status' => 'already_added'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $userParams = !empty($body['params']) && is_array($body['params']) ? $body['params'] : [];
+
+        $savedQueryId = null;
+
+        if ($tpl['widget_type'] === 'report') {
+            $rt = ReportTemplate::findOne((int)$tpl['report_template_id']);
+            if (!$rt) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Report template not found'];
+            }
+
+            // Merge: template default_params < user-supplied params
+            $defaultParams = $tpl['default_params'] ? json_decode($tpl['default_params'], true) : [];
+            $mergedParams = array_merge($defaultParams, $userParams);
+
+            // Build bound SQL (params resolved against academic-year defaults where not supplied)
+            $bound = $rt->bindParams($mergedParams);
+
+            $sq = new SavedQuery();
+            $sq->user_id     = $userId;
+            $sq->name        = $tpl['name'];
+            $sq->description = $tpl['description'];
+            $sq->source      = 'report';
+            $sq->is_pinned   = 1;
+            $sq->generated_sql = $bound['sql'];
+            $sq->query_definition = json_encode([
+                'widget_template_id' => (int)$tpl['id'],
+                'report_template_id' => (int)$tpl['report_template_id'],
+                'params'             => $mergedParams,
+                'bound_params'       => $bound['params'],
+            ]);
+
+            if (!$sq->save()) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Failed to create saved query', 'details' => $sq->errors];
+            }
+            $savedQueryId = (int)$sq->id;
+        }
+
+        // Record the user widget row
+        Yii::$app->db->createCommand()->insert('user_dashboard_widgets', [
+            'user_id'            => $userId,
+            'widget_template_id' => (int)$id,
+            'saved_query_id'     => $savedQueryId,
+        ])->execute();
+
+        Yii::$app->response->statusCode = 201;
+        return ['status' => 'added', 'savedQueryId' => $savedQueryId];
+    }
+
+    /**
+     * DELETE /api/dashboard/widgets/:id/remove
+     * Removes a widget from the current user's dashboard.
+     * For 'report' widgets, the linked SavedQuery is un-pinned and deleted.
+     */
+    public function actionDashboardWidgetRemove($id)
+    {
+        $userId = $this->getCurrentUserId();
+        if (!$userId) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Not authenticated'];
+        }
+
+        $row = Yii::$app->db->createCommand(
+            'SELECT udw.id, udw.saved_query_id, dwt.widget_type
+             FROM user_dashboard_widgets udw
+             JOIN dashboard_widget_templates dwt ON dwt.id = udw.widget_template_id
+             WHERE udw.user_id = :uid AND udw.widget_template_id = :wid',
+            [':uid' => $userId, ':wid' => (int)$id]
+        )->queryOne();
+
+        if (!$row) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Widget not found on this user\'s dashboard'];
+        }
+
+        // For report widgets: delete the linked SavedQuery (this also removes it from dashboard)
+        if ($row['widget_type'] === 'report' && $row['saved_query_id']) {
+            $sq = SavedQuery::findOne((int)$row['saved_query_id']);
+            if ($sq && (int)$sq->user_id === $userId) {
+                $sq->delete();
+            }
+        }
+
+        Yii::$app->db->createCommand()->delete('user_dashboard_widgets', [
+            'user_id'            => $userId,
+            'widget_template_id' => (int)$id,
+        ])->execute();
+
+        return ['status' => 'removed'];
+    }
+
+    /**
+     * POST /api/admin/dashboard-widgets — admin creates a new widget template.
+     * Body: { name, description?, category?, icon?, widget_type, report_template_id?, default_params?, sort_order? }
+     */
+    public function actionAdminWidgetCreate()
+    {
+        if (!$this->requireAdmin()) return null;
+
+        $body = Yii::$app->request->getBodyParams();
+
+        $name = trim($body['name'] ?? '');
+        if (empty($name)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'name is required'];
+        }
+
+        $widgetType = $body['widget_type'] ?? 'report';
+        if (!in_array($widgetType, ['report', 'budget_monitor'], true)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'widget_type must be report or budget_monitor'];
+        }
+
+        $defaultParamsRaw = $body['default_params'] ?? null;
+        if ($defaultParamsRaw !== null && !is_array($defaultParamsRaw)) {
+            // Accept raw JSON string from the textarea
+            $decoded = json_decode($defaultParamsRaw, true);
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                Yii::$app->response->statusCode = 400;
+                return ['error' => 'default_params must be valid JSON'];
+            }
+            $defaultParamsRaw = $decoded;
+        }
+
+        Yii::$app->db->createCommand()->insert('dashboard_widget_templates', [
+            'name'               => $name,
+            'description'        => $body['description'] ?? null,
+            'category'           => $body['category'] ?? 'other',
+            'icon'               => $body['icon'] ?? 'BarChart3',
+            'widget_type'        => $widgetType,
+            'report_template_id' => !empty($body['report_template_id']) ? (int)$body['report_template_id'] : null,
+            'default_params'     => $defaultParamsRaw ? json_encode($defaultParamsRaw) : null,
+            'sort_order'         => isset($body['sort_order']) ? (int)$body['sort_order'] : 100,
+            'is_enabled'         => 1,
+            'created_by'         => $this->getCurrentUserId(),
+        ])->execute();
+
+        $newId = Yii::$app->db->getLastInsertID();
+
+        Yii::$app->response->statusCode = 201;
+        return Yii::$app->db->createCommand(
+            'SELECT * FROM dashboard_widget_templates WHERE id = :id',
+            [':id' => $newId]
+        )->queryOne();
+    }
+
+    /**
+     * PUT /api/admin/dashboard-widgets/:id — admin updates a widget template.
+     */
+    public function actionAdminWidgetUpdate($id)
+    {
+        if (!$this->requireAdmin()) return null;
+
+        $body = Yii::$app->request->getBodyParams();
+
+        $tpl = Yii::$app->db->createCommand(
+            'SELECT id FROM dashboard_widget_templates WHERE id = :id',
+            [':id' => (int)$id]
+        )->queryOne();
+        if (!$tpl) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Widget template not found'];
+        }
+
+        $updates = [];
+        $params  = [':id' => (int)$id];
+
+        $fields = ['name', 'description', 'category', 'icon', 'widget_type', 'sort_order', 'is_enabled'];
+        foreach ($fields as $f) {
+            if (array_key_exists($f, $body)) {
+                $updates[] = "`{$f}` = :{$f}";
+                $params[":{$f}"] = $body[$f];
+            }
+        }
+        if (array_key_exists('report_template_id', $body)) {
+            $updates[] = '`report_template_id` = :report_template_id';
+            $params[':report_template_id'] = !empty($body['report_template_id']) ? (int)$body['report_template_id'] : null;
+        }
+        if (array_key_exists('default_params', $body)) {
+            $dp = $body['default_params'];
+            if ($dp !== null && !is_array($dp)) {
+                $decoded = json_decode($dp, true);
+                if (json_last_error() !== JSON_ERROR_NONE) {
+                    Yii::$app->response->statusCode = 400;
+                    return ['error' => 'default_params must be valid JSON'];
+                }
+                $dp = $decoded;
+            }
+            $updates[] = '`default_params` = :default_params';
+            $params[':default_params'] = $dp ? json_encode($dp) : null;
+        }
+
+        if (!empty($updates)) {
+            Yii::$app->db->createCommand(
+                'UPDATE dashboard_widget_templates SET ' . implode(', ', $updates) . ' WHERE id = :id',
+                $params
+            )->execute();
+        }
+
+        return Yii::$app->db->createCommand(
+            'SELECT * FROM dashboard_widget_templates WHERE id = :id',
+            [':id' => (int)$id]
+        )->queryOne();
+    }
+
+    /**
+     * DELETE /api/admin/dashboard-widgets/:id — admin soft-disables a widget template.
+     * Users who already added the widget keep their SavedQuery cards; the template
+     * simply becomes invisible in the gallery for new users.
+     */
+    public function actionAdminWidgetDelete($id)
+    {
+        if (!$this->requireAdmin()) return null;
+
+        $affected = Yii::$app->db->createCommand(
+            'UPDATE dashboard_widget_templates SET is_enabled = 0 WHERE id = :id',
+            [':id' => (int)$id]
+        )->execute();
+
+        if ($affected === 0) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Widget template not found'];
+        }
+
+        return ['status' => 'disabled'];
+    }
+
+    // ─── Options (CORS) ────────────────────────────────────────────
 
     /**
      * OPTIONS — CORS preflight handler.

@@ -27,6 +27,9 @@ import type {
   DashboardResponse,
   AcrlStatistic,
   ExpenseAllocation,
+  ExpenseMonitorCode,
+  ExpenseMonitorRefreshResponse,
+  DashboardWidgetTemplate,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -608,4 +611,83 @@ export async function saveDashboardDisplay(
   chartConfig?: { xAxis: string; yAxes: string[] } | null,
 ): Promise<void> {
   await api.patch(`/dashboard/${savedQueryId}/display`, { displayType, chartConfig: chartConfig ?? null });
+}
+
+// ─── Expense Class Monitor ────────────────────────────────────────
+
+/** List all SC-prefixed expense classes available in FOLIO (for the selector) */
+export async function fetchExpenseMonitorCodes(): Promise<ExpenseMonitorCode[]> {
+  const { data } = await api.get('/expense-monitor/codes');
+  return data.codes ?? [];
+}
+
+/** Get the current user's monitored expense class codes */
+export async function fetchExpenseMonitors(): Promise<string[]> {
+  const { data } = await api.get('/expense-monitor');
+  return data.codes ?? [];
+}
+
+/** Replace the current user's monitored codes (full replace) */
+export async function saveExpenseMonitors(codes: string[]): Promise<string[]> {
+  const { data } = await api.post('/expense-monitor', { codes });
+  return data.codes ?? [];
+}
+
+/** Remove a single expense class code from the current user's monitor list */
+export async function removeExpenseMonitor(code: string): Promise<void> {
+  await api.delete(`/expense-monitor/${code}`);
+}
+
+/**
+ * Enqueue a composite budget-vs-actual job scoped to the user's monitored codes.
+ * Returns {jobId} for polling via checkJobStatus().
+ */
+export async function refreshExpenseMonitor(fiscalYear?: number): Promise<ExpenseMonitorRefreshResponse> {
+  const body = fiscalYear ? { fiscalYear } : {};
+  const { data } = await api.post('/expense-monitor/refresh', body);
+  return data;
+}
+
+// ─── Dashboard Widget Gallery ─────────────────────────────────────────────────
+
+/** Fetch the full widget catalog for the current user (includes is_added flag). */
+export async function fetchDashboardWidgets(): Promise<DashboardWidgetTemplate[]> {
+  const { data } = await api.get('/dashboard/widgets');
+  return data.widgets ?? [];
+}
+
+/** Add a widget to the current user's dashboard. Pass any required setup params. */
+export async function addDashboardWidget(
+  id: number,
+  params: Record<string, string> = {},
+): Promise<{ savedQueryId: number | null }> {
+  const { data } = await api.post(`/dashboard/widgets/${id}/add`, { params });
+  return data;
+}
+
+/** Remove a widget from the current user's dashboard. */
+export async function removeDashboardWidget(id: number): Promise<void> {
+  await api.delete(`/dashboard/widgets/${id}/remove`);
+}
+
+/** Admin: create a new widget template. */
+export async function createAdminWidget(
+  payload: Partial<DashboardWidgetTemplate> & { default_params_json?: string },
+): Promise<DashboardWidgetTemplate> {
+  const { data } = await api.post('/admin/dashboard-widgets', payload);
+  return data;
+}
+
+/** Admin: update an existing widget template. */
+export async function updateAdminWidget(
+  id: number,
+  payload: Partial<DashboardWidgetTemplate> & { default_params_json?: string },
+): Promise<DashboardWidgetTemplate> {
+  const { data } = await api.put(`/admin/dashboard-widgets/${id}`, payload);
+  return data;
+}
+
+/** Admin: soft-delete (disable) a widget template. */
+export async function deleteAdminWidget(id: number): Promise<void> {
+  await api.delete(`/admin/dashboard-widgets/${id}`);
 }

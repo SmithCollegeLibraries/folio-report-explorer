@@ -496,3 +496,50 @@ export interface ExpenseAllocation {
   created_at?: string;
   updated_at?: string;
 }
+
+// ─── Expense Class Monitor types ─────────────────────────────────
+
+/** An SC-prefixed expense class available for monitoring */
+export interface ExpenseMonitorCode {
+  code: string;
+  name: string;
+}
+
+/** Response from POST /expense-monitor/refresh */
+export interface ExpenseMonitorRefreshResponse {
+  jobId: string;
+  fiscalYear: number;
+  codes: string[];
+  status: 'pending';
+}
+
+// ─── Dashboard Widget Gallery types ──────────────────────────────
+
+/** A required setup param surfaced by the backend so the user can configure it before adding. */
+export interface WidgetSetupParam {
+  name: string;
+  label: string;
+  type: 'text' | 'select' | 'number';
+  required: boolean;
+  placeholder: string;
+  description: string;
+  options: Array<{ value?: string; label?: string; [key: string]: unknown }>;
+}
+
+/** A widget template from the gallery catalog. */
+export interface DashboardWidgetTemplate {
+  id: number;
+  name: string;
+  description: string;
+  category: string;
+  icon: string;
+  widget_type: 'report' | 'budget_monitor';
+  report_template_id: number | null;
+  default_params: Record<string, string> | null;
+  sort_order: number;
+  is_enabled?: boolean;
+  /** Whether the current user has already added this widget */
+  is_added: boolean;
+  /** Required params that the user must fill in before adding (report widgets only) */
+  setup_params: WidgetSetupParam[];
+}

@@ -37,6 +37,14 @@ export default function ResultsTable({ data }: Props) {
           const val = getValue();
           if (val === null) return <span className="text-gray-400 italic">null</span>;
           if (typeof val === 'object') return JSON.stringify(val);
+          // Cap floating-point numbers at 2 decimal places for readability
+          if (typeof val === 'number' && !Number.isInteger(val)) {
+            return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(val);
+          }
+          // Postgres numeric columns sometimes arrive as decimal strings with many dp
+          if (typeof val === 'string' && /^-?\d+\.\d{3,}$/.test(val)) {
+            return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(parseFloat(val));
+          }
           return String(val);
         },
       })),

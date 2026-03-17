@@ -41,7 +41,7 @@ class SavedQuery extends ActiveRecord
             [['name'], 'string', 'max' => 255],
             [['description', 'generated_sql', 'nl_prompt'], 'string'],
             [['query_definition'], 'string'],
-            [['source'], 'in', 'range' => ['builder', 'nl']],
+            [['source'], 'in', 'range' => ['builder', 'nl', 'report']],
             [['source'], 'default', 'value' => 'builder'],
             [['is_pinned', 'is_global', 'user_id'], 'integer'],
             [['is_pinned', 'is_global'], 'default', 'value' => 0],

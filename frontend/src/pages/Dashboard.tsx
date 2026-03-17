@@ -4,18 +4,21 @@ import { useNavigate } from 'react-router-dom';
 import {
   fetchDashboard, reorderDashboard, hideDashboardItem, showDashboardItem,
   toggleGlobal, togglePin, checkJobStatus, refreshDashboardCard, saveDashboardDisplay,
+  fetchDashboardWidgets,
 } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import ResultsModal from '../components/ResultsModal';
 import ChartPanel from '../components/ChartPanel';
+import ExpenseMonitorCard from '../components/ExpenseMonitorCard';
+import DashboardWidgetGallery from '../components/DashboardWidgetGallery';
 import type { ChartType } from '../components/ChartPanel';
 import type { DashboardItem, ExecuteResponse, ChartConfig } from '../types';
 import {
   LayoutDashboard, PinOff, Maximize2, Wrench, MessageSquare, FileBarChart,
   Loader2, AlertCircle, Sparkles, Globe, EyeOff, Eye, GripVertical,
   ChevronDown, ChevronUp, RefreshCw, Play, Table, BarChart3, TrendingUp,
-  PieChart, AreaChart,
+  PieChart, AreaChart, Plus,
 } from 'lucide-react';
 
 // ─── Display-type toggle helpers ─────────────────────────────────────────────
@@ -348,6 +351,20 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modalData, setModalData] = useState<{ data: ExecuteResponse; title: string } | null>(null);
 
+  // Widget gallery
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [hasBudgetMonitor, setHasBudgetMonitor] = useState(false);
+
+  const loadWidgetStatus = useCallback(async () => {
+    try {
+      const list = await fetchDashboardWidgets();
+      const bm = list.find((w) => w.widget_type === 'budget_monitor');
+      setHasBudgetMonitor(bm?.is_added ?? false);
+    } catch { /* non-critical */ }
+  }, []);
+
+  useEffect(() => { loadWidgetStatus(); }, [loadWidgetStatus]);
+
   // Drag-and-drop
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const dragIdxRef = useRef<number | null>(null);
@@ -476,6 +493,12 @@ export default function Dashboard() {
                 )}
               </div>
             )}
+            <button
+              onClick={() => setGalleryOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-folio-600 text-white text-sm rounded-lg hover:bg-folio-700 transition-colors"
+            >
+              <Plus size={14} /> Add Widgets
+            </button>
           </div>
         </div>
       </div>
@@ -496,31 +519,42 @@ export default function Dashboard() {
         )}
 
         {/* Cards */}
-        {!loading && items.length > 0 && (
+        {!loading && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {items.map((item, i) => (
-                <DashboardCard
-                  key={item.id}
-                  item={item}
-                  isAdmin={isAdmin}
-                  isDragging={dragIdx === i}
-                  isDragOver={dragIdxRef.current !== i && dragIdx !== null && dragIdx === i}
-                  onDragStart={() => handleDragStart(i)}
-                  onDragOver={(e) => handleDragOver(e, i)}
-                  onDrop={() => handleDrop(items)}
-                  onDragEnd={handleDragEnd}
-                  onUnpin={() => handleUnpin(item)}
-                  onHide={() => handleHide(item)}
-                  onToggleGlobal={() => handleToggleGlobal(item)}
-                  onExpand={(data, title) => setModalData({ data, title })}
-                />
-              ))}
-            </div>
-            {items.length > 1 && (
-              <p className="mt-4 text-center text-xs text-gray-400 flex items-center justify-center gap-1">
-                <GripVertical size={11} /> Drag cards to reorder — order is saved per user
-              </p>
+            {/* Budget monitor — only shown when the user has added it via the gallery */}
+            {hasBudgetMonitor && (
+              <div className="mb-4">
+                <ExpenseMonitorCard />
+              </div>
+            )}
+
+            {items.length > 0 && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {items.map((item, i) => (
+                    <DashboardCard
+                      key={item.id}
+                      item={item}
+                      isAdmin={isAdmin}
+                      isDragging={dragIdx === i}
+                      isDragOver={dragIdxRef.current !== i && dragIdx !== null && dragIdx === i}
+                      onDragStart={() => handleDragStart(i)}
+                      onDragOver={(e) => handleDragOver(e, i)}
+                      onDrop={() => handleDrop(items)}
+                      onDragEnd={handleDragEnd}
+                      onUnpin={() => handleUnpin(item)}
+                      onHide={() => handleHide(item)}
+                      onToggleGlobal={() => handleToggleGlobal(item)}
+                      onExpand={(data, title) => setModalData({ data, title })}
+                    />
+                  ))}
+                </div>
+                {items.length > 1 && (
+                  <p className="mt-4 text-center text-xs text-gray-400 flex items-center justify-center gap-1">
+                    <GripVertical size={11} /> Drag cards to reorder — order is saved per user
+                  </p>
+                )}
+              </>
             )}
           </>
         )}
@@ -531,27 +565,26 @@ export default function Dashboard() {
             <LayoutDashboard size={40} className="mx-auto text-gray-300 mb-4" />
             <h2 className="text-lg font-semibold text-gray-600 mb-2">Dashboard is empty</h2>
             <p className="text-sm text-gray-400 mb-6 max-w-md mx-auto">
-              Pin saved queries to see live results here at a glance. Use the dashboard icon when
-              saving from Query History, or pin from the Saved Queries page.
+              Add widgets from the gallery or pin saved queries to see live results here at a glance.
             </p>
             <div className="flex justify-center gap-3 flex-wrap">
               <button
-                onClick={() => navigate('/builder')}
+                onClick={() => setGalleryOpen(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-folio-600 text-white rounded-lg hover:bg-folio-700 text-sm"
+              >
+                <Plus size={16} /> Add Widgets
+              </button>
+              <button
+                onClick={() => navigate('/builder')}
+                className="flex items-center gap-2 px-4 py-2 border border-folio-300 text-folio-700 rounded-lg hover:bg-folio-50 text-sm"
               >
                 <Wrench size={16} /> Query Builder
               </button>
               <button
                 onClick={() => navigate('/ask')}
-                className="flex items-center gap-2 px-4 py-2 border border-folio-300 text-folio-700 rounded-lg hover:bg-folio-50 text-sm"
-              >
-                <MessageSquare size={16} /> Ask AI
-              </button>
-              <button
-                onClick={() => navigate('/reports')}
                 className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-600 rounded-lg hover:bg-gray-50 text-sm"
               >
-                <FileBarChart size={16} /> Reports
+                <MessageSquare size={16} /> Ask AI
               </button>
             </div>
           </div>
@@ -564,6 +597,18 @@ export default function Dashboard() {
       {/* Expanded results modal */}
       {modalData && (
         <ResultsModal data={modalData.data} onClose={() => setModalData(null)} title={modalData.title} />
+      )}
+
+      {/* Widget gallery slide-over */}
+      {galleryOpen && (
+        <DashboardWidgetGallery
+          isAdmin={isAdmin}
+          onClose={() => setGalleryOpen(false)}
+          onChanged={() => {
+            loadWidgetStatus();
+            load();
+          }}
+        />
       )}
     </div>
   );
