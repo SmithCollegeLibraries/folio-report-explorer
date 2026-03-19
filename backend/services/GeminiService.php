@@ -132,12 +132,16 @@ RULES:
       ii.material_type_id      = (SELECT id::text FROM inventory.material_type__t WHERE ...)
     Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID
     natively — no cast needed. ::uuid is NEVER the correct cast anywhere in this system.
-20. MONETARY / FINANCIAL COLUMNS — MANDATORY: ALWAYS wrap money amounts in ROUND(..., 2).
+20. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
     Finance tables store amounts as NUMERIC with many decimal places (e.g. 1548302.2100000000000000).
-    Every SELECT of a monetary column must be rounded: ROUND(inv.total, 2), ROUND(SUM(inv.amount), 2).
+    ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
+      TO_CHAR(inv.total, 'FM$999,999,999,990.00')          -- column directly
+      TO_CHAR(SUM(inv.amount), 'FM$999,999,999,990.00')    -- aggregate
+      TO_CHAR(ROUND(SUM(inv.total), 2), 'FM$999,999,999,990.00')  -- if subquery
+    Use TO_CHAR only in the outermost SELECT (not in WHERE, JOIN, or subquery filters).
     This applies to any column from finance.*, invoice.*, acq_unit.*, or any column whose name
     contains: total, amount, price, cost, spent, encumbered, expenditure, budget, balance.
-    NEVER return raw unrounded monetary values to the user.
+    NEVER return raw unformatted monetary values to the user.
 {$campusRule}
 
 SCHEMA:
@@ -498,12 +502,15 @@ RULES:
     ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
     Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
     ::uuid is NEVER the correct cast anywhere in this system.
-15. MONETARY / FINANCIAL COLUMNS — MANDATORY: ALWAYS wrap money amounts in ROUND(..., 2).
+15. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
     Finance tables store amounts as NUMERIC with many decimal places.
-    Every SELECT of a monetary column must be rounded: ROUND(inv.total, 2), ROUND(SUM(inv.amount), 2).
+    ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
+      TO_CHAR(inv.total, 'FM$999,999,999,990.00')
+      TO_CHAR(SUM(inv.amount), 'FM$999,999,999,990.00')
+    Use TO_CHAR only in the outermost SELECT (not in WHERE, JOIN, or subquery filters).
     Applies to any column from finance.*, invoice.*, or any column whose name contains:
     total, amount, price, cost, spent, encumbered, expenditure, budget, balance.
-    NEVER return raw unrounded monetary values.
+    NEVER return raw unformatted monetary values.
 
 SCHEMA:
 {$schemaContext}
@@ -651,12 +658,15 @@ CONVERSION RULES:
    ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
    Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
    ::uuid is NEVER the correct cast anywhere in this system.
-14. MONETARY / FINANCIAL COLUMNS — MANDATORY: ALWAYS wrap money amounts in ROUND(..., 2).
+14. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
    Finance tables store amounts as NUMERIC with many decimal places.
-   Every SELECT of a monetary column must be rounded: ROUND(inv.total, 2), ROUND(SUM(inv.amount), 2).
+   ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
+     TO_CHAR(inv.total, 'FM$999,999,999,990.00')
+     TO_CHAR(SUM(inv.amount), 'FM$999,999,999,990.00')
+   Use TO_CHAR only in the outermost SELECT (not in WHERE, JOIN, or subquery filters).
    Applies to any column from finance.*, invoice.*, or any column whose name contains:
    total, amount, price, cost, spent, encumbered, expenditure, budget, balance.
-   NEVER return raw unrounded monetary values.
+   NEVER return raw unformatted monetary values.
 
 AVAILABLE SCHEMA (use these exact table/column names):
 {$schemaContext}
