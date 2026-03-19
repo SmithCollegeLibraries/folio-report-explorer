@@ -132,6 +132,12 @@ RULES:
       ii.material_type_id      = (SELECT id::text FROM inventory.material_type__t WHERE ...)
     Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID
     natively — no cast needed. ::uuid is NEVER the correct cast anywhere in this system.
+20. MONETARY / FINANCIAL COLUMNS — MANDATORY: ALWAYS wrap money amounts in ROUND(..., 2).
+    Finance tables store amounts as NUMERIC with many decimal places (e.g. 1548302.2100000000000000).
+    Every SELECT of a monetary column must be rounded: ROUND(inv.total, 2), ROUND(SUM(inv.amount), 2).
+    This applies to any column from finance.*, invoice.*, acq_unit.*, or any column whose name
+    contains: total, amount, price, cost, spent, encumbered, expenditure, budget, balance.
+    NEVER return raw unrounded monetary values to the user.
 {$campusRule}
 
 SCHEMA:
@@ -492,6 +498,12 @@ RULES:
     ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
     Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
     ::uuid is NEVER the correct cast anywhere in this system.
+15. MONETARY / FINANCIAL COLUMNS — MANDATORY: ALWAYS wrap money amounts in ROUND(..., 2).
+    Finance tables store amounts as NUMERIC with many decimal places.
+    Every SELECT of a monetary column must be rounded: ROUND(inv.total, 2), ROUND(SUM(inv.amount), 2).
+    Applies to any column from finance.*, invoice.*, or any column whose name contains:
+    total, amount, price, cost, spent, encumbered, expenditure, budget, balance.
+    NEVER return raw unrounded monetary values.
 
 SCHEMA:
 {$schemaContext}
@@ -639,6 +651,12 @@ CONVERSION RULES:
    ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
    Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
    ::uuid is NEVER the correct cast anywhere in this system.
+14. MONETARY / FINANCIAL COLUMNS — MANDATORY: ALWAYS wrap money amounts in ROUND(..., 2).
+   Finance tables store amounts as NUMERIC with many decimal places.
+   Every SELECT of a monetary column must be rounded: ROUND(inv.total, 2), ROUND(SUM(inv.amount), 2).
+   Applies to any column from finance.*, invoice.*, or any column whose name contains:
+   total, amount, price, cost, spent, encumbered, expenditure, budget, balance.
+   NEVER return raw unrounded monetary values.
 
 AVAILABLE SCHEMA (use these exact table/column names):
 {$schemaContext}
