@@ -118,6 +118,9 @@
             ]
         },
         "circulation.audit_loan__t": {
+            "columnWarnings": {
+                "loan__item_id": "UUID type — target item__t.id type varies between installations. Cast BOTH sides to avoid errors: al.loan__item_id::text = ii.id::text"
+            },
             "sampleValues": {
                 "loan__action": [
                     "",
@@ -143,7 +146,7 @@
             "preferredApproach": [
                 "PREFERRED for all circulation counts and statistics. One row per loan action.",
                 "Filter by loan__action: 'checkedout' or 'checkedOutThroughOverride' for checkouts; 'checkedin' for returns; 'renewed' for renewals.",
-                "Join to items: JOIN inventory.item__t AS ii ON al.loan__item_id = ii.id.",
+                "Join to items: JOIN inventory.item__t AS ii ON al.loan__item_id::text = ii.id::text.",
                 "Use loan__loan_date for checkout date. Use created_date for the audit event timestamp."
             ]
         },

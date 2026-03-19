@@ -119,6 +119,19 @@ RULES:
     "show me records" query where the user did not ask for a specific order.
     KEEP ORDER BY only for: ranking queries (ORDER BY count DESC LIMIT 20), explicit top-N
     requests, or when the user specifically asks for a sorted result.
+19. UUID TYPE CASTS — MANDATORY: NEVER cast any column to ::uuid. ALWAYS cast to ::text.
+    In LDP/MetaDB, large fact tables (item__t, holdings_record__t, audit_loan__t) store FK
+    columns as TEXT while reference/lookup table PKs are UUID. Casting to ::uuid causes
+    "operator does not exist: uuid = text". The ONLY correct cast is ::text on the UUID side:
+      hr.instance_id           = inst.id::text     (holdings_record__t.instance_id is TEXT)
+      ii.holdings_record_id    = hr.id::text        (item__t.holdings_record_id is TEXT)
+      ii.effective_location_id = loc.id::text       (item__t.effective_location_id is TEXT)
+      ii.permanent_location_id = loc.id::text       (item__t.permanent_location_id is TEXT)
+      al.loan__item_id::text   = ii.id::text        (audit_loan__t.loan__item_id is UUID, item__t.id varies)
+      sr.external_id           = inst.id::text      (records__t.external_id is TEXT, instance__t.id is UUID)
+      ii.material_type_id      = (SELECT id::text FROM inventory.material_type__t WHERE ...)
+    Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID
+    natively — no cast needed. ::uuid is NEVER the correct cast anywhere in this system.
 {$campusRule}
 
 SCHEMA:
@@ -472,6 +485,13 @@ RULES:
     materialize the ENTIRE result set before returning any rows — even with LIMIT 100.
     OMIT ORDER BY for listing/existence/missing-field queries. KEEP it only for ranking
     (ORDER BY count DESC) or when the user explicitly asks for sorted output.
+14. UUID TYPE CASTS — MANDATORY: NEVER cast to ::uuid. ALWAYS cast to ::text.
+    In LDP/MetaDB, large fact tables store FK columns as TEXT while reference table PKs are UUID.
+    Casting to ::uuid causes "operator does not exist: uuid = text".
+    Always cast the UUID PK side to TEXT: hr.instance_id = inst.id::text,
+    ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
+    Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
+    ::uuid is NEVER the correct cast anywhere in this system.
 
 SCHEMA:
 {$schemaContext}
@@ -612,6 +632,13 @@ CONVERSION RULES:
    materialize the ENTIRE result set before returning any rows — even with LIMIT 100.
    OMIT ORDER BY for listing/existence/missing-field queries. KEEP it only for ranking
    (ORDER BY count DESC) or when the user explicitly asks for sorted output.
+13. UUID TYPE CASTS — MANDATORY: NEVER cast to ::uuid. ALWAYS cast to ::text.
+   In LDP/MetaDB, large fact tables store FK columns as TEXT while reference table PKs are UUID.
+   Casting to ::uuid causes "operator does not exist: uuid = text".
+   Always cast the UUID PK side to TEXT: hr.instance_id = inst.id::text,
+   ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
+   Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
+   ::uuid is NEVER the correct cast anywhere in this system.
 
 AVAILABLE SCHEMA (use these exact table/column names):
 {$schemaContext}
