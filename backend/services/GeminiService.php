@@ -119,11 +119,9 @@ RULES:
     "show me records" query where the user did not ask for a specific order.
     KEEP ORDER BY only for: ranking queries (ORDER BY count DESC LIMIT 20), explicit top-N
     requests, or when the user specifically asks for a sorted result.
-19. UUID TYPE CASTS — Write plain equality with NO casts. Do not write ::text or ::uuid
-    anywhere. The query post-processor reads the live schema and adds ::text casts ONLY
-    on the specific columns that need them (where one side is uuid and the other is text).
-    Unnecessary casts destroy index usage and cause catastrophically slow queries.
-    Simply write plain equality:
+19. UUID TYPE CASTS — NEVER write ::uuid or ::text anywhere. MetaDB join columns are
+    already compatible types. Explicit casts bypass PostgreSQL indexes and cause
+    catastrophically slow full-table scans. Always write plain equality with no casts:
       ii.material_type_id      = imt.id
       ii.holdings_record_id    = hr.id
       hr.instance_id           = inst.id
@@ -134,7 +132,7 @@ RULES:
       subj.id                  = inst.id
       iden.id                  = inst.id
       iden.identifiers__identifier_type_id = idt.id
-    ::uuid is NEVER correct anywhere in this system.
+    ::uuid and ::text are NEVER correct anywhere in JOIN ON conditions or WHERE clauses.
 20. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
     Finance tables store amounts as NUMERIC with many decimal places (e.g. 1548302.2100000000000000).
     ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
@@ -260,89 +258,18 @@ PROMPT;
     }
 
     /**
-     * Post-process generated SQL to add ::text casts ONLY where column types
-     * genuinely differ (uuid vs text), preventing "operator does not exist: uuid = text"
-     * errors while avoiding unnecessary casts that kill index usage.
+     * Strip any AI-generated type casts from SQL.
      *
-     * Strategy:
-     *  1. Parse FROM/JOIN clauses to build alias → schema.table map
-     *  2. Look up both column types from column_cache.json
-     *  3. Cast to ::text only when types differ; leave matching types alone
-     *  4. Fall back to name-heuristic (_id / .id) when types are unknown
+     * MetaDB join columns are already compatible types — explicit casts bypass
+     * PostgreSQL indexes and cause catastrophically slow seq scan / nested loop plans.
+     * The original "operator does not exist: uuid = text" errors were caused by the
+     * AI writing one-sided ::uuid casts, not by genuinely mismatched column types.
+     * Solution: remove all ::uuid and ::text casts; write no new ones.
      */
     private static function normalizeIdCasts(string $sql): string
     {
-        // Remove all existing casts so we re-evaluate from scratch
         $sql = preg_replace('/::uuid\b/i', '', $sql);
         $sql = preg_replace('/::text\b/i', '', $sql);
-
-        // Build type lookup: schema.table => [column => type]
-        $allColumns = FolioSchemaService::discoverAllColumns();
-        $typeMap = [];
-        foreach ($allColumns as $table => $cols) {
-            $tl = strtolower($table);
-            foreach ($cols as $col) {
-                $typeMap[$tl][strtolower($col['name'])] = $col['type'];
-            }
-        }
-
-        // Extract alias → schema.table from FROM/JOIN clauses
-        // Matches: FROM schema.table AS alias  or  JOIN schema.table alias
-        $aliasMap = [];
-        if (preg_match_all(
-            '/\b(?:FROM|JOIN)\s+([\w]+\.[\w]+)\s+(?:AS\s+)?(\w+)\b/i',
-            $sql, $matches, PREG_SET_ORDER
-        )) {
-            foreach ($matches as $m) {
-                $aliasMap[strtolower($m[2])] = strtolower($m[1]);
-            }
-        }
-
-        // Resolve alias.column → type from the map; null = unknown
-        $resolveType = static function (string $alias, string $col) use ($aliasMap, $typeMap): ?string {
-            $table = $aliasMap[strtolower($alias)] ?? null;
-            if ($table === null) {
-                return null;
-            }
-            return $typeMap[$table][strtolower($col)] ?? null;
-        };
-
-        // Apply casts only where needed
-        $sql = preg_replace_callback(
-            '/(\b(\w+)\.(\w+))\s*=\s*(\b(\w+)\.(\w+))/',
-            static function (array $m) use ($resolveType): string {
-                $left      = $m[1];
-                $leftAlias = $m[2];
-                $leftCol   = $m[3];
-                $right     = $m[4];
-                $rightAlias = $m[5];
-                $rightCol   = $m[6];
-
-                $leftType  = $resolveType($leftAlias, $leftCol);
-                $rightType = $resolveType($rightAlias, $rightCol);
-
-                // Both types known and identical — no cast needed
-                if ($leftType !== null && $rightType !== null && $leftType === $rightType) {
-                    return $m[0];
-                }
-
-                // Types differ (uuid vs text) — cast both to text
-                if ($leftType !== null && $rightType !== null && $leftType !== $rightType) {
-                    return $left . '::text = ' . $right . '::text';
-                }
-
-                // Unknown types: fall back to column-name heuristic
-                $leftIsId  = (bool) preg_match('/(_id|\.id)$/i', $left);
-                $rightIsId = (bool) preg_match('/(_id|\.id)$/i', $right);
-                if ($leftIsId || $rightIsId) {
-                    return $left . '::text = ' . $right . '::text';
-                }
-
-                return $m[0];
-            },
-            $sql
-        );
-
         return $sql;
     }
 
@@ -588,13 +515,11 @@ RULES:
     materialize the ENTIRE result set before returning any rows — even with LIMIT 100.
     OMIT ORDER BY for listing/existence/missing-field queries. KEEP it only for ranking
     (ORDER BY count DESC) or when the user explicitly asks for sorted output.
-14. UUID TYPE CASTS — MANDATORY: NEVER cast to ::uuid. ALWAYS cast to ::text.
-    In LDP/MetaDB, large fact tables store FK columns as TEXT while reference table PKs are UUID.
-    Casting to ::uuid causes "operator does not exist: uuid = text".
-    Always cast the UUID PK side to TEXT: hr.instance_id = inst.id::text,
-    ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
-    Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
-    ::uuid is NEVER the correct cast anywhere in this system.
+14. UUID TYPE CASTS — NEVER write ::uuid or ::text anywhere. MetaDB join columns are
+    already compatible types. Explicit casts bypass PostgreSQL indexes and cause
+    catastrophically slow full-table scans. Always write plain equality with no casts:
+    hr.instance_id = inst.id, ii.holdings_record_id = hr.id, etc.
+    ::uuid and ::text are NEVER correct in JOIN ON conditions or WHERE clauses.
 15. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
     Finance tables store amounts as NUMERIC with many decimal places.
     ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
@@ -744,13 +669,11 @@ CONVERSION RULES:
    materialize the ENTIRE result set before returning any rows — even with LIMIT 100.
    OMIT ORDER BY for listing/existence/missing-field queries. KEEP it only for ranking
    (ORDER BY count DESC) or when the user explicitly asks for sorted output.
-13. UUID TYPE CASTS — MANDATORY: NEVER cast to ::uuid. ALWAYS cast to ::text.
-   In LDP/MetaDB, large fact tables store FK columns as TEXT while reference table PKs are UUID.
-   Casting to ::uuid causes "operator does not exist: uuid = text".
-   Always cast the UUID PK side to TEXT: hr.instance_id = inst.id::text,
-   ii.holdings_record_id = hr.id::text, ii.effective_location_id = loc.id::text.
-   Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID.
-   ::uuid is NEVER the correct cast anywhere in this system.
+13. UUID TYPE CASTS — NEVER write ::uuid or ::text anywhere. MetaDB join columns are
+   already compatible types. Explicit casts bypass PostgreSQL indexes and cause
+   catastrophically slow full-table scans. Always write plain equality with no casts:
+   hr.instance_id = inst.id, ii.holdings_record_id = hr.id, etc.
+   ::uuid and ::text are NEVER correct in JOIN ON conditions or WHERE clauses.
 14. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
    Finance tables store amounts as NUMERIC with many decimal places.
    ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
