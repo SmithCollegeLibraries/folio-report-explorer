@@ -615,7 +615,9 @@ class FolioQueryController extends Controller
                 $job->estimated_rows = $estimate['rows'] ?? null;
             }
             if ($job->hasAttribute('estimated_cost')) {
-                $job->estimated_cost = $estimate['cost'] ?? null;
+                $cost = $estimate['cost'] ?? null;
+                // Cap to prevent DECIMAL overflow on very large PG plan costs
+                $job->estimated_cost = ($cost !== null) ? min((float)$cost, 1.0e15) : null;
             }
         }
         if (!$job->save()) {
