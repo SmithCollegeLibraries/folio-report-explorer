@@ -119,28 +119,29 @@ RULES:
     "show me records" query where the user did not ask for a specific order.
     KEEP ORDER BY only for: ranking queries (ORDER BY count DESC LIMIT 20), explicit top-N
     requests, or when the user specifically asks for a sorted result.
-19. UUID TYPE CASTS — MANDATORY: NEVER cast any column to ::uuid. NEVER use ::text on only
-    ONE side of a JOIN condition.
-    In LDP/MetaDB, FK columns have INCONSISTENT types — some are TEXT, some are UUID —
-    while reference/lookup table PKs are typically UUID. Casting only ONE side causes
-    "operator does not exist: uuid = text".
-    THE RULE: For ALL joins between fact tables and lookup/reference tables, cast BOTH
-    sides to ::text. This is always safe regardless of the actual underlying column types:
-      hr.instance_id::text                          = inst.id::text
-      ii.holdings_record_id::text                   = hr.id::text
-      ii.effective_location_id::text                = loc.id::text
-      ii.permanent_location_id::text                = loc.id::text
-      ii.material_type_id::text                     = imt.id::text
-      ii.loan_type_id::text                         = lt.id::text
-      al.loan__item_id::text                        = ii.id::text
-      sr.external_id::text                          = inst.id::text
-      cont.id::text                                 = inst.id::text
-      subj.id::text                                 = inst.id::text
-      iden.id::text                                 = inst.id::text
-      iden.identifiers__identifier_type_id::text    = idt.id::text
-    Lookup-to-lookup joins (loc.library_id = lib.id, lib.campus_id = camp.id) are same-type
-    natively, but casting both sides to ::text is also acceptable and recommended for safety.
-    ::uuid is NEVER the correct cast anywhere in this system.
+19. UUID TYPE CASTS — CRITICAL: ALL JOINs MUST cast BOTH sides to ::text. NO EXCEPTIONS.
+    FORBIDDEN PATTERNS — these ALL cause "operator does not exist: uuid = text":
+      WRONG: ii.material_type_id      = imt.id::text
+      WRONG: ii.holdings_record_id    = hr.id::text
+      WRONG: hr.instance_id           = inst.id::text
+      WRONG: ii.effective_location_id = loc.id::text
+      WRONG: ii.material_type_id      = imt.id
+      WRONG: anything involving ::uuid anywhere
+    MANDATORY CORRECT PATTERNS — always cast BOTH sides to ::text:
+      CORRECT: ii.material_type_id::text                  = imt.id::text
+      CORRECT: ii.holdings_record_id::text                = hr.id::text
+      CORRECT: hr.instance_id::text                       = inst.id::text
+      CORRECT: ii.effective_location_id::text             = loc.id::text
+      CORRECT: ii.permanent_location_id::text             = loc.id::text
+      CORRECT: ii.loan_type_id::text                      = lt.id::text
+      CORRECT: al.loan__item_id::text                     = ii.id::text
+      CORRECT: sr.external_id::text                       = inst.id::text
+      CORRECT: cont.id::text                              = inst.id::text
+      CORRECT: subj.id::text                              = inst.id::text
+      CORRECT: iden.id::text                              = inst.id::text
+      CORRECT: iden.identifiers__identifier_type_id::text = idt.id::text
+    RULE: Every single JOIN ON condition that compares an ID/FK to a PK must have ::text
+    on BOTH sides. Casting only one side ALWAYS fails. ::uuid is forbidden everywhere.
 20. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
     Finance tables store amounts as NUMERIC with many decimal places (e.g. 1548302.2100000000000000).
     ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
