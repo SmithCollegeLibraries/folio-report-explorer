@@ -119,9 +119,11 @@ RULES:
     "show me records" query where the user did not ask for a specific order.
     KEEP ORDER BY only for: ranking queries (ORDER BY count DESC LIMIT 20), explicit top-N
     requests, or when the user specifically asks for a sorted result.
-19. UUID TYPE CASTS — DO NOT ADD ANY TYPE CASTS. Do not write ::text or ::uuid anywhere
-    in JOIN ON conditions, WHERE clauses, or subqueries. The query post-processor will
-    automatically handle all necessary type casts. Simply write plain equality:
+19. UUID TYPE CASTS — Write plain equality with NO casts. Do not write ::text or ::uuid
+    anywhere. The query post-processor reads the live schema and adds ::text casts ONLY
+    on the specific columns that need them (where one side is uuid and the other is text).
+    Unnecessary casts destroy index usage and cause catastrophically slow queries.
+    Simply write plain equality:
       ii.material_type_id      = imt.id
       ii.holdings_record_id    = hr.id
       hr.instance_id           = inst.id
@@ -258,32 +260,84 @@ PROMPT;
     }
 
     /**
-     * Post-process generated SQL to ensure ::text on both sides of every ID-column
-     * equality comparison, preventing "operator does not exist: uuid = text" errors.
+     * Post-process generated SQL to add ::text casts ONLY where column types
+     * genuinely differ (uuid vs text), preventing "operator does not exist: uuid = text"
+     * errors while avoiding unnecessary casts that kill index usage.
      *
-     * Handles JOIN ON conditions, WHERE clauses, and correlated subqueries.
+     * Strategy:
+     *  1. Parse FROM/JOIN clauses to build alias → schema.table map
+     *  2. Look up both column types from column_cache.json
+     *  3. Cast to ::text only when types differ; leave matching types alone
+     *  4. Fall back to name-heuristic (_id / .id) when types are unknown
      */
     private static function normalizeIdCasts(string $sql): string
     {
-        // Remove all ::uuid casts (always wrong in this system)
+        // Remove all existing casts so we re-evaluate from scratch
         $sql = preg_replace('/::uuid\b/i', '', $sql);
-
-        // Remove any existing ::text casts so we can re-apply them uniformly
         $sql = preg_replace('/::text\b/i', '', $sql);
 
-        // Match table.column = table.column (qualified column comparisons)
-        // and add ::text on both sides when either side looks like an ID column
+        // Build type lookup: schema.table => [column => type]
+        $allColumns = FolioSchemaService::discoverAllColumns();
+        $typeMap = [];
+        foreach ($allColumns as $table => $cols) {
+            $tl = strtolower($table);
+            foreach ($cols as $col) {
+                $typeMap[$tl][strtolower($col['name'])] = $col['type'];
+            }
+        }
+
+        // Extract alias → schema.table from FROM/JOIN clauses
+        // Matches: FROM schema.table AS alias  or  JOIN schema.table alias
+        $aliasMap = [];
+        if (preg_match_all(
+            '/\b(?:FROM|JOIN)\s+([\w]+\.[\w]+)\s+(?:AS\s+)?(\w+)\b/i',
+            $sql, $matches, PREG_SET_ORDER
+        )) {
+            foreach ($matches as $m) {
+                $aliasMap[strtolower($m[2])] = strtolower($m[1]);
+            }
+        }
+
+        // Resolve alias.column → type from the map; null = unknown
+        $resolveType = static function (string $alias, string $col) use ($aliasMap, $typeMap): ?string {
+            $table = $aliasMap[strtolower($alias)] ?? null;
+            if ($table === null) {
+                return null;
+            }
+            return $typeMap[$table][strtolower($col)] ?? null;
+        };
+
+        // Apply casts only where needed
         $sql = preg_replace_callback(
-            '/(\b\w+\.\w+)\s*=\s*(\b\w+\.\w+)/',
-            static function (array $m): string {
-                $left  = $m[1];
-                $right = $m[2];
-                // Check if either side is an ID-like column (ends in _id or is named .id)
+            '/(\b(\w+)\.(\w+))\s*=\s*(\b(\w+)\.(\w+))/',
+            static function (array $m) use ($resolveType): string {
+                $left      = $m[1];
+                $leftAlias = $m[2];
+                $leftCol   = $m[3];
+                $right     = $m[4];
+                $rightAlias = $m[5];
+                $rightCol   = $m[6];
+
+                $leftType  = $resolveType($leftAlias, $leftCol);
+                $rightType = $resolveType($rightAlias, $rightCol);
+
+                // Both types known and identical — no cast needed
+                if ($leftType !== null && $rightType !== null && $leftType === $rightType) {
+                    return $m[0];
+                }
+
+                // Types differ (uuid vs text) — cast both to text
+                if ($leftType !== null && $rightType !== null && $leftType !== $rightType) {
+                    return $left . '::text = ' . $right . '::text';
+                }
+
+                // Unknown types: fall back to column-name heuristic
                 $leftIsId  = (bool) preg_match('/(_id|\.id)$/i', $left);
                 $rightIsId = (bool) preg_match('/(_id|\.id)$/i', $right);
                 if ($leftIsId || $rightIsId) {
                     return $left . '::text = ' . $right . '::text';
                 }
+
                 return $m[0];
             },
             $sql
