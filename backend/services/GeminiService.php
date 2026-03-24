@@ -119,29 +119,20 @@ RULES:
     "show me records" query where the user did not ask for a specific order.
     KEEP ORDER BY only for: ranking queries (ORDER BY count DESC LIMIT 20), explicit top-N
     requests, or when the user specifically asks for a sorted result.
-19. UUID TYPE CASTS — CRITICAL: ALL JOINs MUST cast BOTH sides to ::text. NO EXCEPTIONS.
-    FORBIDDEN PATTERNS — these ALL cause "operator does not exist: uuid = text":
-      WRONG: ii.material_type_id      = imt.id::text
-      WRONG: ii.holdings_record_id    = hr.id::text
-      WRONG: hr.instance_id           = inst.id::text
-      WRONG: ii.effective_location_id = loc.id::text
-      WRONG: ii.material_type_id      = imt.id
-      WRONG: anything involving ::uuid anywhere
-    MANDATORY CORRECT PATTERNS — always cast BOTH sides to ::text:
-      CORRECT: ii.material_type_id::text                  = imt.id::text
-      CORRECT: ii.holdings_record_id::text                = hr.id::text
-      CORRECT: hr.instance_id::text                       = inst.id::text
-      CORRECT: ii.effective_location_id::text             = loc.id::text
-      CORRECT: ii.permanent_location_id::text             = loc.id::text
-      CORRECT: ii.loan_type_id::text                      = lt.id::text
-      CORRECT: al.loan__item_id::text                     = ii.id::text
-      CORRECT: sr.external_id::text                       = inst.id::text
-      CORRECT: cont.id::text                              = inst.id::text
-      CORRECT: subj.id::text                              = inst.id::text
-      CORRECT: iden.id::text                              = inst.id::text
-      CORRECT: iden.identifiers__identifier_type_id::text = idt.id::text
-    RULE: Every single JOIN ON condition that compares an ID/FK to a PK must have ::text
-    on BOTH sides. Casting only one side ALWAYS fails. ::uuid is forbidden everywhere.
+19. UUID TYPE CASTS — DO NOT ADD ANY TYPE CASTS. Do not write ::text or ::uuid anywhere
+    in JOIN ON conditions, WHERE clauses, or subqueries. The query post-processor will
+    automatically handle all necessary type casts. Simply write plain equality:
+      ii.material_type_id      = imt.id
+      ii.holdings_record_id    = hr.id
+      hr.instance_id           = inst.id
+      ii.effective_location_id = loc.id
+      loc.library_id           = lib.id
+      lib.campus_id            = camp.id
+      cont.id                  = inst.id
+      subj.id                  = inst.id
+      iden.id                  = inst.id
+      iden.identifiers__identifier_type_id = idt.id
+    ::uuid is NEVER correct anywhere in this system.
 20. MONETARY / FINANCIAL COLUMNS — MANDATORY: Format ALL money amounts as USD currency.
     Finance tables store amounts as NUMERIC with many decimal places (e.g. 1548302.2100000000000000).
     ALWAYS use TO_CHAR to format as a USD dollar amount with comma separators:
@@ -256,11 +247,49 @@ PROMPT;
             $dataSource = 'local';
         }
 
+        // Normalize all ID-column comparisons to use ::text on both sides
+        $sql = self::normalizeIdCasts($sql);
+
         return [
             'sql' => $sql,
             'explanation' => $explanation,
             'dataSource' => $dataSource,
         ];
+    }
+
+    /**
+     * Post-process generated SQL to ensure ::text on both sides of every ID-column
+     * equality comparison, preventing "operator does not exist: uuid = text" errors.
+     *
+     * Handles JOIN ON conditions, WHERE clauses, and correlated subqueries.
+     */
+    private static function normalizeIdCasts(string $sql): string
+    {
+        // Remove all ::uuid casts (always wrong in this system)
+        $sql = preg_replace('/::uuid\b/i', '', $sql);
+
+        // Remove any existing ::text casts so we can re-apply them uniformly
+        $sql = preg_replace('/::text\b/i', '', $sql);
+
+        // Match table.column = table.column (qualified column comparisons)
+        // and add ::text on both sides when either side looks like an ID column
+        $sql = preg_replace_callback(
+            '/(\b\w+\.\w+)\s*=\s*(\b\w+\.\w+)/',
+            static function (array $m): string {
+                $left  = $m[1];
+                $right = $m[2];
+                // Check if either side is an ID-like column (ends in _id or is named .id)
+                $leftIsId  = (bool) preg_match('/(_id|\.id)$/i', $left);
+                $rightIsId = (bool) preg_match('/(_id|\.id)$/i', $right);
+                if ($leftIsId || $rightIsId) {
+                    return $left . '::text = ' . $right . '::text';
+                }
+                return $m[0];
+            },
+            $sql
+        );
+
+        return $sql;
     }
 
     /**
