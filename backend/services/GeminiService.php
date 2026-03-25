@@ -174,7 +174,7 @@ PROMPT;
                 ],
                 'generationConfig' => [
                     'temperature' => 0.1,
-                    'maxOutputTokens' => 4096,
+                    'maxOutputTokens' => 16384,
                 ],
             ]))
             ->send();
@@ -188,7 +188,10 @@ PROMPT;
         $data = json_decode($response->content, true);
         $finishReason = $data['candidates'][0]['finishReason'] ?? '';
         if ($finishReason === 'MAX_TOKENS') {
-            Yii::warning("Gemini NL→SQL response truncated (MAX_TOKENS). Consider reducing schema context size.");
+            throw new \RuntimeException(
+                'The AI response was truncated because the query is too complex. '
+                . 'Try simplifying your request or asking for fewer fields.'
+            );
         }
         $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
