@@ -30,7 +30,10 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - AI_PROVIDER=${AI_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
       - YII_ENV=${YII_ENV:-dev}
     depends_on:
       mysql:
@@ -87,7 +90,10 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - AI_PROVIDER=${AI_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
       - YII_ENV=${YII_ENV:-dev}
     depends_on:
       php:
@@ -114,7 +120,10 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - AI_PROVIDER=${AI_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
       - YII_ENV=${YII_ENV:-dev}
     depends_on:
       php:

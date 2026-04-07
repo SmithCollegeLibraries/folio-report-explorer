@@ -7,8 +7,11 @@ use app\services\SettingsService;
  * Values from data/settings.json override environment variables.
  */
 return [
+    'aiProvider' => strtolower((string) SettingsService::get('ai_provider', 'AI_PROVIDER', 'gemini')),
     'geminiApiKey' => SettingsService::get('gemini_api_key', 'GEMINI_API_KEY', ''),
     'geminiModel' => SettingsService::get('gemini_model', null, 'gemini-2.5-flash'),
+    'openaiApiKey' => SettingsService::get('openai_api_key', 'OPENAI_API_KEY', ''),
+    'openaiModel' => SettingsService::get('openai_model', 'OPENAI_MODEL', 'gpt-4.1-mini'),
     'nl2sqlIntentMode' => filter_var(
         SettingsService::get('nl2sql_intent_mode', 'NL2SQL_INTENT_MODE', 'false'),
         FILTER_VALIDATE_BOOLEAN

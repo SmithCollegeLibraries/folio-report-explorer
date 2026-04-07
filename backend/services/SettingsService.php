@@ -6,10 +6,12 @@ namespace app\services;
  * SettingsService — read/write dev settings from a JSON file.
  *
  * Settings are stored in data/settings.json and override
- * the environment variables for PG connection and Gemini key.
+ * environment variables for PG and AI provider credentials/models.
  */
 class SettingsService
 {
+    private const OPENAI_API_BASE = 'https://api.openai.com/v1';
+
     private static $cache = null;
 
     /**
@@ -92,7 +94,6 @@ class SettingsService
      */
     public static function forDisplay()
     {
-        $s = self::load();
         $display = [
             'pg_host' => self::get('pg_host', 'FOLIO_PG_HOST'),
             'pg_port' => self::get('pg_port', 'FOLIO_PG_PORT', '5432'),
@@ -100,8 +101,11 @@ class SettingsService
             'pg_user' => self::get('pg_user', 'FOLIO_PG_USER'),
             'pg_pass' => self::get('pg_pass', 'FOLIO_PG_PASS') ? '••••••••' : '',
             'pg_sslmode' => self::get('pg_sslmode', 'FOLIO_PG_SSLMODE', 'require'),
+            'ai_provider' => strtolower((string) self::get('ai_provider', 'AI_PROVIDER', 'gemini')),
             'gemini_api_key' => self::get('gemini_api_key', 'GEMINI_API_KEY') ? '••••••••' : '',
             'gemini_model' => self::get('gemini_model', null, 'gemini-2.5-flash'),
+            'openai_api_key' => self::get('openai_api_key', 'OPENAI_API_KEY') ? '••••••••' : '',
+            'openai_model' => self::get('openai_model', 'OPENAI_MODEL', 'gpt-4.1-mini'),
             'nl2sql_intent_mode' => filter_var(
                 self::get('nl2sql_intent_mode', 'NL2SQL_INTENT_MODE', 'false'),
                 FILTER_VALIDATE_BOOLEAN
@@ -205,6 +209,56 @@ class SettingsService
                     'error' => $data['error']['message'] ?? "HTTP $httpCode",
                 ];
             }
+        } catch (\Exception $e) {
+            return ['connected' => false, 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * Test an OpenAI API key.
+     */
+    public static function testOpenAi($apiKey = null, $model = null)
+    {
+        $apiKey = $apiKey ?: self::get('openai_api_key', 'OPENAI_API_KEY');
+        $model  = $model  ?: self::get('openai_model', 'OPENAI_MODEL', 'gpt-4.1-mini');
+
+        if (!$apiKey) {
+            return ['connected' => false, 'error' => 'API key is required'];
+        }
+
+        try {
+            $url = sprintf('%s/models/%s', self::OPENAI_API_BASE, rawurlencode((string) $model));
+            $ch = curl_init($url);
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 10,
+                CURLOPT_HTTPHEADER => [
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $apiKey,
+                ],
+            ]);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlErr = curl_error($ch);
+            curl_close($ch);
+
+            if ($response === false) {
+                return ['connected' => false, 'error' => $curlErr ?: 'Failed to call OpenAI API'];
+            }
+
+            $data = json_decode($response, true);
+            if ($httpCode >= 200 && $httpCode < 300) {
+                return [
+                    'connected' => true,
+                    'model' => $data['id'] ?? $model,
+                ];
+            }
+
+            return [
+                'connected' => false,
+                'error' => $data['error']['message'] ?? "HTTP $httpCode",
+            ];
         } catch (\Exception $e) {
             return ['connected' => false, 'error' => $e->getMessage()];
         }

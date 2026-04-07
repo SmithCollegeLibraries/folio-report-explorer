@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchSettings, saveSettings, testSettings } from '../api/client';
+import type { AppSettings, SettingsTestResponse } from '../types';
 import {
   Settings as SettingsIcon,
   Database,
@@ -13,15 +14,37 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-interface SettingsData {
-  pg_host: string;
-  pg_port: string;
-  pg_db: string;
-  pg_user: string;
-  pg_pass: string;
-  pg_sslmode: string;
-  gemini_api_key: string;
-  gemini_model: string;
+type SettingsData = Pick<
+  AppSettings,
+  | 'pg_host'
+  | 'pg_port'
+  | 'pg_db'
+  | 'pg_user'
+  | 'pg_pass'
+  | 'pg_sslmode'
+  | 'ai_provider'
+  | 'gemini_api_key'
+  | 'gemini_model'
+  | 'openai_api_key'
+  | 'openai_model'
+>;
+
+interface ConnectionResult {
+  connected: boolean;
+  error?: string;
+}
+
+interface PgConnectionResult extends ConnectionResult {
+  version?: string;
+}
+
+interface GeminiConnectionResult extends ConnectionResult {
+  model?: string;
+  displayName?: string;
+}
+
+interface OpenAiConnectionResult extends ConnectionResult {
+  model?: string;
 }
 
 const EMPTY: SettingsData = {
@@ -31,8 +54,11 @@ const EMPTY: SettingsData = {
   pg_user: '',
   pg_pass: '',
   pg_sslmode: 'require',
+  ai_provider: 'gemini',
   gemini_api_key: '',
   gemini_model: 'gemini-2.5-flash',
+  openai_api_key: '',
+  openai_model: 'gpt-4.1-mini',
 };
 
 const SSL_MODES = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'];
@@ -42,17 +68,10 @@ export default function Settings() {
   const [form, setForm] = useState<SettingsData>(EMPTY);
   const [showPgPass, setShowPgPass] = useState(false);
   const [showGeminiKey, setShowGeminiKey] = useState(false);
-  const [pgTestResult, setPgTestResult] = useState<{
-    connected: boolean;
-    version?: string;
-    error?: string;
-  } | null>(null);
-  const [geminiTestResult, setGeminiTestResult] = useState<{
-    connected: boolean;
-    model?: string;
-    displayName?: string;
-    error?: string;
-  } | null>(null);
+  const [showOpenAiKey, setShowOpenAiKey] = useState(false);
+  const [pgTestResult, setPgTestResult] = useState<PgConnectionResult | null>(null);
+  const [geminiTestResult, setGeminiTestResult] = useState<GeminiConnectionResult | null>(null);
+  const [openAiTestResult, setOpenAiTestResult] = useState<OpenAiConnectionResult | null>(null);
   const [saved, setSaved] = useState(false);
 
   // Load current settings
@@ -72,8 +91,11 @@ export default function Settings() {
         pg_user: current.pg_user || '',
         pg_pass: '', // don't populate masked passwords
         pg_sslmode: current.pg_sslmode || 'require',
+        ai_provider: current.ai_provider === 'openai' ? 'openai' : 'gemini',
         gemini_api_key: '', // don't populate masked keys
         gemini_model: current.gemini_model || 'gemini-2.5-flash',
+        openai_api_key: '', // don't populate masked keys
+        openai_model: current.openai_model || 'gpt-4.1-mini',
       }));
     }
   }, [current]);
@@ -99,7 +121,7 @@ export default function Settings() {
         pg_pass: form.pg_pass || undefined,
         pg_sslmode: form.pg_sslmode,
       }),
-    onSuccess: (data) => setPgTestResult(data.postgres),
+    onSuccess: (data: SettingsTestResponse) => setPgTestResult(data.postgres ?? null),
   });
 
   const testGeminiMut = useMutation({
@@ -109,7 +131,17 @@ export default function Settings() {
         gemini_api_key: form.gemini_api_key || undefined,
         gemini_model: form.gemini_model,
       }),
-    onSuccess: (data) => setGeminiTestResult(data.gemini),
+    onSuccess: (data: SettingsTestResponse) => setGeminiTestResult(data.gemini ?? null),
+  });
+
+  const testOpenAiMut = useMutation({
+    mutationFn: () =>
+      testSettings({
+        test_openai: true,
+        openai_api_key: form.openai_api_key || undefined,
+        openai_model: form.openai_model,
+      }),
+    onSuccess: (data: SettingsTestResponse) => setOpenAiTestResult(data.openai ?? null),
   });
 
   const handleSave = () => {
@@ -121,8 +153,11 @@ export default function Settings() {
     if (form.pg_user) payload.pg_user = form.pg_user;
     if (form.pg_pass) payload.pg_pass = form.pg_pass;
     if (form.pg_sslmode) payload.pg_sslmode = form.pg_sslmode;
+    if (form.ai_provider) payload.ai_provider = form.ai_provider;
     if (form.gemini_api_key) payload.gemini_api_key = form.gemini_api_key;
     if (form.gemini_model) payload.gemini_model = form.gemini_model;
+    if (form.openai_api_key) payload.openai_api_key = form.openai_api_key;
+    if (form.openai_model) payload.openai_model = form.openai_model;
     saveMut.mutate(payload);
   };
 
@@ -130,6 +165,7 @@ export default function Settings() {
     setForm((prev) => ({ ...prev, [field]: value }));
     setPgTestResult(null);
     setGeminiTestResult(null);
+    setOpenAiTestResult(null);
   };
 
   if (isLoading) {
@@ -142,6 +178,7 @@ export default function Settings() {
 
   const hasPgSaved = !!(current?.pg_host && current.pg_pass);
   const hasGeminiSaved = !!current?.gemini_api_key;
+  const hasOpenAiSaved = !!current?.openai_api_key;
 
   return (
     <div className="max-w-2xl mx-auto p-4 sm:p-6">
@@ -271,6 +308,31 @@ export default function Settings() {
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
           <Sparkles size={18} className="text-purple-600" />
+          <h3 className="text-lg font-semibold">AI Provider</h3>
+        </div>
+
+        <div className="bg-white border rounded-lg p-5 space-y-4">
+          <div>
+            <Label>Active Provider</Label>
+            <select
+              value={form.ai_provider}
+              onChange={(e) => update('ai_provider', e.target.value)}
+              className="w-full border rounded px-3 py-2 text-sm bg-white"
+            >
+              <option value="gemini">Gemini</option>
+              <option value="openai">OpenAI</option>
+            </select>
+            <p className="text-xs text-gray-400 mt-1">
+              Ask AI uses this provider after you save settings.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Gemini AI ──────────────────────────── */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles size={18} className="text-purple-600" />
           <h3 className="text-lg font-semibold">Gemini AI</h3>
           {hasGeminiSaved && (
             <span className="ml-auto flex items-center gap-1 text-xs text-green-600">
@@ -342,6 +404,78 @@ export default function Settings() {
               className="flex items-center gap-2 border px-4 py-2 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
             >
               {testGeminiMut.isPending ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              Test API Key
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ── OpenAI ─────────────────────────────── */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <Sparkles size={18} className="text-emerald-600" />
+          <h3 className="text-lg font-semibold">OpenAI</h3>
+          {hasOpenAiSaved && (
+            <span className="ml-auto flex items-center gap-1 text-xs text-green-600">
+              <CheckCircle2 size={14} /> Configured
+            </span>
+          )}
+        </div>
+
+        <div className="bg-white border rounded-lg p-5 space-y-4">
+          <div>
+            <Label>API Key</Label>
+            <div className="relative">
+              <Input
+                value={form.openai_api_key}
+                onChange={(v) => update('openai_api_key', v)}
+                placeholder={hasOpenAiSaved ? '(unchanged)' : 'Enter OpenAI API key'}
+                type={showOpenAiKey ? 'text' : 'password'}
+              />
+              <button
+                onClick={() => setShowOpenAiKey(!showOpenAiKey)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                type="button"
+              >
+                {showOpenAiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-1">
+              Generate an API key in the OpenAI dashboard.
+            </p>
+          </div>
+
+          <div>
+            <Label>Model</Label>
+            <Input
+              value={form.openai_model}
+              onChange={(v) => update('openai_model', v)}
+              placeholder="gpt-4.1-mini"
+            />
+          </div>
+
+          {openAiTestResult && (
+            <TestResult
+              connected={openAiTestResult.connected}
+              success={openAiTestResult.model ? `Connected! Model: ${openAiTestResult.model}` : 'Connected!'}
+              error={openAiTestResult.error}
+            />
+          )}
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => testOpenAiMut.mutate()}
+              disabled={
+                (!form.openai_api_key && !hasOpenAiSaved) ||
+                testOpenAiMut.isPending
+              }
+              className="flex items-center gap-2 border px-4 py-2 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              {testOpenAiMut.isPending ? (
                 <Loader2 size={14} className="animate-spin" />
               ) : (
                 <RefreshCw size={14} />

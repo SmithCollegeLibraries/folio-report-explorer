@@ -10,6 +10,8 @@ import type {
   SchemaAskResponse,
   SavedQuery,
   HealthResponse,
+  AppSettings,
+  SettingsTestResponse,
   QueryDefinition,
   JobSubmitResponse,
   JobStatusResponse,
@@ -268,21 +270,21 @@ export async function checkHealth(): Promise<HealthResponse> {
 
 // ─── Settings (dev) ───────────────────────────────────────────────
 
-export async function fetchSettings(): Promise<Record<string, string>> {
+export async function fetchSettings(): Promise<Partial<AppSettings>> {
   const { data } = await api.get('/settings');
   return data;
 }
 
 export async function saveSettings(
-  settings: Record<string, string | undefined>,
-): Promise<Record<string, string>> {
+  settings: Partial<AppSettings>,
+): Promise<Partial<AppSettings>> {
   const { data } = await api.post('/settings', settings);
   return data;
 }
 
 export async function testSettings(
   params: Record<string, unknown>,
-): Promise<Record<string, any>> {
+): Promise<SettingsTestResponse> {
   const { data } = await api.post('/settings/test', params);
   return data;
 }

@@ -1371,8 +1371,11 @@ class FolioQueryController extends Controller
             'pg_user',
             'pg_pass',
             'pg_sslmode',
+            'ai_provider',
             'gemini_api_key',
             'gemini_model',
+            'openai_api_key',
+            'openai_model',
             'nl2sql_intent_mode',
             'nl2sql_primary_mode',
             'nl2sql_shadow_mode',
@@ -1403,7 +1406,7 @@ class FolioQueryController extends Controller
     }
 
     /**
-     * POST /api/settings/test — test Postgres and/or Gemini connection.
+     * POST /api/settings/test — test Postgres and/or AI provider connection.
      */
     public function actionSettingsTest()
     {
@@ -1425,6 +1428,13 @@ class FolioQueryController extends Controller
             $results['gemini'] = SettingsService::testGemini(
                 $body['gemini_api_key'] ?? null,
                 $body['gemini_model'] ?? null
+            );
+        }
+
+        if (isset($body['test_openai']) && $body['test_openai']) {
+            $results['openai'] = SettingsService::testOpenAi(
+                $body['openai_api_key'] ?? null,
+                $body['openai_model'] ?? null
             );
         }
 

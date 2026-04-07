@@ -12,6 +12,7 @@ use yii\httpclient\Client;
 class GeminiService
 {
     const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+    const OPENAI_API_BASE = 'https://api.openai.com/v1';
     const REQUEST_TIMEOUT_SECONDS = 120;
     const DEFAULT_MAX_RETRIES = 3;
     const DEFAULT_RETRY_BASE_DELAY_MS = 400;
@@ -21,6 +22,45 @@ class GeminiService
     const INDEX_RECOMMENDER_PROMPT_VERSION = 'index_recommender.v1';
     const FOLLOW_UP_SUGGESTION_PROMPT_VERSION = 'followup_suggestions.v1';
     const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
+
+    /**
+     * Resolve active AI provider (gemini|openai).
+     *
+     * @return string
+     */
+    private static function getAiProvider()
+    {
+        $provider = strtolower(trim((string)(Yii::$app->params['aiProvider'] ?? 'gemini')));
+        return $provider === 'openai' ? 'openai' : 'gemini';
+    }
+
+    /**
+     * Resolve API key for the active provider.
+     *
+     * @return string
+     */
+    private static function getAiApiKey()
+    {
+        if (self::getAiProvider() === 'openai') {
+            return (string)(Yii::$app->params['openaiApiKey'] ?? '');
+        }
+
+        return (string)(Yii::$app->params['geminiApiKey'] ?? '');
+    }
+
+    /**
+     * Resolve default model for the active provider.
+     *
+     * @return string
+     */
+    private static function getAiModel()
+    {
+        if (self::getAiProvider() === 'openai') {
+            return (string)(Yii::$app->params['openaiModel'] ?? 'gpt-4.1-mini');
+        }
+
+        return (string)(Yii::$app->params['geminiModel'] ?? 'gemini-2.5-flash');
+    }
 
     /**
      * Step 8 entrypoint: run the configured primary mode and optionally execute
@@ -83,14 +123,15 @@ class GeminiService
      */
     public static function recommendIndexesFromHistory(array $snapshot)
     {
-        $apiKey = Yii::$app->params['geminiApiKey'];
+        $apiKey = self::getAiApiKey();
         if (empty($apiKey)) {
+            $provider = strtoupper(self::getAiProvider());
             throw new \RuntimeException(
-                'Gemini API key not configured. Set GEMINI_API_KEY in .env'
+                "{$provider} API key not configured."
             );
         }
 
-        $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
+        $model = self::getAiModel();
         $workloadPayload = [
             'generatedAt' => $snapshot['generatedAt'] ?? null,
             'windowDays' => $snapshot['windowDays'] ?? null,
@@ -192,12 +233,12 @@ class GeminiService
      */
     public static function suggestFollowUpQueries($prompt, $sql, $explanation = '', $campus = null)
     {
-        $apiKey = Yii::$app->params['geminiApiKey'];
+        $apiKey = self::getAiApiKey();
         if (empty($apiKey)) {
             return [];
         }
 
-        $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
+        $model = self::getAiModel();
 
         $payload = [
             'prompt' => trim((string)$prompt),
@@ -391,14 +432,15 @@ PROMPT;
             throw new \InvalidArgumentException('Cannot force both legacy and intent generation modes.');
         }
 
-        $apiKey = Yii::$app->params['geminiApiKey'];
+        $apiKey = self::getAiApiKey();
         if (empty($apiKey)) {
+            $provider = strtoupper(self::getAiProvider());
             throw new \RuntimeException(
-                'Gemini API key not configured. Set GEMINI_API_KEY in .env'
+                "{$provider} API key not configured."
             );
         }
 
-        $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
+        $model = self::getAiModel();
 
         if ($forceIntent) {
             return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model);
@@ -1053,6 +1095,14 @@ PROMPT;
      */
     private static function sendGeminiRequestWithRetries($url, array $payload, $metricContext)
     {
+        $provider = self::getAiProvider();
+        $apiKey = self::getAiApiKey();
+
+        if (empty($apiKey)) {
+            $providerName = strtoupper($provider);
+            throw new \RuntimeException("{$providerName} API key not configured.");
+        }
+
         $maxRetries = (int)(Yii::$app->params['geminiMaxRetries'] ?? self::DEFAULT_MAX_RETRIES);
         if ($maxRetries < 1) {
             $maxRetries = 1;
@@ -1072,19 +1122,34 @@ PROMPT;
             try {
                 $client = new Client();
                 $client->transport = 'yii\\httpclient\\CurlTransport';
+
+                $requestUrl = $url;
+                $requestPayload = $payload;
+                $headers = ['Content-Type' => 'application/json'];
+
+                if ($provider === 'openai') {
+                    $requestUrl = self::OPENAI_API_BASE . '/chat/completions';
+                    $requestPayload = self::buildOpenAiPayloadFromGeminiShape($payload);
+                    $headers['Authorization'] = 'Bearer ' . $apiKey;
+                }
+
                 $response = $client->createRequest()
                     ->setMethod('POST')
-                    ->setUrl($url)
-                    ->setHeaders(['Content-Type' => 'application/json'])
+                    ->setUrl($requestUrl)
+                    ->setHeaders($headers)
                     ->addOptions([CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT_SECONDS])
-                    ->setContent(json_encode($payload))
+                    ->setContent(json_encode($requestPayload))
                     ->send();
 
                 if ($response->isOk) {
+                    $normalizedResponse = $provider === 'openai'
+                        ? self::normalizeOpenAiResponseToGeminiShape($response)
+                        : $response;
+
                     $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
                     self::logRequestOutcome($metricContext, $attempt, $elapsedMs);
                     return [
-                        'response' => $response,
+                        'response' => $normalizedResponse,
                         'attempts' => $attempt,
                         'elapsedMs' => $elapsedMs,
                     ];
@@ -1095,15 +1160,25 @@ PROMPT;
                 $retryable = self::isRetryableGeminiResponse($statusCode, $errorMessage);
 
                 if (!$retryable || $attempt >= $maxRetries) {
+                    // For Gemini quota exhaustion, transparently fall back to OpenAI
+                    // when an OpenAI key is configured and the primary provider is Gemini.
+                    if (
+                        $provider === 'gemini' &&
+                        self::isQuotaExhaustedResponse($statusCode, $errorMessage) &&
+                        !empty((string)(Yii::$app->params['openaiApiKey'] ?? ''))
+                    ) {
+                        return self::sendOpenAiFallbackRequest($payload, $metricContext, $startedAt);
+                    }
+
                     $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
                     self::logRequestOutcome($metricContext, $attempt, $elapsedMs, false, $statusCode, $errorMessage);
-                    throw new \RuntimeException("Gemini API error: {$errorMessage}");
+                    throw new \RuntimeException('AI API error: ' . $errorMessage);
                 }
 
                 self::logRetryAttempt($metricContext, $attempt, $maxRetries, $statusCode, $errorMessage, false);
                 self::sleepWithBackoff($attempt, $baseDelayMs);
             } catch (\Throwable $e) {
-                if ($e instanceof \RuntimeException && strpos($e->getMessage(), 'Gemini API error:') === 0) {
+                if ($e instanceof \RuntimeException && strpos($e->getMessage(), 'AI API error:') === 0) {
                     throw $e;
                 }
 
@@ -1113,13 +1188,128 @@ PROMPT;
                 if (!$retryable || $attempt >= $maxRetries) {
                     $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
                     self::logRequestOutcome($metricContext, $attempt, $elapsedMs, $timedOut, null, $e->getMessage());
-                    throw new \RuntimeException('Gemini request failed: ' . $e->getMessage(), 0, $e);
+                    throw new \RuntimeException('AI request failed: ' . $e->getMessage(), 0, $e);
                 }
 
                 self::logRetryAttempt($metricContext, $attempt, $maxRetries, null, $e->getMessage(), $timedOut);
                 self::sleepWithBackoff($attempt, $baseDelayMs);
             }
         }
+    }
+
+    /**
+     * Convert existing Gemini-style payload shape into OpenAI chat payload.
+     *
+     * @param array $payload
+     * @return array
+     */
+    private static function buildOpenAiPayloadFromGeminiShape(array $payload)
+    {
+        $messages = [];
+
+        $systemParts = $payload['system_instruction']['parts'] ?? [];
+        $systemText = [];
+        foreach ($systemParts as $part) {
+            if (is_array($part) && isset($part['text'])) {
+                $systemText[] = (string)$part['text'];
+            }
+        }
+        $systemMessage = trim(implode("\n\n", $systemText));
+        if ($systemMessage !== '') {
+            $messages[] = [
+                'role' => 'system',
+                'content' => $systemMessage,
+            ];
+        }
+
+        foreach (($payload['contents'] ?? []) as $content) {
+            $parts = $content['parts'] ?? [];
+            $texts = [];
+            foreach ($parts as $part) {
+                if (is_array($part) && isset($part['text'])) {
+                    $texts[] = (string)$part['text'];
+                }
+            }
+
+            $message = trim(implode("\n\n", $texts));
+            if ($message !== '') {
+                $messages[] = [
+                    'role' => 'user',
+                    'content' => $message,
+                ];
+            }
+        }
+
+        if (empty($messages)) {
+            $messages[] = [
+                'role' => 'user',
+                'content' => '',
+            ];
+        }
+
+        $generationConfig = $payload['generationConfig'] ?? [];
+        $openAiPayload = [
+            'model' => self::getAiModel(),
+            'messages' => $messages,
+            'temperature' => isset($generationConfig['temperature'])
+                ? (float)$generationConfig['temperature']
+                : 0.1,
+            'max_tokens' => isset($generationConfig['maxOutputTokens'])
+                ? (int)$generationConfig['maxOutputTokens']
+                : 4096,
+        ];
+
+        if (($generationConfig['responseMimeType'] ?? '') === 'application/json') {
+            $openAiPayload['response_format'] = ['type' => 'json_object'];
+        }
+
+        return $openAiPayload;
+    }
+
+    /**
+     * Normalize OpenAI response shape into the Gemini-like structure expected by parsers.
+     *
+     * @param mixed $response
+     * @return object
+     */
+    private static function normalizeOpenAiResponseToGeminiShape($response)
+    {
+        $decoded = [];
+        if (!empty($response->content)) {
+            $decoded = json_decode((string)$response->content, true);
+        }
+
+        $choice = $decoded['choices'][0] ?? [];
+        $finishReason = strtoupper((string)($choice['finish_reason'] ?? ''));
+        if ($finishReason === 'LENGTH') {
+            $finishReason = 'MAX_TOKENS';
+        }
+
+        $messageContent = $choice['message']['content'] ?? '';
+        if (is_array($messageContent)) {
+            $parts = [];
+            foreach ($messageContent as $segment) {
+                if (is_array($segment) && ($segment['type'] ?? '') === 'text') {
+                    $parts[] = (string)($segment['text'] ?? '');
+                }
+            }
+            $messageContent = implode('', $parts);
+        }
+
+        $geminiLike = [
+            'candidates' => [[
+                'finishReason' => $finishReason,
+                'content' => [
+                    'parts' => [[
+                        'text' => (string)$messageContent,
+                    ]],
+                ],
+            ]],
+        ];
+
+        $normalized = new \stdClass();
+        $normalized->content = json_encode($geminiLike);
+        return $normalized;
     }
 
     /**
@@ -1193,6 +1383,85 @@ PROMPT;
             '/temporar(?:y|ily)|unavailable|connection reset|connection refused|failed to connect|network is unreachable|could not resolve host|ssl|try again/i',
             $message
         ) === 1;
+    }
+
+    /**
+     * Returns true when a Gemini response signals hard quota/billing exhaustion
+     * — errors that will not resolve on retry and warrant a provider fallback.
+     */
+    private static function isQuotaExhaustedResponse($statusCode, $errorMessage)
+    {
+        $msg = (string)$errorMessage;
+
+        // Hard 429 with quota/billing language (Gemini REST API)
+        if ((int)$statusCode === 429 && preg_match('/quota|billing|exceeded/i', $msg)) {
+            return true;
+        }
+
+        // RESOURCE_EXHAUSTED gRPC status that may surface via any HTTP code
+        if (preg_match('/RESOURCE_EXHAUSTED|quota exceeded|free tier.*limit|daily.*limit|monthly.*limit/i', $msg)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Perform a single OpenAI request as a transparent fallback when Gemini
+     * quota is exhausted. Re-uses the same Gemini-shape payload and metric
+     * context so callers require no changes.
+     *
+     * @param array  $payload       Gemini-shape payload (will be translated internally)
+     * @param string $metricContext Logging context string
+     * @param float  $startedAt     microtime(true) from the original request
+     * @return array {response, attempts, elapsedMs, providerFallback}
+     * @throws \RuntimeException
+     */
+    private static function sendOpenAiFallbackRequest(array $payload, $metricContext, $startedAt)
+    {
+        $apiKey = (string)(Yii::$app->params['openaiApiKey'] ?? '');
+
+        Yii::warning(
+            'Gemini quota exhausted — falling back to OpenAI for this request.',
+            'nl2sql.provider_fallback'
+        );
+
+        try {
+            $client = new Client();
+            $client->transport = 'yii\\httpclient\\CurlTransport';
+
+            $response = $client->createRequest()
+                ->setMethod('POST')
+                ->setUrl(self::OPENAI_API_BASE . '/chat/completions')
+                ->setHeaders([
+                    'Content-Type'  => 'application/json',
+                    'Authorization' => 'Bearer ' . $apiKey,
+                ])
+                ->addOptions([CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT_SECONDS])
+                ->setContent(json_encode(self::buildOpenAiPayloadFromGeminiShape($payload)))
+                ->send();
+
+            $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
+
+            if ($response->isOk) {
+                self::logRequestOutcome($metricContext . '.openai_fallback', 1, $elapsedMs);
+                return [
+                    'response'       => self::normalizeOpenAiResponseToGeminiShape($response),
+                    'attempts'       => 1,
+                    'elapsedMs'      => $elapsedMs,
+                    'providerFallback' => 'openai',
+                ];
+            }
+
+            $statusCode   = (int)$response->statusCode;
+            $errorMessage = self::extractGeminiErrorMessage($response);
+            self::logRequestOutcome($metricContext . '.openai_fallback', 1, $elapsedMs, false, $statusCode, $errorMessage);
+            throw new \RuntimeException('OpenAI fallback failed: ' . $errorMessage);
+        } catch (\RuntimeException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            throw new \RuntimeException('OpenAI fallback request failed: ' . $e->getMessage(), 0, $e);
+        }
     }
 
     /**

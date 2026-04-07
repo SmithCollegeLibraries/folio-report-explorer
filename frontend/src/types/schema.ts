@@ -261,6 +261,52 @@ export interface HealthResponse {
   postgres_error?: string;
 }
 
+export type AiProvider = 'gemini' | 'openai';
+
+export interface AppSettings {
+  pg_host: string;
+  pg_port: string;
+  pg_db: string;
+  pg_user: string;
+  pg_pass: string;
+  pg_sslmode: string;
+  ai_provider: AiProvider;
+  gemini_api_key: string;
+  gemini_model: string;
+  openai_api_key: string;
+  openai_model: string;
+  nl2sql_intent_mode?: boolean;
+  nl2sql_primary_mode?: string;
+  nl2sql_shadow_mode?: boolean;
+  nl2sql_shadow_users?: string;
+  nl2sql_shadow_sample_percent?: number;
+  nl2sql_force_legacy?: boolean;
+}
+
+export interface ConnectionTestResult {
+  connected: boolean;
+  error?: string;
+}
+
+export interface PostgresConnectionTestResult extends ConnectionTestResult {
+  version?: string;
+}
+
+export interface GeminiConnectionTestResult extends ConnectionTestResult {
+  model?: string;
+  displayName?: string;
+}
+
+export interface OpenAiConnectionTestResult extends ConnectionTestResult {
+  model?: string;
+}
+
+export interface SettingsTestResponse {
+  postgres?: PostgresConnectionTestResult;
+  gemini?: GeminiConnectionTestResult;
+  openai?: OpenAiConnectionTestResult;
+}
+
 // ─── Async Job types ──────────────────────────────────────────────
 
 export type JobStatus = 'pending' | 'pending_export' | 'running' | 'completed' | 'failed' | 'cancelled';
