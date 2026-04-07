@@ -21,12 +21,6 @@ type AskRequest = {
   includeSuggestions?: boolean;
 };
 
-type LivePreviewState = {
-  prompt: string;
-  campus: string;
-  result: NlResponse;
-};
-
 const CAMPUS_OPTIONS = [
   { code: 'ALL', name: 'All Colleges' },
   { code: 'SC',  name: 'Smith College' },
@@ -133,12 +127,7 @@ export default function Ask() {
   const [history, setHistory] = useState<
     { prompt: string; result: NlResponse }[]
   >([]);
-  const [livePreview, setLivePreview] = useState<LivePreviewState | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [previewTypedSql, setPreviewTypedSql] = useState('');
-  const previewRequestSeq = useRef(0);
-  const enrichRequestSeq = useRef(0);
+
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -234,59 +223,6 @@ export default function Ask() {
     setHistory((prev) => [{ prompt: questionText, result }, ...prev].slice(0, 20));
   };
 
-  const applyPreviewResult = (
-    questionText: string,
-    result: NlResponse,
-    shouldRun: boolean,
-  ) => {
-    setNlResult(result);
-    resetJob();
-    setActiveJobId(null);
-    setSaveSuccess(null);
-    setLastSavedId(null);
-    setCorrecting(false);
-    setDetailTab('results');
-    prependHistory(questionText, result);
-
-    if (shouldRun) {
-      runGeneratedQuery(result, questionText);
-    }
-  };
-
-  const fetchEnrichedResponse = async (questionText: string) => {
-    const seq = ++enrichRequestSeq.current;
-    try {
-      const enriched = await askNl(questionText, campusForRequest, true);
-      if (enrichRequestSeq.current !== seq) {
-        return;
-      }
-
-      setNlResult((prev) => {
-        if (!prev) {
-          return enriched;
-        }
-        return {
-          ...prev,
-          explanation: enriched.explanation || prev.explanation,
-          warnings: enriched.warnings ?? prev.warnings,
-          suggestions: enriched.suggestions ?? prev.suggestions,
-          dataSource: enriched.dataSource || prev.dataSource,
-        };
-      });
-
-      setHistory((prev) => {
-        if (prev.length === 0 || prev[0].prompt !== questionText) {
-          return prev;
-        }
-        const next = [...prev];
-        next[0] = { prompt: questionText, result: enriched };
-        return next;
-      });
-    } catch {
-      // Keep the preview result if enrichment fails.
-    }
-  };
-
   const execMut = useMutation({
     mutationFn: ({
       sql,
@@ -324,43 +260,6 @@ export default function Ask() {
       }
     },
   });
-
-  useEffect(() => {
-    const q = prompt.trim();
-
-    if (q.length < 8) {
-      setIsPreviewLoading(false);
-      setPreviewError(null);
-      return;
-    }
-
-    const seq = ++previewRequestSeq.current;
-    setIsPreviewLoading(true);
-    setPreviewError(null);
-
-    const timer = window.setTimeout(async () => {
-      try {
-        const preview = await askNl(q, campusForRequest, false);
-        if (previewRequestSeq.current !== seq) {
-          return;
-        }
-        setLivePreview({ prompt: q, campus: selectedCampus, result: preview });
-      } catch (error: unknown) {
-        if (previewRequestSeq.current !== seq) {
-          return;
-        }
-        setPreviewError(formatNlError(error));
-      } finally {
-        if (previewRequestSeq.current === seq) {
-          setIsPreviewLoading(false);
-        }
-      }
-    }, 700);
-
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [prompt, selectedCampus, campusForRequest]);
 
   const savedMut = useMutation({
     mutationFn: () =>
@@ -410,20 +309,6 @@ export default function Ask() {
   const handleSubmit = () => {
     const q = prompt.trim();
     if (!q) return;
-
-    const previewMatchesPrompt =
-      livePreview &&
-      livePreview.prompt === q &&
-      livePreview.campus === selectedCampus &&
-      !!livePreview.result.sql;
-
-    if (previewMatchesPrompt) {
-      const previewResult = livePreview.result;
-      applyPreviewResult(q, previewResult, true);
-      fetchEnrichedResponse(q);
-      return;
-    }
-
     askMut.mutate({ question: q, includeSuggestions: true, shouldExecute: true });
   };
 
@@ -446,13 +331,6 @@ export default function Ask() {
     });
   };
 
-  const activeLivePreview =
-    livePreview &&
-    livePreview.prompt === prompt.trim() &&
-    livePreview.campus === selectedCampus
-      ? livePreview.result
-      : null;
-
   const anchorPrompt = history[0]?.prompt || prompt;
   const usingFallbackSuggestions = !!nlResult && (!nlResult.suggestions || nlResult.suggestions.length === 0);
   const effectiveSuggestions = nlResult
@@ -460,28 +338,6 @@ export default function Ask() {
       ? nlResult.suggestions
       : buildClientFallbackSuggestions(anchorPrompt, selectedCampus))
     : [];
-
-  useEffect(() => {
-    const sql = activeLivePreview?.sql || '';
-    if (!sql) {
-      setPreviewTypedSql('');
-      return;
-    }
-
-    let cursor = 0;
-    const step = Math.max(2, Math.ceil(sql.length / 120));
-    const timer = window.setInterval(() => {
-      cursor = Math.min(sql.length, cursor + step);
-      setPreviewTypedSql(sql.slice(0, cursor));
-      if (cursor >= sql.length) {
-        window.clearInterval(timer);
-      }
-    }, 14);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [activeLivePreview?.sql]);
 
   // Are we in any loading phase?
   const isGenerating = askMut.isPending;
@@ -634,46 +490,7 @@ export default function Ask() {
             ))}
           </div>
 
-          {/* Live SQL preview while typing */}
-          {(prompt.trim().length >= 8 || isPreviewLoading || activeLivePreview) && (
-            <div className="mt-3 border border-folio-100 rounded-lg bg-folio-50/50 p-3">
-              <div className="flex items-center justify-between gap-2 mb-2">
-                <div className="text-xs font-medium text-folio-700">
-                  Live SQL Preview
-                </div>
-                {isPreviewLoading ? (
-                  <div className="text-xs text-folio-600 flex items-center gap-1">
-                    <Loader2 size={12} className="animate-spin" /> Building from your latest text...
-                  </div>
-                ) : activeLivePreview?.sql ? (
-                  <div className="text-xs text-emerald-700 flex items-center gap-2">
-                    <span>Ready - press Enter to run immediately</span>
-                    <button
-                      onClick={() => {
-                        const q = prompt.trim();
-                        if (!q || !activeLivePreview?.sql) return;
-                        applyPreviewResult(q, activeLivePreview, true);
-                        fetchEnrichedResponse(q);
-                      }}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                    >
-                      <Play size={11} /> Run Preview
-                    </button>
-                  </div>
-                ) : null}
-              </div>
 
-              {previewError && !activeLivePreview && (
-                <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mb-2">
-                  {previewError}
-                </div>
-              )}
-
-              {activeLivePreview?.sql && (
-                <SqlPreview sql={previewTypedSql || activeLivePreview.sql} height="120px" />
-              )}
-            </div>
-          )}
         </div>
       </div>
 

@@ -1249,7 +1249,7 @@ PROMPT;
 
         $generationConfig = $payload['generationConfig'] ?? [];
         $openAiPayload = [
-            'model' => self::getAiModel(),
+            'model' => (string)(Yii::$app->params['openaiModel'] ?? 'gpt-4.1-mini'),
             'messages' => $messages,
             'temperature' => isset($generationConfig['temperature'])
                 ? (float)$generationConfig['temperature']
