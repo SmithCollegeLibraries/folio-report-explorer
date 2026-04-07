@@ -1,0 +1,33 @@
+{
+  "ticket": "NL2SQL-000",
+  "capturedAt": "2026-04-06_10-11-10",
+  "apiBase": "http://localhost:8090/api",
+  "subset": [
+    "P01",
+    "P02"
+  ],
+  "results": [
+    {
+      "id": "P01",
+      "category": "inventory",
+      "prompt": "Show me 25 available books at Smith College with title and barcode",
+      "status": "success",
+      "response": {
+        "sql": "SELECT\n  inst.title,\n  ii.barcode\nFROM inventory.item__t AS ii\nJOIN inventory.holdings_record__t AS hr\n  ON ii.holdings_record_id = hr.id\nJOIN inventory.instance__t AS inst\n  ON hr.instance_id = inst.id\nJOIN inventory.location__t AS loc\n  ON ii.effective_location_id = loc.id\nJOIN inventory.loclibrary__t AS lib\n  ON loc.library_id = lib.id\nJOIN inventory.loccampus__t AS camp\n  ON lib.campus_id = camp.id\nWHERE\n  ii.status__name = 'Available' AND ii.material_type_id = (\n    SELECT\n      id\n    FROM inventory.material_type__t\n    WHERE\n      LOWER(name) = 'book'\n    LIMIT 1\n  ) AND LOWER(camp.name) = LOWER('Smith College')\nLIMIT 25;",
+        "explanation": "This query retrieves the title and barcode for 25 available items classified as 'Book' at Smith College. It joins item records with their respective holdings, instances, material types, and the full location hierarchy to filter by campus and item status.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P02",
+      "category": "circulation",
+      "prompt": "How many open loans do we currently have by campus?",
+      "status": "success",
+      "response": {
+        "sql": "SELECT\n  camp.name AS campus_name,\n  COUNT(cl.id) AS open_loan_count\nFROM circulation.loan__t AS cl\nJOIN inventory.item__t AS ii\n  ON cl.item_id = ii.id\nJOIN inventory.location__t AS loc\n  ON ii.effective_location_id = loc.id\nJOIN inventory.loclibrary__t AS lib\n  ON loc.library_id = lib.id\nJOIN inventory.loccampus__t AS camp\n  ON lib.campus_id = camp.id\nWHERE\n  cl.status__name = 'Open'\nGROUP BY\n  camp.name\nORDER BY\n  open_loan_count DESC\nLIMIT 100;",
+        "explanation": "This query counts the number of currently open loans by joining the `circulation.loan__t` table with `inventory.item__t`, `inventory.location__t`, `inventory.loclibrary__t`, and `inventory.loccampus__t` to determine the campus for each item. It filters for loans with a `status__name` of 'Open' and groups the results by campus name.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    }
+  ]
+}

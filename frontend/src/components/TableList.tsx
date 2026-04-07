@@ -125,20 +125,16 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
 
   // Filter tables by search term
   const filtered = useMemo(() => {
+    const source = showSubtables
+      ? tables
+      : Object.fromEntries(Object.entries(tables).filter(([, info]) => info.type !== 'SUBTABLE'));
+
     if (!search) {
-      // When not searching, optionally hide subtables
-      if (!showSubtables) {
-        const result: Record<string, TableSummary> = {};
-        for (const [name, info] of Object.entries(tables)) {
-          if (info.type !== 'SUBTABLE') result[name] = info;
-        }
-        return result;
-      }
-      return tables;
+      return source;
     }
     const lower = search.toLowerCase();
     const result: Record<string, TableSummary> = {};
-    for (const [name, info] of Object.entries(tables)) {
+    for (const [name, info] of Object.entries(source)) {
       const sName = shortName(name).toLowerCase();
       if (name.toLowerCase().includes(lower) || sName.includes(lower)) {
         result[name] = info;
@@ -244,6 +240,11 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
                             {displayName}
                           </span>
                         </div>
+                        {displayName !== bt.name && (
+                          <div className="pl-[18px] text-[10px] text-gray-400 truncate" title={bt.name}>
+                            {bt.name}
+                          </div>
+                        )}
                         <div className="flex gap-2 mt-0.5 text-xs text-gray-400 pl-[18px]">
                           <span>{bt.info.column_count} cols</span>
                           {bt.info.parent_count > 0 && <span>{bt.info.parent_count} FK↑</span>}
@@ -275,6 +276,11 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
                                 <Layers size={10} className="text-gray-400 flex-shrink-0" />
                                 <span className="font-mono truncate text-gray-600">{st.leafName}</span>
                               </div>
+                              {st.leafName !== st.name && (
+                                <div className="text-[10px] text-gray-400 truncate pl-[16px]" title={st.name}>
+                                  {st.name}
+                                </div>
+                              )}
                               <div className="text-xs text-gray-400 pl-[16px]">
                                 {st.info.column_count} cols
                               </div>

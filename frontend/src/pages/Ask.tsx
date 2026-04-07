@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
+import { isAxiosError } from 'axios';
 import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
@@ -13,6 +14,18 @@ import {
   Maximize2, Save, FileBarChart, Check, ThumbsDown, Pencil, X,
   Clock, Code2, Table2,
 } from 'lucide-react';
+
+type AskRequest = {
+  question: string;
+  shouldExecute?: boolean;
+  includeSuggestions?: boolean;
+};
+
+type LivePreviewState = {
+  prompt: string;
+  campus: string;
+  result: NlResponse;
+};
 
 const CAMPUS_OPTIONS = [
   { code: 'ALL', name: 'All Colleges' },
@@ -33,7 +46,86 @@ const EXAMPLE_PROMPTS = [
   'Which call number ranges have the highest circulation counts?',
 ];
 
+function getApiErrorMessage(error: unknown): string {
+  if (isAxiosError(error)) {
+    const data = error.response?.data as { error?: unknown; message?: unknown } | undefined;
+    if (typeof data?.error === 'string' && data.error.trim()) {
+      return data.error;
+    }
+    if (typeof data?.message === 'string' && data.message.trim()) {
+      return data.message;
+    }
+    if (typeof error.message === 'string' && error.message.trim()) {
+      return error.message;
+    }
+    return 'Request failed.';
+  }
+
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+
+  return 'Request failed.';
+}
+
+function formatNlError(error: unknown): string {
+  const message = getApiErrorMessage(error);
+  if (isAxiosError(error) && error.response?.status === 403) {
+    return `Query blocked: ${message}`;
+  }
+  return `AI error: ${message}`;
+}
+
+function buildClientFallbackSuggestions(promptText: string, campus: string): string[] {
+  const prompt = promptText.toLowerCase();
+  const scopeSuffix = campus !== 'All Colleges' ? ` for ${campus}` : '';
+
+  const generic = [
+    `Break this result down by month over the last 12 months${scopeSuffix}`,
+    `Show the top 10 categories contributing most to this result${scopeSuffix}`,
+    'Compare this metric across campuses and highlight differences',
+    'List records missing key fields related to this query',
+    `Show year-over-year trend changes for this metric${scopeSuffix}`,
+  ];
+
+  const circulation = [
+    `Show circulation counts by material type${scopeSuffix}`,
+    `Which locations have the highest and lowest circulation${scopeSuffix}`,
+    `Break circulation down by patron group${scopeSuffix}`,
+    `Show monthly circulation trend and peak periods${scopeSuffix}`,
+  ];
+
+  const finance = [
+    `Show spending trend by fiscal year${scopeSuffix}`,
+    `Which vendors account for the highest share of spending${scopeSuffix}`,
+    `Break spending down by fund and expense class${scopeSuffix}`,
+    'Compare encumbered versus expended amounts for the same scope',
+  ];
+
+  const inventory = [
+    `Break inventory count down by library and location${scopeSuffix}`,
+    'Show item age distribution for this result set',
+    'Which call number ranges are most represented in this scope',
+    'Show records added in the last 90 days for this same criteria',
+  ];
+
+  if (/spent|spend|budget|invoice|encumber|expend|vendor|fund|fiscal/.test(prompt)) {
+    return [...finance, ...generic].slice(0, 5);
+  }
+
+  if (/loan|checkout|circulation|renew|return|call number/.test(prompt)) {
+    return [...circulation, ...generic].slice(0, 5);
+  }
+
+  if (/item|holdings|instance|location|inventory|material type/.test(prompt)) {
+    return [...inventory, ...generic].slice(0, 5);
+  }
+
+  return generic.slice(0, 5);
+}
+
 export default function Ask() {
+  const [searchParams] = useSearchParams();
   const { user, authEnabled } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [nlResult, setNlResult] = useState<NlResponse | null>(null);
@@ -41,6 +133,12 @@ export default function Ask() {
   const [history, setHistory] = useState<
     { prompt: string; result: NlResponse }[]
   >([]);
+  const [livePreview, setLivePreview] = useState<LivePreviewState | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewTypedSql, setPreviewTypedSql] = useState('');
+  const previewRequestSeq = useRef(0);
+  const enrichRequestSeq = useRef(0);
 
   // Modal state
   const [modalOpen, setModalOpen] = useState(false);
@@ -64,6 +162,13 @@ export default function Ask() {
       localStorage.setItem('folio_campus', user.defaultCampus);
     }
   }, [user?.defaultCampus]);
+
+  useEffect(() => {
+    const q = (searchParams.get('q') || '').trim();
+    if (q) {
+      setPrompt(q);
+    }
+  }, [searchParams]);
 
   const handleCampusChange = (campus: string) => {
     setSelectedCampus(campus);
@@ -110,16 +215,90 @@ export default function Ask() {
   // --- async job polling ---
   const { job, results, isRunning, error: jobError, cancel: cancelJobFn, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
 
+  const campusForRequest = selectedCampus === 'All Colleges' ? null : selectedCampus;
+
+  const runGeneratedQuery = (
+    result: NlResponse,
+    questionText: string,
+  ) => {
+    if (!result.sql) return;
+    execMut.mutate({
+      sql: result.sql,
+      dataSource: result.dataSource || 'folio',
+      nlPrompt: questionText,
+      options: { outputMode: outputPref === 'full' ? 'file' : 'table' },
+    });
+  };
+
+  const prependHistory = (questionText: string, result: NlResponse) => {
+    setHistory((prev) => [{ prompt: questionText, result }, ...prev].slice(0, 20));
+  };
+
+  const applyPreviewResult = (
+    questionText: string,
+    result: NlResponse,
+    shouldRun: boolean,
+  ) => {
+    setNlResult(result);
+    resetJob();
+    setActiveJobId(null);
+    setSaveSuccess(null);
+    setLastSavedId(null);
+    setCorrecting(false);
+    setDetailTab('results');
+    prependHistory(questionText, result);
+
+    if (shouldRun) {
+      runGeneratedQuery(result, questionText);
+    }
+  };
+
+  const fetchEnrichedResponse = async (questionText: string) => {
+    const seq = ++enrichRequestSeq.current;
+    try {
+      const enriched = await askNl(questionText, campusForRequest, true);
+      if (enrichRequestSeq.current !== seq) {
+        return;
+      }
+
+      setNlResult((prev) => {
+        if (!prev) {
+          return enriched;
+        }
+        return {
+          ...prev,
+          explanation: enriched.explanation || prev.explanation,
+          warnings: enriched.warnings ?? prev.warnings,
+          suggestions: enriched.suggestions ?? prev.suggestions,
+          dataSource: enriched.dataSource || prev.dataSource,
+        };
+      });
+
+      setHistory((prev) => {
+        if (prev.length === 0 || prev[0].prompt !== questionText) {
+          return prev;
+        }
+        const next = [...prev];
+        next[0] = { prompt: questionText, result: enriched };
+        return next;
+      });
+    } catch {
+      // Keep the preview result if enrichment fails.
+    }
+  };
+
   const execMut = useMutation({
     mutationFn: ({
       sql,
       dataSource,
+      nlPrompt,
       options,
     }: {
       sql: string;
       dataSource?: 'folio' | 'local';
+      nlPrompt?: string;
       options?: { outputMode?: 'table' | 'file' };
-    }) => submitQuery(sql, {}, 'nl', prompt.trim() || undefined, dataSource || 'folio', options),
+    }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
     onSuccess: (data) => {
       if (data.jobId) {
         setActiveJobId(data.jobId);
@@ -128,8 +307,9 @@ export default function Ask() {
   });
 
   const askMut = useMutation({
-    mutationFn: (question: string) => askNl(question, selectedCampus === 'All Colleges' ? null : selectedCampus),
-    onSuccess: (data: NlResponse, question: string) => {
+    mutationFn: (request: AskRequest) =>
+      askNl(request.question, campusForRequest, request.includeSuggestions ?? true),
+    onSuccess: (data: NlResponse, request: AskRequest) => {
       setNlResult(data);
       resetJob();
       setActiveJobId(null);
@@ -137,17 +317,50 @@ export default function Ask() {
       setLastSavedId(null);
       setCorrecting(false);
       setDetailTab('results');
-      setHistory((prev) => [{ prompt: question, result: data }, ...prev].slice(0, 20));
-      // Auto-run the generated SQL
-      if (data.sql) {
-        execMut.mutate({
-          sql: data.sql,
-          dataSource: data.dataSource || 'folio',
-          options: { outputMode: outputPref === 'full' ? 'file' : 'table' },
-        });
+      prependHistory(request.question, data);
+
+      if (request.shouldExecute !== false) {
+        runGeneratedQuery(data, request.question);
       }
     },
   });
+
+  useEffect(() => {
+    const q = prompt.trim();
+
+    if (q.length < 8) {
+      setIsPreviewLoading(false);
+      setPreviewError(null);
+      return;
+    }
+
+    const seq = ++previewRequestSeq.current;
+    setIsPreviewLoading(true);
+    setPreviewError(null);
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const preview = await askNl(q, campusForRequest, false);
+        if (previewRequestSeq.current !== seq) {
+          return;
+        }
+        setLivePreview({ prompt: q, campus: selectedCampus, result: preview });
+      } catch (error: unknown) {
+        if (previewRequestSeq.current !== seq) {
+          return;
+        }
+        setPreviewError(formatNlError(error));
+      } finally {
+        if (previewRequestSeq.current === seq) {
+          setIsPreviewLoading(false);
+        }
+      }
+    }, 700);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [prompt, selectedCampus, campusForRequest]);
 
   const savedMut = useMutation({
     mutationFn: () =>
@@ -197,7 +410,21 @@ export default function Ask() {
   const handleSubmit = () => {
     const q = prompt.trim();
     if (!q) return;
-    askMut.mutate(q);
+
+    const previewMatchesPrompt =
+      livePreview &&
+      livePreview.prompt === q &&
+      livePreview.campus === selectedCampus &&
+      !!livePreview.result.sql;
+
+    if (previewMatchesPrompt) {
+      const previewResult = livePreview.result;
+      applyPreviewResult(q, previewResult, true);
+      fetchEnrichedResponse(q);
+      return;
+    }
+
+    askMut.mutate({ question: q, includeSuggestions: true, shouldExecute: true });
   };
 
   const handleCopy = () => {
@@ -205,6 +432,56 @@ export default function Ask() {
       navigator.clipboard.writeText(nlResult.sql);
     }
   };
+
+  const handleUseSuggestion = (suggestedPrompt: string) => {
+    setPrompt(suggestedPrompt);
+  };
+
+  const handleRunSuggestion = (suggestedPrompt: string) => {
+    setPrompt(suggestedPrompt);
+    askMut.mutate({
+      question: suggestedPrompt,
+      includeSuggestions: true,
+      shouldExecute: true,
+    });
+  };
+
+  const activeLivePreview =
+    livePreview &&
+    livePreview.prompt === prompt.trim() &&
+    livePreview.campus === selectedCampus
+      ? livePreview.result
+      : null;
+
+  const anchorPrompt = history[0]?.prompt || prompt;
+  const usingFallbackSuggestions = !!nlResult && (!nlResult.suggestions || nlResult.suggestions.length === 0);
+  const effectiveSuggestions = nlResult
+    ? (nlResult.suggestions && nlResult.suggestions.length > 0
+      ? nlResult.suggestions
+      : buildClientFallbackSuggestions(anchorPrompt, selectedCampus))
+    : [];
+
+  useEffect(() => {
+    const sql = activeLivePreview?.sql || '';
+    if (!sql) {
+      setPreviewTypedSql('');
+      return;
+    }
+
+    let cursor = 0;
+    const step = Math.max(2, Math.ceil(sql.length / 120));
+    const timer = window.setInterval(() => {
+      cursor = Math.min(sql.length, cursor + step);
+      setPreviewTypedSql(sql.slice(0, cursor));
+      if (cursor >= sql.length) {
+        window.clearInterval(timer);
+      }
+    }, 14);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [activeLivePreview?.sql]);
 
   // Are we in any loading phase?
   const isGenerating = askMut.isPending;
@@ -356,6 +633,47 @@ export default function Ask() {
               </button>
             ))}
           </div>
+
+          {/* Live SQL preview while typing */}
+          {(prompt.trim().length >= 8 || isPreviewLoading || activeLivePreview) && (
+            <div className="mt-3 border border-folio-100 rounded-lg bg-folio-50/50 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-xs font-medium text-folio-700">
+                  Live SQL Preview
+                </div>
+                {isPreviewLoading ? (
+                  <div className="text-xs text-folio-600 flex items-center gap-1">
+                    <Loader2 size={12} className="animate-spin" /> Building from your latest text...
+                  </div>
+                ) : activeLivePreview?.sql ? (
+                  <div className="text-xs text-emerald-700 flex items-center gap-2">
+                    <span>Ready - press Enter to run immediately</span>
+                    <button
+                      onClick={() => {
+                        const q = prompt.trim();
+                        if (!q || !activeLivePreview?.sql) return;
+                        applyPreviewResult(q, activeLivePreview, true);
+                        fetchEnrichedResponse(q);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                    >
+                      <Play size={11} /> Run Preview
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              {previewError && !activeLivePreview && (
+                <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 mb-2">
+                  {previewError}
+                </div>
+              )}
+
+              {activeLivePreview?.sql && (
+                <SqlPreview sql={previewTypedSql || activeLivePreview.sql} height="120px" />
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -374,18 +692,18 @@ export default function Ask() {
         {/* Errors — always visible regardless of tab */}
         {askMut.isError && (
           <div className="max-w-4xl mx-auto m-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-            AI error: {String(askMut.error)}
+            {formatNlError(askMut.error)}
           </div>
         )}
         {nlResult && execMut.isError && (
-          <div className="max-w-4xl mx-auto mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+          <div className="max-w-4xl mx-auto px-4 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
             {(execMut.error as any)?.response?.data?.error
               ? `Query error: ${(execMut.error as any).response.data.error}`
               : `Submit error: ${String(execMut.error)}`}
           </div>
         )}
         {nlResult && jobError && (
-          <div className="max-w-4xl mx-auto mx-4 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+          <div className="max-w-4xl mx-auto px-4 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
             Execution error: {jobError}
           </div>
         )}
@@ -469,6 +787,38 @@ export default function Ask() {
                 SQL &amp; Details
               </button>
             </div>
+
+            {effectiveSuggestions.length > 0 && (
+              <div className="bg-folio-50 border border-folio-100 rounded-lg p-4 mt-3">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="text-sm font-semibold text-folio-800">Suggested Follow-up Queries</div>
+                  {usingFallbackSuggestions && (
+                    <div className="text-xs text-folio-700/80">Fallback suggestions shown</div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  {effectiveSuggestions.map((suggestion, i) => (
+                    <div key={`${suggestion}-${i}`} className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleUseSuggestion(suggestion)}
+                        className="flex-1 text-left text-xs bg-white border border-folio-200 text-folio-700 hover:bg-folio-100 px-3 py-2 rounded-lg transition-colors"
+                        title="Load this suggestion into Ask AI"
+                      >
+                        {suggestion}
+                      </button>
+                      <button
+                        onClick={() => handleRunSuggestion(suggestion)}
+                        disabled={askMut.isPending || execMut.isPending || isRunning}
+                        className="inline-flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg bg-folio-600 text-white hover:bg-folio-700 disabled:opacity-50"
+                        title="Run this suggestion now"
+                      >
+                        <Play size={12} /> Run
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* ===== Results tab ===== */}
             {detailTab === 'results' && (

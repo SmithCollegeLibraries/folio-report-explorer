@@ -46,6 +46,7 @@ export default function TableBrowser({
   onRemoveTable,
 }: Props) {
   const [search, setSearch] = useState('');
+  const [showSubtables, setShowSubtables] = useState(true);
   const [expandedDomains, setExpandedDomains] = useState<Set<string>>(new Set());
 
   const selectedSet = useMemo(() => new Set(selectedTables), [selectedTables]);
@@ -62,6 +63,7 @@ export default function TableBrowser({
       for (const rel of detail.relationships.parents || []) {
         const parentName = rel.parent_table;
         if (!parentName || !tables[parentName] || selectedSet.has(parentName)) continue;
+        if (!showSubtables && tables[parentName]?.type === 'SUBTABLE') continue;
         if (!map.has(parentName)) map.set(parentName, []);
         map.get(parentName)!.push({
           fromTable: selTable,
@@ -73,6 +75,7 @@ export default function TableBrowser({
       for (const rel of detail.relationships.children || []) {
         const childName = rel.child_table;
         if (!childName || !tables[childName] || selectedSet.has(childName)) continue;
+        if (!showSubtables && tables[childName]?.type === 'SUBTABLE') continue;
         if (!map.has(childName)) map.set(childName, []);
         map.get(childName)!.push({
           fromTable: selTable,
@@ -88,19 +91,24 @@ export default function TableBrowser({
       result.push({ name, links });
     }
     return result.sort((a, b) => b.links.length - a.links.length);
-  }, [tableDetails, selectedTables, selectedSet, tables]);
+  }, [tableDetails, selectedTables, selectedSet, tables, showSubtables]);
 
   const connectedSet = useMemo(
     () => new Set(connectedTables.map((ct) => ct.name)),
     [connectedTables],
   );
 
-  // Group tables by domain (exclude SUBTABLE)
+  const subtableCount = useMemo(
+    () => Object.values(tables).filter((t) => t.type === 'SUBTABLE').length,
+    [tables],
+  );
+
+  // Group tables by domain, with optional subtable visibility
   const { groups, domainOrder } = useMemo(() => {
     const g = new Map<string, { name: string; info: TableSummary }[]>();
 
     for (const [name, info] of Object.entries(tables)) {
-      if (info.type === 'SUBTABLE') continue;
+      if (!showSubtables && info.type === 'SUBTABLE') continue;
       const domain = domainOf(name, info);
       if (!g.has(domain)) g.set(domain, []);
       g.get(domain)!.push({ name, info });
@@ -120,7 +128,7 @@ export default function TableBrowser({
     });
 
     return { groups: g, domainOrder: order };
-  }, [tables, selectedSet]);
+  }, [tables, selectedSet, showSubtables]);
 
   // Filter by search
   const filteredDomains = useMemo(() => {
@@ -173,6 +181,17 @@ export default function TableBrowser({
             className="w-full text-sm border rounded-lg pl-8 pr-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-folio-500"
           />
         </div>
+        {subtableCount > 0 && (
+          <label className="mt-2 inline-flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showSubtables}
+              onChange={(e) => setShowSubtables(e.target.checked)}
+              className="rounded border-gray-300 text-folio-500 focus:ring-folio-500 h-3.5 w-3.5"
+            />
+            Subtables ({subtableCount})
+          </label>
+        )}
       </div>
 
       {/* Scrollable list */}
@@ -191,7 +210,12 @@ export default function TableBrowser({
                 className="w-full text-left px-3 py-1.5 text-xs hover:bg-emerald-50 flex items-center gap-2 border-l-2 border-emerald-300"
               >
                 <Plus size={12} className="text-emerald-500 shrink-0" />
-                <span className="font-mono truncate flex-1">{shortName(ct.name)}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="font-mono truncate">{shortName(ct.name)}</div>
+                  {shortName(ct.name) !== ct.name && (
+                    <div className="text-[10px] text-gray-400 truncate">{ct.name}</div>
+                  )}
+                </div>
                 <span className="text-[10px] text-gray-400 shrink-0">
                   {ct.links.length} link{ct.links.length > 1 ? 's' : ''}
                 </span>
@@ -271,9 +295,14 @@ export default function TableBrowser({
                         ) : (
                           <Plus size={12} className="text-gray-300 shrink-0" />
                         )}
-                        <span className="font-mono truncate flex-1">{shortName(name)}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono truncate">{shortName(name)}</div>
+                          {shortName(name) !== name && (
+                            <div className="text-[10px] text-gray-400 truncate">{name}</div>
+                          )}
+                        </div>
                         <span className="text-[10px] text-gray-400 shrink-0">
-                          {info.column_count} col
+                          {info.column_count} col{info.type === 'SUBTABLE' ? ' · sub' : ''}
                         </span>
                       </button>
                     );

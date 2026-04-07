@@ -31,9 +31,14 @@ WORKDIR /var/www/html
 # Copy composer files first for layer caching
 COPY composer.json composer.lock* ./
 
-# Install dependencies (if composer.lock exists)
-RUN if [ -f composer.lock ]; then \
-    composer install --no-dev --optimize-autoloader --no-interaction; \
+# Install dependencies only when explicitly requested.
+# Default is OFF because some hosts hit CPU/emulation issues during composer install
+# (Illegal instruction) and this repository already includes vendor dependencies.
+ARG RUN_COMPOSER_INSTALL=0
+RUN if [ "$RUN_COMPOSER_INSTALL" = "1" ] && [ -f composer.lock ]; then \
+    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction; \
+    else \
+    echo "Skipping composer install at build time (RUN_COMPOSER_INSTALL=${RUN_COMPOSER_INSTALL})."; \
     fi
 
 # Copy application code

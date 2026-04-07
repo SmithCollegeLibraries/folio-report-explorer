@@ -12,15 +12,76 @@ use yii\httpclient\Client;
 class GeminiService
 {
     const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+    const REQUEST_TIMEOUT_SECONDS = 120;
+    const DEFAULT_MAX_RETRIES = 3;
+    const DEFAULT_RETRY_BASE_DELAY_MS = 400;
+    const MAX_RETRY_BACKOFF_MS = 5000;
+    const LEGACY_PROMPT_VERSION = 'legacy_sql_prompt.v1';
+    const INTENT_PROMPT_VERSION = 'intent_json_prompt.v1';
+    const INDEX_RECOMMENDER_PROMPT_VERSION = 'index_recommender.v1';
+    const FOLLOW_UP_SUGGESTION_PROMPT_VERSION = 'followup_suggestions.v1';
+    const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
 
     /**
-     * Generate SQL from a natural-language prompt.
+     * Step 8 entrypoint: run the configured primary mode and optionally execute
+     * the alternate mode in shadow for comparison telemetry.
      *
-     * @param string $prompt User's natural language query description
+     * @param string $prompt
+     * @param string|null $campus
+     * @param int|null $userId
      * @return array {sql: string, explanation: string, dataSource: string}
+     */
+    public static function generateSqlWithShadow($prompt, $campus = null, $userId = null)
+    {
+        $primaryMode = self::resolvePrimaryMode();
+        $primary = $primaryMode === 'intent'
+            ? self::generateSql($prompt, $campus, false, true)
+            : self::generateSql($prompt, $campus, true, false);
+
+        if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
+            $primary['routeReason'] = !empty(Yii::$app->params['nl2sqlForceLegacy'])
+                ? 'forced_legacy_mode'
+                : 'primary_legacy_mode';
+        }
+
+        if (!self::shouldRunShadowForUser($userId, $prompt)) {
+            return $primary;
+        }
+
+        $shadowMode = $primaryMode === 'intent' ? 'legacy' : 'intent';
+
+        try {
+            $shadow = $shadowMode === 'intent'
+                ? self::generateSql($prompt, $campus, false, true)
+                : self::generateSql($prompt, $campus, true, false);
+
+            self::logShadowComparison($primary, $shadow, [
+                'primaryMode' => $primaryMode,
+                'shadowMode' => $shadowMode,
+                'userId' => $userId,
+                'promptFingerprint' => self::fingerprintPrompt($prompt),
+            ]);
+        } catch (\Throwable $e) {
+            self::logNlTelemetry('nl2sql.shadow_error', [
+                'primaryMode' => $primaryMode,
+                'shadowMode' => $shadowMode,
+                'userId' => $userId,
+                'promptFingerprint' => self::fingerprintPrompt($prompt),
+                'error' => $e->getMessage(),
+            ], true);
+        }
+
+        return $primary;
+    }
+
+    /**
+     * Generate index recommendations from query-history workload snapshots.
+     *
+     * @param array $snapshot
+     * @return array
      * @throws \RuntimeException
      */
-    public static function generateSql($prompt, $campus = null)
+    public static function recommendIndexesFromHistory(array $snapshot)
     {
         $apiKey = Yii::$app->params['geminiApiKey'];
         if (empty($apiKey)) {
@@ -30,7 +91,326 @@ class GeminiService
         }
 
         $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
-        $schemaContext = FolioSchemaService::buildSchemaContext();
+        $workloadPayload = [
+            'generatedAt' => $snapshot['generatedAt'] ?? null,
+            'windowDays' => $snapshot['windowDays'] ?? null,
+            'workload' => [
+                'logsAnalyzed' => $snapshot['workload']['logsAnalyzed'] ?? 0,
+                'eligibleLogs' => $snapshot['workload']['eligibleLogs'] ?? 0,
+                'uniqueQueryPatterns' => $snapshot['workload']['uniqueQueryPatterns'] ?? 0,
+                'tables' => $snapshot['workload']['tables'] ?? [],
+                'queryPatterns' => $snapshot['workload']['queryPatterns'] ?? [],
+            ],
+            'existingIndexesByTable' => $snapshot['existingIndexesByTable'] ?? [],
+        ];
+
+        $promptFingerprint = substr(hash('sha256', json_encode($workloadPayload)), 0, 16);
+        $systemPrompt = self::buildIndexRecommendationSystemPrompt();
+
+        $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
+        $requestResult = self::sendGeminiRequestWithRetries(
+            $url,
+            [
+                'system_instruction' => [
+                    'parts' => [['text' => $systemPrompt]],
+                ],
+                'contents' => [
+                    [
+                        'parts' => [[
+                            'text' => "WORKLOAD_SNAPSHOT_JSON:\n" . json_encode(
+                                $workloadPayload,
+                                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+                            ),
+                        ]],
+                    ],
+                ],
+                'generationConfig' => [
+                    'temperature' => 0.1,
+                    'maxOutputTokens' => 4096,
+                    'responseMimeType' => 'application/json',
+                ],
+            ],
+            'index_recommend.generate'
+        );
+
+        $response = $requestResult['response'];
+        $data = json_decode($response->content, true);
+        $finishReason = $data['candidates'][0]['finishReason'] ?? '';
+        $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+        $parsed = json_decode(trim((string)$text), true);
+        if (!is_array($parsed)) {
+            $fragment = self::extractJsonObject((string)$text);
+            if ($fragment !== null) {
+                $parsed = json_decode($fragment, true);
+            }
+        }
+        if (!is_array($parsed)) {
+            throw new \RuntimeException('Model returned malformed index recommendation JSON.');
+        }
+
+        $recommendations = $parsed['recommendations'] ?? [];
+        if (!is_array($recommendations)) {
+            $recommendations = [];
+        }
+
+        $notes = $parsed['notes'] ?? [];
+        if (!is_array($notes)) {
+            $notes = [];
+        }
+
+        self::logNlTelemetry('nl2sql.index_recommendation', [
+            'model' => $model,
+            'promptVersion' => self::INDEX_RECOMMENDER_PROMPT_VERSION,
+            'promptFingerprint' => $promptFingerprint,
+            'finishReason' => $finishReason,
+            'attempts' => $requestResult['attempts'] ?? null,
+            'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            'recommendationCount' => count($recommendations),
+            'tableCount' => count($workloadPayload['workload']['tables'] ?? []),
+            'queryPatternCount' => count($workloadPayload['workload']['queryPatterns'] ?? []),
+        ]);
+
+        return [
+            'summary' => trim((string)($parsed['summary'] ?? '')),
+            'recommendations' => $recommendations,
+            'notes' => $notes,
+            'model' => $model,
+            'promptVersion' => self::INDEX_RECOMMENDER_PROMPT_VERSION,
+            'route' => 'index_recommender',
+        ];
+    }
+
+    /**
+     * Generate follow-up NL prompts that expand on the original request.
+     *
+     * @param string $prompt
+     * @param string $sql
+     * @param string $explanation
+     * @param string|null $campus
+     * @return array
+     */
+    public static function suggestFollowUpQueries($prompt, $sql, $explanation = '', $campus = null)
+    {
+        $apiKey = Yii::$app->params['geminiApiKey'];
+        if (empty($apiKey)) {
+            return [];
+        }
+
+        $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
+
+        $payload = [
+            'prompt' => trim((string)$prompt),
+            'sql' => trim((string)$sql),
+            'explanation' => trim((string)$explanation),
+            'campus' => $campus,
+        ];
+
+        $systemPrompt = self::buildFollowUpSuggestionPrompt();
+        $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
+
+        $requestResult = self::sendGeminiRequestWithRetries(
+            $url,
+            [
+                'system_instruction' => [
+                    'parts' => [['text' => $systemPrompt]],
+                ],
+                'contents' => [
+                    [
+                        'parts' => [[
+                            'text' => "FOLLOW_UP_INPUT_JSON:\n" . json_encode(
+                                $payload,
+                                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+                            ),
+                        ]],
+                    ],
+                ],
+                'generationConfig' => [
+                    'temperature' => 0.3,
+                    'maxOutputTokens' => 512,
+                    'responseMimeType' => 'application/json',
+                ],
+            ],
+            'nl2sql.followup_suggestions'
+        );
+
+        $response = $requestResult['response'];
+        $data = json_decode($response->content, true);
+        $finishReason = $data['candidates'][0]['finishReason'] ?? '';
+        $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+        $parsed = json_decode(trim((string)$text), true);
+        if (!is_array($parsed)) {
+            $fragment = self::extractJsonObject((string)$text);
+            if ($fragment !== null) {
+                $parsed = json_decode($fragment, true);
+            }
+        }
+
+        if (!is_array($parsed)) {
+            self::logNlTelemetry('nl2sql.followup_suggestions_parse_error', [
+                'model' => $model,
+                'promptVersion' => self::FOLLOW_UP_SUGGESTION_PROMPT_VERSION,
+                'promptFingerprint' => self::fingerprintPrompt((string)$prompt),
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ], true);
+
+            return self::sanitizeFollowUpSuggestions(
+                self::buildFallbackFollowUpSuggestions((string)$prompt, $campus),
+                (string)$prompt
+            );
+        }
+
+        $suggestions = $parsed['suggestions'] ?? [];
+        if (!is_array($suggestions)) {
+            $suggestions = [];
+        }
+
+        $suggestions = self::sanitizeFollowUpSuggestions($suggestions, (string)$prompt);
+        if (count($suggestions) < 3) {
+            $fallback = self::buildFallbackFollowUpSuggestions((string)$prompt, $campus);
+            $suggestions = self::sanitizeFollowUpSuggestions(
+                array_merge($suggestions, $fallback),
+                (string)$prompt
+            );
+        }
+
+        self::logNlTelemetry('nl2sql.followup_suggestions_generated', [
+            'model' => $model,
+            'promptVersion' => self::FOLLOW_UP_SUGGESTION_PROMPT_VERSION,
+            'promptFingerprint' => self::fingerprintPrompt((string)$prompt),
+            'finishReason' => $finishReason,
+            'attempts' => $requestResult['attempts'] ?? null,
+            'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            'suggestionCount' => count($suggestions),
+        ]);
+
+        return $suggestions;
+    }
+
+    /**
+     * Build the system prompt used for workload-driven index recommendations.
+     *
+     * @return string
+     */
+    private static function buildIndexRecommendationSystemPrompt()
+    {
+        return <<<PROMPT
+You are a PostgreSQL performance advisor for a FOLIO reporting workload.
+
+You are given:
+1) Query history workload patterns (frequency + execution time + sample SQL).
+2) Existing indexes by table.
+
+Goal:
+Recommend practical NEW indexes that are most likely to reduce execution time
+for the observed workload.
+
+Rules:
+1. Recommend only indexes that do not already exist (same table + leading column sequence).
+2. Prioritize high-impact patterns first (frequent and/or slow queries).
+3. Use realistic PostgreSQL index types: btree by default, gin/gist only when justified.
+4. Avoid recommending indexes on tiny lookup/value tables unless clearly justified.
+5. Prefer composite indexes when multiple columns repeatedly appear together in JOIN/WHERE predicates.
+6. Keep recommendations conservative: max 10 recommendations.
+7. If workload is insufficient, return an empty recommendations array and explain why in notes.
+
+Return ONLY JSON with this exact shape:
+{
+  "summary": "short plain-English summary",
+  "recommendations": [
+    {
+      "table": "schema.table",
+      "columns": ["column_a", "column_b"],
+      "indexType": "btree",
+      "confidence": "high|medium|low",
+      "reason": "why this helps",
+      "evidence": {
+        "patternIds": ["Q001", "Q004"],
+        "estimatedImpact": "high|medium|low"
+      },
+      "createIndexSql": "CREATE INDEX CONCURRENTLY ..."
+    }
+  ],
+  "notes": ["optional caveats or follow-up checks"]
+}
+PROMPT;
+    }
+
+        /**
+         * Build the system prompt used to generate follow-up NL suggestions.
+         *
+         * @return string
+         */
+        private static function buildFollowUpSuggestionPrompt()
+        {
+                return <<<PROMPT
+You generate short follow-up natural-language report prompts for a library analytics user.
+
+You are given:
+1) The user's original question.
+2) The SQL that was generated.
+3) A brief explanation.
+4) Optional campus context.
+
+Return ONLY JSON with this shape:
+{
+    "suggestions": [
+        "prompt 1",
+        "prompt 2",
+        "prompt 3",
+        "prompt 4"
+    ]
+}
+
+Rules:
+1. Provide 3 to 5 suggestions.
+2. Suggestions must be user-facing prompts in plain English (not SQL).
+3. Keep each suggestion concise (around 6 to 18 words).
+4. Make each suggestion distinct: trend, breakdown, anomaly, comparison, or drill-down.
+5. Keep scope consistent with the original domain and campus context.
+6. Do not repeat the original prompt verbatim.
+7. Do not include markdown or extra keys.
+PROMPT;
+        }
+
+    /**
+     * Generate SQL from a natural-language prompt.
+     *
+     * @param string $prompt User's natural language query description
+     * @param bool $forceLegacy Internal control for deterministic fallback routing.
+     * @param bool $forceIntent Internal control for shadow-mode intent execution.
+     * @return array {sql: string, explanation: string, dataSource: string}
+     * @throws \RuntimeException
+     */
+    public static function generateSql($prompt, $campus = null, $forceLegacy = false, $forceIntent = false)
+    {
+        if ($forceLegacy && $forceIntent) {
+            throw new \InvalidArgumentException('Cannot force both legacy and intent generation modes.');
+        }
+
+        $apiKey = Yii::$app->params['geminiApiKey'];
+        if (empty($apiKey)) {
+            throw new \RuntimeException(
+                'Gemini API key not configured. Set GEMINI_API_KEY in .env'
+            );
+        }
+
+        $model = Yii::$app->params['geminiModel'] ?: 'gemini-2.5-flash';
+
+        if ($forceIntent) {
+            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model);
+        }
+
+        if (!$forceLegacy && self::isIntentModeEnabled()) {
+            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model);
+        }
+
+        $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
+        $schemaTelemetry = self::buildSchemaTelemetry($schemaContext);
+        $promptFingerprint = self::fingerprintPrompt($prompt);
 
         // Load acqUnit codes from settings.json (campus full name → 2-letter abbreviation)
         // Maintained in backend/data/settings.json under "acqUnitCodes" — configurable
@@ -143,27 +523,25 @@ RULES:
     This applies to any column from finance.*, invoice.*, acq_unit.*, or any column whose name
     contains: total, amount, price, cost, spent, encumbered, expenditure, budget, balance.
     NEVER return raw unformatted monetary values to the user.
+21. SINGLE STATEMENT — Return exactly one SELECT statement for the user's request.
+    Never output multiple semicolon-delimited statements, even if the user asks for "also"
+    or multiple follow-ups in one prompt. If needed, combine logic into one query.
 {$campusRule}
 
 SCHEMA:
 {$schemaContext}
 
 RESPONSE FORMAT:
-Return the SQL in a ```sql code block, followed by a brief plain-English explanation
+Return exactly one SQL statement in a ```sql code block, followed by a brief plain-English explanation
 of what the query does and which tables/joins are used.
 Then add a final line exactly like: DATA SOURCE: folio OR DATA SOURCE: local
 PROMPT;
 
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
-        $client = new Client();
-        $client->transport = 'yii\httpclient\CurlTransport';
-        $response = $client->createRequest()
-            ->setMethod('POST')
-            ->setUrl($url)
-            ->setHeaders(['Content-Type' => 'application/json'])
-            ->addOptions([CURLOPT_TIMEOUT => 120])
-            ->setContent(json_encode([
+        $requestResult = self::sendGeminiRequestWithRetries(
+            $url,
+            [
                 'system_instruction' => [
                     'parts' => [['text' => $systemPrompt]],
                 ],
@@ -176,18 +554,23 @@ PROMPT;
                     'temperature' => 0.1,
                     'maxOutputTokens' => 16384,
                 ],
-            ]))
-            ->send();
-
-        if (!$response->isOk) {
-            $error = json_decode($response->content, true);
-            $msg = $error['error']['message'] ?? 'Unknown Gemini API error';
-            throw new \RuntimeException("Gemini API error: {$msg}");
-        }
+            ],
+            'nl2sql.generate'
+        );
+        $response = $requestResult['response'];
 
         $data = json_decode($response->content, true);
         $finishReason = $data['candidates'][0]['finishReason'] ?? '';
         if ($finishReason === 'MAX_TOKENS') {
+            self::logNlTelemetry('nl2sql.max_tokens', [
+                'route' => 'legacy_freeform',
+                'model' => $model,
+                'promptVersion' => self::LEGACY_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ] + $schemaTelemetry, true);
             throw new \RuntimeException(
                 'The AI response was truncated because the query is too complex. '
                 . 'Try simplifying your request or asking for fewer fields.'
@@ -195,7 +578,1007 @@ PROMPT;
         }
         $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
-        return self::parseResponse($text);
+        try {
+            $parsed = self::parseResponse($text);
+        } catch (\Throwable $e) {
+            self::logValidationFailure('legacy_sql_parse', [
+                'route' => 'legacy_freeform',
+                'model' => $model,
+                'promptVersion' => self::LEGACY_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+                'error' => $e->getMessage(),
+            ] + $schemaTelemetry);
+            throw $e;
+        }
+
+        if (!isset($parsed['route'])) {
+            $parsed['route'] = 'legacy_freeform';
+        }
+        if (!isset($parsed['routeReason'])) {
+            $parsed['routeReason'] = $forceLegacy ? 'forced_legacy_mode' : 'intent_mode_disabled';
+        }
+
+        self::logNlTelemetry('nl2sql.generated', [
+            'route' => $parsed['route'],
+            'routeReason' => $parsed['routeReason'],
+            'model' => $model,
+            'promptVersion' => self::LEGACY_PROMPT_VERSION,
+            'promptFingerprint' => $promptFingerprint,
+            'finishReason' => $finishReason,
+            'dataSource' => $parsed['dataSource'] ?? 'folio',
+            'attempts' => $requestResult['attempts'] ?? null,
+            'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+        ] + $schemaTelemetry);
+
+        return $parsed;
+    }
+
+    /**
+     * Feature flag gate for structured intent mode.
+     */
+    private static function isIntentModeEnabled()
+    {
+        return !empty(Yii::$app->params['nl2sqlIntentMode']);
+    }
+
+    /**
+     * Generate SQL through structured QueryIntent output.
+     *
+     * This path is guarded by a feature flag and intentionally keeps the
+     * legacy freeform SQL path unchanged when disabled.
+     *
+     * @param string $prompt
+     * @param string|null $campus
+     * @param string $apiKey
+     * @param string $model
+     * @return array {sql: string, explanation: string, dataSource: string}
+     * @throws \RuntimeException
+     */
+    private static function generateSqlFromIntent($prompt, $campus, $apiKey, $model)
+    {
+        $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
+        $schemaTelemetry = self::buildSchemaTelemetry($schemaContext);
+        $promptFingerprint = self::fingerprintPrompt($prompt);
+        $systemPrompt = self::buildIntentSystemPrompt($schemaContext, $campus);
+
+        $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
+
+        $requestResult = self::sendGeminiRequestWithRetries(
+            $url,
+            [
+                'system_instruction' => [
+                    'parts' => [['text' => $systemPrompt]],
+                ],
+                'contents' => [
+                    [
+                        'parts' => [['text' => $prompt]],
+                    ],
+                ],
+                'generationConfig' => [
+                    'temperature' => 0.1,
+                    'maxOutputTokens' => 8192,
+                    'responseMimeType' => 'application/json',
+                ],
+            ],
+            'nl2sql.intent'
+        );
+        $response = $requestResult['response'];
+
+        $data = json_decode($response->content, true);
+        $finishReason = $data['candidates'][0]['finishReason'] ?? '';
+        if ($finishReason === 'MAX_TOKENS') {
+            self::logNlTelemetry('nl2sql.max_tokens', [
+                'route' => 'intent_json',
+                'model' => $model,
+                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ] + $schemaTelemetry, true);
+            throw new \RuntimeException(
+                'The AI intent response was truncated because the query is too complex. '
+                . 'Try simplifying your request or asking for fewer fields.'
+            );
+        }
+
+        $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+        try {
+            $intent = self::parseIntentResponse($text);
+        } catch (\Throwable $e) {
+            self::logValidationFailure('intent_json_parse', [
+                'route' => 'intent_json',
+                'model' => $model,
+                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+                'error' => $e->getMessage(),
+            ] + $schemaTelemetry);
+            throw $e;
+        }
+
+        $validation = QueryIntentService::validateIntent($intent);
+        if (empty($validation['valid'])) {
+            $first = $validation['errors'][0] ?? [];
+            $path = $first['path'] ?? 'intent';
+            $message = $first['message'] ?? 'Unknown validation error.';
+            self::logValidationFailure('intent_contract', [
+                'route' => 'intent_json',
+                'model' => $model,
+                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+                'errorCount' => count($validation['errors'] ?? []),
+                'firstErrorPath' => $path,
+                'firstErrorMessage' => $message,
+            ] + $schemaTelemetry);
+            throw new \RuntimeException(
+                "Model returned invalid intent JSON ({$path}): {$message}"
+            );
+        }
+
+        $normalizedIntent = $validation['normalizedIntent'];
+
+        $capability = self::classifyIntentCapability($normalizedIntent);
+        if (!$capability['supported']) {
+            self::logRouteSelection('legacy_fallback', $capability['reason'], $normalizedIntent);
+            $fallback = self::generateSql($prompt, $campus, true);
+            $fallback['route'] = 'legacy_fallback';
+            $fallback['routeReason'] = $capability['reason'];
+            self::logNlTelemetry('nl2sql.generated', [
+                'route' => $fallback['route'],
+                'routeReason' => $fallback['routeReason'],
+                'model' => $model,
+                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'dataSource' => $fallback['dataSource'] ?? 'folio',
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ] + $schemaTelemetry);
+            return $fallback;
+        }
+
+        try {
+            $queryDef = QueryIntentService::toQueryDefinition($normalizedIntent);
+            $built = SqlBuilderService::build($queryDef);
+        } catch (QueryIntentValidationException $e) {
+            self::logValidationFailure('intent_to_query_definition', [
+                'route' => 'intent_json',
+                'model' => $model,
+                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+                'error' => $e->getMessage(),
+            ] + $schemaTelemetry);
+            throw new \RuntimeException('Intent validation failed: ' . $e->getMessage());
+        } catch (\InvalidArgumentException $e) {
+            $reason = 'builder_conversion_failed';
+            self::logRouteSelection('legacy_fallback', $reason . ': ' . $e->getMessage(), $normalizedIntent);
+            $fallback = self::generateSql($prompt, $campus, true);
+            $fallback['route'] = 'legacy_fallback';
+            $fallback['routeReason'] = $reason;
+            self::logNlTelemetry('nl2sql.generated', [
+                'route' => $fallback['route'],
+                'routeReason' => $fallback['routeReason'],
+                'model' => $model,
+                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'dataSource' => $fallback['dataSource'] ?? 'folio',
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ] + $schemaTelemetry);
+            return $fallback;
+        }
+
+        $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
+        $sql = self::normalizeIdCasts($sql);
+
+        SqlBuilderService::validateSafety($sql);
+        SqlBuilderService::validateTablePolicy($sql);
+        self::validateTableReferences($sql);
+
+        $dataSource = 'folio';
+        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
+            $dataSource = 'local';
+        }
+
+        $tables = $normalizedIntent['query']['tables'] ?? [];
+        $explanation = 'Generated from structured intent mode.';
+        if (!empty($tables)) {
+            $explanation .= ' Tables: ' . implode(', ', $tables) . '.';
+        }
+
+        self::logRouteSelection('builder_intent', 'intent_supported', $normalizedIntent);
+
+        self::logNlTelemetry('nl2sql.generated', [
+            'route' => 'builder_intent',
+            'routeReason' => 'intent_supported',
+            'model' => $model,
+            'promptVersion' => self::INTENT_PROMPT_VERSION,
+            'promptFingerprint' => $promptFingerprint,
+            'finishReason' => $finishReason,
+            'dataSource' => $dataSource,
+            'attempts' => $requestResult['attempts'] ?? null,
+            'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+        ] + $schemaTelemetry);
+
+        return [
+            'sql' => $sql,
+            'explanation' => $explanation,
+            'dataSource' => $dataSource,
+            'route' => 'builder_intent',
+            'routeReason' => 'intent_supported',
+        ];
+    }
+
+    /**
+     * Deterministic capability classifier for builder support.
+     *
+     * @param array $normalizedIntent
+     * @return array {supported: bool, reason: string}
+     */
+    private static function classifyIntentCapability(array $normalizedIntent)
+    {
+        $query = $normalizedIntent['query'] ?? [];
+        $tables = $query['tables'] ?? [];
+        $joins = $query['joins'] ?? 'auto';
+
+        // Phase 1 router keeps explicit joins on the fallback path.
+        if (is_array($joins) && !empty($joins)) {
+            return [
+                'supported' => false,
+                'reason' => 'explicit_joins_unsupported_in_builder_route',
+            ];
+        }
+
+        // Cap very large multi-table plans for deterministic builder routing.
+        if (is_array($tables) && count($tables) > 6) {
+            return [
+                'supported' => false,
+                'reason' => 'too_many_tables_for_builder_route',
+            ];
+        }
+
+        return [
+            'supported' => true,
+            'reason' => 'intent_supported',
+        ];
+    }
+
+    /**
+     * Record selected route for observability.
+     *
+     * @param string $route
+     * @param string $reason
+     * @param array $normalizedIntent
+     */
+    private static function logRouteSelection($route, $reason, array $normalizedIntent)
+    {
+        $query = $normalizedIntent['query'] ?? [];
+        $payload = [
+            'route' => $route,
+            'reason' => $reason,
+            'tables' => $query['tables'] ?? [],
+            'selectCount' => count($query['select'] ?? []),
+            'whereCount' => count($query['where'] ?? []),
+            'hasExplicitJoins' => is_array($query['joins'] ?? null),
+            'intentVersion' => $normalizedIntent['intentVersion'] ?? null,
+        ];
+
+        Yii::info('NL2SQL route: ' . json_encode($payload), 'nl2sql.routing');
+    }
+
+    /**
+     * Build deterministic schema telemetry fields from the prompt context payload.
+     */
+    private static function buildSchemaTelemetry($schemaContext)
+    {
+        $metadata = FolioSchemaService::getMetadata();
+
+        return [
+            'schemaContextHash' => substr(hash('sha256', (string)$schemaContext), 0, 16),
+            'schemaContextBytes' => strlen((string)$schemaContext),
+            'schemaVersion' => $metadata['scraped_at'] ?? null,
+        ];
+    }
+
+    /**
+     * Create a stable prompt fingerprint for telemetry without logging prompt text.
+     */
+    private static function fingerprintPrompt($prompt)
+    {
+        return substr(hash('sha256', trim((string)$prompt)), 0, 16);
+    }
+
+    /**
+     * Structured NL2SQL telemetry logging.
+     */
+    private static function logNlTelemetry($event, array $payload, $warning = false)
+    {
+        $record = array_merge([
+            'event' => (string)$event,
+            'timestamp' => gmdate('c'),
+        ], $payload);
+
+        $message = 'NL2SQL telemetry: ' . json_encode($record);
+        if ($warning) {
+            Yii::warning($message, self::NL2SQL_TELEMETRY_CATEGORY);
+            return;
+        }
+
+        Yii::info($message, self::NL2SQL_TELEMETRY_CATEGORY);
+    }
+
+    /**
+     * Emit structured validation-failure telemetry.
+     */
+    private static function logValidationFailure($stage, array $payload)
+    {
+        self::logNlTelemetry('nl2sql.validation_failure', array_merge([
+            'stage' => (string)$stage,
+        ], $payload), true);
+    }
+
+    /**
+     * Resolve the primary NL2SQL mode for user-facing responses.
+     */
+    private static function resolvePrimaryMode()
+    {
+        if (!empty(Yii::$app->params['nl2sqlForceLegacy'])) {
+            return 'legacy';
+        }
+
+        $configured = strtolower((string)(Yii::$app->params['nl2sqlPrimaryMode'] ?? ''));
+        if ($configured === 'intent' || $configured === 'legacy') {
+            return $configured;
+        }
+
+        return self::isIntentModeEnabled() ? 'intent' : 'legacy';
+    }
+
+    /**
+     * Determine if the current user/prompt should run shadow comparison.
+     */
+    private static function shouldRunShadowForUser($userId, $prompt)
+    {
+        if (empty(Yii::$app->params['nl2sqlShadowMode'])) {
+            return false;
+        }
+
+        if (!self::isShadowUserAllowed($userId)) {
+            return false;
+        }
+
+        $percent = (int)(Yii::$app->params['nl2sqlShadowSamplePercent'] ?? 100);
+        $percent = max(0, min(100, $percent));
+        if ($percent <= 0) {
+            return false;
+        }
+        if ($percent >= 100) {
+            return true;
+        }
+
+        $seed = (string)$userId . '|' . self::fingerprintPrompt((string)$prompt);
+        $hash = hash('sha256', $seed);
+        $bucket = hexdec(substr($hash, 0, 8)) % 100;
+        return $bucket < $percent;
+    }
+
+    /**
+     * Check user cohort allowlist for shadow-mode execution.
+     */
+    private static function isShadowUserAllowed($userId)
+    {
+        $raw = trim((string)(Yii::$app->params['nl2sqlShadowUsers'] ?? ''));
+        if ($raw === '') {
+            return false;
+        }
+
+        $normalized = strtolower($raw);
+        if ($normalized === '*' || $normalized === 'all') {
+            return true;
+        }
+
+        if ($userId === null) {
+            return false;
+        }
+
+        $allowed = array_filter(array_map('trim', explode(',', $raw)), function ($value) {
+            return $value !== '';
+        });
+
+        return in_array((string)$userId, $allowed, true);
+    }
+
+    /**
+     * Normalize SQL text for stable hash comparisons.
+     */
+    private static function normalizeSqlForHash($sql)
+    {
+        $normalized = preg_replace('/\s+/', ' ', strtolower(trim((string)$sql)));
+        return trim((string)$normalized);
+    }
+
+    /**
+     * Log shadow comparison metrics without affecting the primary response.
+     */
+    private static function logShadowComparison(array $primary, array $shadow, array $context)
+    {
+        $primarySql = $primary['sql'] ?? '';
+        $shadowSql = $shadow['sql'] ?? '';
+
+        $primaryHash = $primarySql !== ''
+            ? substr(hash('sha256', self::normalizeSqlForHash($primarySql)), 0, 16)
+            : null;
+        $shadowHash = $shadowSql !== ''
+            ? substr(hash('sha256', self::normalizeSqlForHash($shadowSql)), 0, 16)
+            : null;
+
+        self::logNlTelemetry('nl2sql.shadow_compare', array_merge($context, [
+            'primaryRoute' => $primary['route'] ?? null,
+            'primaryRouteReason' => $primary['routeReason'] ?? null,
+            'shadowRoute' => $shadow['route'] ?? null,
+            'shadowRouteReason' => $shadow['routeReason'] ?? null,
+            'primaryDataSource' => $primary['dataSource'] ?? null,
+            'shadowDataSource' => $shadow['dataSource'] ?? null,
+            'primarySqlHash' => $primaryHash,
+            'shadowSqlHash' => $shadowHash,
+            'sqlHashMatch' => $primaryHash !== null && $shadowHash !== null
+                ? $primaryHash === $shadowHash
+                : null,
+            'primarySqlLength' => strlen((string)$primarySql),
+            'shadowSqlLength' => strlen((string)$shadowSql),
+        ]));
+    }
+
+    /**
+     * Send Gemini API requests with deterministic retry policy for transient failures.
+     *
+     * @param string $url
+     * @param array $payload
+     * @param string $metricContext
+     * @return array {response: mixed, attempts: int, elapsedMs: int}
+     * @throws \RuntimeException
+     */
+    private static function sendGeminiRequestWithRetries($url, array $payload, $metricContext)
+    {
+        $maxRetries = (int)(Yii::$app->params['geminiMaxRetries'] ?? self::DEFAULT_MAX_RETRIES);
+        if ($maxRetries < 1) {
+            $maxRetries = 1;
+        }
+
+        $baseDelayMs = (int)(Yii::$app->params['geminiRetryBaseDelayMs'] ?? self::DEFAULT_RETRY_BASE_DELAY_MS);
+        if ($baseDelayMs < 1) {
+            $baseDelayMs = self::DEFAULT_RETRY_BASE_DELAY_MS;
+        }
+
+        $attempt = 0;
+        $startedAt = microtime(true);
+
+        while (true) {
+            $attempt++;
+
+            try {
+                $client = new Client();
+                $client->transport = 'yii\\httpclient\\CurlTransport';
+                $response = $client->createRequest()
+                    ->setMethod('POST')
+                    ->setUrl($url)
+                    ->setHeaders(['Content-Type' => 'application/json'])
+                    ->addOptions([CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT_SECONDS])
+                    ->setContent(json_encode($payload))
+                    ->send();
+
+                if ($response->isOk) {
+                    $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
+                    self::logRequestOutcome($metricContext, $attempt, $elapsedMs);
+                    return [
+                        'response' => $response,
+                        'attempts' => $attempt,
+                        'elapsedMs' => $elapsedMs,
+                    ];
+                }
+
+                $statusCode = (int)$response->statusCode;
+                $errorMessage = self::extractGeminiErrorMessage($response);
+                $retryable = self::isRetryableGeminiResponse($statusCode, $errorMessage);
+
+                if (!$retryable || $attempt >= $maxRetries) {
+                    $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
+                    self::logRequestOutcome($metricContext, $attempt, $elapsedMs, false, $statusCode, $errorMessage);
+                    throw new \RuntimeException("Gemini API error: {$errorMessage}");
+                }
+
+                self::logRetryAttempt($metricContext, $attempt, $maxRetries, $statusCode, $errorMessage, false);
+                self::sleepWithBackoff($attempt, $baseDelayMs);
+            } catch (\Throwable $e) {
+                if ($e instanceof \RuntimeException && strpos($e->getMessage(), 'Gemini API error:') === 0) {
+                    throw $e;
+                }
+
+                $timedOut = self::isTimeoutThrowable($e);
+                $retryable = self::isRetryableThrowable($e);
+
+                if (!$retryable || $attempt >= $maxRetries) {
+                    $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
+                    self::logRequestOutcome($metricContext, $attempt, $elapsedMs, $timedOut, null, $e->getMessage());
+                    throw new \RuntimeException('Gemini request failed: ' . $e->getMessage(), 0, $e);
+                }
+
+                self::logRetryAttempt($metricContext, $attempt, $maxRetries, null, $e->getMessage(), $timedOut);
+                self::sleepWithBackoff($attempt, $baseDelayMs);
+            }
+        }
+    }
+
+    /**
+     * Extract a normalized Gemini API error message from an HTTP response.
+     */
+    private static function extractGeminiErrorMessage($response)
+    {
+        $error = null;
+
+        if (!empty($response->content)) {
+            $decoded = json_decode($response->content, true);
+            if (is_array($decoded)) {
+                $error = $decoded['error']['message'] ?? null;
+            }
+        }
+
+        if (empty($error) && is_array($response->data ?? null)) {
+            $error = $response->data['error']['message'] ?? null;
+        }
+
+        if (!empty($error)) {
+            return (string)$error;
+        }
+
+        $statusCode = (int)($response->statusCode ?? 0);
+        return $statusCode > 0
+            ? "Unknown Gemini API error (HTTP {$statusCode})"
+            : 'Unknown Gemini API error';
+    }
+
+    /**
+     * Retry only transient HTTP failures.
+     */
+    private static function isRetryableGeminiResponse($statusCode, $errorMessage)
+    {
+        if (in_array((int)$statusCode, [408, 500, 502, 503, 504], true)) {
+            return true;
+        }
+
+        if ((int)$statusCode === 429) {
+            // Retry rate-limit spikes, but do not retry hard quota/billing failures.
+            return !preg_match('/quota|billing|exceeded/i', (string)$errorMessage);
+        }
+
+        return preg_match(
+            '/temporar(?:y|ily)|unavailable|timeout|timed out|deadline exceeded|resource exhausted|backend error|try again/i',
+            (string)$errorMessage
+        ) === 1;
+    }
+
+    /**
+     * Determine if a thrown exception indicates a timeout condition.
+     */
+    private static function isTimeoutThrowable(\Throwable $e)
+    {
+        return preg_match('/timeout|timed out|deadline exceeded|operation timed out/i', $e->getMessage()) === 1;
+    }
+
+    /**
+     * Retry only transient transport/availability exceptions.
+     */
+    private static function isRetryableThrowable(\Throwable $e)
+    {
+        $message = $e->getMessage();
+
+        if (self::isTimeoutThrowable($e)) {
+            return true;
+        }
+
+        return preg_match(
+            '/temporar(?:y|ily)|unavailable|connection reset|connection refused|failed to connect|network is unreachable|could not resolve host|ssl|try again/i',
+            $message
+        ) === 1;
+    }
+
+    /**
+     * Exponential backoff with jitter for retry pacing.
+     */
+    private static function sleepWithBackoff($attempt, $baseDelayMs)
+    {
+        $expDelayMs = (int)($baseDelayMs * pow(2, max(0, (int)$attempt - 1)));
+        $jitterMs = random_int(0, 200);
+        $delayMs = min(self::MAX_RETRY_BACKOFF_MS, $expDelayMs + $jitterMs);
+        usleep($delayMs * 1000);
+    }
+
+    /**
+     * Emit per-attempt retry telemetry.
+     */
+    private static function logRetryAttempt($context, $attempt, $maxRetries, $statusCode, $errorMessage, $timedOut)
+    {
+        $payload = [
+            'context' => $context,
+            'attempt' => (int)$attempt,
+            'maxRetries' => (int)$maxRetries,
+            'statusCode' => $statusCode,
+            'timedOut' => (bool)$timedOut,
+            'error' => (string)$errorMessage,
+        ];
+
+        Yii::warning('Gemini retry attempt: ' . json_encode($payload), 'nl2sql.retry');
+    }
+
+    /**
+     * Emit terminal request metrics for success or final failure.
+     */
+    private static function logRequestOutcome($context, $attempts, $elapsedMs, $timedOut = false, $statusCode = null, $errorMessage = null)
+    {
+        $payload = [
+            'context' => $context,
+            'attempts' => (int)$attempts,
+            'elapsedMs' => (int)$elapsedMs,
+            'timedOut' => (bool)$timedOut,
+            'statusCode' => $statusCode,
+            'error' => $errorMessage,
+        ];
+
+        if (!empty($errorMessage)) {
+            Yii::warning('Gemini request failed: ' . json_encode($payload), 'nl2sql.retry');
+            return;
+        }
+
+        Yii::info('Gemini request success: ' . json_encode($payload), 'nl2sql.retry');
+    }
+
+    /**
+     * Build the system prompt for structured QueryIntent generation.
+     */
+    private static function buildIntentSystemPrompt($schemaContext, $campus)
+    {
+        $campusRule = '';
+        if ($campus && $campus !== 'All Colleges') {
+            $safeCampus = str_replace("'", "''", (string)$campus);
+            $campusRule = <<<RULE
+
+CAMPUS SCOPE REQUIREMENT:
+- The user's home institution is '{$safeCampus}'.
+- Unless the prompt explicitly asks for all colleges or a different campus, include a campus filter in query.where.
+- For inventory/circulation entities, campus is represented through location campus names.
+- For finance/acquisitions entities, campus is represented through acquisitions unit codes.
+RULE;
+        }
+
+        return <<<PROMPT
+You are a deterministic QueryIntent planner for a FOLIO PostgreSQL dataset.
+
+Return ONLY a JSON object matching this contract:
+{
+  "intentVersion": 1,
+  "query": {
+        "tables": ["inventory_items"],
+    "select": [
+            {"table": "inventory_items", "column": "id", "alias": "optional_alias", "aggregate": "COUNT|SUM|AVG|MIN|MAX"}
+    ],
+    "where": [
+            {"table": "inventory_items", "column": "barcode", "op": "=|!=|<>|>|<|>=|<=|LIKE|ILIKE|NOT LIKE|IN|NOT IN|IS NULL|IS NOT NULL|BETWEEN", "value": "literal or array"}
+    ],
+    "joins": "auto",
+        "groupBy": [{"table": "inventory_items", "column": "material_type_id"}],
+        "having": [{"aggregate": "COUNT|SUM|AVG|MIN|MAX", "table": "inventory_items", "column": "id", "op": "=|!=|>|<|>=|<=", "value": "literal"}],
+        "sort": [{"table": "inventory_items", "column": "id", "direction": "ASC|DESC"}],
+    "distinct": false,
+    "limit": 100
+  }
+}
+
+Rules:
+1. Use ONLY table and column names present in SCHEMA below.
+2. Use table identifiers from SCHEMA keys (for example: inventory_items, circulation_loans).
+3. Do NOT use schema-qualified SQL names like inventory.item__t in the JSON contract.
+4. Generate SELECT-only intent; no DDL/DML behavior.
+5. Keep joins as "auto" unless an explicit join structure is required.
+6. Use limit <= 1000. Default to 100 if unsure.
+7. Prefer case-insensitive matching for name/text filters via ILIKE or LOWER semantics.
+8. Do not include markdown, code fences, or commentary.
+9. Return exactly one query object (one SQL statement intent), never multiple alternatives.
+{$campusRule}
+
+SCHEMA:
+{$schemaContext}
+PROMPT;
+    }
+
+    /**
+     * Parse and validate raw model output into an intent array.
+     */
+    private static function parseIntentResponse($text)
+    {
+        $clean = trim((string)$text);
+        if ($clean === '') {
+            throw new \RuntimeException('Model returned an empty structured intent response.');
+        }
+
+        // Be tolerant if the model still wraps JSON in markdown.
+        $clean = preg_replace('/^```(?:json)?\s*/i', '', $clean);
+        $clean = preg_replace('/\s*```$/', '', $clean);
+        $clean = trim($clean);
+
+        $intent = json_decode($clean, true);
+        if (is_array($intent)) {
+            return $intent;
+        }
+
+        $fragment = self::extractJsonObject($clean);
+        if ($fragment !== null) {
+            $intent = json_decode($fragment, true);
+            if (is_array($intent)) {
+                return $intent;
+            }
+        }
+
+        throw new \RuntimeException(
+            'Model returned malformed intent JSON. Unable to parse structured response.'
+        );
+    }
+
+    /**
+     * Extract the first balanced JSON object from arbitrary text.
+     *
+     * @param string $text
+     * @return string|null
+     */
+    private static function extractJsonObject($text)
+    {
+        $len = strlen($text);
+        $start = -1;
+        $depth = 0;
+        $inString = false;
+        $escape = false;
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $text[$i];
+
+            if ($inString) {
+                if ($escape) {
+                    $escape = false;
+                    continue;
+                }
+                if ($ch === '\\\\') {
+                    $escape = true;
+                    continue;
+                }
+                if ($ch === '"') {
+                    $inString = false;
+                }
+                continue;
+            }
+
+            if ($ch === '"') {
+                $inString = true;
+                continue;
+            }
+
+            if ($ch === '{') {
+                if ($depth === 0) {
+                    $start = $i;
+                }
+                $depth++;
+                continue;
+            }
+
+            if ($ch === '}') {
+                if ($depth > 0) {
+                    $depth--;
+                    if ($depth === 0 && $start >= 0) {
+                        return substr($text, $start, $i - $start + 1);
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Normalize and filter follow-up prompt suggestions.
+     *
+     * @param array $suggestions
+     * @param string $originalPrompt
+     * @return array
+     */
+    private static function sanitizeFollowUpSuggestions(array $suggestions, $originalPrompt)
+    {
+        $original = strtolower(trim((string)$originalPrompt));
+        $seen = [];
+        $final = [];
+
+        foreach ($suggestions as $candidate) {
+            $text = trim((string)$candidate);
+            if ($text === '') {
+                continue;
+            }
+
+            $text = preg_replace('/\s+/', ' ', $text);
+            if ($text === '') {
+                continue;
+            }
+
+            $normalized = strtolower($text);
+            if ($normalized === $original) {
+                continue;
+            }
+            if (isset($seen[$normalized])) {
+                continue;
+            }
+            if (strlen($text) < 10 || strlen($text) > 180) {
+                continue;
+            }
+
+            $seen[$normalized] = true;
+            $final[] = $text;
+
+            if (count($final) >= 5) {
+                break;
+            }
+        }
+
+        return $final;
+    }
+
+    /**
+     * Deterministic fallback suggestions when model output is weak/unavailable.
+     *
+     * @param string $prompt
+     * @param string|null $campus
+     * @return array
+     */
+    private static function buildFallbackFollowUpSuggestions($prompt, $campus = null)
+    {
+        $promptLower = strtolower(trim((string)$prompt));
+        $scopeSuffix = '';
+        if (!empty($campus) && $campus !== 'All Colleges') {
+            $scopeSuffix = ' for ' . trim((string)$campus);
+        }
+
+        $generic = [
+            'Break this result down by month over the last 12 months' . $scopeSuffix,
+            'Show the top 10 categories contributing the most to this result' . $scopeSuffix,
+            'Compare this metric across campuses and highlight differences',
+            'List records that are missing key fields related to this query',
+            'Show year-over-year trend changes for this metric' . $scopeSuffix,
+        ];
+
+        $finance = [
+            'Show this spending trend by fiscal year' . $scopeSuffix,
+            'Which vendors account for the highest share of this spending' . $scopeSuffix,
+            'Break this amount down by fund and expense class' . $scopeSuffix,
+            'Compare encumbered versus expended amounts for the same scope',
+        ];
+
+        $circulation = [
+            'Show this circulation metric by material type' . $scopeSuffix,
+            'Which locations have the highest and lowest circulation for this scope',
+            'Break this down by patron group and loan type' . $scopeSuffix,
+            'Show monthly circulation trend and identify peak periods' . $scopeSuffix,
+        ];
+
+        $inventory = [
+            'Break this inventory count down by library and location' . $scopeSuffix,
+            'Show item age distribution for this result set',
+            'Which call number ranges are most represented in this scope',
+            'Show records added in the last 90 days for this same criteria',
+        ];
+
+        if (preg_match('/spent|spend|budget|invoice|encumber|expend|vendor|fund|fiscal/', $promptLower)) {
+            return array_merge($finance, $generic);
+        }
+
+        if (preg_match('/loan|checkout|circulation|renew|return/', $promptLower)) {
+            return array_merge($circulation, $generic);
+        }
+
+        if (preg_match('/item|holdings|instance|location|call number|inventory|material type/', $promptLower)) {
+            return array_merge($inventory, $generic);
+        }
+
+        return $generic;
+    }
+
+    /**
+     * Inline SqlBuilder-style bind parameters into the SQL string so the
+     * existing NL execution flow can continue to submit raw SQL.
+     *
+     * @param string $sql
+     * @param array $params
+     * @return string
+     */
+    private static function inlineParams($sql, array $params)
+    {
+        if (empty($params)) {
+            return $sql;
+        }
+
+        uksort($params, function ($a, $b) {
+            return strlen((string)$b) <=> strlen((string)$a);
+        });
+
+        foreach ($params as $name => $value) {
+            $sql = str_replace((string)$name, self::toSqlLiteral($value), $sql);
+        }
+
+        return $sql;
+    }
+
+    /**
+     * Convert a scalar value to a SQL literal representation.
+     *
+     * @param mixed $value
+     * @return string
+     */
+    private static function toSqlLiteral($value)
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        if (is_bool($value)) {
+            return $value ? 'TRUE' : 'FALSE';
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (string)$value;
+        }
+
+        if (is_numeric($value)) {
+            $numeric = trim((string)$value);
+            if (!preg_match('/^0[0-9]+$/', $numeric)) {
+                return $numeric;
+            }
+        }
+
+        $escaped = str_replace("'", "''", (string)$value);
+        return "'{$escaped}'";
+    }
+
+    /**
+     * Validate a QueryIntent payload against the server-side contract.
+     *
+     * This is intentionally additive for NL2SQL-003 and does not change the
+     * existing freeform SQL generation pipeline.
+     *
+     * @param mixed $intent
+     * @return array {valid: bool, errors: array, normalizedIntent: array|null}
+     */
+    public static function validateQueryIntent($intent)
+    {
+        return QueryIntentService::validateIntent($intent);
+    }
+
+    /**
+     * Translate a QueryIntent payload to a SqlBuilder query definition.
+     *
+     * @param mixed $intent
+     * @return array QueryDefinition shape accepted by SqlBuilderService::build
+     * @throws QueryIntentValidationException
+     */
+    public static function intentToQueryDefinition($intent)
+    {
+        return QueryIntentService::toQueryDefinition($intent);
     }
 
     /**
@@ -241,6 +1624,7 @@ PROMPT;
 
         // Validate the generated SQL
         SqlBuilderService::validateSafety($sql);
+        SqlBuilderService::validateTablePolicy($sql);
 
         // Validate that referenced tables exist
         self::validateTableReferences($sql);

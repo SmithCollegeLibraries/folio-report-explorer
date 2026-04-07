@@ -42,6 +42,14 @@ class FolioSchemaService
     /** Cache TTL in seconds (24 hours) */
     const CACHE_TTL = 86400;
 
+    /** Max prompt terms used for relevance scoring */
+    const MAX_PROMPT_TERMS = 12;
+
+    /** Context caps for prompt payload stability */
+    const MAX_TABLE_DESCRIPTION_HINTS = 140;
+    const MAX_VOCABULARY_HINTS = 180;
+    const MAX_EXAMPLES = 20;
+
     /**
      * Schemas to completely exclude from direct MetaDB discovery.
      * These are either internal MetaDB/system schemas, test data, or
@@ -1280,7 +1288,10 @@ class FolioSchemaService
         try {
             $db = \Yii::$app->db;
             $rows = $db->createCommand(
-                'SELECT type, hint_key, hint_value, example_question, example_sql FROM ai_training_hints WHERE is_active = 1'
+                'SELECT id, type, hint_key, hint_value, example_question, example_sql
+                 FROM ai_training_hints
+                 WHERE is_active = 1
+                 ORDER BY type ASC, COALESCE(hint_key, \'\') ASC, id DESC'
             )->queryAll();
 
             $tableDescriptions = [];
@@ -1291,12 +1302,18 @@ class FolioSchemaService
                 switch ($row['type']) {
                     case 'table_description':
                         if ($row['hint_key'] && $row['hint_value']) {
-                            $tableDescriptions[$row['hint_key']] = $row['hint_value'];
+                            // Query ordering is deterministic; keep first match so latest
+                            // active hint for a key wins.
+                            if (!isset($tableDescriptions[$row['hint_key']])) {
+                                $tableDescriptions[$row['hint_key']] = $row['hint_value'];
+                            }
                         }
                         break;
                     case 'vocabulary':
                         if ($row['hint_key'] && $row['hint_value']) {
-                            $vocabulary[$row['hint_key']] = $row['hint_value'];
+                            if (!isset($vocabulary[$row['hint_key']])) {
+                                $vocabulary[$row['hint_key']] = $row['hint_value'];
+                            }
                         }
                         break;
                     case 'example':
@@ -1337,6 +1354,171 @@ class FolioSchemaService
     }
 
     /**
+     * Extract deterministic relevance terms from a user prompt.
+     *
+     * @param string $prompt
+     * @return array
+     */
+    private static function extractPromptTerms($prompt): array
+    {
+        $normalized = strtolower((string)$prompt);
+        if ($normalized === '') {
+            return [];
+        }
+
+        $parts = preg_split('/[^a-z0-9_]+/', $normalized);
+        $stopwords = [
+            'the', 'and', 'for', 'with', 'from', 'that', 'this', 'show', 'list',
+            'count', 'what', 'which', 'where', 'when', 'have', 'has', 'into',
+            'also', 'only', 'your', 'our', 'are', 'was', 'were', 'how', 'many',
+            'get', 'give', 'use', 'using', 'about', 'over', 'under', 'than',
+        ];
+        $stop = array_flip($stopwords);
+
+        $terms = [];
+        foreach ($parts as $part) {
+            if ($part === '' || strlen($part) < 3) {
+                continue;
+            }
+            if (isset($stop[$part])) {
+                continue;
+            }
+            $terms[$part] = true;
+        }
+
+        $result = array_keys($terms);
+        sort($result, SORT_STRING);
+        return array_slice($result, 0, self::MAX_PROMPT_TERMS);
+    }
+
+    /**
+     * Score relevance of a key/value hint pair against prompt terms.
+     */
+    private static function scoreHint($key, $value, array $terms): int
+    {
+        if (empty($terms)) {
+            return 0;
+        }
+
+        $keyText = strtolower((string)$key);
+        $valueText = strtolower((string)$value);
+        $score = 0;
+
+        foreach ($terms as $term) {
+            if (strpos($keyText, $term) !== false) {
+                $score += 12;
+            }
+            if (strpos($valueText, $term) !== false) {
+                $score += 4;
+            }
+        }
+
+        return $score;
+    }
+
+    /**
+     * Select bounded, deterministic map hints by relevance.
+     *
+     * @param array $map
+     * @param array $terms
+     * @param int $limit
+     * @return array
+     */
+    private static function selectRelevantMapHints(array $map, array $terms, int $limit): array
+    {
+        if (empty($map) || $limit <= 0) {
+            return [];
+        }
+
+        $items = [];
+        foreach ($map as $key => $value) {
+            $items[] = [
+                'key' => (string)$key,
+                'value' => (string)$value,
+                'score' => self::scoreHint($key, $value, $terms),
+            ];
+        }
+
+        usort($items, function ($a, $b) use ($terms) {
+            if (!empty($terms) && $a['score'] !== $b['score']) {
+                return $b['score'] <=> $a['score'];
+            }
+            return strcmp($a['key'], $b['key']);
+        });
+
+        $selected = array_slice($items, 0, $limit);
+        $result = [];
+        foreach ($selected as $item) {
+            $result[$item['key']] = $item['value'];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Select bounded, deterministic examples by relevance.
+     *
+     * @param array $examples
+     * @param array $terms
+     * @param int $limit
+     * @return array
+     */
+    private static function selectRelevantExamples(array $examples, array $terms, int $limit): array
+    {
+        if (empty($examples) || $limit <= 0) {
+            return [];
+        }
+
+        $scored = [];
+        foreach ($examples as $ex) {
+            $question = (string)($ex['question'] ?? '');
+            $sql = (string)($ex['sql'] ?? '');
+            if ($question === '' || $sql === '') {
+                continue;
+            }
+
+            $score = 0;
+            if (!empty($terms)) {
+                $q = strtolower($question);
+                $s = strtolower($sql);
+                foreach ($terms as $term) {
+                    if (strpos($q, $term) !== false) {
+                        $score += 10;
+                    }
+                    if (strpos($s, $term) !== false) {
+                        $score += 3;
+                    }
+                }
+            }
+
+            $scored[] = [
+                'question' => $question,
+                'sql' => $sql,
+                'score' => $score,
+            ];
+        }
+
+        usort($scored, function ($a, $b) use ($terms) {
+            if (!empty($terms) && $a['score'] !== $b['score']) {
+                return $b['score'] <=> $a['score'];
+            }
+            $questionCmp = strcmp($a['question'], $b['question']);
+            if ($questionCmp !== 0) {
+                return $questionCmp;
+            }
+            return strcmp($a['sql'], $b['sql']);
+        });
+
+        $selected = array_slice($scored, 0, $limit);
+        return array_map(function ($item) {
+            return [
+                'question' => $item['question'],
+                'sql' => $item['sql'],
+            ];
+        }, $selected);
+    }
+
+    /**
      * Load data patterns from data_patterns.json.
      * Returns column type warnings, sample values, and preferred query approaches
      * for tables that commonly cause AI-generated SQL errors.
@@ -1373,7 +1555,7 @@ class FolioSchemaService
      * Uses MetaDB table names so Gemini generates executable SQL.
      * @return string
      */
-    public static function buildSchemaContext()
+    public static function buildSchemaContext($prompt = '')
     {
         $schema = self::loadSchema();
         $tables = $schema['tables'] ?? [];
@@ -1385,6 +1567,24 @@ class FolioSchemaService
         $tableDescs = $domainHints['tableDescriptions'] ?? [];
         $vocabulary = $domainHints['vocabulary'] ?? [];
         $examples = $domainHints['examples'] ?? [];
+
+        // Keep prompt context size bounded and deterministic.
+        $promptTerms = self::extractPromptTerms($prompt);
+        $tableDescs = self::selectRelevantMapHints(
+            $tableDescs,
+            $promptTerms,
+            self::MAX_TABLE_DESCRIPTION_HINTS
+        );
+        $vocabulary = self::selectRelevantMapHints(
+            $vocabulary,
+            $promptTerms,
+            self::MAX_VOCABULARY_HINTS
+        );
+        $examples = self::selectRelevantExamples(
+            $examples,
+            $promptTerms,
+            self::MAX_EXAMPLES
+        );
 
         // Load derived table column comments for enriching key columns
         $derivedData = self::loadDerived();

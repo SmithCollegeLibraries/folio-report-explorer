@@ -1,0 +1,29 @@
+{
+  "ticket": "NL2SQL-000",
+  "capturedAt": "2026-04-06_10-18-25",
+  "apiBase": "http://localhost:8090/api",
+  "subset": [
+    "P09",
+    "P10"
+  ],
+  "results": [
+    {
+      "id": "P09",
+      "category": "schema",
+      "prompt": "Show purchase order lines with fund distribution amounts from subtables",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 31.677134693s."
+      }
+    },
+    {
+      "id": "P10",
+      "category": "local-table",
+      "prompt": "Show ACRL statistics trend for the last 5 years",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 31.235877957s."
+      }
+    }
+  ]
+}

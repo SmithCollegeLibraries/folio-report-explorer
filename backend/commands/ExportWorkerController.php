@@ -5,6 +5,7 @@ namespace app\commands;
 use Yii;
 use yii\console\Controller;
 use app\models\QueryJob;
+use app\services\DatabaseRetryService;
 
 /**
  * ExportWorkerController — background worker for large file exports.
@@ -163,26 +164,34 @@ class ExportWorkerController extends Controller
 
             $sql = $this->applyExportLimit($job->sql_text, (int) (Yii::$app->params['exportRowLimit'] ?? 500000));
 
-            if ($dataSource === 'folio') {
-                $db->createCommand("SET statement_timeout = " . (int) Yii::$app->params['queryTimeoutMs'])->execute();
-                if ($job->hasAttribute('pg_backend_pid')) {
-                    $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
-                    if ($pidRow !== false) {
-                        Yii::$app->db->createCommand()->update(
-                            'query_jobs',
-                            ['pg_backend_pid' => (int)$pidRow['pg_backend_pid']],
-                            ['id' => $job->id]
-                        )->execute();
+            $prepareAndExecute = function () use ($db, $dataSource, $job, $sql, $params) {
+                if ($dataSource === 'folio') {
+                    $db->createCommand("SET statement_timeout = " . (int) Yii::$app->params['queryTimeoutMs'])->execute();
+                    if ($job->hasAttribute('pg_backend_pid')) {
+                        $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
+                        if ($pidRow !== false) {
+                            Yii::$app->db->createCommand()->update(
+                                'query_jobs',
+                                ['pg_backend_pid' => (int)$pidRow['pg_backend_pid']],
+                                ['id' => $job->id]
+                            )->execute();
+                        }
                     }
                 }
-            }
 
-            $pdo = $db->getMasterPdo();
-            $stmt = $pdo->prepare($sql);
-            foreach ($params as $key => $value) {
-                $stmt->bindValue($key, $value);
-            }
-            $stmt->execute();
+                $pdo = $db->getMasterPdo();
+                $stmt = $pdo->prepare($sql);
+                foreach ($params as $key => $value) {
+                    $stmt->bindValue($key, $value);
+                }
+                $stmt->execute();
+
+                return $stmt;
+            };
+
+            $stmt = $dataSource === 'folio'
+                ? DatabaseRetryService::runWithReconnectRetry($db, $prepareAndExecute, 'export-worker.execute_export.folio')
+                : $prepareAndExecute();
 
             $columnCount = $stmt->columnCount();
             $headers = [];

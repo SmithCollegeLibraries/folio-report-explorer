@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import {
   X, Download, Bookmark, LayoutDashboard, Clock, User,
-  Loader2, Code2, ChevronDown, ChevronUp, Pencil,
+  Loader2, Code2, ChevronDown, ChevronUp, Pencil, Lightbulb, Play,
 } from 'lucide-react';
 import SourceBadge from '../../components/SourceBadge';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
@@ -21,10 +21,19 @@ interface Props {
   onRename: (newName: string) => void;
   /** Called when the user clicks Save or Dashboard. */
   onSave: (initialPinned: boolean) => void;
+  suggestions: string[];
+  suggestionSource?: 'gemini' | 'heuristic' | null;
+  suggestionWarnings?: string[];
+  suggestionsLoading: boolean;
+  suggestionsError: string | null;
+  onGenerateSuggestions: () => void;
+  onRunSuggestion: (prompt: string) => void;
 }
 
 export default function HistoryResultsModal({
   item, job, loading, onClose, onRename, onSave,
+  suggestions, suggestionSource, suggestionWarnings,
+  suggestionsLoading, suggestionsError, onGenerateSuggestions, onRunSuggestion,
 }: Props) {
   const [sqlOpen, setSqlOpen] = useState(false);
   const hasFilePreview = !!(job?.outputMode === 'file' && (job.columns?.length || 0) > 0 && (job.rows?.length || 0) > 0);
@@ -179,6 +188,61 @@ export default function HistoryResultsModal({
               <pre className="text-xs font-mono text-gray-600 bg-gray-50 p-3 rounded border border-gray-100 max-h-40 overflow-auto whitespace-pre-wrap">
                 {job?.sql ?? item.sql}
               </pre>
+            </div>
+          )}
+        </div>
+
+        {/* ── Related suggestions ── */}
+        <div className="border-b px-6 py-3 bg-folio-50/40">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-semibold text-folio-800 flex items-center gap-2">
+              <Lightbulb size={14} className="text-amber-500" />
+              Related Query Suggestions
+            </div>
+            <button
+              onClick={onGenerateSuggestions}
+              disabled={suggestionsLoading}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-folio-200 text-folio-700 bg-white hover:bg-folio-100 disabled:opacity-50 text-xs"
+            >
+              {suggestionsLoading ? <Loader2 size={12} className="animate-spin" /> : <Lightbulb size={12} />}
+              {suggestionsLoading ? 'Generating…' : suggestions.length > 0 ? 'Refresh Suggestions' : 'Generate Suggestions'}
+            </button>
+          </div>
+
+          {suggestionSource && (
+            <div className="mt-1 text-xs text-gray-500">
+              Source: {suggestionSource === 'heuristic' ? 'Heuristic fallback' : 'Gemini'}
+            </div>
+          )}
+
+          {suggestionsError && (
+            <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+              {suggestionsError}
+            </div>
+          )}
+
+          {suggestionWarnings && suggestionWarnings.length > 0 && (
+            <div className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              {suggestionWarnings.join(' | ')}
+            </div>
+          )}
+
+          {suggestions.length > 0 && (
+            <div className="mt-2 space-y-2">
+              {suggestions.map((suggestion, idx) => (
+                <div key={`${suggestion}-${idx}`} className="flex items-center gap-2">
+                  <div className="flex-1 text-xs text-gray-700 bg-white border border-gray-200 rounded px-2.5 py-2">
+                    {suggestion}
+                  </div>
+                  <button
+                    onClick={() => onRunSuggestion(suggestion)}
+                    className="inline-flex items-center gap-1 px-2.5 py-2 rounded bg-folio-600 text-white hover:bg-folio-700 text-xs"
+                    title="Run in Ask AI"
+                  >
+                    <Play size={11} /> Run in Ask
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>

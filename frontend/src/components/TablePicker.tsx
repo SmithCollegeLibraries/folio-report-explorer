@@ -43,11 +43,10 @@ function shortName(fullName: string): string {
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
 }
 
-function buildGroups(tables: Record<string, TableSummary>): SchemaGroup[] {
+function buildGroups(tables: Record<string, TableSummary>, includeSubtables: boolean): SchemaGroup[] {
   const map: Record<string, { name: string; info: TableSummary }[]> = {};
   for (const [name, info] of Object.entries(tables)) {
-    // Skip subtables in builder picker — they can be added but are less common
-    if (info.type === 'SUBTABLE') continue;
+    if (!includeSubtables && info.type === 'SUBTABLE') continue;
     const schema = extractSchema(name, info);
     if (!map[schema]) map[schema] = [];
     map[schema].push({ name, info });
@@ -63,21 +62,30 @@ function buildGroups(tables: Record<string, TableSummary>): SchemaGroup[] {
 
 export default function TablePicker({ tables, selectedTables, onToggleTable, tableDetails }: Props) {
   const [search, setSearch] = useState('');
+  const [showSubtables, setShowSubtables] = useState(true);
   const [expandedSchemas, setExpandedSchemas] = useState<Set<string>>(new Set());
   const [connectedExpanded, setConnectedExpanded] = useState(true);
   const selectedSet = useMemo(() => new Set(selectedTables), [selectedTables]);
 
+  const subtableCount = useMemo(
+    () => Object.values(tables).filter((t) => t.type === 'SUBTABLE').length,
+    [tables],
+  );
+
   // Compute connected tables from FK relationships of selected tables
-  const connectedTables = useMemo(() => {
+  const connectedTables = useMemo<ConnectedTable[]>(() => {
     if (!tableDetails || selectedTables.length === 0) return [];
     const map = new Map<string, ConnectedTable['connections']>();
     for (const selTable of selectedTables) {
-      const detail = tableDetails[selTable];
+      const detail: TableDetail | undefined = tableDetails[selTable];
       if (!detail?.relationships) continue;
+      const parentRelationships: TableDetail['relationships']['parents'] = detail.relationships.parents || [];
+      const childRelationships: TableDetail['relationships']['children'] = detail.relationships.children || [];
       // Parent tables (tables this one references via FK)
-      for (const rel of detail.relationships.parents || []) {
+      for (const rel of parentRelationships) {
         const parentName = rel.parent_table;
         if (!parentName || !tables[parentName]) continue;
+        if (!showSubtables && tables[parentName]?.type === 'SUBTABLE') continue;
         if (!map.has(parentName)) map.set(parentName, []);
         map.get(parentName)!.push({
           fromTable: selTable,
@@ -86,9 +94,10 @@ export default function TablePicker({ tables, selectedTables, onToggleTable, tab
         });
       }
       // Child tables (tables that reference this one)
-      for (const rel of detail.relationships.children || []) {
+      for (const rel of childRelationships) {
         const childName = rel.child_table;
         if (!childName || !tables[childName]) continue;
+        if (!showSubtables && tables[childName]?.type === 'SUBTABLE') continue;
         if (!map.has(childName)) map.set(childName, []);
         map.get(childName)!.push({
           fromTable: selTable,
@@ -104,7 +113,7 @@ export default function TablePicker({ tables, selectedTables, onToggleTable, tab
       result.push({ name, connections });
     }
     return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [tableDetails, selectedTables, selectedSet, tables]);
+  }, [tableDetails, selectedTables, selectedSet, tables, showSubtables]);
 
   // Filter connected tables by search
   const filteredConnected = useMemo(() => {
@@ -124,18 +133,22 @@ export default function TablePicker({ tables, selectedTables, onToggleTable, tab
   }, []);
 
   const filtered = useMemo(() => {
-    if (!search) return tables;
+    const source = showSubtables
+      ? tables
+      : Object.fromEntries(Object.entries(tables).filter(([, info]) => info.type !== 'SUBTABLE'));
+
+    if (!search) return source;
     const lower = search.toLowerCase();
     const result: Record<string, TableSummary> = {};
-    for (const [name, info] of Object.entries(tables)) {
+    for (const [name, info] of Object.entries(source)) {
       if (name.toLowerCase().includes(lower) || shortName(name).toLowerCase().includes(lower)) {
         result[name] = info;
       }
     }
     return result;
-  }, [tables, search]);
+  }, [tables, search, showSubtables]);
 
-  const groups = useMemo(() => buildGroups(filtered), [filtered]);
+  const groups = useMemo(() => buildGroups(filtered, showSubtables), [filtered, showSubtables]);
   const isSearching = search.length > 0;
 
   return (
@@ -155,6 +168,17 @@ export default function TablePicker({ tables, selectedTables, onToggleTable, tab
         <div className="mt-1.5 text-xs text-gray-500">
           {selectedTables.length} selected
         </div>
+        {subtableCount > 0 && (
+          <label className="mt-1.5 inline-flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showSubtables}
+              onChange={(e) => setShowSubtables(e.target.checked)}
+              className="rounded border-gray-300 text-folio-500 focus:ring-folio-500 h-3.5 w-3.5"
+            />
+            Subtables ({subtableCount})
+          </label>
+        )}
       </div>
 
       {/* Table list */}
@@ -186,6 +210,9 @@ export default function TablePicker({ tables, selectedTables, onToggleTable, tab
                   <div className="font-mono text-xs truncate" title={ct.name}>
                     {shortName(ct.name)}
                   </div>
+                  {shortName(ct.name) !== ct.name && (
+                    <div className="text-[10px] text-gray-400 truncate" title={ct.name}>{ct.name}</div>
+                  )}
                   <div className="text-xs text-gray-400 space-x-1">
                     {ct.connections.slice(0, 2).map((conn, i) => (
                       <span key={i} className="inline-flex items-center gap-0.5">
@@ -249,9 +276,13 @@ export default function TablePicker({ tables, selectedTables, onToggleTable, tab
                       <div className="font-mono text-xs truncate" title={t.name}>
                         {shortName(t.name)}
                       </div>
+                      {shortName(t.name) !== t.name && (
+                        <div className="text-[10px] text-gray-400 truncate" title={t.name}>{t.name}</div>
+                      )}
                       <div className="text-xs text-gray-400">
                         {t.info.column_count} cols
                         {t.info.parent_count > 0 && <span className="ml-2">{t.info.parent_count} FK↑</span>}
+                        {t.info.type === 'SUBTABLE' && <span className="ml-2 text-folio-500">sub</span>}
                       </div>
                     </div>
                   </button>

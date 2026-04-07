@@ -1,0 +1,10 @@
+{
+  "ticket": "NL2SQL-000",
+  "capturedAt": "2026-04-06_10-09-17",
+  "apiBase": "http://localhost:8090/api",
+  "subset": [
+    "P01",
+    "P02"
+  ],
+  "results": []
+}

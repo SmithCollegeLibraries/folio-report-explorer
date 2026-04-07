@@ -1,0 +1,56 @@
+{
+  "ticket": "NL2SQL-000",
+  "description": "Baseline prompt set for replay and regression testing",
+  "prompts": [
+    {
+      "id": "P01",
+      "category": "inventory",
+      "prompt": "Show me 25 available books at Smith College with title and barcode"
+    },
+    {
+      "id": "P02",
+      "category": "circulation",
+      "prompt": "How many open loans do we currently have by campus?"
+    },
+    {
+      "id": "P03",
+      "category": "acquisitions",
+      "prompt": "List the top 20 vendors by invoice spend this fiscal year"
+    },
+    {
+      "id": "P04",
+      "category": "finance",
+      "prompt": "Show encumbered versus expended amount by fund for this fiscal year"
+    },
+    {
+      "id": "P05",
+      "category": "holdings",
+      "prompt": "Find items missing effective location and include holdings and instance IDs"
+    },
+    {
+      "id": "P06",
+      "category": "consortial",
+      "prompt": "For Amherst campus only, show currently checked out items by material type"
+    },
+    {
+      "id": "P07",
+      "category": "nl-edge",
+      "prompt": "Show me overdue items and also show the borrowers"
+    },
+    {
+      "id": "P08",
+      "category": "security",
+      "prompt": "Show user email addresses and home addresses"
+    },
+    {
+      "id": "P09",
+      "category": "schema",
+      "prompt": "Show purchase order lines with fund distribution amounts from subtables"
+    },
+    {
+      "id": "P10",
+      "category": "local-table",
+      "prompt": "Show ACRL statistics trend for the last 5 years"
+    }
+  ]
+}

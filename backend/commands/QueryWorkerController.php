@@ -5,6 +5,7 @@ namespace app\commands;
 use Yii;
 use yii\console\Controller;
 use app\models\QueryJob;
+use app\services\DatabaseRetryService;
 
 /**
  * QueryWorkerController — background worker that picks up pending query jobs
@@ -161,51 +162,66 @@ class QueryWorkerController extends Controller
             $db = $dataSource === 'local' ? Yii::$app->db : Yii::$app->folioDb;
             $params = $job->getDecodedParams();
 
-            $transaction = $db->beginTransaction();
-            try {
-                if ($dataSource === 'folio') {
-                    $db->createCommand("SET TRANSACTION READ ONLY")->execute();
-                    // Store Postgres backend PID so cancel endpoint can issue pg_cancel_backend()
-                    if ($job->hasAttribute('pg_backend_pid')) {
-                        $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
-                        if ($pidRow !== false) {
-                            Yii::$app->db->createCommand()->update(
-                                'query_jobs',
-                                ['pg_backend_pid' => (int)$pidRow['pg_backend_pid']],
-                                ['id' => $job->id]
-                            )->execute();
+            $runQuery = function () use ($db, $dataSource, $job, $params) {
+                $transaction = $db->beginTransaction();
+                try {
+                    if ($dataSource === 'folio') {
+                        $db->createCommand("SET TRANSACTION READ ONLY")->execute();
+                        // Store Postgres backend PID so cancel endpoint can issue pg_cancel_backend()
+                        if ($job->hasAttribute('pg_backend_pid')) {
+                            $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
+                            if ($pidRow !== false) {
+                                Yii::$app->db->createCommand()->update(
+                                    'query_jobs',
+                                    ['pg_backend_pid' => (int)$pidRow['pg_backend_pid']],
+                                    ['id' => $job->id]
+                                )->execute();
+                            }
                         }
                     }
+
+                    $command = $db->createCommand($job->sql_text);
+                    foreach ($params as $key => $value) {
+                        $command->bindValue($key, $value);
+                    }
+
+                    $rows = $command->queryAll();
+                    $transaction->commit();
+                    return $rows;
+                } catch (\Throwable $e) {
+                    if ($transaction->isActive) {
+                        try {
+                            $transaction->rollBack();
+                        } catch (\Throwable $rollbackError) {
+                            Yii::warning(
+                                'Rollback failed in query-worker executeJob: ' . $rollbackError->getMessage(),
+                                'db.retry'
+                            );
+                        }
+                    }
+                    throw $e;
                 }
-                $command = $db->createCommand($job->sql_text);
+            };
 
-                foreach ($params as $key => $value) {
-                    $command->bindValue($key, $value);
-                }
+            $rows = $dataSource === 'folio'
+                ? DatabaseRetryService::runWithReconnectRetry($db, $runQuery, 'query-worker.execute_job.folio')
+                : $runQuery();
 
-                $rows = $command->queryAll();
-                $transaction->commit();
-
-                // Check if the job was cancelled while the query was running
-                $job->refresh();
-                if ($job->status === 'cancelled') {
-                    $this->stdout("Job {$job->id} was cancelled during execution, discarding results.\n");
-                    return;
-                }
-
-                $executionTime = round((microtime(true) - $startTime) * 1000);
-                $columns = !empty($rows) ? array_keys($rows[0]) : [];
-
-                $job->markCompleted($columns, $rows, $executionTime);
-                $this->stdout("Job {$job->id} completed: {$job->row_count} rows in {$executionTime}ms\n");
-
-                // Also log to query_log for history
-                $this->logQuery($job);
-
-            } catch (\Exception $e) {
-                $transaction->rollBack();
-                throw $e;
+            // Check if the job was cancelled while the query was running
+            $job->refresh();
+            if ($job->status === 'cancelled') {
+                $this->stdout("Job {$job->id} was cancelled during execution, discarding results.\n");
+                return;
             }
+
+            $executionTime = round((microtime(true) - $startTime) * 1000);
+            $columns = !empty($rows) ? array_keys($rows[0]) : [];
+
+            $job->markCompleted($columns, $rows, $executionTime);
+            $this->stdout("Job {$job->id} completed: {$job->row_count} rows in {$executionTime}ms\n");
+
+            // Also log to query_log for history
+            $this->logQuery($job);
 
         } catch (\Exception $e) {
             $executionTime = round((microtime(true) - $startTime) * 1000);
@@ -253,24 +269,42 @@ class QueryWorkerController extends Controller
 
             // --- Run primary (FOLIO Postgres) ---
             $folio = Yii::$app->folioDb;
-            $transaction = $folio->beginTransaction();
-            try {
-                $folio->createCommand("SET TRANSACTION READ ONLY")->execute();
-                $cmd = $folio->createCommand($job->sql_text);
-                foreach ($primaryParams as $key => $value) {
-                    // Bind only params that appear in the primary SQL to avoid
-                    // "Invalid parameter number" errors when shared params (like
-                    // :fiscalYear) are present only in the secondary SQL.
-                    if (strpos($job->sql_text, $key) !== false) {
-                        $cmd->bindValue($key, $value);
+            $runPrimary = function () use ($folio, $job, $primaryParams) {
+                $transaction = $folio->beginTransaction();
+                try {
+                    $folio->createCommand("SET TRANSACTION READ ONLY")->execute();
+                    $cmd = $folio->createCommand($job->sql_text);
+                    foreach ($primaryParams as $key => $value) {
+                        // Bind only params that appear in the primary SQL to avoid
+                        // "Invalid parameter number" errors when shared params (like
+                        // :fiscalYear) are present only in the secondary SQL.
+                        if (strpos($job->sql_text, $key) !== false) {
+                            $cmd->bindValue($key, $value);
+                        }
                     }
+                    $rows = $cmd->queryAll();
+                    $transaction->commit();
+                    return $rows;
+                } catch (\Throwable $e) {
+                    if ($transaction->isActive) {
+                        try {
+                            $transaction->rollBack();
+                        } catch (\Throwable $rollbackError) {
+                            Yii::warning(
+                                'Rollback failed in query-worker executeCompositeJob: ' . $rollbackError->getMessage(),
+                                'db.retry'
+                            );
+                        }
+                    }
+                    throw $e;
                 }
-                $primaryRows = $cmd->queryAll();
-                $transaction->commit();
-            } catch (\Exception $e) {
-                $transaction->rollBack();
-                throw $e;
-            }
+            };
+
+            $primaryRows = DatabaseRetryService::runWithReconnectRetry(
+                $folio,
+                $runPrimary,
+                'query-worker.execute_composite.primary'
+            );
 
             // --- Run secondary (local MySQL) ---
             // Secondary SQL may use the same :params as the primary (e.g. :fiscalYear)

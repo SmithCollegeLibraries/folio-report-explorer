@@ -1,0 +1,101 @@
+{
+  "ticket": "NL2SQL-000",
+  "capturedAt": "2026-04-06_09-43-52",
+  "apiBase": "http://localhost:8090/api",
+  "results": [
+    {
+      "id": "P01",
+      "category": "inventory",
+      "prompt": "Show me 25 available books at Smith College with title and barcode",
+      "status": "success",
+      "response": {
+        "sql": "SELECT\n  inst.title,\n  ii.barcode\nFROM inventory.item__t AS ii\nJOIN inventory.holdings_record__t AS hr\n  ON ii.holdings_record_id = hr.id\nJOIN inventory.instance__t AS inst\n  ON hr.instance_id = inst.id\nJOIN inventory.material_type__t AS imt\n  ON ii.material_type_id = imt.id\nJOIN inventory.location__t AS loc\n  ON ii.effective_location_id = loc.id\nJOIN inventory.loclibrary__t AS lib\n  ON loc.library_id = lib.id\nJOIN inventory.loccampus__t AS camp\n  ON lib.campus_id = camp.id\nWHERE\n  ii.status__name = 'Available' AND LOWER(imt.name) = 'book' AND LOWER(camp.name) = LOWER('Smith College')\nLIMIT 25;",
+        "explanation": "This query retrieves the title and barcode for 25 available items classified as 'Book' located at Smith College. It joins item records with holdings, instances, material types, and the location hierarchy to filter by availability, material type, and campus.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P02",
+      "category": "circulation",
+      "prompt": "How many open loans do we currently have by campus?",
+      "status": "success",
+      "response": {
+        "sql": "SELECT\n  camp.name AS campus_name,\n  COUNT(cl.id) AS open_loan_count\nFROM circulation.loan__t AS cl\nJOIN inventory.item__t AS ii\n  ON cl.item_id = ii.id\nJOIN inventory.location__t AS loc\n  ON ii.effective_location_id = loc.id\nJOIN inventory.loclibrary__t AS lib\n  ON loc.library_id = lib.id\nJOIN inventory.loccampus__t AS camp\n  ON lib.campus_id = camp.id\nWHERE\n  cl.status__name = 'Open'\nGROUP BY\n  camp.name\nORDER BY\n  open_loan_count DESC\nLIMIT 100;",
+        "explanation": "This query counts the number of currently open loans by joining loan records to item records, then through the location hierarchy (location, library, campus) to get the campus name. It filters for loans with a status of 'Open' and groups the results by campus name.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P03",
+      "category": "acquisitions",
+      "prompt": "List the top 20 vendors by invoice spend this fiscal year",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 30.405734761s."
+      }
+    },
+    {
+      "id": "P04",
+      "category": "finance",
+      "prompt": "Show encumbered versus expended amount by fund for this fiscal year",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 24.839224821s."
+      }
+    },
+    {
+      "id": "P05",
+      "category": "holdings",
+      "prompt": "Find items missing effective location and include holdings and instance IDs",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 24.433126158s."
+      }
+    },
+    {
+      "id": "P06",
+      "category": "consortial",
+      "prompt": "For Amherst campus only, show currently checked out items by material type",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 23.964010132s."
+      }
+    },
+    {
+      "id": "P07",
+      "category": "nl-edge",
+      "prompt": "Show me overdue items and also show the borrowers",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 23.498107598s."
+      }
+    },
+    {
+      "id": "P08",
+      "category": "security",
+      "prompt": "Show user email addresses and home addresses",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 17.963830586s."
+      }
+    },
+    {
+      "id": "P09",
+      "category": "schema",
+      "prompt": "Show purchase order lines with fund distribution amounts from subtables",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 17.542582674s."
+      }
+    },
+    {
+      "id": "P10",
+      "category": "local-table",
+      "prompt": "Show ACRL statistics trend for the last 5 years",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 11.95966921s."
+      }
+    }
+  ]
+}

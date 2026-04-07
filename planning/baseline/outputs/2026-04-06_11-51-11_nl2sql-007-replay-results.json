@@ -1,0 +1,266 @@
+{
+  "ticket": "NL2SQL-007",
+  "capturedAt": "2026-04-06_11-51-11",
+  "apiBase": "http://localhost:8090/api",
+  "baselineFile": "planning/baseline/outputs/2026-04-06_10-20-49_nl2sql-000-merged-results.json",
+  "subset": null,
+  "thresholds": {
+    "maxRegressionsOnBaselineSuccess": 0,
+    "minOverallPassRate": 80
+  },
+  "results": [
+    {
+      "id": "P01",
+      "category": "inventory",
+      "prompt": "Show me 25 available books at Smith College with title and barcode",
+      "baseline": {
+        "status": "success",
+        "dataSource": "folio",
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "success",
+        "dataSource": "folio",
+        "route": "legacy_freeform",
+        "routeReason": "intent_mode_disabled",
+        "error": null
+      },
+      "verdict": "pass",
+      "regression": false,
+      "sqlChanged": true,
+      "baselineSqlHash": "c6d4d54316178ddd689744e9c7f455707481b60cacb42d467f4a2f4a26bc8d3f",
+      "currentSqlHash": "ada7317e6d104990b456be4d5637bb3ed1362a49c53e071af4bcf02320dd53b4",
+      "note": "sql_changed_non_regression"
+    },
+    {
+      "id": "P02",
+      "category": "circulation",
+      "prompt": "How many open loans do we currently have by campus?",
+      "baseline": {
+        "status": "success",
+        "dataSource": "folio",
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "success",
+        "dataSource": "folio",
+        "route": "legacy_freeform",
+        "routeReason": "intent_mode_disabled",
+        "error": null
+      },
+      "verdict": "pass",
+      "regression": false,
+      "sqlChanged": true,
+      "baselineSqlHash": "bb0da5a9583baae97543dae571ad2d9a51fd60b67e365c76bb01cb8b202a7e6e",
+      "currentSqlHash": "19d3b8ae99bab44b97d5c43bd75a7c26bf52b348b9c70f0f07e268d443fa6a50",
+      "note": "sql_changed_non_regression"
+    },
+    {
+      "id": "P03",
+      "category": "acquisitions",
+      "prompt": "List the top 20 vendors by invoice spend this fiscal year",
+      "baseline": {
+        "status": "success",
+        "dataSource": "folio",
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 18.180495631s."
+      },
+      "verdict": "fail",
+      "regression": true,
+      "sqlChanged": null,
+      "baselineSqlHash": "d1a7ad0092782fd67ef937e6c859df405f91bbb3ab5556b14fd34e4348063a6a",
+      "currentSqlHash": null,
+      "note": "baseline_success_now_error"
+    },
+    {
+      "id": "P04",
+      "category": "finance",
+      "prompt": "Show encumbered versus expended amount by fund for this fiscal year",
+      "baseline": {
+        "status": "success",
+        "dataSource": "folio",
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 12.642011053s."
+      },
+      "verdict": "fail",
+      "regression": true,
+      "sqlChanged": null,
+      "baselineSqlHash": "ffb64914000797833e27146f731c38303d7cb200df685b069147c69266794eff",
+      "currentSqlHash": null,
+      "note": "baseline_success_now_error"
+    },
+    {
+      "id": "P05",
+      "category": "holdings",
+      "prompt": "Find items missing effective location and include holdings and instance IDs",
+      "baseline": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 12.005346072s."
+      },
+      "verdict": "pass",
+      "regression": false,
+      "sqlChanged": null,
+      "baselineSqlHash": null,
+      "currentSqlHash": null,
+      "note": "both_error"
+    },
+    {
+      "id": "P06",
+      "category": "consortial",
+      "prompt": "For Amherst campus only, show currently checked out items by material type",
+      "baseline": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 11.527787479s."
+      },
+      "verdict": "pass",
+      "regression": false,
+      "sqlChanged": null,
+      "baselineSqlHash": null,
+      "currentSqlHash": null,
+      "note": "both_error"
+    },
+    {
+      "id": "P07",
+      "category": "nl-edge",
+      "prompt": "Show me overdue items and also show the borrowers",
+      "baseline": {
+        "status": "success",
+        "dataSource": "folio",
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 11.005104158s."
+      },
+      "verdict": "fail",
+      "regression": true,
+      "sqlChanged": null,
+      "baselineSqlHash": "38b2c0953806cec7736990b39dfcb31d5b8a71ec7ae0675e59fe30768853a43d",
+      "currentSqlHash": null,
+      "note": "baseline_success_now_error"
+    },
+    {
+      "id": "P08",
+      "category": "security",
+      "prompt": "Show user email addresses and home addresses",
+      "baseline": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 10.574865278s."
+      },
+      "verdict": "pass",
+      "regression": false,
+      "sqlChanged": null,
+      "baselineSqlHash": null,
+      "currentSqlHash": null,
+      "note": "both_error"
+    },
+    {
+      "id": "P09",
+      "category": "schema",
+      "prompt": "Show purchase order lines with fund distribution amounts from subtables",
+      "baseline": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 10.081109748s."
+      },
+      "verdict": "pass",
+      "regression": false,
+      "sqlChanged": null,
+      "baselineSqlHash": null,
+      "currentSqlHash": null,
+      "note": "both_error"
+    },
+    {
+      "id": "P10",
+      "category": "local-table",
+      "prompt": "Show ACRL statistics trend for the last 5 years",
+      "baseline": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null
+      },
+      "current": {
+        "status": "error",
+        "dataSource": null,
+        "route": null,
+        "routeReason": null,
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 9.553570316s."
+      },
+      "verdict": "pass",
+      "regression": false,
+      "sqlChanged": null,
+      "baselineSqlHash": null,
+      "currentSqlHash": null,
+      "note": "both_error"
+    }
+  ],
+  "summary": {
+    "total": 10,
+    "pass": 7,
+    "fail": 3,
+    "baselineSuccess": 5,
+    "regressionsOnBaselineSuccess": 3,
+    "passRate": 70
+  },
+  "gate": {
+    "maxRegressionsOnBaselineSuccess": 0,
+    "minOverallPassRate": 80,
+    "met": false
+  }
+}

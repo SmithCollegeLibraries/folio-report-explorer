@@ -2,9 +2,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   History as HistoryIcon, ChevronLeft, ChevronRight, Activity,
-  CheckCircle2, AlertCircle,
+  CheckCircle2, AlertCircle, Lightbulb,
 } from 'lucide-react';
-import { checkJobStatus, cancelJob, deleteHistoryJob } from '../api/client';
+import {
+  checkJobStatus,
+  cancelJob,
+  deleteHistoryJob,
+  fetchIndexRecommendations,
+  fetchHistorySuggestions,
+} from '../api/client';
 import { useHistoryData } from '../hooks/useHistoryData';
 import { useSelectionManager } from '../hooks/useSelectionManager';
 import { useInlineRename } from '../hooks/useInlineRename';
@@ -13,7 +19,12 @@ import HistoryToolbar from './history/HistoryToolbar';
 import HistoryTable from './history/HistoryTable';
 import HistoryResultsModal from './history/HistoryResultsModal';
 import SaveQueryDialog from '../components/SaveQueryDialog';
-import type { HistoryItem, JobStatusResponse } from '../types';
+import type {
+  HistoryItem,
+  JobStatusResponse,
+  IndexRecommendationResponse,
+  HistorySuggestionsResponse,
+} from '../types';
 
 const STATUS_TABS: { value: string; label: string; icon: React.ElementType }[] = [
   { value: 'all',       label: 'All',       icon: HistoryIcon },
@@ -39,6 +50,9 @@ export default function History() {
   // ── Client-side filtering & sorting ─────────────────────────────
   const [search, setSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+  const [indexRecLoading, setIndexRecLoading] = useState(false);
+  const [indexRecError, setIndexRecError] = useState<string | null>(null);
+  const [indexRecData, setIndexRecData] = useState<IndexRecommendationResponse | null>(null);
 
   const filteredItems = useMemo(() => {
     return items
@@ -127,6 +141,24 @@ export default function History() {
     }
   };
 
+  // ── Query-history index recommendations ─────────────────────────
+  const handleGenerateIndexRecommendations = useCallback(async () => {
+    setIndexRecLoading(true);
+    setIndexRecError(null);
+    try {
+      const data = await fetchIndexRecommendations({
+        days: 30,
+        maxLogs: 300,
+        maxPatterns: 25,
+      });
+      setIndexRecData(data);
+    } catch (err: any) {
+      setIndexRecError(err.response?.data?.error || 'Failed to generate index recommendations');
+    } finally {
+      setIndexRecLoading(false);
+    }
+  }, []);
+
   // ── Cancel active job ────────────────────────────────────────────
   const [cancellingId, setCancellingId] = useState<string | null>(null);
 
@@ -147,6 +179,9 @@ export default function History() {
   const [modalItem, setModalItem] = useState<HistoryItem | null>(null);
   const [modalJob, setModalJob] = useState<JobStatusResponse | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
+  const [historySuggestions, setHistorySuggestions] = useState<HistorySuggestionsResponse | null>(null);
+  const [historySuggestionsLoading, setHistorySuggestionsLoading] = useState(false);
+  const [historySuggestionsError, setHistorySuggestionsError] = useState<string | null>(null);
 
   const openModal = useCallback(async (item: HistoryItem) => {
     if (item.status !== 'completed') return;
@@ -154,6 +189,8 @@ export default function History() {
     setModalItem(item);
     setModalJob(null);
     setModalLoading(true);
+    setHistorySuggestions(null);
+    setHistorySuggestionsError(null);
     try {
       const data = await checkJobStatus(item.jobId);
       setModalJob(data);
@@ -176,7 +213,28 @@ export default function History() {
   const closeModal = useCallback(() => {
     setModalItem(null);
     setModalJob(null);
+    setHistorySuggestions(null);
+    setHistorySuggestionsError(null);
     navigate('/history', { replace: true });
+  }, [navigate]);
+
+  const handleGenerateHistorySuggestions = useCallback(async () => {
+    if (!modalItem) return;
+
+    setHistorySuggestionsLoading(true);
+    setHistorySuggestionsError(null);
+    try {
+      const data = await fetchHistorySuggestions(modalItem.jobId);
+      setHistorySuggestions(data);
+    } catch (err: any) {
+      setHistorySuggestionsError(err.response?.data?.error || 'Failed to generate related query suggestions');
+    } finally {
+      setHistorySuggestionsLoading(false);
+    }
+  }, [modalItem]);
+
+  const handleRunHistorySuggestion = useCallback((suggestion: string) => {
+    navigate(`/ask?q=${encodeURIComponent(suggestion)}`);
   }, [navigate]);
 
   const handleModalRename = (newName: string) => {
@@ -200,17 +258,29 @@ export default function History() {
   return (
     <div className="max-w-screen-xl mx-auto p-6">
       {/* Page header */}
-      <div className="flex items-center gap-3 mb-6">
-        <HistoryIcon className="text-folio-600 flex-shrink-0" size={22} />
-        <h1 className="text-2xl font-bold text-gray-800">Query History</h1>
-        <span className="text-sm text-gray-400 ml-1">
-          {total} {total === 1 ? 'query' : 'queries'}
-        </span>
-        {hasActive && (
-          <span className="ml-2 flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium animate-pulse">
-            <Activity size={11} /> Live
+      <div className="flex items-center justify-between gap-3 mb-6">
+        <div className="flex items-center gap-3 min-w-0">
+          <HistoryIcon className="text-folio-600 flex-shrink-0" size={22} />
+          <h1 className="text-2xl font-bold text-gray-800">Query History</h1>
+          <span className="text-sm text-gray-400 ml-1">
+            {total} {total === 1 ? 'query' : 'queries'}
           </span>
-        )}
+          {hasActive && (
+            <span className="ml-2 flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full font-medium animate-pulse">
+              <Activity size={11} /> Live
+            </span>
+          )}
+        </div>
+
+        <button
+          onClick={handleGenerateIndexRecommendations}
+          disabled={indexRecLoading}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-folio-200 text-folio-700 bg-folio-50 hover:bg-folio-100 disabled:opacity-60 disabled:cursor-not-allowed text-sm font-medium whitespace-nowrap"
+          title="Analyze recent query history and ask Gemini for index recommendations"
+        >
+          <Lightbulb size={14} className={indexRecLoading ? 'animate-pulse' : ''} />
+          {indexRecLoading ? 'Analyzing History...' : 'Index Suggestions'}
+        </button>
       </div>
 
       {/* Status tabs */}
@@ -235,6 +305,89 @@ export default function History() {
       {error && (
         <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">
           {error}
+        </div>
+      )}
+
+      {indexRecError && (
+        <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">
+          {indexRecError}
+        </div>
+      )}
+
+      {indexRecData && (
+        <div className="bg-white border rounded-lg p-4 mb-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                <Lightbulb size={14} className="text-amber-500" />
+                {indexRecData.recommendationSource === 'heuristic'
+                  ? 'Heuristic Index Recommendations'
+                  : 'Gemini Index Recommendations'}
+              </h2>
+              <p className="text-xs text-gray-500 mt-1">
+                Generated {new Date(indexRecData.generatedAt).toLocaleString()} •
+                {' '}{indexRecData.workload.eligibleLogs} eligible logs •
+                {' '}{indexRecData.workload.uniqueQueryPatterns} query patterns
+              </p>
+            </div>
+            <button
+              onClick={() => setIndexRecData(null)}
+              className="text-xs text-gray-500 hover:text-gray-700"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {indexRecData.summary && (
+            <p className="text-sm text-gray-700 mt-3">{indexRecData.summary}</p>
+          )}
+
+          {indexRecData.warnings && indexRecData.warnings.length > 0 && (
+            <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+              {indexRecData.warnings.join(' | ')}
+            </div>
+          )}
+
+          {indexRecData.recommendations.length === 0 ? (
+            <div className="mt-3 text-sm text-gray-600">
+              No index recommendations were produced for the selected history window.
+            </div>
+          ) : (
+            <div className="mt-3 space-y-3">
+              {indexRecData.recommendations.map((rec, idx) => (
+                <div key={`${rec.table}-${rec.columns.join('-')}-${idx}`} className="border rounded p-3 bg-gray-50">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="font-semibold text-gray-800">{rec.table}</span>
+                    <span className="text-gray-500">({rec.indexType})</span>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      rec.confidence === 'high'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : rec.confidence === 'low'
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-blue-100 text-blue-700'
+                    }`}>
+                      {rec.confidence}
+                    </span>
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    Columns: <span className="font-mono">{rec.columns.join(', ')}</span>
+                  </div>
+                  {rec.reason && <div className="text-sm text-gray-700 mt-2">{rec.reason}</div>}
+                  {rec.createIndexSql && (
+                    <pre className="mt-2 text-xs bg-white border rounded p-2 overflow-x-auto">
+{rec.createIndexSql}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {indexRecData.notes?.length > 0 && (
+            <div className="mt-3 text-xs text-gray-500">
+              Notes: {indexRecData.notes.join(' | ')}
+            </div>
+          )}
         </div>
       )}
 
@@ -328,6 +481,13 @@ export default function History() {
           onClose={closeModal}
           onRename={handleModalRename}
           onSave={(pinned) => openSaveDialog(modalItem, pinned)}
+          suggestions={historySuggestions?.suggestions ?? []}
+          suggestionSource={historySuggestions?.suggestionSource ?? null}
+          suggestionWarnings={historySuggestions?.warnings ?? []}
+          suggestionsLoading={historySuggestionsLoading}
+          suggestionsError={historySuggestionsError}
+          onGenerateSuggestions={handleGenerateHistorySuggestions}
+          onRunSuggestion={handleRunHistorySuggestion}
         />
       )}
 

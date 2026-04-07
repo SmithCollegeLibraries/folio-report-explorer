@@ -28,6 +28,9 @@ class SqlBuilderService
     /** Aggregate functions allowed in SELECT clauses */
     const VALID_AGGREGATES = ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX'];
 
+    /** Unquoted SQL identifier pattern (used for aliases and column refs) */
+    const VALID_IDENTIFIER_PATTERN = '/^[A-Za-z_][A-Za-z0-9_]*$/';
+
     /**
      * Build a SQL SELECT statement from a structured query definition.
      *
@@ -64,8 +67,8 @@ class SqlBuilderService
             throw new \InvalidArgumentException('At least one table is required');
         }
 
-        // Validate table/column names exist in schema
-        self::validateNames($tables, $columns, $filters);
+        // Validate table/column references before assembling any SQL.
+        self::validateNames($tables, $columns, $filters, $joins, $groupBy, $having, $orderBy);
 
         // Build table aliases
         $aliases = self::buildAliases($tables);
@@ -137,15 +140,181 @@ class SqlBuilderService
     /**
      * Validate that all referenced tables and columns exist in the schema.
      */
-    private static function validateNames($tables, $columns, $filters)
+    private static function validateNames($tables, $columns, $filters, $joins, $groupBy, $having, $orderBy)
     {
-        $tableNames = FolioSchemaService::getTableNames();
-
+        $resolvedTables = [];
         foreach ($tables as $t) {
             $matched = FolioSchemaService::fuzzyMatch($t);
             if ($matched === null) {
-                throw new \InvalidArgumentException("Unknown table: $t");
+                throw new \InvalidArgumentException("Unknown table: {$t}");
             }
+            $resolvedTables[$matched] = true;
+        }
+
+        $columnLookup = self::buildColumnLookup(array_keys($resolvedTables));
+
+        foreach ($columns as $idx => $col) {
+            $context = "columns[{$idx}]";
+            self::validateTableColumnReference(
+                $col['table'] ?? '',
+                $col['column'] ?? '',
+                $resolvedTables,
+                $columnLookup,
+                $context,
+                true
+            );
+
+            $aggregate = strtoupper((string)($col['aggregate'] ?? ''));
+            if ($aggregate !== '' && !in_array($aggregate, self::VALID_AGGREGATES, true)) {
+                throw new \InvalidArgumentException("Invalid aggregate in {$context}: {$aggregate}");
+            }
+
+            if (isset($col['alias']) && trim((string)$col['alias']) !== '') {
+                self::validateIdentifier(trim((string)$col['alias']), "{$context}.alias", false);
+            }
+        }
+
+        foreach ($filters as $idx => $f) {
+            self::validateTableColumnReference(
+                $f['table'] ?? '',
+                $f['column'] ?? '',
+                $resolvedTables,
+                $columnLookup,
+                "filters[{$idx}]",
+                false
+            );
+        }
+
+        foreach ($groupBy as $idx => $g) {
+            self::validateTableColumnReference(
+                $g['table'] ?? '',
+                $g['column'] ?? '',
+                $resolvedTables,
+                $columnLookup,
+                "groupBy[{$idx}]",
+                false
+            );
+        }
+
+        foreach ($orderBy as $idx => $o) {
+            self::validateTableColumnReference(
+                $o['table'] ?? '',
+                $o['column'] ?? '',
+                $resolvedTables,
+                $columnLookup,
+                "orderBy[{$idx}]",
+                false
+            );
+        }
+
+        foreach ($having as $idx => $h) {
+            self::validateTableColumnReference(
+                $h['table'] ?? '',
+                $h['column'] ?? '',
+                $resolvedTables,
+                $columnLookup,
+                "having[{$idx}]",
+                true
+            );
+        }
+
+        if (is_array($joins)) {
+            foreach ($joins as $idx => $j) {
+                self::validateTableColumnReference(
+                    $j['from_table'] ?? '',
+                    $j['from_column'] ?? '',
+                    $resolvedTables,
+                    $columnLookup,
+                    "joins[{$idx}].from",
+                    false
+                );
+                self::validateTableColumnReference(
+                    $j['to_table'] ?? '',
+                    $j['to_column'] ?? '',
+                    $resolvedTables,
+                    $columnLookup,
+                    "joins[{$idx}].to",
+                    false
+                );
+            }
+        }
+    }
+
+    /**
+     * Build a lowercase column lookup map keyed by resolved table name.
+     * @param array $resolvedTables
+     * @return array
+     */
+    private static function buildColumnLookup(array $resolvedTables)
+    {
+        $lookup = [];
+        foreach ($resolvedTables as $tableName) {
+            $detail = FolioSchemaService::getTable($tableName);
+            $columns = $detail['table']['columns'] ?? [];
+
+            $lookup[$tableName] = [];
+            foreach ($columns as $col) {
+                $name = $col['name'] ?? null;
+                if (is_string($name) && $name !== '') {
+                    $lookup[$tableName][strtolower($name)] = true;
+                }
+            }
+
+            if (empty($lookup[$tableName])) {
+                throw new \InvalidArgumentException("Unable to load columns for table: {$tableName}");
+            }
+        }
+
+        return $lookup;
+    }
+
+    /**
+     * Validate one table+column reference used by a specific query clause.
+     */
+    private static function validateTableColumnReference($tableInput, $columnInput, $allowedTables, $columnLookup, $context, $allowStar)
+    {
+        $tableInput = trim((string)$tableInput);
+        $columnInput = trim((string)$columnInput);
+
+        if ($tableInput === '') {
+            throw new \InvalidArgumentException("Missing table in {$context}");
+        }
+        if ($columnInput === '') {
+            throw new \InvalidArgumentException("Missing column in {$context}");
+        }
+
+        $resolvedTable = FolioSchemaService::fuzzyMatch($tableInput);
+        if ($resolvedTable === null) {
+            throw new \InvalidArgumentException("Unknown table in {$context}: {$tableInput}");
+        }
+        if (!isset($allowedTables[$resolvedTable])) {
+            throw new \InvalidArgumentException(
+                "Table '{$resolvedTable}' in {$context} must be included in tables list"
+            );
+        }
+
+        self::validateIdentifier($columnInput, "{$context}.column", $allowStar);
+        if ($columnInput === '*') {
+            return;
+        }
+
+        if (!isset($columnLookup[$resolvedTable][strtolower($columnInput)])) {
+            throw new \InvalidArgumentException(
+                "Unknown column in {$context}: {$resolvedTable}.{$columnInput}"
+            );
+        }
+    }
+
+    /**
+     * Validate a SQL identifier used in query definition inputs.
+     */
+    private static function validateIdentifier($identifier, $context, $allowStar)
+    {
+        if ($allowStar && $identifier === '*') {
+            return;
+        }
+        if (!preg_match(self::VALID_IDENTIFIER_PATTERN, $identifier)) {
+            throw new \InvalidArgumentException("Invalid identifier in {$context}: {$identifier}");
         }
     }
 
@@ -458,7 +627,24 @@ class SqlBuilderService
      */
     public static function validateSafety($sql)
     {
-        $upper = strtoupper($sql);
+        $trimmed = trim((string)$sql);
+        if ($trimmed === '') {
+            throw new \InvalidArgumentException('SQL cannot be empty.');
+        }
+
+        // Single statement only: allow optional trailing semicolon, reject inner semicolons.
+        $normalized = rtrim($trimmed, " \t\r\n;");
+        if (self::hasSemicolonOutsideLiteralsOrComments($normalized)) {
+            throw new \InvalidArgumentException(
+                'Only a single SELECT statement is allowed.'
+            );
+        }
+
+        $upper = strtoupper($normalized);
+
+        if (!preg_match('/^\s*SELECT\b/', $upper) && !preg_match('/^\s*WITH\b/', $upper)) {
+            throw new \InvalidArgumentException('Only SELECT queries are allowed.');
+        }
 
         foreach (self::BLOCKED_KEYWORDS as $keyword) {
             // Check for keyword as a whole word
@@ -468,5 +654,124 @@ class SqlBuilderService
                 );
             }
         }
+    }
+
+    /**
+     * Enforce blocked schema/table policy for SQL execution.
+     * @param string $sql
+     * @throws \InvalidArgumentException
+     */
+    public static function validateTablePolicy($sql)
+    {
+        $blockedTables = array_map('strtolower', FolioSchemaService::EXCLUDED_TABLES);
+        $blockedSchemas = array_map('strtolower', FolioSchemaService::EXCLUDED_SCHEMAS);
+
+        // Extract schema-qualified table references from FROM/JOIN clauses.
+        preg_match_all('/(?:FROM|JOIN)\s+([\w-]+(?:\.[\w-]+)?)/i', (string)$sql, $matches);
+
+        foreach (($matches[1] ?? []) as $ref) {
+            $tableRef = strtolower(trim($ref));
+            if ($tableRef === '' || $tableRef === 'select' || $tableRef === 'lateral' || $tableRef === 'unnest') {
+                continue;
+            }
+
+            if (in_array($tableRef, $blockedTables, true)) {
+                throw new \InvalidArgumentException("Query references blocked table: {$tableRef}");
+            }
+
+            if (strpos($tableRef, '.') !== false) {
+                list($schemaName, $tableName) = explode('.', $tableRef, 2);
+
+                if ($schemaName === 'users' && $tableName !== 'groups__t') {
+                    throw new \InvalidArgumentException("Query references blocked schema table: {$tableRef}");
+                }
+
+                if ($schemaName === 'perms') {
+                    throw new \InvalidArgumentException("Query references blocked schema table: {$tableRef}");
+                }
+
+                if (in_array($schemaName, $blockedSchemas, true)) {
+                    throw new \InvalidArgumentException("Query references blocked schema: {$schemaName}");
+                }
+            }
+        }
+    }
+
+    /**
+     * Detect semicolons that are not inside strings/comments.
+     */
+    private static function hasSemicolonOutsideLiteralsOrComments($sql)
+    {
+        $len = strlen($sql);
+        $inSingle = false;
+        $inDouble = false;
+        $inLineComment = false;
+        $inBlockComment = false;
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $sql[$i];
+            $next = ($i + 1 < $len) ? $sql[$i + 1] : '';
+
+            if ($inLineComment) {
+                if ($ch === "\n") {
+                    $inLineComment = false;
+                }
+                continue;
+            }
+
+            if ($inBlockComment) {
+                if ($ch === '*' && $next === '/') {
+                    $inBlockComment = false;
+                    $i++;
+                }
+                continue;
+            }
+
+            if ($inSingle) {
+                if ($ch === "'" && $next === "'") {
+                    $i++;
+                    continue;
+                }
+                if ($ch === "'") {
+                    $inSingle = false;
+                }
+                continue;
+            }
+
+            if ($inDouble) {
+                if ($ch === '"') {
+                    $inDouble = false;
+                }
+                continue;
+            }
+
+            if ($ch === '-' && $next === '-') {
+                $inLineComment = true;
+                $i++;
+                continue;
+            }
+
+            if ($ch === '/' && $next === '*') {
+                $inBlockComment = true;
+                $i++;
+                continue;
+            }
+
+            if ($ch === "'") {
+                $inSingle = true;
+                continue;
+            }
+
+            if ($ch === '"') {
+                $inDouble = true;
+                continue;
+            }
+
+            if ($ch === ';') {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

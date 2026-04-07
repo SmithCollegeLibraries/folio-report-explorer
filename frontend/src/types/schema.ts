@@ -203,6 +203,7 @@ export interface NlResponse {
   explanation: string;
   dataSource?: 'folio' | 'local';
   warnings?: string[];
+  suggestions?: string[];
 }
 
 /** Saved query */
@@ -475,6 +476,64 @@ export interface HistoryResponse {
   offset: number;
   limit: number;
   items: HistoryItem[];
+}
+
+export interface HistorySuggestionsResponse {
+  jobId: string;
+  promptSeed: string;
+  suggestions: string[];
+  suggestionSource: 'gemini' | 'heuristic';
+  warnings?: string[];
+}
+
+export interface IndexRecommendationEvidence {
+  patternIds?: string[];
+  estimatedImpact?: 'high' | 'medium' | 'low';
+}
+
+export interface IndexRecommendation {
+  table: string;
+  columns: string[];
+  indexType: 'btree' | 'gin' | 'gist' | 'hash';
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+  evidence: IndexRecommendationEvidence | null;
+  createIndexSql: string;
+}
+
+export interface QueryPatternSummary {
+  patternId: string;
+  sqlHash: string;
+  sampleSql: string;
+  source: string;
+  executions: number;
+  avgExecutionMs: number;
+  maxExecutionMs: number;
+  avgRowCount: number | null;
+  tables: string[];
+  sampleJobIds: string[];
+  lastSeenAt: string;
+}
+
+export interface IndexRecommendationWorkload {
+  logsAnalyzed: number;
+  eligibleLogs: number;
+  uniqueQueryPatterns: number;
+  tables: string[];
+  queryPatterns: QueryPatternSummary[];
+}
+
+export interface IndexRecommendationResponse {
+  generatedAt: string;
+  summary: string;
+  workload: IndexRecommendationWorkload;
+  recommendations: IndexRecommendation[];
+  recommendationSource?: 'gemini' | 'heuristic' | 'none';
+  notes: string[];
+  warnings?: string[];
+  model?: string | null;
+  promptVersion?: string | null;
+  error?: string;
 }
 
 export interface AcrlStatistic {

@@ -9,6 +9,8 @@ use app\services\FolioSchemaService;
 use app\services\SqlBuilderService;
 use app\services\GeminiService;
 use app\services\SettingsService;
+use app\services\DatabaseRetryService;
+use app\services\IndexRecommendationService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -446,6 +448,7 @@ class FolioQueryController extends Controller
         // Safety validation
         try {
             SqlBuilderService::validateSafety($sql);
+            SqlBuilderService::validateTablePolicy($sql);
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
             return ['error' => $e->getMessage()];
@@ -471,43 +474,59 @@ class FolioQueryController extends Controller
         try {
             $dbComponent = $this->resolveDbComponent($dataSource);
             $db = Yii::$app->{$dbComponent};
-            $transaction = $db->beginTransaction();
 
-            try {
-                if ($dataSource === 'folio') {
-                    $db->createCommand("SET TRANSACTION READ ONLY")->execute();
+            $runQuery = function () use ($db, $dataSource, $sql, $params) {
+                $transaction = $db->beginTransaction();
+                try {
+                    if ($dataSource === 'folio') {
+                        $db->createCommand("SET TRANSACTION READ ONLY")->execute();
+                    }
+
+                    $command = $db->createCommand($sql);
+                    foreach ($params as $key => $value) {
+                        $command->bindValue($key, $value);
+                    }
+
+                    $rows = $command->queryAll();
+                    $transaction->commit();
+                    return $rows;
+                } catch (\Throwable $e) {
+                    if ($transaction->isActive) {
+                        try {
+                            $transaction->rollBack();
+                        } catch (\Throwable $rollbackError) {
+                            Yii::warning(
+                                'Rollback failed in actionExecute: ' . $rollbackError->getMessage(),
+                                'db.retry'
+                            );
+                        }
+                    }
+                    throw $e;
                 }
-                $command = $db->createCommand($sql);
+            };
 
-                foreach ($params as $key => $value) {
-                    $command->bindValue($key, $value);
-                }
+            $rows = $dataSource === 'folio'
+                ? DatabaseRetryService::runWithReconnectRetry($db, $runQuery, 'api.execute.folio')
+                : $runQuery();
 
-                $rows = $command->queryAll();
-                $transaction->commit();
+            $executionTime = round((microtime(true) - $startTime) * 1000);
 
-                $executionTime = round((microtime(true) - $startTime) * 1000);
+            // Get column names from first row
+            $columns = !empty($rows) ? array_keys($rows[0]) : [];
 
-                // Get column names from first row
-                $columns = !empty($rows) ? array_keys($rows[0]) : [];
+            // Log success
+            $log->row_count = count($rows);
+            $log->execution_time_ms = $executionTime;
+            $log->save(false);
 
-                // Log success
-                $log->row_count = count($rows);
-                $log->execution_time_ms = $executionTime;
-                $log->save(false);
-
-                return [
-                    'columns' => $columns,
-                    'rows' => $rows,
-                    'rowCount' => count($rows),
-                    'executionTimeMs' => $executionTime,
-                    'sql' => $sql,
-                    'dataSource' => $dataSource,
-                ];
-            } catch (\Exception $e) {
-                $transaction->rollBack();
-                throw $e;
-            }
+            return [
+                'columns' => $columns,
+                'rows' => $rows,
+                'rowCount' => count($rows),
+                'executionTimeMs' => $executionTime,
+                'sql' => $sql,
+                'dataSource' => $dataSource,
+            ];
         } catch (\Exception $e) {
             $executionTime = round((microtime(true) - $startTime) * 1000);
             $log->execution_time_ms = $executionTime;
@@ -563,6 +582,7 @@ class FolioQueryController extends Controller
         // Safety validation
         try {
             SqlBuilderService::validateSafety($sql);
+            SqlBuilderService::validateTablePolicy($sql);
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
             return ['error' => $e->getMessage()];
@@ -728,6 +748,12 @@ class FolioQueryController extends Controller
     {
         $body = Yii::$app->request->getBodyParams();
         $prompt = $body['prompt'] ?? '';
+        $userId = $this->getCurrentUserId();
+        $includeSuggestionsRaw = $body['includeSuggestions'] ?? true;
+        $includeSuggestions = filter_var($includeSuggestionsRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if ($includeSuggestions === null) {
+            $includeSuggestions = true;
+        }
 
         if (empty($prompt)) {
             Yii::$app->response->statusCode = 400;
@@ -737,7 +763,6 @@ class FolioQueryController extends Controller
         // Resolve campus: request body overrides user's saved preference
         $campus = $body['campus'] ?? null;
         if ($campus === null) {
-            $userId = $this->getCurrentUserId();
             if ($userId) {
                 $user = User::findOne($userId);
                 $campus = $user ? ($user->default_campus ?: 'Smith College') : 'Smith College';
@@ -747,11 +772,32 @@ class FolioQueryController extends Controller
         }
 
         try {
-            $result = GeminiService::generateSql($prompt, $campus ?: null);
+            $result = GeminiService::generateSqlWithShadow($prompt, $campus ?: null, $userId);
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
             }
+
+            $result['suggestions'] = [];
+            if ($includeSuggestions) {
+                try {
+                    $result['suggestions'] = GeminiService::suggestFollowUpQueries(
+                        $prompt,
+                        (string)($result['sql'] ?? ''),
+                        (string)($result['explanation'] ?? ''),
+                        $campus ?: null
+                    );
+                } catch (\Throwable $suggestionError) {
+                    Yii::warning(
+                        'Follow-up suggestion generation failed: ' . $suggestionError->getMessage(),
+                        'nl2sql.suggestions'
+                    );
+                }
+            }
+
             return $result;
+        } catch (\InvalidArgumentException $e) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => $e->getMessage()];
         } catch (\RuntimeException $e) {
             Yii::$app->response->statusCode = 500;
             return ['error' => $e->getMessage()];
@@ -1318,7 +1364,22 @@ class FolioQueryController extends Controller
     {
         $body = Yii::$app->request->getBodyParams();
 
-        $allowed = ['pg_host', 'pg_port', 'pg_db', 'pg_user', 'pg_pass', 'pg_sslmode', 'gemini_api_key', 'gemini_model'];
+        $allowed = [
+            'pg_host',
+            'pg_port',
+            'pg_db',
+            'pg_user',
+            'pg_pass',
+            'pg_sslmode',
+            'gemini_api_key',
+            'gemini_model',
+            'nl2sql_intent_mode',
+            'nl2sql_primary_mode',
+            'nl2sql_shadow_mode',
+            'nl2sql_shadow_users',
+            'nl2sql_shadow_sample_percent',
+            'nl2sql_force_legacy',
+        ];
         $filtered = [];
         foreach ($allowed as $key) {
             if (array_key_exists($key, $body)) {
@@ -2443,6 +2504,260 @@ class FolioQueryController extends Controller
                 ];
             }, $jobs),
         ];
+    }
+
+    /**
+     * POST /api/query/history/<id>/suggestions
+     *
+     * Generate related follow-up NL prompts for a specific historical query job.
+     */
+    public function actionQueryHistorySuggestions($id)
+    {
+        $userId = $this->getCurrentUserId();
+        $identity = $this->getAppIdentity();
+        $isAdmin = $identity && $identity->isAdmin();
+
+        $job = QueryJob::findOne($id);
+        if (!$job) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Job not found'];
+        }
+
+        if (!$isAdmin && $userId && (int)$job->user_id !== (int)$userId) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Forbidden'];
+        }
+
+        $sql = trim((string)($job->sql_text ?? ''));
+        if ($sql === '') {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'Historical query has no SQL text'];
+        }
+
+        $promptSeed = trim((string)($job->name ?? ''));
+        if ($promptSeed === '') {
+            $promptSeed = 'Suggest related analysis for this historical query';
+        }
+
+        $warnings = [];
+        $suggestions = [];
+        $suggestionSource = 'gemini';
+
+        try {
+            $suggestions = GeminiService::suggestFollowUpQueries($promptSeed, $sql, '', null);
+        } catch (\Throwable $e) {
+            $suggestionSource = 'heuristic';
+            $warnings[] = 'AI suggestion generation failed: ' . $e->getMessage();
+            Yii::warning(
+                'Query history suggestion generation failed for job ' . $job->id . ': ' . $e->getMessage(),
+                'nl2sql.history_suggestions'
+            );
+        }
+
+        if (empty($suggestions)) {
+            $suggestionSource = 'heuristic';
+            $suggestions = $this->buildHistorySuggestionFallback($promptSeed, $sql);
+        }
+
+        return [
+            'jobId' => (string)$job->id,
+            'promptSeed' => $promptSeed,
+            'suggestions' => $suggestions,
+            'suggestionSource' => $suggestionSource,
+            'warnings' => $warnings,
+        ];
+    }
+
+    /**
+     * Deterministic follow-up suggestions for history queries when AI is unavailable.
+     *
+     * @param string $promptSeed
+     * @param string $sql
+     * @return array
+     */
+    private function buildHistorySuggestionFallback($promptSeed, $sql)
+    {
+        $text = strtolower(trim((string)$promptSeed . ' ' . (string)$sql));
+
+        $generic = [
+            'Break this result down by month over the last 12 months',
+            'Show top 10 categories contributing most to this result',
+            'Compare this metric across campuses and highlight differences',
+            'List records missing key fields related to this query',
+            'Show year-over-year trend changes for this metric',
+        ];
+
+        $circulation = [
+            'Show circulation counts by material type',
+            'Which locations have the highest and lowest circulation',
+            'Break circulation down by patron group',
+            'Show monthly circulation trend and peak periods',
+            'Which call number ranges are trending up versus last year',
+        ];
+
+        $finance = [
+            'Show spending trend by fiscal year',
+            'Which vendors account for the highest share of spending',
+            'Break spending down by fund and expense class',
+            'Compare encumbered versus expended amounts for this scope',
+            'Which funds are most over or under budget this year',
+        ];
+
+        $inventory = [
+            'Break inventory count down by library and location',
+            'Show item age distribution for this result set',
+            'Which call number ranges are most represented',
+            'Show records added in the last 90 days for this criteria',
+            'List locations with the highest concentration of these items',
+        ];
+
+        if (preg_match('/spent|spend|budget|invoice|encumber|expend|vendor|fund|fiscal/', $text)) {
+            return $finance;
+        }
+
+        if (preg_match('/loan|checkout|circulation|renew|return|call number/', $text)) {
+            return $circulation;
+        }
+
+        if (preg_match('/item|holdings|instance|location|inventory|material type/', $text)) {
+            return $inventory;
+        }
+
+        return $generic;
+    }
+
+    /**
+     * POST /api/query/index-recommendations
+     *
+     * Build a workload snapshot from recent query history and ask Gemini
+     * for index recommendations.
+     *
+     * Body (optional):
+     * {
+     *   "days": 30,
+     *   "maxLogs": 300,
+     *   "maxPatterns": 25
+     * }
+     */
+    public function actionQueryIndexRecommendations()
+    {
+        if (!$this->requireAdmin()) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Admin access required'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $days = max(1, min(180, (int)($body['days'] ?? 30)));
+        $maxLogs = max(50, min(2000, (int)($body['maxLogs'] ?? 300)));
+        $maxPatterns = max(5, min(100, (int)($body['maxPatterns'] ?? 25)));
+
+        try {
+            $snapshot = IndexRecommendationService::buildWorkloadSnapshot($days, $maxLogs, $maxPatterns);
+            $workload = $snapshot['workload'] ?? [];
+
+            if ((int)($workload['uniqueQueryPatterns'] ?? 0) === 0) {
+                return [
+                    'generatedAt' => gmdate('c'),
+                    'summary' => 'No eligible query history found for the selected window.',
+                    'workload' => $workload,
+                    'recommendations' => [],
+                    'recommendationSource' => 'none',
+                    'notes' => [
+                        'Run and complete more FOLIO queries to collect workload evidence before recommending indexes.',
+                    ],
+                ];
+            }
+
+            $aiResult = [
+                'summary' => '',
+                'recommendations' => [],
+                'notes' => [],
+                'model' => null,
+                'promptVersion' => null,
+            ];
+            $warnings = [];
+
+            try {
+                $aiResult = GeminiService::recommendIndexesFromHistory($snapshot);
+            } catch (\Throwable $aiError) {
+                Yii::warning(
+                    'Index recommendation AI generation failed: ' . $aiError->getMessage(),
+                    'index.recommendation'
+                );
+
+                $warnings[] = 'Gemini recommendation generation failed: ' . $aiError->getMessage();
+                $aiResult['summary'] = 'Workload snapshot generated, but AI recommendations are temporarily unavailable.';
+                $aiResult['notes'] = [
+                    'Retry the request in a moment. The workload evidence has been collected successfully.',
+                ];
+            }
+
+            $finalRecommendations = IndexRecommendationService::finalizeRecommendations(
+                $aiResult['recommendations'] ?? [],
+                $snapshot['existingIndexesByTable'] ?? [],
+                $workload['tables'] ?? []
+            );
+
+            $recommendationSource = 'gemini';
+            if (empty($finalRecommendations)) {
+                $heuristic = IndexRecommendationService::generateHeuristicRecommendations(
+                    $workload,
+                    $snapshot['existingIndexesByTable'] ?? []
+                );
+
+                if (!empty($heuristic['recommendations'])) {
+                    $finalRecommendations = $heuristic['recommendations'];
+                    $recommendationSource = 'heuristic';
+
+                    if (!empty($warnings)) {
+                        $heuristicNotes = is_array($heuristic['notes'] ?? null) ? $heuristic['notes'] : [];
+                        $heuristicNotes[] = 'Gemini output was unavailable or malformed, so deterministic fallback recommendations were returned.';
+                        $heuristic['notes'] = array_values(array_unique($heuristicNotes));
+                    }
+
+                    $aiResult['summary'] = trim((string)($heuristic['summary'] ?? ''));
+                    $aiResult['notes'] = is_array($heuristic['notes'] ?? null) ? $heuristic['notes'] : [];
+                } else {
+                    $recommendationSource = 'none';
+                    if (trim((string)($aiResult['summary'] ?? '')) === '') {
+                        $aiResult['summary'] = trim((string)($heuristic['summary'] ?? 'No index recommendations were produced for this workload.'));
+                    }
+
+                    $mergedNotes = [];
+                    if (is_array($aiResult['notes'] ?? null)) {
+                        $mergedNotes = array_merge($mergedNotes, $aiResult['notes']);
+                    }
+                    if (is_array($heuristic['notes'] ?? null)) {
+                        $mergedNotes = array_merge($mergedNotes, $heuristic['notes']);
+                    }
+                    $aiResult['notes'] = array_values(array_unique($mergedNotes));
+                }
+            }
+
+            return [
+                'generatedAt' => gmdate('c'),
+                'summary' => $aiResult['summary'] ?? '',
+                'workload' => [
+                    'logsAnalyzed' => (int)($workload['logsAnalyzed'] ?? 0),
+                    'eligibleLogs' => (int)($workload['eligibleLogs'] ?? 0),
+                    'uniqueQueryPatterns' => (int)($workload['uniqueQueryPatterns'] ?? 0),
+                    'tables' => $workload['tables'] ?? [],
+                    'queryPatterns' => $workload['queryPatterns'] ?? [],
+                ],
+                'recommendations' => $finalRecommendations,
+                'recommendationSource' => $recommendationSource,
+                'notes' => $aiResult['notes'] ?? [],
+                'model' => $aiResult['model'] ?? null,
+                'promptVersion' => $aiResult['promptVersion'] ?? null,
+                'warnings' => $warnings,
+            ];
+        } catch (\Throwable $e) {
+            Yii::error('Index recommendation generation failed: ' . $e->getMessage(), 'index.recommendation');
+            Yii::$app->response->statusCode = 500;
+            return [
+                'error' => 'Failed to generate index recommendations: ' . $e->getMessage(),
+            ];
+        }
     }
 
     /**

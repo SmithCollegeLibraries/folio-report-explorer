@@ -100,11 +100,11 @@ export default function Builder() {
   const buildMut = useMutation({
     mutationFn: () => {
       // Auto-compute GROUP BY: if any column has an aggregate, group by all non-aggregated columns
-      const hasAggregates = columns.some((c) => c.aggregate && c.aggregate !== '');
+      const hasAggregates = columns.some((c) => Boolean(c.aggregate));
       let groupBy: GroupBySpec[] | undefined;
       if (hasAggregates) {
         groupBy = columns
-          .filter((c) => !c.aggregate || c.aggregate === '')
+          .filter((c) => !c.aggregate)
           .map((c) => ({ table: c.table, column: c.column }));
       }
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { findPath } from '../api/client';
 import type { JoinEdge, JoinType, TableDetail } from '../types';
 import {
@@ -21,7 +21,6 @@ interface Props {
 
 export default function JoinPanel({
   selectedTables,
-  tableDetails,
   joinMode,
   customJoins,
   onJoinModeChange,

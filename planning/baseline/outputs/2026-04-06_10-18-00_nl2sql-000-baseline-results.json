@@ -1,0 +1,29 @@
+{
+  "ticket": "NL2SQL-000",
+  "capturedAt": "2026-04-06_10-18-00",
+  "apiBase": "http://localhost:8090/api",
+  "subset": [
+    "P05",
+    "P06"
+  ],
+  "results": [
+    {
+      "id": "P05",
+      "category": "holdings",
+      "prompt": "Find items missing effective location and include holdings and instance IDs",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later."
+      }
+    },
+    {
+      "id": "P06",
+      "category": "consortial",
+      "prompt": "For Amherst campus only, show currently checked out items by material type",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later."
+      }
+    }
+  ]
+}

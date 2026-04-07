@@ -102,6 +102,33 @@ class SettingsService
             'pg_sslmode' => self::get('pg_sslmode', 'FOLIO_PG_SSLMODE', 'require'),
             'gemini_api_key' => self::get('gemini_api_key', 'GEMINI_API_KEY') ? '••••••••' : '',
             'gemini_model' => self::get('gemini_model', null, 'gemini-2.5-flash'),
+            'nl2sql_intent_mode' => filter_var(
+                self::get('nl2sql_intent_mode', 'NL2SQL_INTENT_MODE', 'false'),
+                FILTER_VALIDATE_BOOLEAN
+            ),
+            'nl2sql_primary_mode' => strtolower((string) self::get(
+                'nl2sql_primary_mode',
+                'NL2SQL_PRIMARY_MODE',
+                'auto'
+            )),
+            'nl2sql_shadow_mode' => filter_var(
+                self::get('nl2sql_shadow_mode', 'NL2SQL_SHADOW_MODE', 'false'),
+                FILTER_VALIDATE_BOOLEAN
+            ),
+            'nl2sql_shadow_users' => (string) self::get(
+                'nl2sql_shadow_users',
+                'NL2SQL_SHADOW_USERS',
+                ''
+            ),
+            'nl2sql_shadow_sample_percent' => (int) self::get(
+                'nl2sql_shadow_sample_percent',
+                'NL2SQL_SHADOW_SAMPLE_PERCENT',
+                '100'
+            ),
+            'nl2sql_force_legacy' => filter_var(
+                self::get('nl2sql_force_legacy', 'NL2SQL_FORCE_LEGACY', 'false'),
+                FILTER_VALIDATE_BOOLEAN
+            ),
         ];
         return $display;
     }

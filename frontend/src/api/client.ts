@@ -24,6 +24,8 @@ import type {
   AuthUser,
   RefreshResponse,
   HistoryResponse,
+  HistorySuggestionsResponse,
+  IndexRecommendationResponse,
   DashboardResponse,
   AcrlStatistic,
   ExpenseAllocation,
@@ -183,8 +185,16 @@ export async function executeQueryDefinition(
   return data;
 }
 
-export async function askNl(prompt: string, campus?: string | null): Promise<NlResponse> {
-  const { data } = await api.post('/nl', { prompt, campus: campus || null });
+export async function askNl(
+  prompt: string,
+  campus?: string | null,
+  includeSuggestions = true,
+): Promise<NlResponse> {
+  const { data } = await api.post('/nl', {
+    prompt,
+    campus: campus || null,
+    includeSuggestions,
+  });
   return data;
 }
 
@@ -565,6 +575,11 @@ export async function fetchQueryHistory(
   return data;
 }
 
+export async function fetchHistorySuggestions(jobId: string): Promise<HistorySuggestionsResponse> {
+  const { data } = await api.post(`/query/history/${jobId}/suggestions`);
+  return data;
+}
+
 export async function renameHistoryJob(jobId: string, name: string): Promise<{ jobId: string; name: string | null }> {
   const { data } = await api.patch(`/query/history/${jobId}`, { name });
   return data;
@@ -572,6 +587,15 @@ export async function renameHistoryJob(jobId: string, name: string): Promise<{ j
 
 export async function deleteHistoryJob(jobId: string): Promise<void> {
   await api.delete(`/query/history/${jobId}`);
+}
+
+export async function fetchIndexRecommendations(payload: {
+  days?: number;
+  maxLogs?: number;
+  maxPatterns?: number;
+} = {}): Promise<IndexRecommendationResponse> {
+  const { data } = await api.post('/query/index-recommendations', payload);
+  return data;
 }
 
 // ─── Per-user Dashboard ───────────────────────────────────────────

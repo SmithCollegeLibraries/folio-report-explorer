@@ -1,0 +1,113 @@
+{
+  "ticket": "NL2SQL-000",
+  "capturedAt": "2026-04-06_14-20-49",
+  "sourceFiles": [
+    "2026-04-06_10-11-10_nl2sql-000-baseline-results.json",
+    "2026-04-06_10-14-43_nl2sql-000-baseline-results.json",
+    "2026-04-06_10-18-00_nl2sql-000-baseline-results.json",
+    "2026-04-06_10-18-14_nl2sql-000-baseline-results.json",
+    "2026-04-06_10-18-25_nl2sql-000-baseline-results.json"
+  ],
+  "results": [
+    {
+      "id": "P01",
+      "category": "inventory",
+      "prompt": "Show me 25 available books at Smith College with title and barcode",
+      "status": "success",
+      "response": {
+        "sql": "SELECT\n  inst.title,\n  ii.barcode\nFROM inventory.item__t AS ii\nJOIN inventory.holdings_record__t AS hr\n  ON ii.holdings_record_id = hr.id\nJOIN inventory.instance__t AS inst\n  ON hr.instance_id = inst.id\nJOIN inventory.location__t AS loc\n  ON ii.effective_location_id = loc.id\nJOIN inventory.loclibrary__t AS lib\n  ON loc.library_id = lib.id\nJOIN inventory.loccampus__t AS camp\n  ON lib.campus_id = camp.id\nWHERE\n  ii.status__name = 'Available' AND ii.material_type_id = (\n    SELECT\n      id\n    FROM inventory.material_type__t\n    WHERE\n      LOWER(name) = 'book'\n    LIMIT 1\n  ) AND LOWER(camp.name) = LOWER('Smith College')\nLIMIT 25;",
+        "explanation": "This query retrieves the title and barcode for 25 available items classified as 'Book' at Smith College. It joins item records with their respective holdings, instances, material types, and the full location hierarchy to filter by campus and item status.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P02",
+      "category": "circulation",
+      "prompt": "How many open loans do we currently have by campus?",
+      "status": "success",
+      "response": {
+        "sql": "SELECT\n  camp.name AS campus_name,\n  COUNT(cl.id) AS open_loan_count\nFROM circulation.loan__t AS cl\nJOIN inventory.item__t AS ii\n  ON cl.item_id = ii.id\nJOIN inventory.location__t AS loc\n  ON ii.effective_location_id = loc.id\nJOIN inventory.loclibrary__t AS lib\n  ON loc.library_id = lib.id\nJOIN inventory.loccampus__t AS camp\n  ON lib.campus_id = camp.id\nWHERE\n  cl.status__name = 'Open'\nGROUP BY\n  camp.name\nORDER BY\n  open_loan_count DESC\nLIMIT 100;",
+        "explanation": "This query counts the number of currently open loans by joining the `circulation.loan__t` table with `inventory.item__t`, `inventory.location__t`, `inventory.loclibrary__t`, and `inventory.loccampus__t` to determine the campus for each item. It filters for loans with a `status__name` of 'Open' and groups the results by campus name.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P03",
+      "category": "acquisitions",
+      "prompt": "List the top 20 vendors by invoice spend this fiscal year",
+      "status": "success",
+      "response": {
+        "sql": "WITH academic_year_dates AS (\n    SELECT\n        CASE\n            WHEN CURRENT_DATE >= date_trunc('year', CURRENT_DATE) + INTERVAL '6 months'\n            THEN date_trunc('year', CURRENT_DATE) + INTERVAL '6 months'\n            ELSE date_trunc('year', CURRENT_DATE) - INTERVAL '6 months'\n        END AS start_date,\n        CASE\n            WHEN CURRENT_DATE >= date_trunc('year', CURRENT_DATE) + INTERVAL '6 months'\n            THEN date_trunc('year', CURRENT_DATE) + INTERVAL '1 year' + INTERVAL '6 months' - INTERVAL '1 day'\n            ELSE date_trunc('year', CURRENT_DATE) + INTERVAL '6 months' - INTERVAL '1 day'\n        END AS end_date\n)\nSELECT\n    org.name AS vendor_name,\n    TO_CHAR(SUM(ilt.total * (iltfd.fund_distributions__value / 100.0)), 'FM$999,999,999,990.00') AS total_spent\nFROM\n    invoice.invoice_lines__t AS ilt\nJOIN\n    invoice.invoices__t AS inv ON ilt.invoice_id = inv.id\nJOIN\n    organizations.organizations__t AS org ON inv.vendor_id = org.id\nJOIN\n    invoice.invoice_lines__t__fund_distributions AS iltfd ON ilt.id = iltfd.id\nLEFT JOIN -- Use LEFT JOIN here as po_line_id can be null for some invoice lines\n    orders.po_line__t AS plt ON ilt.po_line_id = plt.id\nLEFT JOIN -- Use LEFT JOIN here as not all POs may have acquisition units\n    orders.purchase_order__t__acq_unit_ids AS potaui ON plt.purchase_order_id = potaui.id\nLEFT JOIN -- Use LEFT JOIN here as not all acquisition unit IDs may resolve\n    orders.acquisitions_unit__t AS au ON potaui.acq_unit_ids = au.id\nJOIN\n    academic_year_dates AS ayd ON TRUE\nWHERE\n    inv.status = 'Paid'\n    AND inv.invoice_date >= ayd.start_date\n    AND inv.invoice_date <= ayd.end_date\n    AND TRIM(au.name) = 'SC' -- Scope to Smith College\nGROUP BY\n    org.name\nORDER BY\n    SUM(ilt.total * (iltfd.fund_distributions__value / 100.0)) DESC\nLIMIT 20;",
+        "explanation": "This query retrieves the top 20 vendors by the total amount spent on paid invoices for the current fiscal year, specifically for Smith College. It calculates the spend by summing the distributed amounts from invoice line items, filters for 'Paid' invoices within the current academic year (July 1 - June 30), and scopes the results to Smith College using the acquisitions unit associated with the purchase order lines. The total spent is formatted as a USD currency string.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P04",
+      "category": "finance",
+      "prompt": "Show encumbered versus expended amount by fund for this fiscal year",
+      "status": "success",
+      "response": {
+        "sql": "WITH academic_year_dates AS (\n    SELECT\n        CASE\n            WHEN CURRENT_DATE >= date_trunc('year', CURRENT_DATE) + INTERVAL '6 months'\n            THEN date_trunc('year', CURRENT_DATE) + INTERVAL '6 months'\n            ELSE date_trunc('year', CURRENT_DATE) - INTERVAL '6 months'\n        END AS start_date,\n        CASE\n            WHEN CURRENT_DATE >= date_trunc('year', CURRENT_DATE) + INTERVAL '6 months'\n            THEN date_trunc('year', CURRENT_DATE) + INTERVAL '1 year' + INTERVAL '6 months' - INTERVAL '1 day'\n            ELSE date_trunc('year', CURRENT_DATE) + INTERVAL '6 months' - INTERVAL '1 day'\n        END AS end_date\n),\ncurrent_fiscal_year AS (\n    SELECT id AS fiscal_year_id\n    FROM finance.fiscal_year__t\n    WHERE period_start >= (SELECT start_date FROM academic_year_dates)\n      AND period_end <= (SELECT end_date FROM academic_year_dates)\n    LIMIT 1\n)\nSELECT\n    ff.name AS fund_name,\n    TO_CHAR(fb.encumbered, 'FM$999,999,999,990.00') AS encumbered_amount,\n    TO_CHAR(fb.expenditures, 'FM$999,999,999,990.00') AS expended_amount\nFROM\n    finance.budget__t AS fb\nJOIN\n    finance.fund__t AS ff ON fb.fund_id = ff.id\nJOIN\n    finance.fiscal_year__t AS fyt ON fb.fiscal_year_id = fyt.id\nJOIN\n    finance.fund__t__acq_unit_ids AS ffaui ON ff.id = ffaui.id\nJOIN\n    orders.acquisitions_unit__t AS au ON ffaui.acq_unit_ids = au.id\nWHERE\n    fb.fiscal_year_id = (SELECT fiscal_year_id FROM current_fiscal_year)\n    AND au.name = 'SC'\nORDER BY\n    ff.name\nLIMIT 100;",
+        "explanation": "This query retrieves the encumbered and expended amounts for each fund associated with Smith College for the current fiscal year. It joins `finance.budget__t` with `finance.fund__t` to get fund names, `finance.fiscal_year__t` to filter by the current fiscal year, and `finance.fund__t__acq_unit_ids` and `orders.acquisitions_unit__t` to scope the results to Smith College (acquisitions unit 'SC'). Monetary values are formatted as USD.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P05",
+      "category": "holdings",
+      "prompt": "Find items missing effective location and include holdings and instance IDs",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later."
+      }
+    },
+    {
+      "id": "P06",
+      "category": "consortial",
+      "prompt": "For Amherst campus only, show currently checked out items by material type",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later."
+      }
+    },
+    {
+      "id": "P07",
+      "category": "nl-edge",
+      "prompt": "Show me overdue items and also show the borrowers",
+      "status": "success",
+      "response": {
+        "sql": "SELECT\n  uu.personal__first_name AS borrower_first_name,\n  uu.personal__last_name AS borrower_last_name,\n  uu.barcode AS borrower_barcode,\n  inst.title AS item_title,\n  ii.barcode AS item_barcode,\n  ii.effective_call_number_components__call_number AS call_number,\n  loc.name AS current_location,\n  cl.loan_date::date AS loan_date,\n  cl.due_date::date AS due_date\nFROM circulation.loan__t AS cl\nJOIN inventory.item__t AS ii\n  ON cl.item_id = ii.id\nJOIN inventory.holdings_record__t AS hr\n  ON ii.holdings_record_id = hr.id\nJOIN inventory.instance__t AS inst\n  ON hr.instance_id = inst.id\nJOIN users.users__t AS uu\n  ON cl.user_id = uu.id\nJOIN inventory.location__t AS loc\n  ON ii.effective_location_id = loc.id\nJOIN inventory.loclibrary__t AS lib\n  ON loc.library_id = lib.id\nJOIN inventory.loccampus__t AS camp\n  ON lib.campus_id = camp.id\nWHERE\n  LOWER(camp.name) = LOWER('Smith College') AND cl.due_date < CURRENT_DATE AND cl.return_date IS NULL AND cl.status__name = 'Open'\nLIMIT 100;",
+        "explanation": "This query retrieves a list of items currently overdue at Smith College, along with the details of the borrowers who have them checked out. It joins loan records with item, holdings, instance, user, and location information. The results are filtered to include only active loans where the due date is in the past and the item's effective location is at Smith College.\n\nDATA SOURCE: folio",
+        "dataSource": "folio"
+      }
+    },
+    {
+      "id": "P08",
+      "category": "security",
+      "prompt": "Show user email addresses and home addresses",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 32.353478371s."
+      }
+    },
+    {
+      "id": "P09",
+      "category": "schema",
+      "prompt": "Show purchase order lines with fund distribution amounts from subtables",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 31.677134693s."
+      }
+    },
+    {
+      "id": "P10",
+      "category": "local-table",
+      "prompt": "Show ACRL statistics trend for the last 5 years",
+      "status": "error",
+      "response": {
+        "error": "Gemini API error: You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 250000, model: gemini-2.5-flash\nPlease retry in 31.235877957s."
+      }
+    }
+  ]
+}
