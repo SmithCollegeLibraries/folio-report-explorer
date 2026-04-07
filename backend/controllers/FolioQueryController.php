@@ -760,6 +760,39 @@ class FolioQueryController extends Controller
             return ['error' => 'A "prompt" is required'];
         }
 
+        // Pre-flight: block prompts that would require patron PII tables (users.*,
+        // feesfines.*, audit.*) before spending AI tokens. The execution-time check in
+        // SqlBuilderService::validateTablePolicy() remains as the authoritative safety
+        // net; this is an early-exit optimisation only.
+        $promptLower = strtolower($prompt);
+        $blockedPatterns = [
+            // Patron personal fields
+            '/\bpatron\s+(name|email|address|phone|barcode|contact|record|profile|detail)\b/',
+            '/\bborrower\s+(name|email|address|phone|barcode|contact|record)\b/',
+            '/\buser\s+(email|address|phone|barcode|personal|contact)\b/',
+            // General PII phrasing
+            '/\b(personal|contact)\s+information\b/',
+            '/\bpatron\s+personal\b/',
+            '/\bpii\b/',
+            // Enumerate all patrons / borrowers (highly likely to require users__t)
+            '/\b(list|show|find|get|display|return|report\s+on|retrieve)\s+(all\s+)?patrons\b/',
+            '/\b(list|show|find|get|display|return|report\s+on|retrieve)\s+(all\s+)?borrowers\b/',
+            // Patron accounts / fee records with patron identity
+            '/\bpatron\s+(fee|fine|account|block|debt)\b/',
+            '/\bborrower\s+(fee|fine|account|block)\b/',
+        ];
+
+        foreach ($blockedPatterns as $pattern) {
+            if (preg_match($pattern, $promptLower)) {
+                Yii::warning(
+                    "Blocked pre-flight prompt (patron PII pattern): {$prompt}",
+                    'nl2sql.prompt_block'
+                );
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'Queries about patron personal information or individual patron records are not supported. This system provides aggregate and operational library reporting only.'];
+            }
+        }
+
         // Resolve campus: request body overrides user's saved preference
         $campus = $body['campus'] ?? null;
         if ($campus === null) {
