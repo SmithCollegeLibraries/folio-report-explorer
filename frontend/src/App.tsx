@@ -11,6 +11,7 @@ import Builder from './pages/Builder';
 import Ask from './pages/Ask';
 import SavedQueries from './pages/SavedQueries';
 import Reports from './pages/Reports';
+import ReportDetail from './pages/ReportDetail';
 import SettingsPage from './pages/Settings';
 import Training from './pages/Training';
 import History from './pages/History';
@@ -329,7 +330,7 @@ export default function App() {
           <Route path="/builder" element={<ProtectedRoute><Builder /></ProtectedRoute>} />
           <Route path="/ask" element={<ProtectedRoute><Ask /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
-          <Route path="/reports/:id" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+          <Route path="/reports/:id" element={<ProtectedRoute><ReportDetail /></ProtectedRoute>} />
           <Route path="/saved" element={<ProtectedRoute><SavedQueries /></ProtectedRoute>} />
           <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />
           <Route path="/history/:jobId" element={<ProtectedRoute><History /></ProtectedRoute>} />

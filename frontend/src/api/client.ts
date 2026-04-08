@@ -430,8 +430,16 @@ export async function getReport(id: number): Promise<ReportTemplate> {
 export async function runReport(
   id: number,
   params: Record<string, string>,
+  options?: { outputMode?: 'table' | 'file' },
 ): Promise<ReportRunResponse> {
-  const { data } = await api.post(`/reports/${id}/run`, { params });
+  const payload: {
+    params: Record<string, string>;
+    outputMode?: 'table' | 'file';
+  } = { params };
+  if (options?.outputMode) {
+    payload.outputMode = options.outputMode;
+  }
+  const { data } = await api.post(`/reports/${id}/run`, payload);
   return data;
 }
 

@@ -411,8 +411,14 @@ export interface ReportGenerateResponse {
 /** Response from POST /reports/:id/run */
 export interface ReportRunResponse {
   jobId: string;
+  status: JobStatus;
   reportName: string;
-  status: 'pending';
+  outputMode?: 'table' | 'file';
+  dataSource?: 'folio' | 'local' | 'composite';
+  progressMessage?: string;
+  createdAt?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 // ─── AI Training types ────────────────────────────────────────────

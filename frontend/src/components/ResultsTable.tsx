@@ -14,9 +14,13 @@ import ChartPanel from './ChartPanel';
 
 interface Props {
   data: ExecuteResponse;
+  drillThrough?: {
+    column: string;
+    onClick: (value: string, row: Record<string, unknown>) => void;
+  };
 }
 
-export default function ResultsTable({ data }: Props) {
+export default function ResultsTable({ data, drillThrough }: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [view, setView] = useState<'table' | 'chart'>('table');
 
@@ -33,10 +37,25 @@ export default function ResultsTable({ data }: Props) {
             <ArrowUpDown size={12} />
           </button>
         ),
-        cell: ({ getValue }) => {
+        cell: ({ getValue, row }) => {
           const val = getValue();
           if (val === null) return <span className="text-gray-400 italic">null</span>;
           if (typeof val === 'object') return JSON.stringify(val);
+          const asText = String(val);
+
+          if (drillThrough && col === drillThrough.column && asText.trim() !== '') {
+            return (
+              <button
+                type="button"
+                onClick={() => drillThrough.onClick(asText, row.original)}
+                className="text-folio-700 underline decoration-dotted underline-offset-2 hover:text-folio-900"
+                title={`Open related report for ${asText}`}
+              >
+                {asText}
+              </button>
+            );
+          }
+
           // Cap floating-point numbers at 2 decimal places for readability
           if (typeof val === 'number' && !Number.isInteger(val)) {
             return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(val);
@@ -61,6 +80,8 @@ export default function ResultsTable({ data }: Props) {
   });
 
   const exportCsv = () => downloadCsv(data.columns, data.rows, 'query-results');
+  const hasRows = data.rowCount > 0 && data.columns.length > 0;
+  const downloadUrl = data.outputMode === 'file' ? data.downloadUrl : undefined;
 
   return (
     <div>
@@ -79,10 +100,19 @@ export default function ResultsTable({ data }: Props) {
         </div>
         <button
           onClick={exportCsv}
+          disabled={!hasRows}
           className="flex items-center gap-1 text-folio-600 hover:text-folio-800"
         >
           <Download size={14} /> CSV
         </button>
+        {downloadUrl && (
+          <a
+            href={downloadUrl}
+            className="flex items-center gap-1 ml-2 text-green-700 hover:text-green-900"
+          >
+            <Download size={14} /> Download Full CSV
+          </a>
+        )}
         <button
           onClick={() => setView(view === 'table' ? 'chart' : 'table')}
           className={`flex items-center gap-1 ml-2 px-2 py-0.5 rounded border transition-colors ${
@@ -106,6 +136,12 @@ export default function ResultsTable({ data }: Props) {
 
       {/* Table view */}
       {view === 'table' && (
+      data.columns.length === 0 ? (
+        <div className="border border-t-0 rounded-b-lg p-4 text-sm text-gray-600 bg-white">
+          No inline preview rows are available for this result.
+          {downloadUrl ? ' Use Download Full CSV to retrieve the export file.' : ''}
+        </div>
+      ) : (
       <div className="overflow-x-auto border border-t-0 rounded-b-lg">
         <table className="w-full text-sm">
           <thead>
@@ -137,6 +173,7 @@ export default function ResultsTable({ data }: Props) {
           </tbody>
         </table>
       </div>
+      )
       )}
     </div>
   );
