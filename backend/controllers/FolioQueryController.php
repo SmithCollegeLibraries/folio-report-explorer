@@ -1518,7 +1518,7 @@ class FolioQueryController extends Controller
 
     /**
      * POST /api/reports/<id>/run — execute a report with user-provided parameters.
-     * Body: {params: {startDate: '2025-07-01', endDate: '2026-06-30', ...}}
+        * Body: {params: {startDate: '2025-07-01', endDate: '2026-06-30', ...}, outputMode?: 'table'|'file'}
      * Returns: {jobId: string} — uses async job pipeline.
      */
     public function actionReportRun($id)
@@ -1531,6 +1531,7 @@ class FolioQueryController extends Controller
 
         $body = Yii::$app->request->getBodyParams();
         $userParams = $body['params'] ?? [];
+        $outputMode = strtolower((string)($body['outputMode'] ?? 'table')) === 'file' ? 'file' : 'table';
 
         // Validate required params
         $paramDefs = $report->getDecodedParameters();
@@ -1551,6 +1552,7 @@ class FolioQueryController extends Controller
 
         // Bind params and get SQL
         $bound = $report->bindParams($userParams);
+        $bound['sql'] = $this->normalizeLegacyReportSql($report, $bound['sql']);
 
         // Safety validation
         try {
@@ -1584,6 +1586,13 @@ class FolioQueryController extends Controller
         // Create async job
         $job = QueryJob::createJob($bound['sql'], $bound['params'], 'report', $dataSource, $metadata);
         $job->user_id = $this->getCurrentUserId();
+        if ($job->hasAttribute('output_mode')) {
+            $job->output_mode = $outputMode;
+        }
+        if ($outputMode === 'file') {
+            $job->status = 'pending_export';
+            $job->progress_message = 'Queued for CSV export';
+        }
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
             return ['error' => 'Failed to create job', 'details' => $job->errors];
@@ -1593,8 +1602,13 @@ class FolioQueryController extends Controller
         return [
             'jobId' => $job->id,
             'reportName' => $report->name,
-            'status' => 'pending',
+            'status' => $job->status,
+            'outputMode' => $job->hasAttribute('output_mode') ? ($job->output_mode ?: 'table') : 'table',
             'dataSource' => $dataSource,
+            'progressMessage' => $job->progress_message,
+            'createdAt' => $job->created_at,
+            'startedAt' => $job->started_at,
+            'completedAt' => $job->completed_at,
         ];
     }
 
@@ -3509,5 +3523,62 @@ SQL;
     {
         Yii::$app->response->statusCode = 204;
         return '';
+    }
+
+    /**
+     * Applies minimal SQL normalization for known legacy report templates.
+     * This keeps older seeded environments working until data migrations are applied.
+     */
+    private function normalizeLegacyReportSql(ReportTemplate $report, string $sql): string
+    {
+        if (($report->slug ?? '') === 'title-list-report') {
+            $sql = preg_replace(
+                '/CAST\s*\(\s*substring\(\s*it\.payment_date\s*,\s*0\s*,\s*11\s*\)\s*AS\s*date\s*\)/i',
+                'it.payment_date::date',
+                $sql
+            ) ?? $sql;
+
+            $sql = str_replace(
+                'inv.invoice_date AS "Invoice Date"',
+                'inv.invoice_date::date AS "Invoice Date"',
+                $sql
+            );
+
+            $sql = str_replace(
+                'it.invoice_date AS invoice_date',
+                'it.invoice_date::date AS invoice_date',
+                $sql
+            );
+
+            $sql = str_replace(
+                'GROUP BY it.invoice_date, po_line_id, ftaui."name", iltfd.invoice_line_status',
+                'GROUP BY it.invoice_date::date, po_line_id, ftaui."name", iltfd.invoice_line_status',
+                $sql
+            );
+
+            if (stripos($sql, '"Invoice Date"') === false) {
+                $sql = str_replace(
+                    "    potaui.order_type AS \"PO Type\",\n    ROUND(inv.payment, 2) AS \"Sum of Invoice Payments\",",
+                    "    potaui.order_type AS \"PO Type\",\n    inv.invoice_date::date AS \"Invoice Date\",\n    ROUND(inv.payment, 2) AS \"Sum of Invoice Payments\",",
+                    $sql
+                );
+
+                $sql = str_replace(
+                    "SELECT ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS payment,\n           po_line_id, ftaui.\"name\" AS fund, iltfd.invoice_line_status AS status",
+                    "SELECT ROUND(SUM(iltfd.total * (iltfd.fund_distributions__value * .01)), 2) AS payment,\n           it.invoice_date::date AS invoice_date,\n           po_line_id, ftaui.\"name\" AS fund, iltfd.invoice_line_status AS status",
+                    $sql
+                );
+
+                $sql = str_replace(
+                    'GROUP BY po_line_id, ftaui."name", iltfd.invoice_line_status',
+                    'GROUP BY it.invoice_date::date, po_line_id, ftaui."name", iltfd.invoice_line_status',
+                    $sql
+                );
+            }
+
+            return $sql;
+        }
+
+        return $sql;
     }
 }
