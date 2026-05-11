@@ -19,6 +19,7 @@ class GeminiService
     const MAX_RETRY_BACKOFF_MS = 5000;
     const LEGACY_PROMPT_VERSION = 'legacy_sql_prompt.v1';
     const INTENT_PROMPT_VERSION = 'intent_json_prompt.v1';
+    const FAMILY_SLOT_PROMPT_VERSION = 'family_slot_prompt.v1';
     const INDEX_RECOMMENDER_PROMPT_VERSION = 'index_recommender.v1';
     const FOLLOW_UP_SUGGESTION_PROMPT_VERSION = 'followup_suggestions.v1';
     const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
@@ -684,7 +685,10 @@ PROMPT;
         $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
         $schemaTelemetry = self::buildSchemaTelemetry($schemaContext);
         $promptFingerprint = self::fingerprintPrompt($prompt);
-        $systemPrompt = self::buildIntentSystemPrompt($schemaContext, $campus);
+        $requestContext = self::buildIntentRequestContext($prompt, $campus, $schemaContext);
+        $queryFamily = $requestContext['queryFamily'];
+        $systemPrompt = $requestContext['systemPrompt'];
+        $promptVersion = $requestContext['promptVersion'];
 
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
@@ -715,7 +719,7 @@ PROMPT;
             self::logNlTelemetry('nl2sql.max_tokens', [
                 'route' => 'intent_json',
                 'model' => $model,
-                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptVersion' => $promptVersion,
                 'promptFingerprint' => $promptFingerprint,
                 'finishReason' => $finishReason,
                 'attempts' => $requestResult['attempts'] ?? null,
@@ -734,7 +738,7 @@ PROMPT;
             self::logValidationFailure('intent_json_parse', [
                 'route' => 'intent_json',
                 'model' => $model,
-                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptVersion' => $promptVersion,
                 'promptFingerprint' => $promptFingerprint,
                 'finishReason' => $finishReason,
                 'attempts' => $requestResult['attempts'] ?? null,
@@ -742,6 +746,24 @@ PROMPT;
                 'error' => $e->getMessage(),
             ] + $schemaTelemetry);
             throw $e;
+        }
+
+        $familyResponse = self::maybeRouteQueryFamilyIntentResponse(
+            $intent,
+            $queryFamily,
+            $prompt,
+            $campus,
+            [
+                'model' => $model,
+                'promptVersion' => $promptVersion,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ] + $schemaTelemetry
+        );
+        if ($familyResponse !== null) {
+            return $familyResponse;
         }
 
         $validation = QueryIntentService::validateIntent($intent);
@@ -752,7 +774,7 @@ PROMPT;
             self::logValidationFailure('intent_contract', [
                 'route' => 'intent_json',
                 'model' => $model,
-                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptVersion' => $promptVersion,
                 'promptFingerprint' => $promptFingerprint,
                 'finishReason' => $finishReason,
                 'attempts' => $requestResult['attempts'] ?? null,
@@ -778,7 +800,7 @@ PROMPT;
                 'route' => $fallback['route'],
                 'routeReason' => $fallback['routeReason'],
                 'model' => $model,
-                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptVersion' => $promptVersion,
                 'promptFingerprint' => $promptFingerprint,
                 'finishReason' => $finishReason,
                 'dataSource' => $fallback['dataSource'] ?? 'folio',
@@ -795,7 +817,7 @@ PROMPT;
             self::logValidationFailure('intent_to_query_definition', [
                 'route' => 'intent_json',
                 'model' => $model,
-                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptVersion' => $promptVersion,
                 'promptFingerprint' => $promptFingerprint,
                 'finishReason' => $finishReason,
                 'attempts' => $requestResult['attempts'] ?? null,
@@ -813,7 +835,7 @@ PROMPT;
                 'route' => $fallback['route'],
                 'routeReason' => $fallback['routeReason'],
                 'model' => $model,
-                'promptVersion' => self::INTENT_PROMPT_VERSION,
+                'promptVersion' => $promptVersion,
                 'promptFingerprint' => $promptFingerprint,
                 'finishReason' => $finishReason,
                 'dataSource' => $fallback['dataSource'] ?? 'folio',
@@ -847,7 +869,7 @@ PROMPT;
             'route' => 'builder_intent',
             'routeReason' => 'intent_supported',
             'model' => $model,
-            'promptVersion' => self::INTENT_PROMPT_VERSION,
+            'promptVersion' => $promptVersion,
             'promptFingerprint' => $promptFingerprint,
             'finishReason' => $finishReason,
             'dataSource' => $dataSource,
@@ -862,6 +884,107 @@ PROMPT;
             'route' => 'builder_intent',
             'routeReason' => 'intent_supported',
         ];
+    }
+
+    private static function buildIntentRequestContext($prompt, $campus, string $schemaContext): array
+    {
+        $queryFamily = self::resolvePromptQueryFamily($prompt, $campus);
+        $systemPrompt = $queryFamily !== null
+            ? self::buildQueryFamilySlotSystemPrompt($queryFamily['familyKey'], $campus)
+            : self::buildIntentSystemPrompt($schemaContext, $campus);
+        $promptVersion = $queryFamily !== null
+            ? self::FAMILY_SLOT_PROMPT_VERSION
+            : self::INTENT_PROMPT_VERSION;
+
+        return [
+            'queryFamily' => $queryFamily,
+            'systemPrompt' => $systemPrompt,
+            'promptVersion' => $promptVersion,
+        ];
+    }
+
+    private static function maybeRouteQueryFamilyIntentResponse(
+        array $intent,
+        ?array $queryFamily,
+        $prompt,
+        $campus,
+        array $telemetryContext,
+        $familyResponseBuilder = null,
+        $legacyFallbackFactory = null
+    ): ?array {
+        if ($queryFamily === null) {
+            return null;
+        }
+
+        $expectedFamilyKey = trim((string)($queryFamily['familyKey'] ?? ''));
+        $returnedFamilyKey = trim((string)($intent['familyKey'] ?? ''));
+        if ($expectedFamilyKey !== '' && $returnedFamilyKey !== $expectedFamilyKey) {
+            if ($legacyFallbackFactory === null) {
+                $legacyFallbackFactory = function () use ($prompt, $campus): array {
+                    return self::generateSql($prompt, $campus, true);
+                };
+            }
+
+            $reason = 'family_contract_mismatch';
+            self::logValidationFailure('family_contract_mismatch', [
+                'route' => 'intent_json',
+                'model' => $telemetryContext['model'] ?? null,
+                'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+                'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+                'finishReason' => $telemetryContext['finishReason'] ?? null,
+                'attempts' => $telemetryContext['attempts'] ?? null,
+                'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+                'expectedFamilyKey' => $expectedFamilyKey,
+                'returnedFamilyKey' => $returnedFamilyKey === '' ? null : $returnedFamilyKey,
+            ] + $telemetryContext);
+            self::logRouteSelection('legacy_fallback', $reason . ':' . $expectedFamilyKey, [
+                'query' => [],
+            ]);
+
+            $fallback = $legacyFallbackFactory();
+            $fallback['route'] = 'legacy_fallback';
+            $fallback['routeReason'] = $reason;
+            self::logNlTelemetry('nl2sql.generated', [
+                'route' => $fallback['route'],
+                'routeReason' => $fallback['routeReason'],
+                'model' => $telemetryContext['model'] ?? null,
+                'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+                'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+                'finishReason' => $telemetryContext['finishReason'] ?? null,
+                'dataSource' => $fallback['dataSource'] ?? 'folio',
+                'attempts' => $telemetryContext['attempts'] ?? null,
+                'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+                'expectedFamilyKey' => $expectedFamilyKey,
+                'returnedFamilyKey' => $returnedFamilyKey === '' ? null : $returnedFamilyKey,
+            ] + $telemetryContext);
+            return $fallback;
+        }
+
+        if ($familyResponseBuilder === null) {
+            $familyResponseBuilder = function (
+                array $intent,
+                array $queryFamily,
+                $prompt,
+                $campus,
+                array $telemetryContext
+            ): array {
+                return self::buildQueryFamilyIntentResponse(
+                    $intent,
+                    $queryFamily,
+                    $prompt,
+                    $campus,
+                    $telemetryContext
+                );
+            };
+        }
+
+        return $familyResponseBuilder(
+            $intent,
+            $queryFamily,
+            $prompt,
+            $campus,
+            $telemetryContext
+        );
     }
 
     /**
@@ -1793,6 +1916,1047 @@ PROMPT;
         return $sql;
     }
 
+    private static function buildQueryFamilyIntentResponse(
+        array $intent,
+        array $queryFamily,
+        $prompt,
+        $campus,
+        array $telemetryContext,
+        $familyResultBuilder = null
+    ): array {
+        $intent = self::recoverPromptScopedFamilySlots(
+            $intent,
+            (string)$prompt,
+            $campus
+        );
+
+        $slotValidation = QueryFamilySlotService::validateFamilyPayload($intent, [
+            'campus' => $campus,
+        ]);
+        if (empty($slotValidation['valid'])) {
+            $clarification = self::buildFamilySlotClarificationResponse(
+                $slotValidation['errors'] ?? [],
+                $intent,
+                $telemetryContext
+            );
+            if ($clarification !== null) {
+                return $clarification;
+            }
+
+            $first = $slotValidation['errors'][0] ?? [];
+            $path = $first['path'] ?? 'slots';
+            $message = $first['message'] ?? 'Unknown validation error.';
+            self::logValidationFailure('family_slot_contract', [
+                'route' => 'intent_json',
+                'model' => $telemetryContext['model'] ?? null,
+                'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+                'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+                'finishReason' => $telemetryContext['finishReason'] ?? null,
+                'attempts' => $telemetryContext['attempts'] ?? null,
+                'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+                'errorCount' => count($slotValidation['errors'] ?? []),
+                'firstErrorPath' => $path,
+                'firstErrorMessage' => $message,
+            ] + $telemetryContext);
+            throw new \RuntimeException(
+                "Model returned invalid family slot JSON ({$path}): {$message}"
+            );
+        }
+
+        $normalizedPayload = QueryFamilySlotService::applyPromptMatchPolicy(
+            $slotValidation['normalizedPayload'],
+            (string)$prompt,
+            $campus
+        );
+        $normalizedPayload = self::normalizeQueryFamilyPayload(
+            $normalizedPayload,
+            (string)$prompt,
+            $campus
+        );
+
+        $routeReason = 'family_contract_supported:'
+            . ($normalizedPayload['familyKey'] ?? $queryFamily['familyKey'] ?? '');
+
+        if ($familyResultBuilder === null) {
+            $familyResultBuilder = function (
+                array $normalizedPayload,
+                string $familyRouteReason,
+                $requestPrompt,
+                $requestCampus,
+                array $requestTelemetry
+            ): array {
+                return self::buildCompiledQueryFamilyOrLegacyFallback(
+                    $normalizedPayload,
+                    $familyRouteReason,
+                    $requestPrompt,
+                    $requestCampus,
+                    $requestTelemetry
+                );
+            };
+        }
+
+        $compiledFamily = $familyResultBuilder(
+            $normalizedPayload,
+            $routeReason,
+            $prompt,
+            $campus,
+            $telemetryContext
+        );
+
+        if (($compiledFamily['route'] ?? null) === 'legacy_fallback') {
+            return $compiledFamily;
+        }
+
+        self::logRouteSelection('builder_intent', $routeReason, [
+            'intentVersion' => QueryIntentService::CONTRACT_VERSION,
+            'query' => [
+                'tables' => $compiledFamily['queryDefinition']['tables'] ?? [],
+                'select' => $compiledFamily['queryDefinition']['columns'] ?? [],
+                'where' => $compiledFamily['queryDefinition']['filters'] ?? [],
+                'joins' => $compiledFamily['queryDefinition']['joins'] ?? [],
+            ],
+        ]);
+        self::logNlTelemetry('nl2sql.generated', [
+            'route' => 'builder_intent',
+            'routeReason' => $routeReason,
+            'model' => $telemetryContext['model'] ?? null,
+            'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+            'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+            'finishReason' => $telemetryContext['finishReason'] ?? null,
+            'dataSource' => $compiledFamily['dataSource'] ?? 'folio',
+            'attempts' => $telemetryContext['attempts'] ?? null,
+            'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+        ] + $telemetryContext);
+
+        unset($compiledFamily['queryDefinition']);
+        return $compiledFamily;
+    }
+
+    private static function recoverPromptScopedFamilySlots(array $intent, string $prompt, $campus = null): array
+    {
+        $familyKey = trim((string)($intent['familyKey'] ?? ''));
+        if (!is_array($intent['slots'] ?? null)) {
+            return $intent;
+        }
+
+        if ($familyKey === 'inventory_collection_age') {
+            $intent['slots'] = self::recoverCollectionAgeFamilySlotsFromPrompt(
+                $intent['slots'],
+                $prompt
+            );
+        }
+
+        if ($familyKey === 'inventory_library_location_listing') {
+            $intent['slots'] = self::recoverInventoryListingFamilySlotsFromPrompt(
+                $intent['slots'],
+                $prompt
+            );
+        }
+
+        return $intent;
+    }
+
+    private static function recoverInventoryListingFamilySlotsFromPrompt(array $slots, string $prompt): array
+    {
+        $locationCodes = self::extractInventoryListingLocationCodes($prompt);
+        if ($locationCodes === []) {
+            return $slots;
+        }
+
+        $slots['location_code'] = implode(',', $locationCodes);
+
+        $library = trim((string)($slots['library'] ?? ''));
+        if ($library !== '' && self::valueLooksLikeLocationCodeList($library) && !self::promptMentionsExplicitLibraryScope($prompt)) {
+            unset($slots['library']);
+        }
+
+        $location = trim((string)($slots['location'] ?? ''));
+        if ($location !== '' && self::valueLooksLikeLocationCodeList($location)) {
+            unset($slots['location']);
+        }
+
+        return $slots;
+    }
+
+    private static function recoverCollectionAgeFamilySlotsFromPrompt(array $slots, string $prompt): array
+    {
+        if (trim($prompt) === '') {
+            return $slots;
+        }
+
+        $library = trim((string)($slots['library'] ?? ''));
+        if ($library === '') {
+            $recoveredLibrary = self::extractCollectionAgeLibraryScope($prompt);
+            if ($recoveredLibrary !== '') {
+                $slots['library'] = $recoveredLibrary;
+            }
+        }
+
+        $location = trim((string)($slots['location'] ?? ''));
+        if ($location === '') {
+            $recoveredLocation = self::extractCollectionAgeLocationScope($prompt);
+            if ($recoveredLocation !== '') {
+                $slots['location'] = $recoveredLocation;
+            }
+        }
+
+        return $slots;
+    }
+
+    private static function extractCollectionAgeLibraryScope(string $prompt): string
+    {
+        $patterns = [
+            '/\b(?:in|at|from|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\b/i',
+            '/\b(?:of|in|at|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?)\s+reference collection\b/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $prompt, $matches) !== 1) {
+                continue;
+            }
+
+            $library = self::normalizeRecoveredPromptScope((string)($matches[1] ?? ''));
+            if ($library === '') {
+                continue;
+            }
+
+            if (preg_match('/\blibrary\b/i', $library) !== 1) {
+                $library .= ' Library';
+            }
+
+            return $library;
+        }
+
+        return '';
+    }
+
+    private static function extractCollectionAgeLocationScope(string $prompt): string
+    {
+        if (preg_match('/\breference collection\b/i', $prompt) === 1) {
+            return 'Reference collection';
+        }
+
+        return '';
+    }
+
+    private static function normalizeRecoveredPromptScope(string $value): string
+    {
+        return trim((string) preg_replace('/\s+/', ' ', $value));
+    }
+
+    private static function extractInventoryListingLocationCodes(string $prompt): array
+    {
+        if (trim($prompt) === '') {
+            return [];
+        }
+
+        $patterns = [
+            '/\blocation codes?\s+((?:[A-Z0-9]{3,10}(?:\s*(?:,|and|or)\s*)?)+)\b/i',
+            '/\b(?:in|at|from|for)\s+(?:the\s+)?((?:[A-Z0-9]{3,10}(?:\s*(?:,|and|or)\s*)?)+)\s+locations?\b/i',
+            '/\b(?:in|at|from|for)\s+(?:the\s+)?((?:[A-Z0-9]{3,10}(?:\s*(?:,|and|or)\s*)?)+)\s+location codes?\b/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $prompt, $matches) !== 1) {
+                continue;
+            }
+
+            preg_match_all('/\b[A-Z0-9]{3,10}\b/', strtoupper((string)($matches[1] ?? '')), $codeMatches);
+            $codes = [];
+            foreach (($codeMatches[0] ?? []) as $code) {
+                if (in_array($code, ['AND', 'OR'], true)) {
+                    continue;
+                }
+
+                if (!in_array($code, $codes, true)) {
+                    $codes[] = $code;
+                }
+            }
+
+            if ($codes !== []) {
+                return $codes;
+            }
+        }
+
+        return [];
+    }
+
+    private static function valueLooksLikeLocationCodeList(string $value): bool
+    {
+        if (trim($value) === '') {
+            return false;
+        }
+
+        $tokens = preg_split('/\s*(?:,|and|or)\s*/i', strtoupper($value)) ?: [];
+        $tokens = array_values(array_filter(array_map('trim', $tokens), static function (string $token): bool {
+            return $token !== '';
+        }));
+
+        if ($tokens === []) {
+            return false;
+        }
+
+        foreach ($tokens as $token) {
+            if (preg_match('/^[A-Z0-9]{3,10}$/', $token) !== 1) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static function promptMentionsExplicitLibraryScope(string $prompt): bool
+    {
+        return preg_match('/\blibrary\b/i', $prompt) === 1;
+    }
+
+    private static function normalizeQueryFamilyPayload(array $normalizedPayload, string $prompt, $campus = null): array
+    {
+        $familyKey = trim((string)($normalizedPayload['familyKey'] ?? ''));
+        if (!is_array($normalizedPayload['slots'] ?? null)) {
+            return $normalizedPayload;
+        }
+
+        if ($familyKey === 'circulation_trends_matrix') {
+            $normalizedPayload['slots'] = self::normalizeTrendFamilySlots(
+                $normalizedPayload['slots'],
+                $prompt,
+                $campus
+            );
+
+            return $normalizedPayload;
+        }
+
+        if ($familyKey === 'circulation_top_items') {
+            $normalizedPayload['slots'] = self::normalizeTopItemsFamilySlots(
+                $normalizedPayload['slots'],
+                $prompt,
+                $campus
+            );
+        }
+
+        return $normalizedPayload;
+    }
+
+    private static function normalizeTrendFamilySlots(array $slots, string $prompt, $campus = null): array
+    {
+        $normalizedPrompt = strtolower(trim($prompt));
+        if ($normalizedPrompt === '') {
+            return $slots;
+        }
+
+        $groupingDimension = trim((string)($slots['grouping_dimension'] ?? ''));
+        if ($groupingDimension !== '') {
+            $normalizedGroupingDimension = strtolower(str_replace(['-', ' '], '_', $groupingDimension));
+            if (in_array($normalizedGroupingDimension, ['primary_call_number_class', 'call_number_class'], true)) {
+                $slots['grouping_dimension'] = 'primary_call_number_class';
+            }
+        }
+
+        $circulationSourcePolicy = trim((string)($slots['circulation_source_policy'] ?? ''));
+        if (self::promptMentionsFormerAlephComparisonPolicy($normalizedPrompt)) {
+            $slots['circulation_source_policy'] = 'former_aleph_comparison';
+
+            return $slots;
+        }
+
+        if (self::promptMentionsPriorYearComparisonPolicy($normalizedPrompt)) {
+            $slots['circulation_source_policy'] = 'prior_year_comparison';
+
+            return $slots;
+        }
+
+        if (self::promptMentionsCumulativeBeforeComparisonPolicy($normalizedPrompt)) {
+            $slots['circulation_source_policy'] = 'cumulative_before_selected_years_comparison';
+
+            return $slots;
+        }
+
+        if (
+            ($circulationSourcePolicy === '' || $circulationSourcePolicy !== 'current_loans_only')
+            && !self::promptMentionsExplicitHistoricalCirculationPolicy($normalizedPrompt)
+        ) {
+            $slots['circulation_source_policy'] = 'current_loans_only';
+        }
+
+        return $slots;
+    }
+
+    private static function normalizeTopItemsFamilySlots(array $slots, string $prompt, $campus = null): array
+    {
+        $materialType = strtolower(trim((string)($slots['material_type'] ?? '')));
+        if ($materialType !== '' && preg_match('/\bbooks?\b/', $materialType) === 1) {
+            $slots['material_type'] = 'book';
+        }
+
+        $limit = trim((string)($slots['limit'] ?? ''));
+        if ($limit === '' && preg_match('/\btop\s+(\d+)\b/i', $prompt, $matches) === 1) {
+            $slots['limit'] = $matches[1];
+        }
+
+        return $slots;
+    }
+
+    private static function promptMentionsExplicitHistoricalCirculationPolicy(string $normalizedPrompt): bool
+    {
+        if (self::promptMentionsFormerAlephComparisonPolicy($normalizedPrompt)
+            || self::promptMentionsPriorYearComparisonPolicy($normalizedPrompt)
+            || self::promptMentionsCumulativeBeforeComparisonPolicy($normalizedPrompt)
+        ) {
+            return true;
+        }
+
+        return preg_match('/\baudit[_ -]?loan\b/', $normalizedPrompt) === 1;
+    }
+
+    private static function buildFamilySlotClarificationResponse(
+        array $errors,
+        array $intent,
+        array $telemetryContext
+    ): ?array {
+        $missingSlots = [];
+        foreach ($errors as $error) {
+            if (!is_array($error)) {
+                continue;
+            }
+
+            if ((string)($error['code'] ?? '') !== 'required') {
+                continue;
+            }
+
+            $path = (string)($error['path'] ?? '');
+            if (strpos($path, 'slots.') !== 0) {
+                continue;
+            }
+
+            $slotName = substr($path, strlen('slots.'));
+            if ($slotName === false || $slotName === '') {
+                continue;
+            }
+
+            $missingSlots[] = $slotName;
+        }
+
+        $missingSlots = array_values(array_unique($missingSlots));
+        sort($missingSlots);
+        if (empty($missingSlots)) {
+            return null;
+        }
+
+        $question = self::buildFamilySlotClarificationQuestion($missingSlots);
+        $routeReason = 'family_slot_missing_required_slot';
+
+        self::logRouteSelection('clarification', $routeReason, [
+            'familyKey' => $intent['familyKey'] ?? null,
+            'missingSlots' => $missingSlots,
+        ]);
+        self::logNlTelemetry('nl2sql.generated', [
+            'route' => 'clarification',
+            'routeReason' => $routeReason,
+            'model' => $telemetryContext['model'] ?? null,
+            'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+            'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+            'finishReason' => $telemetryContext['finishReason'] ?? null,
+            'dataSource' => null,
+            'attempts' => $telemetryContext['attempts'] ?? null,
+            'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+            'missingSlots' => $missingSlots,
+        ] + $telemetryContext);
+
+        return [
+            'needsClarification' => true,
+            'clarificationType' => 'missing_required_slot',
+            'question' => $question,
+            'options' => [],
+            'missingSlots' => $missingSlots,
+            'warnings' => [],
+            'suggestions' => [],
+            'route' => 'clarification',
+            'routeReason' => $routeReason,
+        ];
+    }
+
+    private static function buildFamilySlotClarificationQuestion(array $missingSlots): string
+    {
+        sort($missingSlots);
+
+        if ($missingSlots === ['library']) {
+            return 'Which library should I use for this report?';
+        }
+
+        if ($missingSlots === ['location']) {
+            return 'Which location or collection should I use for this report?';
+        }
+
+        if ($missingSlots === ['location_code']) {
+            return 'Which location code should I use for this report?';
+        }
+
+        if (count($missingSlots) === 1) {
+            switch ($missingSlots[0]) {
+                case 'contributor_name':
+                    return 'Which contributor should I use for this report?';
+                case 'campus':
+                    return 'Which campus should I scope this report to?';
+                case 'material_type':
+                    return 'Which material type should I use for this report?';
+                case 'grouping_dimension':
+                    return 'Which grouping dimension should I use for this report?';
+                case 'year_buckets':
+                    return 'Which years should I use for this report?';
+                case 'requested_outputs':
+                    return 'What fields should I include in the results?';
+            }
+        }
+
+        return 'I need one more detail before I can generate SQL for this request.';
+    }
+
+    private static function buildCompiledQueryFamilyOrLegacyFallback(
+        array $normalizedPayload,
+        string $routeReason,
+        $prompt,
+        $campus,
+        array $telemetryContext,
+        $compiler = null,
+        $legacyFallbackFactory = null
+    ): array {
+        if ($compiler === null) {
+            $compiler = function (array $payload, string $reason): array {
+                return self::buildCompiledQueryFamilyResult($payload, $reason);
+            };
+        }
+
+        if ($legacyFallbackFactory === null) {
+            $legacyFallbackFactory = function () use ($prompt, $campus): array {
+                return self::generateSql($prompt, $campus, true);
+            };
+        }
+
+        try {
+            return $compiler($normalizedPayload, $routeReason);
+        } catch (\InvalidArgumentException | \RuntimeException $e) {
+            $reason = 'family_compiler_failed';
+            self::logRouteSelection('legacy_fallback', $reason . ': ' . $e->getMessage(), [
+                'query' => [],
+            ]);
+            $fallback = $legacyFallbackFactory();
+            $fallback['route'] = 'legacy_fallback';
+            $fallback['routeReason'] = $reason;
+            self::logNlTelemetry('nl2sql.generated', [
+                'route' => $fallback['route'],
+                'routeReason' => $fallback['routeReason'],
+                'model' => $telemetryContext['model'] ?? null,
+                'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+                'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+                'finishReason' => $telemetryContext['finishReason'] ?? null,
+                'dataSource' => $fallback['dataSource'] ?? 'folio',
+                'attempts' => $telemetryContext['attempts'] ?? null,
+                'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+            ] + $telemetryContext);
+            return $fallback;
+        }
+    }
+
+    private static function buildCompiledQueryFamilyResult(array $normalizedPayload, string $routeReason): array
+    {
+        $queryDef = QueryFamilyCompilerService::compileToQueryDefinition($normalizedPayload);
+        $built = QueryFamilyCompilerService::compileToSql($normalizedPayload);
+
+        $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
+        $sql = self::normalizeIdCasts($sql);
+
+        SqlBuilderService::validateSafety($sql);
+        SqlBuilderService::validateTablePolicy($sql);
+        self::validateTableReferences($sql);
+
+        try {
+            self::validateCompiledQueryFamilyShape($normalizedPayload, $queryDef, $sql);
+        } catch (\InvalidArgumentException $e) {
+            $issueFamily = 'family_sql_shape';
+            if (preg_match('/^([a-z0-9_]+)/i', $e->getMessage(), $matches) === 1) {
+                $issueFamily = strtolower((string)$matches[1]);
+            }
+
+            self::logValidationFailure('family_sql_shape', [
+                'route' => 'builder_intent',
+                'routeReason' => $routeReason,
+                'familyKey' => $normalizedPayload['familyKey'] ?? null,
+                'issueFamily' => $issueFamily,
+                'error' => $e->getMessage(),
+            ]);
+            throw $e;
+        }
+
+        $dataSource = 'folio';
+        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
+            $dataSource = 'local';
+        }
+
+        $tables = $queryDef['tables'] ?? [];
+        $explanation = 'Generated from structured family compiler mode.';
+        if (!empty($tables)) {
+            $explanation .= ' Tables: ' . implode(', ', $tables) . '.';
+        }
+
+        return [
+            'sql' => $sql,
+            'explanation' => $explanation,
+            'dataSource' => $dataSource,
+            'route' => 'builder_intent',
+            'routeReason' => $routeReason,
+            'queryDefinition' => $queryDef,
+        ];
+    }
+
+    private static function validateCompiledQueryFamilyShape(array $normalizedPayload, array $queryDef, string $sql): void
+    {
+        $familyKey = trim((string)($normalizedPayload['familyKey'] ?? ''));
+        if ($familyKey === 'inventory_collection_age') {
+            $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
+            $queryTables = is_array($queryDef['tables'] ?? null) ? $queryDef['tables'] : [];
+
+            $hasPublicationYearAnchor = in_array('inventory_instance__t__publication', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_instances', 'inventory_instance__t__publication')
+                && stripos($sql, 'LEFT JOIN inventory.instance__t__publication') !== false
+                && stripos($sql, 'publication__date_of_publication') !== false
+                && stripos($sql, "publication__date_of_publication ~ '^\\d{4}'") !== false;
+
+            $usesInvalidAgeSource = preg_match('/\b(status__date|metadata__created_date|cataloged_date)\b/i', $sql) === 1;
+            if (!$hasPublicationYearAnchor || $usesInvalidAgeSource) {
+                throw new \InvalidArgumentException(
+                    'missing_publication_year_anchor: Collection-age family prompts require validated instance publication-year logic.'
+                );
+            }
+
+            $library = trim((string)($slots['library'] ?? ''));
+            if ($library !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLibraryFilter = QueryFamilySlotService::resolveSlotMatch('library', $library, $matchPolicy);
+                $hasLibraryScope = in_array('inventory_libraries', $queryTables, true)
+                    && self::queryDefinitionHasJoin($queryDef, 'inventory_locations', 'inventory_libraries')
+                    && stripos($sql, 'JOIN inventory.loclibrary__t') !== false
+                    && self::queryDefinitionHasFilter($queryDef, 'inventory_libraries', 'name', (string)($expectedLibraryFilter['value'] ?? ''));
+
+                if (!$hasLibraryScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_library_scope_anchor: Collection-age family prompts require a library lookup join and filter.'
+                    );
+                }
+            }
+
+            $location = trim((string)($slots['location'] ?? ''));
+            if ($location !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLocationFilter = QueryFamilySlotService::resolveSlotMatch('location', $location, $matchPolicy);
+                $hasLocationScope = in_array('inventory_locations', $queryTables, true)
+                    && self::queryDefinitionHasJoin($queryDef, 'inventory_items', 'inventory_locations')
+                    && stripos($sql, 'JOIN inventory.location__t') !== false
+                    && self::queryDefinitionHasFilter($queryDef, 'inventory_locations', 'name', (string)($expectedLocationFilter['value'] ?? ''));
+
+                if (!$hasLocationScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_location_scope_anchor: Collection-age family location prompts require a location lookup join and filter.'
+                    );
+                }
+            }
+
+            return;
+        }
+
+        if ($familyKey === 'inventory_library_location_listing') {
+            $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
+            $queryTables = is_array($queryDef['tables'] ?? null) ? $queryDef['tables'] : [];
+            $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
+
+            $hasInventoryListingScopeAnchor = in_array('inventory_instances', $queryTables, true)
+                && in_array('inventory_holdings', $queryTables, true)
+                && in_array('inventory_items', $queryTables, true)
+                && in_array('inventory_locations', $queryTables, true)
+                && in_array('inventory_libraries', $queryTables, true)
+                && in_array('inventory_campuses', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_instances', 'inventory_holdings')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_holdings', 'inventory_items')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_items', 'inventory_locations')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_locations', 'inventory_libraries')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_libraries', 'inventory_campuses')
+                && stripos($sql, 'JOIN inventory.holdings_record__t') !== false
+                && stripos($sql, 'JOIN inventory.item__t') !== false
+                && stripos($sql, 'JOIN inventory.location__t') !== false
+                && stripos($sql, 'JOIN inventory.loclibrary__t') !== false
+                && stripos($sql, 'JOIN inventory.loccampus__t') !== false;
+
+            if (!$hasInventoryListingScopeAnchor) {
+                throw new \InvalidArgumentException(
+                    'missing_inventory_listing_scope_anchor: Library/location listing prompts require the canonical inventory scope path from instances through holdings, items, and library lookups.'
+                );
+            }
+
+            $requiresContributorJoin = false;
+            foreach ($requestedOutputs as $outputField) {
+                if (in_array($outputField, ['author', 'contributor_name'], true)) {
+                    $requiresContributorJoin = true;
+                    break;
+                }
+            }
+
+            if ($requiresContributorJoin) {
+                $hasContributorOutputAnchor = in_array('inventory_instance__t__contributors', $queryTables, true)
+                    && self::queryDefinitionHasJoin($queryDef, 'inventory_instances', 'inventory_instance__t__contributors')
+                    && stripos($sql, 'JOIN inventory.instance__t__contributors') !== false;
+
+                if (!$hasContributorOutputAnchor) {
+                    throw new \InvalidArgumentException(
+                        'missing_listing_contributor_anchor: Library/location listing prompts that request author outputs require the contributor join.'
+                    );
+                }
+            }
+
+            $campus = trim((string)($slots['campus'] ?? ''));
+            if ($campus !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedCampusFilter = QueryFamilySlotService::resolveSlotMatch('campus', $campus, $matchPolicy);
+                $hasCampusScope = self::queryDefinitionHasFilter($queryDef, 'inventory_campuses', 'name', (string)($expectedCampusFilter['value'] ?? ''));
+
+                if (!$hasCampusScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_campus_scope_anchor: Library/location listing prompts require a campus lookup filter when campus scope is present.'
+                    );
+                }
+            }
+
+            $library = trim((string)($slots['library'] ?? ''));
+            if ($library !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLibraryFilter = QueryFamilySlotService::resolveSlotMatch('library', $library, $matchPolicy);
+                $hasLibraryScope = self::queryDefinitionHasFilter($queryDef, 'inventory_libraries', 'name', (string)($expectedLibraryFilter['value'] ?? ''));
+
+                if (!$hasLibraryScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_library_scope_anchor: Library/location listing prompts require a library lookup filter.'
+                    );
+                }
+            }
+
+            $location = trim((string)($slots['location'] ?? ''));
+            if ($location !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLocationFilter = QueryFamilySlotService::resolveSlotMatch('location', $location, $matchPolicy);
+                $hasLocationScope = self::queryDefinitionHasFilter($queryDef, 'inventory_locations', 'name', (string)($expectedLocationFilter['value'] ?? ''));
+
+                if (!$hasLocationScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_location_scope_anchor: Library/location listing prompts require a location lookup filter when explicit location scope is present.'
+                    );
+                }
+            }
+
+            $locationCode = trim((string)($slots['location_code'] ?? ''));
+            if ($locationCode !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLocationCodeFilter = QueryFamilySlotService::resolveSlotMatch('location_code', $locationCode, $matchPolicy);
+                $hasLocationCodeScope = self::queryDefinitionHasFilter($queryDef, 'inventory_locations', 'code', (string)($expectedLocationCodeFilter['value'] ?? ''));
+
+                if (!$hasLocationCodeScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_location_code_scope_anchor: Library/location listing prompts with location codes require an inventory location code filter.'
+                    );
+                }
+            }
+
+            return;
+        }
+
+        if ($familyKey === 'circulation_top_items') {
+            $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
+            $queryTables = is_array($queryDef['tables'] ?? null) ? $queryDef['tables'] : [];
+
+            $hasInventoryScopeAnchor = in_array('inventory_instances', $queryTables, true)
+                && in_array('inventory_holdings', $queryTables, true)
+                && in_array('inventory_items', $queryTables, true)
+                && in_array('inventory_locations', $queryTables, true)
+                && in_array('inventory_libraries', $queryTables, true)
+                && in_array('inventory_campuses', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_instances', 'inventory_holdings')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_holdings', 'inventory_items')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_items', 'inventory_locations')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_locations', 'inventory_libraries')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_libraries', 'inventory_campuses')
+                && stripos($sql, 'JOIN inventory.holdings_record__t') !== false
+                && stripos($sql, 'JOIN inventory.instance__t') !== false
+                && stripos($sql, 'JOIN inventory.location__t') !== false
+                && stripos($sql, 'JOIN inventory.loclibrary__t') !== false
+                && stripos($sql, 'JOIN inventory.loccampus__t') !== false;
+
+            if (!$hasInventoryScopeAnchor) {
+                throw new \InvalidArgumentException(
+                    'missing_top_items_scope_anchor: Top-items family prompts require the canonical inventory scope path from instances through holdings, items, and library lookups.'
+                );
+            }
+
+            $campus = trim((string)($slots['campus'] ?? ''));
+            if ($campus !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedCampusFilter = QueryFamilySlotService::resolveSlotMatch('campus', $campus, $matchPolicy);
+                $hasCampusScope = self::queryDefinitionHasFilter($queryDef, 'inventory_campuses', 'name', (string)($expectedCampusFilter['value'] ?? ''));
+
+                if (!$hasCampusScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_campus_scope_anchor: Top-items family prompts require a campus lookup filter when campus scope is present.'
+                    );
+                }
+            }
+
+            $library = trim((string)($slots['library'] ?? ''));
+            if ($library !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLibraryFilter = QueryFamilySlotService::resolveSlotMatch('library', $library, $matchPolicy);
+                $hasLibraryScope = self::queryDefinitionHasFilter($queryDef, 'inventory_libraries', 'name', (string)($expectedLibraryFilter['value'] ?? ''));
+
+                if (!$hasLibraryScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_library_scope_anchor: Top-items family prompts require a library lookup filter.'
+                    );
+                }
+            }
+
+            $location = trim((string)($slots['location'] ?? ''));
+            if ($location !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLocationFilter = QueryFamilySlotService::resolveSlotMatch('location', $location, $matchPolicy);
+                $hasLocationScope = self::queryDefinitionHasFilter($queryDef, 'inventory_locations', 'name', (string)($expectedLocationFilter['value'] ?? ''));
+
+                if (!$hasLocationScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_location_scope_anchor: Top-items family prompts with explicit location scope require a location lookup filter.'
+                    );
+                }
+            }
+
+            $materialType = trim((string)($slots['material_type'] ?? ''));
+            if ($materialType !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedMaterialTypeFilter = QueryFamilySlotService::resolveSlotMatch('material_type', $materialType, $matchPolicy);
+                $hasMaterialTypeAnchor = in_array('inventory_material_types', $queryTables, true)
+                    && self::queryDefinitionHasJoin($queryDef, 'inventory_items', 'inventory_material_types')
+                    && stripos($sql, 'JOIN inventory.material_type__t') !== false
+                    && self::queryDefinitionHasFilter($queryDef, 'inventory_material_types', 'name', (string)($expectedMaterialTypeFilter['value'] ?? ''));
+
+                if (!$hasMaterialTypeAnchor) {
+                    throw new \InvalidArgumentException(
+                        'missing_material_type_anchor: Top-items family prompts require a material-type join and filter for ranked item scope.'
+                    );
+                }
+            }
+
+            $limit = trim((string)($slots['limit'] ?? ''));
+            $expectedLimit = $limit === '' ? QueryFamilySlotService::DEFAULT_LIMIT : max(1, min((int)$limit, QueryFamilySlotService::DEFAULT_LIMIT));
+            $hasCirculationAnchor = stripos($sql, 'FROM circulation.audit_loan__t al') !== false
+                && stripos($sql, "al.loan__action IN ('checkedout', 'checkedOutThroughOverride')") !== false
+                && stripos($sql, 'FROM inventory.item__t__notes itn') !== false
+                && stripos($sql, "itn.notes__item_note_type_id = '" . QueryFamilyCompilerService::FORMER_CIRCULATION_NOTE_TYPE_ID . "'") !== false
+                && stripos($sql, 'AS total_circulation') !== false
+                && stripos($sql, 'ORDER BY total_circulation DESC') !== false
+                && stripos($sql, 'LIMIT ' . $expectedLimit) !== false;
+
+            if (!$hasCirculationAnchor) {
+                throw new \InvalidArgumentException(
+                    'missing_top_items_circulation_anchor: Top-items family prompts require audit-loan counts, former-circulation notes, total_circulation ranking, and the requested top-N limit.'
+                );
+            }
+
+            return;
+        }
+
+        if ($familyKey === 'circulation_trends_matrix') {
+            $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
+            $queryTables = is_array($queryDef['tables'] ?? null) ? $queryDef['tables'] : [];
+
+            $hasCallNumberClassAnchor = in_array('circulation_loans', $queryTables, true)
+                && in_array('inventory_items', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'circulation_loans', 'inventory_items')
+                && stripos($sql, 'FROM circulation.loan__t') !== false
+                && stripos($sql, 'JOIN inventory.item__t') !== false
+                && stripos($sql, 'AS call_number_class') !== false
+                && stripos($sql, "effective_call_number_components__call_number ~ '^[A-Z]{1,3}[0-9]'") !== false
+                && stripos($sql, 'LPAD(') !== false
+                && preg_match('/LEFT\s*\([^\)]*call_number/i', $sql) !== 1;
+
+            if (!$hasCallNumberClassAnchor) {
+                throw new \InvalidArgumentException(
+                    'missing_call_number_class_anchor: Trend-matrix family prompts require the canonical primary call-number-class extraction logic.'
+                );
+            }
+
+            $hasLocationBranch = in_array('inventory_locations', $queryTables, true)
+                && in_array('inventory_libraries', $queryTables, true)
+                && in_array('inventory_campuses', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'circulation_loans', 'inventory_locations')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_locations', 'inventory_libraries')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_libraries', 'inventory_campuses')
+                && stripos($sql, 'JOIN inventory.location__t') !== false
+                && stripos($sql, 'JOIN inventory.loclibrary__t') !== false
+                && stripos($sql, 'JOIN inventory.loccampus__t') !== false;
+
+            if (!$hasLocationBranch) {
+                throw new \InvalidArgumentException(
+                    'missing_circulation_scope_anchor: Trend-matrix family prompts require the circulation location-to-library scope branch.'
+                );
+            }
+
+            $campus = trim((string)($slots['campus'] ?? ''));
+            if ($campus !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedCampusFilter = QueryFamilySlotService::resolveSlotMatch('campus', $campus, $matchPolicy);
+                $hasCampusScope = self::queryDefinitionHasFilter($queryDef, 'inventory_campuses', 'name', (string)($expectedCampusFilter['value'] ?? ''));
+
+                if (!$hasCampusScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_campus_scope_anchor: Trend-matrix family prompts require a campus lookup filter.'
+                    );
+                }
+            }
+
+            $library = trim((string)($slots['library'] ?? ''));
+            if ($library !== '') {
+                $matchPolicy = (string)($slots['match_policy'] ?? QueryFamilySlotService::DEFAULT_MATCH_POLICY);
+                $expectedLibraryFilter = QueryFamilySlotService::resolveSlotMatch('library', $library, $matchPolicy);
+                $hasLibraryScope = self::queryDefinitionHasFilter($queryDef, 'inventory_libraries', 'name', (string)($expectedLibraryFilter['value'] ?? ''));
+
+                if (!$hasLibraryScope) {
+                    throw new \InvalidArgumentException(
+                        'missing_library_scope_anchor: Trend-matrix family prompts require a library lookup filter.'
+                    );
+                }
+            }
+
+            $yearBuckets = is_array($slots['year_buckets'] ?? null) ? $slots['year_buckets'] : [];
+            foreach ($yearBuckets as $year) {
+                $year = (string)$year;
+                if (
+                    stripos($sql, 'EXTRACT(YEAR FROM cl.loan_date) = ' . $year) === false
+                    || stripos($sql, 'AS circulation_' . $year) === false
+                ) {
+                    throw new \InvalidArgumentException(
+                        'missing_year_bucket_anchor: Trend-matrix family prompts require one aggregate column per requested year bucket.'
+                    );
+                }
+            }
+
+            $circulationSourcePolicy = trim((string)($slots['circulation_source_policy'] ?? ''));
+            if ($circulationSourcePolicy === 'current_loans_only'
+                && (
+                    stripos($sql, "cl.action IN ('checkedout', 'checkedOutThroughOverride')") === false
+                    || stripos($sql, 'GROUP BY call_number_class') === false
+                )
+            ) {
+                throw new \InvalidArgumentException(
+                    'missing_current_circulation_anchor: Trend-matrix family prompts require current checkout action filtering and grouped matrix output.'
+                );
+            }
+
+            return;
+        }
+
+        if ($familyKey !== 'inventory_contributor_campus_item_barcode') {
+            return;
+        }
+
+        $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
+        $queryTables = is_array($queryDef['tables'] ?? null) ? $queryDef['tables'] : [];
+        $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
+
+        $requiresItemBranch = false;
+        foreach ($requestedOutputs as $outputField) {
+            if (in_array($outputField, ['barcode', 'item_id'], true)) {
+                $requiresItemBranch = true;
+                break;
+            }
+        }
+
+        if ($requiresItemBranch) {
+            $hasHoldingsBranch = in_array('inventory_holdings', $queryTables, true)
+                && in_array('inventory_items', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_instances', 'inventory_holdings')
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_holdings', 'inventory_items')
+                && stripos($sql, 'JOIN inventory.holdings_record__t') !== false
+                && stripos($sql, 'JOIN inventory.item__t') !== false;
+
+            if (!$hasHoldingsBranch) {
+                throw new \InvalidArgumentException(
+                    'missing_holdings_item_branch: Covered-family item outputs require holdings-to-items joins.'
+                );
+            }
+        }
+
+        $campus = trim((string)($slots['campus'] ?? ''));
+        if ($campus !== '') {
+            $hasCampusScope = in_array('inventory_campuses', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_libraries', 'inventory_campuses')
+                && stripos($sql, 'JOIN inventory.loccampus__t') !== false
+                && self::queryDefinitionHasFilter($queryDef, 'inventory_campuses', 'name', $campus);
+
+            if (!$hasCampusScope) {
+                throw new \InvalidArgumentException(
+                    'missing_campus_scope_anchor: Covered-family campus prompts require a campus lookup join and filter.'
+                );
+            }
+        }
+
+        $contributorNameType = trim((string)($slots['contributor_name_type'] ?? ''));
+        if ($contributorNameType !== '') {
+            $hasContributorNameTypeScope = in_array('inventory_contributor_name_types', $queryTables, true)
+                && self::queryDefinitionHasJoin($queryDef, 'inventory_instance__t__contributors', 'inventory_contributor_name_types')
+                && stripos($sql, 'JOIN inventory.contributor_name_type__t') !== false
+                && self::queryDefinitionHasFilter(
+                    $queryDef,
+                    'inventory_contributor_name_types',
+                    'name',
+                    $contributorNameType
+                );
+
+            if (!$hasContributorNameTypeScope) {
+                throw new \InvalidArgumentException(
+                    'missing_contributor_name_type_anchor: Covered-family contributor name type prompts require the contributor-name-type join and filter.'
+                );
+            }
+        }
+    }
+
+    private static function queryDefinitionHasJoin(array $queryDef, string $fromTable, string $toTable): bool
+    {
+        foreach (($queryDef['joins'] ?? []) as $join) {
+            if (!is_array($join)) {
+                continue;
+            }
+
+            if (($join['from_table'] ?? null) === $fromTable && ($join['to_table'] ?? null) === $toTable) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function queryDefinitionHasFilter(array $queryDef, string $table, string $column, string $value): bool
+    {
+        foreach (($queryDef['filters'] ?? []) as $filter) {
+            if (!is_array($filter)) {
+                continue;
+            }
+
+            if (
+                ($filter['table'] ?? null) === $table
+                && ($filter['column'] ?? null) === $column
+                && (string)($filter['value'] ?? '') === $value
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /**
      * Convert a scalar value to a SQL literal representation.
      *
@@ -2454,5 +3618,387 @@ PROMPT;
         $template['createdBy'] = 'ai';
 
         return $template;
+    }
+
+    private static function promptNeedsTrendTimeframeClarification(string $normalizedPrompt): bool
+    {
+        $mentionsCirculation = strpos($normalizedPrompt, 'circulation') !== false;
+        $mentionsTrend = preg_match('/\btrend\b|\btrends\b/i', $normalizedPrompt) === 1;
+        if (!$mentionsCirculation || !$mentionsTrend) {
+            return false;
+        }
+
+        if (self::promptHasExplicitTimeframe($normalizedPrompt)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function promptNeedsPreviousCirculationClarification(string $normalizedPrompt): bool
+    {
+        if (strpos($normalizedPrompt, 'previous circulation') === false) {
+            return false;
+        }
+
+        if (self::promptMentionsFormerAlephComparisonPolicy($normalizedPrompt)
+            || self::promptMentionsPriorYearComparisonPolicy($normalizedPrompt)
+            || self::promptMentionsCumulativeBeforeComparisonPolicy($normalizedPrompt)
+        ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function promptHasExplicitTimeframe(string $normalizedPrompt): bool
+    {
+        $timeframePatterns = [
+            '/\b(19|20)\d{2}\b/',
+            '/\blast\s+\d+\s+(day|days|week|weeks|month|months|year|years)\b/',
+            '/\bthis\s+(year|month|quarter|week)\b/',
+            '/\bcurrent\s+(year|month|quarter|week|fiscal year|academic year)\b/',
+            '/\bfiscal year\b/',
+            '/\bacademic year\b/',
+            '/\bbetween\b/',
+            '/\bfrom\b.*\bto\b/',
+            '/\bmonthly\b/',
+            '/\bweekly\b/',
+            '/\bdaily\b/',
+        ];
+
+        foreach ($timeframePatterns as $pattern) {
+            if (preg_match($pattern, $normalizedPrompt) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function promptMentionsFormerAlephComparisonPolicy(string $normalizedPrompt): bool
+    {
+        $formerAlephPatterns = [
+            '/\bformer\b/',
+            '/\bhistoric\b/',
+            '/\bhistorical\b/',
+            '/\baleph\b/',
+        ];
+
+        foreach ($formerAlephPatterns as $pattern) {
+            if (preg_match($pattern, $normalizedPrompt) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function promptMentionsPriorYearComparisonPolicy(string $normalizedPrompt): bool
+    {
+        $priorYearPatterns = [
+            '/\bprior year\b/',
+            '/\bprevious year\b/',
+            '/\byear over year\b/',
+            '/\byoy\b/',
+        ];
+
+        foreach ($priorYearPatterns as $pattern) {
+            if (preg_match($pattern, $normalizedPrompt) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function promptMentionsCumulativeBeforeComparisonPolicy(string $normalizedPrompt): bool
+    {
+        $cumulativeBeforePatterns = [
+            '/\bcumulative before\b/',
+            '/\bcumulative circulation before\b/',
+        ];
+
+        foreach ($cumulativeBeforePatterns as $pattern) {
+            if (preg_match($pattern, $normalizedPrompt) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function promptMentionsContributorConstraint($prompt)
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        return preg_match(
+            '/\b(other author|by this contributor|by the contributor|with (?:the )?(?:corporate[- ]body )?(?:author|authors|contributor|contributors)|(?:author|authors|contributor|contributors)\s+(?:named|called|listed as|matching)|corporate[- ]body contributor)\b/i',
+            $prompt
+        ) === 1;
+    }
+
+    private static function resolvePromptQueryFamily($prompt, $campus = null)
+    {
+        $prompt = strtolower(trim((string)$prompt));
+        if ($prompt === '') {
+            return null;
+        }
+
+        if (self::promptMentionsMarcConstraint($prompt)) {
+            return null;
+        }
+
+        if (self::promptMentionsCollectionAgeFamily($prompt)) {
+            return [
+                'familyKey' => 'inventory_collection_age',
+            ];
+        }
+
+        if (self::promptMentionsCirculationTrendMatrixFamily($prompt)) {
+            return [
+                'familyKey' => 'circulation_trends_matrix',
+            ];
+        }
+
+        if (self::promptMentionsTopCirculatingItemsFamily($prompt)) {
+            return [
+                'familyKey' => 'circulation_top_items',
+            ];
+        }
+
+        if (self::promptMentionsInventoryLibraryLocationListingFamily($prompt)) {
+            return [
+                'familyKey' => 'inventory_library_location_listing',
+            ];
+        }
+
+        if (!self::promptMentionsContributorConstraint($prompt)) {
+            return null;
+        }
+
+        if (!self::promptMentionsCoveredInventoryOutputs($prompt)) {
+            return null;
+        }
+
+        $hasCampusContext = !empty($campus) && $campus !== 'All Colleges';
+        $mentionsCampusLikeScope = self::promptMentionsCoveredInventoryScope($prompt);
+        if (!$hasCampusContext && !$mentionsCampusLikeScope) {
+            return null;
+        }
+
+        return [
+            'familyKey' => 'inventory_contributor_campus_item_barcode',
+        ];
+    }
+
+    private static function promptMentionsCoveredInventoryScope($prompt)
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        if (preg_match('/\b(campus|library|location|holdings?)\b/i', $prompt) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(at|from|for|in)\s+[a-z0-9 .\-]*college\b/i', $prompt) === 1) {
+            return true;
+        }
+
+        return preg_match('/\b[a-z0-9 .\-]*college\s+(campus|library)\b/i', $prompt) === 1;
+    }
+
+    private static function promptMentionsCollectionAgeFamily($prompt)
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        $mentionsAge = preg_match('/\b(average\s+age|avg\s+age|age)\b/i', $prompt) === 1;
+        if (!$mentionsAge) {
+            return false;
+        }
+
+        $mentionsScope = preg_match('/\b(library|location|collection|shelving)\b/i', $prompt) === 1;
+        if (!$mentionsScope) {
+            return false;
+        }
+
+        return preg_match('/\b(circulation|trend|trends|previous circulation|barcode|barcodes|instance number|item id|contributor|author)\b/i', $prompt) !== 1;
+    }
+
+    private static function promptMentionsCirculationTrendMatrixFamily($prompt)
+    {
+        if (!self::promptMentionsCirculationTrendMatrixCandidate($prompt)) {
+            return false;
+        }
+
+        return preg_match('/\b(primary call number class|call number class)\b/i', $prompt) === 1;
+    }
+
+    private static function promptMentionsCirculationTrendMatrixCandidate($prompt)
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        if (self::promptNeedsTrendTimeframeClarification(strtolower($prompt))) {
+            return false;
+        }
+
+        if (self::promptNeedsPreviousCirculationClarification(strtolower($prompt))) {
+            return false;
+        }
+
+        $mentionsCirculation = preg_match('/\b(circulation|loan|loans|checkout|checkouts)\b/i', $prompt) === 1;
+        if (!$mentionsCirculation) {
+            return false;
+        }
+
+        preg_match_all('/\b20\d{2}\b/', $prompt, $yearMatches);
+        if (count($yearMatches[0] ?? []) < 2) {
+            return false;
+        }
+
+        return preg_match('/\b(campus|library|location)\b/i', $prompt) === 1;
+    }
+
+    private static function promptMentionsTopCirculatingItemsFamily($prompt)
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        $hasTopRanking = preg_match('/\b(top|most)\b/i', $prompt) === 1;
+        $hasCirculationLanguage = preg_match('/\b(circulating|circulated|circulation)\b/i', $prompt) === 1;
+        $hasItemConstraint = preg_match('/\b(item|items|material|materials|book(?:s)?|dvd(?:s)?|cd(?:s)?|video(?:s)?|journal(?:s)?|magazine(?:s)?|map(?:s)?|score(?:s)?|thes(?:is|es)|dissertation(?:s)?)\b/i', $prompt) === 1;
+
+        return $hasTopRanking
+            && $hasCirculationLanguage
+            && $hasItemConstraint
+            && preg_match('/\b(campus|library|location)\b/i', $prompt) === 1;
+    }
+
+    private static function promptMentionsInventoryLibraryLocationListingFamily($prompt)
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        if (self::promptMentionsContributorConstraint($prompt)) {
+            return false;
+        }
+
+        if (!self::promptMentionsCoveredInventoryOutputs($prompt)) {
+            return false;
+        }
+
+        if (!self::promptMentionsCoveredInventoryScope($prompt)) {
+            return false;
+        }
+
+        $hasListingLanguage = preg_match('/\b(list|listing|show|create)\b/i', $prompt) === 1;
+        $hasInventoryNoun = preg_match('/\b(material|materials|item|items)\b/i', $prompt) === 1;
+
+        if (!$hasListingLanguage || !$hasInventoryNoun) {
+            return false;
+        }
+
+        return preg_match('/\b(top|circulating|circulation|average\s+age|avg\s+age|loan|checkout|trend|trends)\b/i', $prompt) !== 1;
+    }
+
+    private static function promptMentionsCoveredInventoryOutputs($prompt)
+    {
+        return preg_match('/\b(barcode|barcodes|item id|item ids|instance number|instance numbers|publication date|pub date|title|titles)\b/', (string)$prompt) === 1;
+    }
+
+    private static function promptMentionsMarcConstraint($prompt)
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        return preg_match('/\bmarc\b|\bfield\s*[0-9]{3}\b|\b[0-9]{3}\s*field\b|\b[0-9]xx\s+fields?\b/i', $prompt) === 1;
+    }
+
+    private static function buildQueryFamilySlotSystemPrompt($familyKey, $campus)
+    {
+        $contracts = QueryFamilyContractService::loadContracts();
+        $contract = $contracts[$familyKey] ?? null;
+        if (!is_array($contract)) {
+            throw new \RuntimeException('Missing query family contract for slot extraction: ' . $familyKey);
+        }
+
+        $campusRule = '';
+        if ($campus && $campus !== 'All Colleges') {
+            $safeCampus = str_replace("'", "''", (string)$campus);
+            $campusRule = <<<RULE
+
+CAMPUS SLOT DEFAULT:
+- The user's home institution is '{$safeCampus}'.
+- If the prompt does not name another campus explicitly, set slots.campus to '{$safeCampus}'.
+RULE;
+        }
+
+        $requiredSlots = json_encode(array_values($contract['slots']['required'] ?? []), JSON_UNESCAPED_SLASHES);
+        $supportedSlots = json_encode(array_values($contract['slots']['supported'] ?? []), JSON_UNESCAPED_SLASHES);
+        $allowedOutputs = json_encode(array_values($contract['outputs']['allowed'] ?? []), JSON_UNESCAPED_SLASHES);
+        $matchPolicies = json_encode(array_values($contract['matchPolicy']['supported'] ?? []), JSON_UNESCAPED_SLASHES);
+        $defaultMatchPolicy = trim((string)($contract['matchPolicy']['default'] ?? 'case_insensitive_contains'));
+        $slotContract = self::buildQueryFamilySlotPromptContract($contract, $defaultMatchPolicy);
+
+        return <<<PROMPT
+You are a deterministic query-family slot extractor for a FOLIO inventory workflow.
+
+Return ONLY a JSON object matching this contract:
+{$slotContract}
+
+Rules:
+1. Use only the family key {$familyKey}.
+2. Required slots: {$requiredSlots}
+3. Supported slots: {$supportedSlots}
+4. Allowed outputs: {$allowedOutputs}
+5. Supported match policies: {$matchPolicies}
+6. Choose exact_phrase when the prompt uses quotation marks or wording such as named, listed as, or called for a contributor or other named entity; otherwise use {$defaultMatchPolicy}.
+7. Do NOT return tables, joins, SQL operators, SQL snippets, raw schema names, or query objects.
+8. Do NOT include markdown, code fences, or commentary.
+{$campusRule}
+PROMPT;
+    }
+
+    private static function buildQueryFamilySlotPromptContract(array $contract, string $defaultMatchPolicy): string
+    {
+        $requiredSlots = array_fill_keys(array_values($contract['slots']['required'] ?? []), true);
+        $supportedSlots = array_values($contract['slots']['supported'] ?? []);
+
+        $lines = [];
+        $lines[] = '{';
+        $lines[] = '    "familyKey": "' . ($contract['familyKey'] ?? '') . '",';
+        $lines[] = '    "slots": {';
+
+        $slotLines = [];
+        foreach ($supportedSlots as $slotName) {
+            if ($slotName === 'year_buckets') {
+                $slotLines[] = '        "' . $slotName . '": ["' . (isset($requiredSlots[$slotName]) ? 'required years' : 'optional years') . '"]';
+                continue;
+            }
+
+            $slotLines[] = '        "' . $slotName . '": "' . (isset($requiredSlots[$slotName]) ? 'required string' : 'optional string') . '"';
+        }
+        $slotLines[] = '        "requested_outputs": ["one or more allowed outputs"]';
+        $slotLines[] = '        "match_policy": "' . $defaultMatchPolicy . '"';
+
+        $lastIndex = count($slotLines) - 1;
+        foreach ($slotLines as $index => $slotLine) {
+            $lines[] = $slotLine . ($index === $lastIndex ? '' : ',');
+        }
+
+        $lines[] = '    }';
+        $lines[] = '}';
+
+        return implode("\n", $lines);
     }
 }
