@@ -1089,6 +1089,24 @@ class FolioSchemaService
     }
 
     /**
+     * Discover the live column type for a table/column pair.
+     *
+     * @param string $tableName MetaDB schema.table__t name or LDP1 name
+     * @param string $columnName Column name
+     * @return string|null
+     */
+    public static function discoverColumnType($tableName, $columnName)
+    {
+        foreach (self::discoverColumnsFor($tableName) as $column) {
+            if (($column['name'] ?? null) === $columnName) {
+                return (string)($column['type'] ?? '');
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Discover subtables (e.g. invoice.invoice_lines__t__fund_distributions).
      * These are flattened array/object tables created by LDLite from nested JSON.
      * Pattern: schema.parent__t__child — parent FK is parent__t.id.
@@ -1519,6 +1537,263 @@ class FolioSchemaService
     }
 
     /**
+     * Remove prompt guidance that references schemas/tables the SQL safety layer blocks.
+     */
+    private static function containsBlockedPromptReference(string $text): bool
+    {
+        $normalized = strtolower(trim($text));
+        if ($normalized === '') {
+            return false;
+        }
+
+        foreach (self::EXCLUDED_TABLES as $blockedTable) {
+            if (strpos($normalized, strtolower($blockedTable)) !== false) {
+                return true;
+            }
+        }
+
+        foreach (self::EXCLUDED_SCHEMAS as $blockedSchema) {
+            $blockedSchema = strtolower($blockedSchema);
+            if (strpos($normalized, $blockedSchema . '.') !== false) {
+                return true;
+            }
+        }
+
+        return preg_match('/\bmarctab\b/i', $normalized) === 1;
+    }
+
+    /**
+     * Strip blocked-schema guidance while preserving adjacent supported guidance.
+     */
+    private static function isJsonLikeColumnType(?string $columnType): bool
+    {
+        $normalized = strtolower(trim((string)$columnType));
+        return $normalized === 'jsonb' || $normalized === 'json';
+    }
+
+    /**
+     * Normalize parsed_record__content guidance to match the live column type.
+     */
+    private static function normalizeParsedRecordPromptText(string $text, ?string $parsedRecordContentType): string
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return $text;
+        }
+
+        $recordsHasStateColumn = self::discoverColumnType('folio_source_record.records__t', 'state') !== null;
+        $recordsHasDeletedColumn = self::discoverColumnType('folio_source_record.records__t', 'deleted') !== null;
+        $recordsHasExternalIdColumn = self::discoverColumnType('folio_source_record.records__t', 'external_id') !== null;
+        $recordsHasInstanceIdColumn = self::discoverColumnType('folio_source_record.records__t', 'external_ids_holder__instance_id') !== null;
+
+        if (!$recordsHasExternalIdColumn && $recordsHasInstanceIdColumn && stripos($text, 'external_id') !== false) {
+            $text = preg_replace(
+                '/\b([A-Za-z_][A-Za-z0-9_]*)\.external_id\b/i',
+                '$1.external_ids_holder__instance_id',
+                $text
+            );
+            $text = str_ireplace('records__t.external_id', 'records__t.external_ids_holder__instance_id', $text);
+            if (stripos($text, 'records__t') !== false || stripos($text, 'parsed_record__content') !== false) {
+                $text = preg_replace('/\bexternal_id\b/i', 'external_ids_holder__instance_id', $text);
+            }
+        }
+
+        if (!$recordsHasStateColumn && $recordsHasDeletedColumn) {
+            $text = preg_replace(
+                '/\b([A-Za-z_][A-Za-z0-9_]*)\.state\s*=\s*([\'"])ACTUAL\2/i',
+                'COALESCE($1.deleted, false) = false',
+                $text
+            );
+            $text = preg_replace(
+                '/\brecords__t\.state\s*=\s*([\'"])ACTUAL\1/i',
+                'COALESCE(records__t.deleted, false) = false',
+                $text
+            );
+            $text = preg_replace('/\bstate\s*=\s*([\'"])ACTUAL\1/i', 'COALESCE(deleted, false) = false', $text);
+            $text = preg_replace('/\bstate\s*=\s*ACTUAL\b/i', 'COALESCE(deleted, false) = false', $text);
+            $text = str_ireplace('with state = ACTUAL', 'with COALESCE(deleted, false) = false', $text);
+        }
+
+        if (!self::isJsonLikeColumnType($parsedRecordContentType)) {
+            return $text;
+        }
+
+        $text = preg_replace(
+            '/((?:\b[A-Za-z_][A-Za-z0-9_]*\.)?parsed_record__content)(?!::text)(\s+(?:NOT\s+ILIKE|ILIKE)\b)/i',
+            '$1::text$2',
+            $text
+        );
+
+        $cleanLines = [];
+        $lines = preg_split('/\r?\n/', $text) ?: [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+
+            if (stripos($line, 'parsed_record__content') !== false) {
+                if (
+                    preg_match('/\bTEXT\b/i', $line) ||
+                    stripos($line, 'NOT jsonb') !== false ||
+                    stripos($line, 'cast to ::jsonb') !== false ||
+                    stripos($line, 'cast it to JSONB') !== false ||
+                    stripos($line, 'cast it to jsonb') !== false ||
+                    stripos($line, 'never cast it to jsonb') !== false
+                ) {
+                    continue;
+                }
+            }
+
+            $cleanLines[] = $line;
+        }
+
+        return trim(implode("\n", $cleanLines));
+    }
+
+    /**
+     * Strip blocked-schema guidance while preserving adjacent supported guidance.
+     */
+    private static function sanitizePromptText(string $text, ?string $parsedRecordContentType = null): string
+    {
+        $text = self::normalizeParsedRecordPromptText(trim($text), $parsedRecordContentType);
+        if ($text === '' || !self::containsBlockedPromptReference($text)) {
+            return $text;
+        }
+
+        $cleanLines = [];
+        $lines = preg_split('/\r?\n/', $text) ?: [];
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '') {
+                continue;
+            }
+
+            if (!self::containsBlockedPromptReference($line)) {
+                $cleanLines[] = $line;
+                continue;
+            }
+
+            $cleanSentences = [];
+            $sentences = preg_split('/(?<=[.!?])\s+/', $line) ?: [];
+            foreach ($sentences as $sentence) {
+                $sentence = trim($sentence);
+                if ($sentence === '' || self::containsBlockedPromptReference($sentence)) {
+                    continue;
+                }
+                $cleanSentences[] = $sentence;
+            }
+
+            if (!empty($cleanSentences)) {
+                $cleanLines[] = implode(' ', $cleanSentences);
+            }
+        }
+
+        return trim(implode("\n", $cleanLines));
+    }
+
+    /**
+     * Sanitize keyed prompt hints so blocked-schema guidance never reaches the model.
+     */
+    private static function sanitizePromptHintMap(array $map, ?string $parsedRecordContentType = null): array
+    {
+        $clean = [];
+        foreach ($map as $key => $value) {
+            if (self::containsBlockedPromptReference((string)$key)) {
+                continue;
+            }
+
+            $sanitized = self::sanitizePromptText((string)$value, $parsedRecordContentType);
+            if ($sanitized === '') {
+                continue;
+            }
+
+            $clean[(string)$key] = $sanitized;
+        }
+
+        return $clean;
+    }
+
+    /**
+     * Drop few-shot examples that would be rejected by SQL table-policy validation.
+     */
+    private static function sanitizePromptExamples(array $examples, ?string $parsedRecordContentType = null): array
+    {
+        $clean = [];
+        foreach ($examples as $example) {
+            $question = self::sanitizePromptText((string)($example['question'] ?? ''), $parsedRecordContentType);
+            $sql = self::sanitizePromptText((string)($example['sql'] ?? ''), $parsedRecordContentType);
+            if ($question === '' || $sql === '') {
+                continue;
+            }
+
+            if (self::containsBlockedPromptReference($question) || self::containsBlockedPromptReference($sql)) {
+                continue;
+            }
+
+            $clean[] = [
+                'question' => $question,
+                'sql' => $sql,
+            ];
+        }
+
+        return $clean;
+    }
+
+    /**
+     * Sanitize data-pattern guidance so blocked schemas are never recommended.
+     */
+    private static function sanitizePromptDataPatterns(array $patterns, ?string $parsedRecordContentType = null): array
+    {
+        $clean = [];
+        foreach ($patterns as $tableName => $info) {
+            if (self::containsBlockedPromptReference((string)$tableName)) {
+                continue;
+            }
+
+            $columnWarnings = [];
+            foreach (($info['columnWarnings'] ?? []) as $column => $warning) {
+                $sanitized = self::sanitizePromptText((string)$warning, $parsedRecordContentType);
+                if ($sanitized === '') {
+                    continue;
+                }
+                $columnWarnings[(string)$column] = $sanitized;
+            }
+
+            $preferredApproach = [];
+            foreach (($info['preferredApproach'] ?? []) as $approach) {
+                $sanitized = self::sanitizePromptText((string)$approach, $parsedRecordContentType);
+                if ($sanitized === '') {
+                    continue;
+                }
+                $preferredApproach[] = $sanitized;
+            }
+
+            if ((string)$tableName === 'folio_source_record.records__t' && self::isJsonLikeColumnType($parsedRecordContentType)) {
+                $columnWarnings['parsed_record__content'] = 'JSONB type. Cast to ::text before using ILIKE/NOT ILIKE pattern matching; direct string operators on jsonb will fail.';
+
+                $jsonbApproach = "For MARC field presence/absence checks on parsed_record__content, cast to text first: parsed_record__content::text ILIKE '%\"300\"%' or parsed_record__content::text NOT ILIKE '%\"300\"%'.";
+                if (!in_array($jsonbApproach, $preferredApproach, true)) {
+                    array_unshift($preferredApproach, $jsonbApproach);
+                }
+            }
+
+            $sampleValues = $info['sampleValues'] ?? [];
+            if (empty($columnWarnings) && empty($preferredApproach) && empty($sampleValues)) {
+                continue;
+            }
+
+            $clean[(string)$tableName] = [
+                'columnWarnings' => $columnWarnings,
+                'sampleValues' => $sampleValues,
+                'preferredApproach' => $preferredApproach,
+            ];
+        }
+
+        return $clean;
+    }
+
+    /**
      * Load data patterns from data_patterns.json.
      * Returns column type warnings, sample values, and preferred query approaches
      * for tables that commonly cause AI-generated SQL errors.
@@ -1562,11 +1837,16 @@ class FolioSchemaService
         $rels = $schema['relationships'] ?? [];
         $metadbMap = self::discoverTableMapping();
         $allCols = self::discoverAllColumns();
+        $parsedRecordContentType = self::discoverColumnType('folio_source_record.records__t', 'parsed_record__content');
+        $recordsHasStateColumn = self::discoverColumnType('folio_source_record.records__t', 'state') !== null;
+        $recordsHasDeletedColumn = self::discoverColumnType('folio_source_record.records__t', 'deleted') !== null;
+        $recordsHasExternalIdColumn = self::discoverColumnType('folio_source_record.records__t', 'external_id') !== null;
+        $recordsHasInstanceIdColumn = self::discoverColumnType('folio_source_record.records__t', 'external_ids_holder__instance_id') !== null;
         $subtables = self::discoverSubtables();
         $domainHints = self::loadDomainHints();
-        $tableDescs = $domainHints['tableDescriptions'] ?? [];
-        $vocabulary = $domainHints['vocabulary'] ?? [];
-        $examples = $domainHints['examples'] ?? [];
+        $tableDescs = self::sanitizePromptHintMap($domainHints['tableDescriptions'] ?? [], $parsedRecordContentType);
+        $vocabulary = self::sanitizePromptHintMap($domainHints['vocabulary'] ?? [], $parsedRecordContentType);
+        $examples = self::sanitizePromptExamples($domainHints['examples'] ?? [], $parsedRecordContentType);
 
         // Keep prompt context size bounded and deterministic.
         $promptTerms = self::extractPromptTerms($prompt);
@@ -1707,8 +1987,20 @@ class FolioSchemaService
             }
         }
 
+        if (self::isJsonLikeColumnType($parsedRecordContentType)) {
+            $lines[] = "\n--- MARC Source Record Rule ---";
+            $lines[] = "folio_source_record.records__t.parsed_record__content is {$parsedRecordContentType} in this environment.";
+            $lines[] = "For ILIKE/NOT ILIKE MARC field checks, cast to text first: parsed_record__content::text ILIKE '%\"300\"%' or parsed_record__content::text NOT ILIKE '%\"300\"%'.";
+            if ($recordsHasInstanceIdColumn && !$recordsHasExternalIdColumn) {
+                $lines[] = "Join folio_source_record.records__t to inventory.instance__t via external_ids_holder__instance_id = instance__t.id.";
+            }
+            if (!$recordsHasStateColumn && $recordsHasDeletedColumn) {
+                $lines[] = "folio_source_record.records__t has no state column in this environment. Use COALESCE(deleted, false) = false when you need current, non-deleted source records.";
+            }
+        }
+
         // Append data patterns — column type warnings and sample values
-        $dataPatterns = self::loadDataPatterns();
+        $dataPatterns = self::sanitizePromptDataPatterns(self::loadDataPatterns(), $parsedRecordContentType);
         if (!empty($dataPatterns)) {
             $lines[] = "\n--- COLUMN TYPE WARNINGS & SAMPLE VALUES ---";
             $lines[] = "CRITICAL: Read this section BEFORE writing column expressions for these tables.";

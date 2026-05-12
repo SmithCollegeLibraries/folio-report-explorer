@@ -25,14 +25,68 @@ class GeminiService
     const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
 
     /**
-     * Resolve active AI provider (gemini|openai).
+     * Resolve preferred AI provider from settings (gemini|openai).
+     *
+     * @return string
+     */
+    private static function getPreferredAiProvider()
+    {
+        $provider = strtolower(trim((string)(Yii::$app->params['aiProvider'] ?? 'gemini')));
+        return $provider === 'openai' ? 'openai' : 'gemini';
+    }
+
+    /**
+     * Resolve the effective AI configuration.
+     * Falls back to the alternate provider when the preferred provider has no key.
+     *
+     * @return array{provider:string,apiKey:string,model:string}
+     */
+    private static function getAiConfig()
+    {
+        $preferredProvider = self::getPreferredAiProvider();
+        $geminiApiKey = trim((string)(Yii::$app->params['geminiApiKey'] ?? ''));
+        $openaiApiKey = trim((string)(Yii::$app->params['openaiApiKey'] ?? ''));
+
+        $provider = 'none';
+        $apiKey = '';
+
+        if ($preferredProvider === 'openai') {
+            if ($openaiApiKey !== '') {
+                $provider = 'openai';
+                $apiKey = $openaiApiKey;
+            } elseif ($geminiApiKey !== '') {
+                $provider = 'gemini';
+                $apiKey = $geminiApiKey;
+            }
+        } else {
+            if ($geminiApiKey !== '') {
+                $provider = 'gemini';
+                $apiKey = $geminiApiKey;
+            } elseif ($openaiApiKey !== '') {
+                $provider = 'openai';
+                $apiKey = $openaiApiKey;
+            }
+        }
+
+        $model = $provider === 'openai'
+            ? (string)(Yii::$app->params['openaiModel'] ?? 'gpt-4.1-mini')
+            : (string)(Yii::$app->params['geminiModel'] ?? 'gemini-2.5-flash');
+
+        return [
+            'provider' => $provider,
+            'apiKey' => $apiKey,
+            'model' => $model,
+        ];
+    }
+
+    /**
+     * Resolve active AI provider (gemini|openai|none).
      *
      * @return string
      */
     private static function getAiProvider()
     {
-        $provider = strtolower(trim((string)(Yii::$app->params['aiProvider'] ?? 'gemini')));
-        return $provider === 'openai' ? 'openai' : 'gemini';
+        return self::getAiConfig()['provider'];
     }
 
     /**
@@ -42,11 +96,7 @@ class GeminiService
      */
     private static function getAiApiKey()
     {
-        if (self::getAiProvider() === 'openai') {
-            return (string)(Yii::$app->params['openaiApiKey'] ?? '');
-        }
-
-        return (string)(Yii::$app->params['geminiApiKey'] ?? '');
+        return self::getAiConfig()['apiKey'];
     }
 
     /**
@@ -56,11 +106,17 @@ class GeminiService
      */
     private static function getAiModel()
     {
-        if (self::getAiProvider() === 'openai') {
-            return (string)(Yii::$app->params['openaiModel'] ?? 'gpt-4.1-mini');
-        }
+        return self::getAiConfig()['model'];
+    }
 
-        return (string)(Yii::$app->params['geminiModel'] ?? 'gemini-2.5-flash');
+    /**
+     * Standardized message when no AI provider key is configured.
+     *
+     * @return string
+     */
+    private static function getMissingAiApiKeyMessage()
+    {
+        return 'AI API key not configured. Set GEMINI_API_KEY or OPENAI_API_KEY in .env.';
     }
 
     /**
@@ -126,10 +182,7 @@ class GeminiService
     {
         $apiKey = self::getAiApiKey();
         if (empty($apiKey)) {
-            $provider = strtoupper(self::getAiProvider());
-            throw new \RuntimeException(
-                "{$provider} API key not configured."
-            );
+            throw new \RuntimeException(self::getMissingAiApiKeyMessage());
         }
 
         $model = self::getAiModel();
@@ -435,10 +488,7 @@ PROMPT;
 
         $apiKey = self::getAiApiKey();
         if (empty($apiKey)) {
-            $provider = strtoupper(self::getAiProvider());
-            throw new \RuntimeException(
-                "{$provider} API key not configured."
-            );
+            throw new \RuntimeException(self::getMissingAiApiKeyMessage());
         }
 
         $model = self::getAiModel();
@@ -1222,8 +1272,7 @@ PROMPT;
         $apiKey = self::getAiApiKey();
 
         if (empty($apiKey)) {
-            $providerName = strtoupper($provider);
-            throw new \RuntimeException("{$providerName} API key not configured.");
+            throw new \RuntimeException(self::getMissingAiApiKeyMessage());
         }
 
         $maxRetries = (int)(Yii::$app->params['geminiMaxRetries'] ?? self::DEFAULT_MAX_RETRIES);

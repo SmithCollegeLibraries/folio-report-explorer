@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS saved_queries (
     source ENUM('builder', 'nl', 'report') DEFAULT 'builder' COMMENT 'Origin: query builder, AI, or widget gallery',
     nl_prompt TEXT NULL COMMENT 'Original natural language question (for source=nl)',
     is_pinned TINYINT(1) DEFAULT 0 COMMENT 'Pinned to dashboard',
+    is_global TINYINT(1) DEFAULT 0 COMMENT 'Visible to all users on the dashboard',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_name (name),
@@ -38,6 +39,19 @@ CREATE TABLE IF NOT EXISTS saved_queries (
     INDEX idx_user_id (user_id),
     CONSTRAINT fk_saved_queries_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS user_dashboard_prefs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    saved_query_id INT NOT NULL,
+    position INT NOT NULL DEFAULT 0,
+    hidden TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY unique_user_item (user_id, saved_query_id),
+    INDEX idx_udp_user_id (user_id),
+    INDEX idx_udp_saved_query_id (saved_query_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS query_log (
     id INT AUTO_INCREMENT PRIMARY KEY,

@@ -445,6 +445,8 @@ class FolioQueryController extends Controller
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
         }
 
+        $sql = SqlBuilderService::normalizeForExecution($sql);
+
         // Safety validation
         try {
             SqlBuilderService::validateSafety($sql);
@@ -578,6 +580,8 @@ class FolioQueryController extends Controller
             Yii::$app->response->statusCode = 400;
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
         }
+
+        $sql = SqlBuilderService::normalizeForExecution($sql);
 
         // Safety validation
         try {
@@ -808,6 +812,9 @@ class FolioQueryController extends Controller
             $result = GeminiService::generateSqlWithShadow($prompt, $campus ?: null, $userId);
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
+            }
+            if (isset($result['sql'])) {
+                $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
             }
 
             $result['suggestions'] = [];

@@ -657,6 +657,90 @@ class SqlBuilderService
     }
 
     /**
+     * Normalize generated SQL for live-schema operator compatibility.
+     *
+     * In some environments `folio_source_record.records__t.parsed_record__content`
+     * is jsonb rather than text, so string operators must cast to ::text first.
+     *
+     * @param string $sql
+     * @return string
+     */
+    public static function normalizeForExecution($sql)
+    {
+        $sql = (string)$sql;
+        if ($sql === '') {
+            return $sql;
+        }
+
+        if (self::parsedRecordContentNeedsTextCast()) {
+            $sql = preg_replace(
+                '/((?:\b[A-Za-z_][A-Za-z0-9_]*\.)?parsed_record__content)(?!::text)(\s+AS\s+[A-Za-z_][A-Za-z0-9_]*\b)/i',
+                '$1::text$2',
+                $sql
+            );
+
+            $sql = preg_replace(
+                '/((?:\b[A-Za-z_][A-Za-z0-9_]*\.)?parsed_record__content)(?!::text)(\s+(?:NOT\s+ILIKE|ILIKE)\b)/i',
+                '$1::text$2',
+                $sql
+            );
+        }
+
+        return self::normalizeSourceRecordStateFilter($sql);
+    }
+
+    /**
+     * Detect environments where parsed_record__content is json/jsonb.
+     */
+    private static function parsedRecordContentNeedsTextCast(): bool
+    {
+        $columnType = strtolower(trim((string)FolioSchemaService::discoverColumnType(
+            'folio_source_record.records__t',
+            'parsed_record__content'
+        )));
+
+        return $columnType === 'jsonb' || $columnType === 'json';
+    }
+
+    /**
+     * Replace stale source-record state filters with the live deleted flag contract.
+     */
+    private static function normalizeSourceRecordStateFilter(string $sql): string
+    {
+        if (stripos($sql, 'folio_source_record.records__t') === false) {
+            return $sql;
+        }
+
+        $hasStateColumn = FolioSchemaService::discoverColumnType('folio_source_record.records__t', 'state') !== null;
+        $hasDeletedColumn = FolioSchemaService::discoverColumnType('folio_source_record.records__t', 'deleted') !== null;
+        if ($hasStateColumn || !$hasDeletedColumn) {
+            return $sql;
+        }
+
+        $sql = preg_replace(
+            '/\bfolio_source_record\.records__t\.state\s*=\s*([\'"])ACTUAL\1/i',
+            'COALESCE(folio_source_record.records__t.deleted, false) = false',
+            $sql
+        );
+
+        preg_match_all(
+            '/(?:FROM|JOIN)\s+folio_source_record\.records__t(?:\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*))?(?=\s+(?:ON|USING|WHERE|LEFT|RIGHT|INNER|FULL|JOIN|LIMIT|GROUP|ORDER|$))/i',
+            $sql,
+            $matches
+        );
+
+        foreach (array_unique(array_filter($matches[1] ?? [])) as $alias) {
+            $sql = preg_replace(
+                '/\b' . preg_quote($alias, '/') . '\.state\s*=\s*([\'"])ACTUAL\1/i',
+                'COALESCE(' . $alias . '.deleted, false) = false',
+                $sql
+            );
+        }
+
+        return $sql;
+    }
+
+    /**
      * Enforce blocked schema/table policy for SQL execution.
      * @param string $sql
      * @throws \InvalidArgumentException

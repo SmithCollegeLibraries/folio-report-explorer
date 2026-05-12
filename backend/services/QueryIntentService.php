@@ -2,6 +2,8 @@
 
 namespace app\services;
 
+use Yii;
+
 /**
  * QueryIntentService
  *
@@ -68,7 +70,7 @@ class QueryIntentService
             ];
         }
 
-        $tables = self::validateStringArray($query['tables'] ?? null, 'query.tables', true, $errors);
+        $tables = self::validateTableArray($query['tables'] ?? null, 'query.tables', true, $errors);
         $select = self::validateSelect($query['select'] ?? null, 'query.select', $errors);
         $where = self::validateWhere($query['where'] ?? [], 'query.where', $errors);
         $groupBy = self::validateTableColumnList($query['groupBy'] ?? [], 'query.groupBy', false, $errors);
@@ -206,7 +208,7 @@ class QueryIntentService
                 continue;
             }
 
-            $table = self::validateIdentifierField($item['table'] ?? null, $itemPath . '.table', false, $errors);
+            $table = self::validateTableIdentifierField($item['table'] ?? null, $itemPath . '.table', $errors);
             $column = self::validateIdentifierField($item['column'] ?? null, $itemPath . '.column', true, $errors);
             $alias = null;
             if (array_key_exists('alias', $item) && $item['alias'] !== null && trim((string)$item['alias']) !== '') {
@@ -253,7 +255,7 @@ class QueryIntentService
                 continue;
             }
 
-            $table = self::validateIdentifierField($item['table'] ?? null, $itemPath . '.table', false, $errors);
+            $table = self::validateTableIdentifierField($item['table'] ?? null, $itemPath . '.table', $errors);
             $column = self::validateIdentifierField($item['column'] ?? null, $itemPath . '.column', false, $errors);
             $op = strtoupper(trim((string)($item['op'] ?? '')));
             if ($op === '') {
@@ -298,7 +300,7 @@ class QueryIntentService
                 continue;
             }
 
-            $table = self::validateIdentifierField($item['table'] ?? null, $itemPath . '.table', false, $errors);
+            $table = self::validateTableIdentifierField($item['table'] ?? null, $itemPath . '.table', $errors);
             $column = self::validateIdentifierField($item['column'] ?? null, $itemPath . '.column', false, $errors);
             $direction = strtoupper(trim((string)($item['direction'] ?? 'ASC')));
             if (!in_array($direction, ['ASC', 'DESC'], true)) {
@@ -343,7 +345,7 @@ class QueryIntentService
                 );
             }
 
-            $table = self::validateIdentifierField($item['table'] ?? null, $itemPath . '.table', false, $errors);
+            $table = self::validateTableIdentifierField($item['table'] ?? null, $itemPath . '.table', $errors);
             $column = self::validateIdentifierField($item['column'] ?? null, $itemPath . '.column', true, $errors);
 
             $op = strtoupper(trim((string)($item['op'] ?? '')));
@@ -394,9 +396,9 @@ class QueryIntentService
                 continue;
             }
 
-            $fromTable = self::validateIdentifierField($item['fromTable'] ?? null, $itemPath . '.fromTable', false, $errors);
+            $fromTable = self::validateTableIdentifierField($item['fromTable'] ?? null, $itemPath . '.fromTable', $errors);
             $fromColumn = self::validateIdentifierField($item['fromColumn'] ?? null, $itemPath . '.fromColumn', false, $errors);
-            $toTable = self::validateIdentifierField($item['toTable'] ?? null, $itemPath . '.toTable', false, $errors);
+            $toTable = self::validateTableIdentifierField($item['toTable'] ?? null, $itemPath . '.toTable', $errors);
             $toColumn = self::validateIdentifierField($item['toColumn'] ?? null, $itemPath . '.toColumn', false, $errors);
 
             $joinType = null;
@@ -439,7 +441,7 @@ class QueryIntentService
                 continue;
             }
 
-            $table = self::validateIdentifierField($item['table'] ?? null, $itemPath . '.table', false, $errors);
+            $table = self::validateTableIdentifierField($item['table'] ?? null, $itemPath . '.table', $errors);
             $column = self::validateIdentifierField($item['column'] ?? null, $itemPath . '.column', $allowStar, $errors);
 
             if ($table !== null && $column !== null) {
@@ -453,7 +455,7 @@ class QueryIntentService
         return $normalized;
     }
 
-    private static function validateStringArray($value, $path, $required, &$errors)
+    private static function validateTableArray($value, $path, $required, &$errors)
     {
         if (!is_array($value)) {
             if ($required) {
@@ -470,11 +472,26 @@ class QueryIntentService
         $normalized = [];
         foreach ($value as $i => $entry) {
             $itemPath = $path . '[' . $i . ']';
-            if (!is_string($entry) || trim($entry) === '') {
-                $errors[] = self::err($itemPath, 'type', 'Value must be a non-empty string.');
-                continue;
+            $table = self::validateTableIdentifierField($entry, $itemPath, $errors);
+            if ($table !== null) {
+                $normalized[] = $table;
             }
-            $normalized[] = trim($entry);
+        }
+
+        return $normalized;
+    }
+
+    private static function validateTableIdentifierField($value, $path, &$errors)
+    {
+        if (!is_string($value) || trim($value) === '') {
+            $errors[] = self::err($path, 'required', 'Value is required.');
+            return null;
+        }
+
+        $normalized = self::normalizeTableIdentifier(trim($value));
+        if ($normalized === null) {
+            $errors[] = self::err($path, 'invalid_identifier', 'Invalid identifier: ' . trim((string)$value));
+            return null;
         }
 
         return $normalized;
@@ -498,6 +515,44 @@ class QueryIntentService
         }
 
         return $normalized;
+    }
+
+    private static function normalizeTableIdentifier(string $value)
+    {
+        if (preg_match(SqlBuilderService::VALID_IDENTIFIER_PATTERN, $value)) {
+            return $value;
+        }
+
+        $metadbMapping = self::loadIntentTableMappings();
+        $needle = strtolower($value);
+        foreach ($metadbMapping as $logicalName => $physicalName) {
+            if (strtolower((string)$physicalName) === $needle
+                && preg_match(SqlBuilderService::VALID_IDENTIFIER_PATTERN, (string)$logicalName)) {
+                return $logicalName;
+            }
+        }
+
+        $sanitized = str_replace('.', '_', $value);
+        if (preg_match(SqlBuilderService::VALID_IDENTIFIER_PATTERN, $sanitized)) {
+            return $sanitized;
+        }
+
+        return null;
+    }
+
+    private static function loadIntentTableMappings(): array
+    {
+        $mapping = FolioSchemaService::getMetadbMapping();
+
+        $cachePath = Yii::getAlias('@app/data/table_mapping_cache.json');
+        if (is_string($cachePath) && file_exists($cachePath)) {
+            $cache = json_decode((string) file_get_contents($cachePath), true);
+            if (is_array($cache) && isset($cache['mapping']) && is_array($cache['mapping'])) {
+                $mapping = array_merge($mapping, $cache['mapping']);
+            }
+        }
+
+        return $mapping;
     }
 
     private static function err($path, $code, $message)

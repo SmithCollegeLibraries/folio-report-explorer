@@ -5,6 +5,11 @@
 - Naming format: `YYYY-MM-DD_HH-MM-SS_ticket-id_short-title.md`
 - Each update file must include: summary, files changed, validation evidence, blockers/risks, and next ticket.
 
+## Current Main State
+- `origin/main` now includes the deterministic query-family slice at commit `1bc3f36`, including the checked-in canonical query graph artifact, query-family contracts, slot validation, compiler, and Gemini family routing/shape validation.
+- The focused query-family validation pack is currently green on `main`: `QueryFamilyContractServiceTest`, `QueryFamilySlotServiceTest`, `QueryFamilyCompilerServiceTest`, `GeminiServiceQueryFamilySelectionTest`, `GeminiServiceFamilyCompilerFallbackTest`, `GeminiServiceFamilyCompilerResultTest`, `GeminiServiceFamilyIntentBranchTest`, `GeminiServiceFamilyMatchPolicyTest`, `GeminiServiceFamilyShapeValidationTest`, and `GeminiServiceIntentRequestPathTest`.
+- Treat this clean `main` checkout as the source of truth for planning and future work; archived local-only diffs are no longer authoritative for ticket status.
+
 ## Ticket List
 
 ### NL2SQL-000 - Baseline Capture
@@ -146,7 +151,7 @@
   - Verified no syntax or editor diagnostics errors in updated service files.
 
 ### NL2SQL-007 - Observability and Regression Harness
-- Status: IN PROGRESS
+- Status: COMPLETED
 - Source step: Step 7
 - Scope:
   - Add route/version telemetry.
@@ -161,11 +166,9 @@
   - Added structured validation-failure telemetry (`nl2sql.validation_failure`) for malformed/invalid intent and SQL parse failures.
   - Added replay harness script at `planning/baseline/replay_nl_regression.sh`.
   - Added threshold definition at `planning/baseline/NL2SQL-007-threshold.md`.
-  - Generated replay artifacts:
-    - `planning/baseline/outputs/2026-04-06_11-51-11_nl2sql-007-replay-results.json`
-    - `planning/baseline/reports/2026-04-06_11-51-11_nl2sql-007-replay-report.md`
-  - Latest replay summary: total=10, pass=7, fail=3, passRate=70%, regressionsOnBaselineSuccess=3, gateMet=false.
-  - Current replay failures are quota-driven Gemini errors for baseline-success prompts (P03, P04, P07).
+  - Step 7 remains closed; the current status sync is recorded in [updates/2026-05-11_14-31-00_NL2SQL-007_step7-status-sync-on-main.md](../updates/2026-05-11_14-31-00_NL2SQL-007_step7-status-sync-on-main.md).
+  - The deterministic query-family slice now lives on `origin/main` at `1bc3f36`, and the focused query-family validation pack is green on that landed runtime.
+  - `NL2SQL-008` remains the active release gate: Step 8 still needs two more qualifying shadow days before cutover eligibility.
 
 ### NL2SQL-008 - Shadow Mode and Cutover
 - Status: IN PROGRESS
@@ -195,6 +198,11 @@
     - `planning/baseline/NL2SQL-008-shadow-operations-checklist.md`
     - `planning/baseline/report_nl2sql_shadow_metrics.sh`
     - `planning/baseline/reports/2026-04-06_nl2sql-008-shadow-metrics.md`
+  - On-campus live validation resumed on 2026-05-11 and produced another qualifying Step 8 day on the current query-family slice.
+  - Current Step 8 position: qualifying streak `1`, remaining qualifying days `2`, `shadow_error events=0`, `dataSourceMismatchCount=0`, and no forced-legacy activations on the latest controlled pass.
+  - The repaired `P74` library-clarification seam is part of the landed `1bc3f36` main baseline, so any further Step 8 or publish work should continue from that current main branch state.
+  - Production parity check on 2026-05-11 found that the server was already on commit `1bc3f36`, but a blank `backend/data/settings.json` left NL2SQL runtime flags at their defaults and `/api/nl` still served the legacy freeform path. Restoring `nl2sql_intent_mode=true`, `nl2sql_primary_mode=intent`, and `nl2sql_force_legacy=false` brought production back onto the deterministic query-family route for the covered contributor/theses prompt.
+  - Deployment implication: carrying the query-family slice on `main` is not sufficient by itself; server rollout must also preserve or reapply the NL2SQL runtime settings needed for intent-mode parity. See [updates/2026-05-11_14-43-00_NL2SQL-008_production-settings-parity-restored.md](../updates/2026-05-11_14-43-00_NL2SQL-008_production-settings-parity-restored.md).
 
 ### NL2SQL-100 - Optional Index Recommendation Track
 - Status: IN PROGRESS (user-directed early implementation)
@@ -214,3 +222,5 @@
   - Added deterministic heuristic fallback recommendations from query-history JOIN/WHERE/ORDER-BY signals when Gemini output is empty or malformed.
   - Endpoint now reports `recommendationSource` (`gemini|heuristic|none`) and can return non-empty suggestions even during AI JSON failures.
   - Added frontend API/types and History-page UI trigger to generate and display recommendations.
+  - Latest live endpoint smoke on 2026-05-11 returned `recommendationSource=gemini` on `openai/gpt-4.1-mini` with `eligibleLogs=16`, `uniqueQueryPatterns=14`, `recommendationCount=10`, and no warnings.
+
