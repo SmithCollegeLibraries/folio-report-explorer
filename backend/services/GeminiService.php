@@ -2691,6 +2691,11 @@ PROMPT;
             return $library;
         }
 
+        $namedCollectionScope = self::extractNamedCollectionAgeCollectionScope($prompt);
+        if (($namedCollectionScope['library'] ?? '') !== '') {
+            return (string)$namedCollectionScope['library'];
+        }
+
         return '';
     }
 
@@ -2699,6 +2704,11 @@ PROMPT;
         $namedReferenceLocation = self::extractNamedReferenceCollectionLocationScope($prompt);
         if ($namedReferenceLocation !== '') {
             return $namedReferenceLocation;
+        }
+
+        $namedCollectionScope = self::extractNamedCollectionAgeCollectionScope($prompt);
+        if (($namedCollectionScope['location'] ?? '') !== '') {
+            return (string)$namedCollectionScope['location'];
         }
 
         if (
@@ -2725,7 +2735,8 @@ PROMPT;
 
     private static function promptMentionsExplicitCollectionAgeLocationScope(string $prompt): bool
     {
-        return preg_match('/\breference collection\b/i', $prompt) === 1;
+        return preg_match('/\breference collection\b/i', $prompt) === 1
+            || self::extractNamedCollectionAgeCollectionScope($prompt) !== [];
     }
 
     private static function extractNamedReferenceCollectionLocationScope(string $prompt): string
@@ -2742,6 +2753,51 @@ PROMPT;
         }
 
         return $baseName . ' Reference';
+    }
+
+    private static function extractNamedCollectionAgeCollectionScope(string $prompt): array
+    {
+        $patterns = [
+            [
+                'pattern' => '/\b(?:of|in|at|from|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\s+([a-z0-9][a-z0-9 .\'\-]*?)\s+collection\b/i',
+                'libraryIndex' => 1,
+                'locationIndex' => 2,
+            ],
+            [
+                'pattern' => '/\b(?:of|in|at|from|for)\s+(?:items\s+in\s+)?(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?)\s+collection\s+in\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\b/i',
+                'libraryIndex' => 2,
+                'locationIndex' => 1,
+            ],
+        ];
+
+        foreach ($patterns as $patternSpec) {
+            if (preg_match($patternSpec['pattern'], $prompt, $matches) !== 1) {
+                continue;
+            }
+
+            $library = self::normalizeRecoveredPromptScope((string)($matches[$patternSpec['libraryIndex']] ?? ''));
+            $location = self::normalizeRecoveredPromptScope((string)($matches[$patternSpec['locationIndex']] ?? ''));
+            $location = trim((string) preg_replace('/\s+collection\s*$/i', '', $location));
+
+            if ($library === '' || $location === '') {
+                continue;
+            }
+
+            if (preg_match('/\blibrary\b/i', $library) !== 1) {
+                $library .= ' Library';
+            }
+
+            if (in_array(strtolower($location), ['a', 'an', 'the', 'this', 'that', 'item', 'items', 'reference'], true)) {
+                continue;
+            }
+
+            return [
+                'library' => $library,
+                'location' => $location,
+            ];
+        }
+
+        return [];
     }
 
     private static function normalizeRecoveredPromptScope(string $value): string

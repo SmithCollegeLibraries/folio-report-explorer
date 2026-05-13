@@ -469,6 +469,49 @@ assertSameValue('Neilson Library', $collectionAgeLibraryOnlyMalformedScopePayloa
 assertSameValue(false, array_key_exists('location', $collectionAgeLibraryOnlyMalformedScopePayloadSeen['normalizedPayload']['slots'] ?? []), 'Library-only collection-age prompts should clear prefilled location slots when the prompt never requested a location.');
 assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeLibraryOnlyMalformedScopePayloadSeen['routeReason'] ?? null, 'Library-only malformed-scope prompts should remain on the supported collection-age route after repair.');
 
+$collectionAgeNamedCollectionPayloadSeen = null;
+$collectionAgeNamedCollectionResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_collection_age',
+        'slots' => [
+            'campus' => 'Smith College',
+            'requested_outputs' => ['average_age_years'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_collection_age',
+    ],
+    'What is the average age of the Neilson Library Burack collection?',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'collection-age-named-collection-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload, string $routeReason) use (&$collectionAgeNamedCollectionPayloadSeen): array {
+        $collectionAgeNamedCollectionPayloadSeen = [
+            'normalizedPayload' => $normalizedPayload,
+            'routeReason' => $routeReason,
+        ];
+
+        return [
+            'sql' => 'SELECT normalized_collection_age_named_collection_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue('legacy_fallback', $collectionAgeNamedCollectionResult['route'] ?? null, 'Named collection-age requests should preserve the family compiler helper result when compilation is stubbed.');
+assertSameValue('Neilson Library', $collectionAgeNamedCollectionPayloadSeen['normalizedPayload']['slots']['library'] ?? null, 'Named collection-age prompts should recover the explicit library scope from the prompt before validation.');
+assertSameValue('Burack', $collectionAgeNamedCollectionPayloadSeen['normalizedPayload']['slots']['location'] ?? null, 'Named collection-age prompts should recover the explicit Burack collection scope instead of collapsing back to a library-only query.');
+assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeNamedCollectionPayloadSeen['routeReason'] ?? null, 'Named collection-age prompts should remain on the supported collection-age route after prompt recovery.');
+
 $collectionAgeMalformedSlotPayloadSeen = null;
 $collectionAgeMalformedSlotResult = $familyBranch->invoke(
     null,
