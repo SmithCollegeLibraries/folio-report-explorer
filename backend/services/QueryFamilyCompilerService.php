@@ -186,7 +186,9 @@ class QueryFamilyCompilerService
             if (!empty($slots['campus'])) {
                 $filters[] = QueryFamilySlotService::buildSlotFilter('campus', 'inventory_campuses', 'name', $slots['campus'], $slots['match_policy']);
             }
-            $filters[] = QueryFamilySlotService::buildSlotFilter('library', 'inventory_libraries', 'name', $slots['library'], $slots['match_policy']);
+            if (!empty($slots['library'])) {
+                $filters[] = QueryFamilySlotService::buildSlotFilter('library', 'inventory_libraries', 'name', $slots['library'], $slots['match_policy']);
+            }
             if (!empty($slots['location'])) {
                 $filters[] = QueryFamilySlotService::buildSlotFilter('location', 'inventory_locations', 'name', $slots['location'], $slots['match_policy']);
             }

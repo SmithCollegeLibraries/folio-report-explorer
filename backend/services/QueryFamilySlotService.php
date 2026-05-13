@@ -118,6 +118,18 @@ class QueryFamilySlotService
             ));
         }
 
+        if (
+            $familyKey === 'inventory_collection_age'
+            && self::collectionAgeScopeRequirementIsSatisfied($normalizedSlots)
+        ) {
+            $requiredSlotNames = array_values(array_filter(
+                $requiredSlotNames,
+                static function (string $slotName): bool {
+                    return $slotName !== 'library';
+                }
+            ));
+        }
+
         foreach ($requiredSlotNames as $slotName) {
             if (!isset($normalizedSlots[$slotName])) {
                 $errors[] = self::err('slots.' . $slotName, 'required', 'Slot is required for this query family.');
@@ -390,6 +402,25 @@ class QueryFamilySlotService
     {
         $normalized = trim((string) preg_replace('/\s+location\s*$/i', '', $value));
         return $normalized === '' ? $value : $normalized;
+    }
+
+    private static function collectionAgeScopeRequirementIsSatisfied(array $normalizedSlots): bool
+    {
+        return self::slotHasUsableValue($normalizedSlots['library'] ?? null)
+            || self::slotHasUsableValue($normalizedSlots['location'] ?? null);
+    }
+
+    private static function slotHasUsableValue($value): bool
+    {
+        if (is_array($value)) {
+            return $value !== [];
+        }
+
+        if (!is_scalar($value)) {
+            return false;
+        }
+
+        return trim((string)$value) !== '';
     }
 
     private static function normalizeDelimitedLocationCodes(string $value): array

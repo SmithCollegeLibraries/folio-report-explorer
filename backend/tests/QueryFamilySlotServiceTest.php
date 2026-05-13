@@ -74,6 +74,35 @@ assertSameValue(
     'Collection-age library scope should remain recoverable from direct library wording rather than being marked explicit-only.'
 );
 
+$collectionAgeLocationOnlyValidation = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'location' => 'Locked Stack',
+        'requested_outputs' => ['average_age_years'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+assertSameValue(
+    true,
+    $collectionAgeLocationOnlyValidation['valid'] ?? null,
+    'Collection-age payloads with an explicit location scope should validate without requiring a broader library slot.'
+);
+
+$collectionAgeUnscopedValidation = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'requested_outputs' => ['average_age_years'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+assertSameValue(
+    false,
+    $collectionAgeUnscopedValidation['valid'] ?? null,
+    'Collection-age payloads should still require either a library scope or an explicit location scope.'
+);
+
 $intent = QueryFamilySlotService::toQueryIntent($normalizedPayload);
 
 assertSameValue(

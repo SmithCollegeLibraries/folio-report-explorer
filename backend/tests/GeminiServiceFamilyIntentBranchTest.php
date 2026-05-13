@@ -424,6 +424,49 @@ assertSameValue('Neilson Library', $collectionAgeLibraryOnlyPayloadSeen['normali
 assertSameValue(false, array_key_exists('location', $collectionAgeLibraryOnlyPayloadSeen['normalizedPayload']['slots'] ?? []), 'Library-only collection-age prompts should not invent a location slot when the prompt asks only for Neilson Library.');
 assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeLibraryOnlyPayloadSeen['routeReason'] ?? null, 'Library-only collection-age prompts should remain on the supported collection-age route after recovery.');
 
+$collectionAgeLibraryCollectionPayloadSeen = null;
+$collectionAgeLibraryCollectionResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_collection_age',
+        'slots' => [
+            'campus' => 'Smith College',
+            'requested_outputs' => ['average_age_years'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_collection_age',
+    ],
+    'What is the average age of the Neilson Library collection?',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'collection-age-library-collection-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload, string $routeReason) use (&$collectionAgeLibraryCollectionPayloadSeen): array {
+        $collectionAgeLibraryCollectionPayloadSeen = [
+            'normalizedPayload' => $normalizedPayload,
+            'routeReason' => $routeReason,
+        ];
+
+        return [
+            'sql' => 'SELECT normalized_collection_age_library_collection_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue('legacy_fallback', $collectionAgeLibraryCollectionResult['route'] ?? null, 'Library collection-age requests should preserve the family compiler helper result when compilation is stubbed.');
+assertSameValue('Neilson Library', $collectionAgeLibraryCollectionPayloadSeen['normalizedPayload']['slots']['library'] ?? null, 'Library collection-age prompts should recover the broad library scope from collection wording.');
+assertSameValue(false, array_key_exists('location', $collectionAgeLibraryCollectionPayloadSeen['normalizedPayload']['slots'] ?? []), 'Library collection-age prompts should not treat the library name itself as a location.');
+assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeLibraryCollectionPayloadSeen['routeReason'] ?? null, 'Library collection-age prompts should remain on the supported collection-age route after recovery.');
+
 $collectionAgeLibraryOnlyMalformedScopePayloadSeen = null;
 $collectionAgeLibraryOnlyMalformedScopeResult = $familyBranch->invoke(
     null,
@@ -511,6 +554,50 @@ assertSameValue('legacy_fallback', $collectionAgeNamedCollectionResult['route'] 
 assertSameValue('Neilson Library', $collectionAgeNamedCollectionPayloadSeen['normalizedPayload']['slots']['library'] ?? null, 'Named collection-age prompts should recover the explicit library scope from the prompt before validation.');
 assertSameValue('Burack', $collectionAgeNamedCollectionPayloadSeen['normalizedPayload']['slots']['location'] ?? null, 'Named collection-age prompts should recover the explicit Burack collection scope instead of collapsing back to a library-only query.');
 assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeNamedCollectionPayloadSeen['routeReason'] ?? null, 'Named collection-age prompts should remain on the supported collection-age route after prompt recovery.');
+
+$collectionAgeHillyerLocationPayloadSeen = null;
+$collectionAgeHillyerLocationResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_collection_age',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Hillyer',
+            'requested_outputs' => ['average_age_years'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_collection_age',
+    ],
+    'What is the average age of the Hillyer locked stacks collection?',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'collection-age-hillyer-locked-stacks-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload, string $routeReason) use (&$collectionAgeHillyerLocationPayloadSeen): array {
+        $collectionAgeHillyerLocationPayloadSeen = [
+            'normalizedPayload' => $normalizedPayload,
+            'routeReason' => $routeReason,
+        ];
+
+        return [
+            'sql' => 'SELECT normalized_collection_age_hillyer_locked_stack_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue('legacy_fallback', $collectionAgeHillyerLocationResult['route'] ?? null, 'Hillyer locked-stacks collection-age prompts should preserve the family compiler helper result when compilation is stubbed.');
+assertSameValue('Hillyer', $collectionAgeHillyerLocationPayloadSeen['normalizedPayload']['slots']['library'] ?? null, 'Hillyer locked-stacks prompts should preserve the model-provided library scope.');
+assertSameValue('Locked Stack', $collectionAgeHillyerLocationPayloadSeen['normalizedPayload']['slots']['location'] ?? null, 'Hillyer locked-stacks prompts should recover the explicit locked-stack location scope instead of compiling as Hillyer-wide totals.');
+assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeHillyerLocationPayloadSeen['routeReason'] ?? null, 'Hillyer locked-stacks prompts should remain on the supported collection-age route after prompt recovery.');
 
 $collectionAgeMalformedSlotPayloadSeen = null;
 $collectionAgeMalformedSlotResult = $familyBranch->invoke(

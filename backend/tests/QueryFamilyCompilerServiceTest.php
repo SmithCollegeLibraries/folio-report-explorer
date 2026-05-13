@@ -746,6 +746,33 @@ assertNotContainsText(
     'Library-only collection-age aggregate SQL should not append a LIMIT clause.'
 );
 
+$ageLocationOnlyBuilt = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'location' => 'Locked Stack',
+        'requested_outputs' => ['average_age_years'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+$ageLocationOnlySql = $ageLocationOnlyBuilt['sql'] ?? '';
+assertContainsText(
+    'ilo.name ILIKE :p1',
+    $ageLocationOnlySql,
+    'Location-scoped collection-age SQL should compile an explicit location predicate even when no library slot is present.'
+);
+assertNotContainsText(
+    'il.name ILIKE',
+    $ageLocationOnlySql,
+    'Location-scoped collection-age SQL should not invent a library predicate when the payload supplies only campus and location scope.'
+);
+assertSameValue(
+    '%Locked Stack%',
+    $ageLocationOnlyBuilt['params'][':p1'] ?? null,
+    'Location-scoped collection-age SQL should preserve the explicit locked-stack location phrase as a contains match.'
+);
+
 $trendCompiled = QueryFamilyCompilerService::compileToQueryDefinition([
     'familyKey' => 'circulation_trends_matrix',
     'slots' => [
