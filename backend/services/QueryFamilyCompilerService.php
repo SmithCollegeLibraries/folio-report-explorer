@@ -22,6 +22,9 @@ class QueryFamilyCompilerService
         $contract = self::loadFamilyContract($familyKey);
 
         $graph = CanonicalQueryGraphService::loadArtifact();
+        if (QueryFamilySchemaManifestService::hasManifest($familyKey)) {
+            QueryFamilySchemaManifestService::validateFamilyReady($familyKey, $slots, $graph);
+        }
         $joins = self::buildDeterministicJoins($familyKey, $slots, $graph);
 
         return [
@@ -445,7 +448,7 @@ class QueryFamilyCompilerService
     {
         $filters = self::indexFilters($queryDef['filters'] ?? []);
         $params = [];
-        $where = [];
+        $scopeWhere = [];
         $parameterIndex = 0;
 
         foreach ([
@@ -459,24 +462,32 @@ class QueryFamilyCompilerService
             }
 
             $placeholder = ':p' . $parameterIndex;
-            $where[] = $filterSpec[2] . ' ILIKE ' . $placeholder;
+            $scopeWhere[] = $filterSpec[2] . ' ILIKE ' . $placeholder;
             $params[$placeholder] = (string)$filters[$key]['value'];
             $parameterIndex++;
         }
 
-        $where[] = 'iip.publication__date_of_publication IS NOT NULL';
-        $where[] = "iip.publication__date_of_publication ~ '^\\d{4}'";
+        $publicationWhere = [
+            'iip.publication__date_of_publication IS NOT NULL',
+            "iip.publication__date_of_publication ~ '^\\d{4}'",
+        ];
 
-        $sql = "SELECT AVG(EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER)) AS average_age_years\n"
-            . "FROM inventory.item__t ii\n"
-            . "JOIN inventory.holdings_record__t ih ON ii.holdings_record_id = ih.id\n"
-            . "JOIN inventory.instance__t iin ON ih.instance_id = iin.id\n"
-            . "LEFT JOIN inventory.instance__t__publication iip ON iip.id = iin.id\n"
-            . "JOIN inventory.location__t ilo ON ii.effective_location_id = ilo.id\n"
-            . "JOIN inventory.loclibrary__t il ON ilo.library_id = il.id\n"
-            . "JOIN inventory.loccampus__t ic ON il.campus_id = ic.id\n"
-            . "WHERE " . implode("\n  AND ", $where) . "\n"
-            . "LIMIT " . self::DEFAULT_LIMIT;
+        $sql = "WITH scoped_instances AS (\n"
+            . "    SELECT iin.id AS instance_id,\n"
+            . "           COUNT(*) AS item_count\n"
+            . "    FROM inventory.item__t ii\n"
+            . "    JOIN inventory.holdings_record__t ih ON ii.holdings_record_id = ih.id\n"
+            . "    JOIN inventory.instance__t iin ON ih.instance_id = iin.id\n"
+            . "    JOIN inventory.location__t ilo ON ii.effective_location_id = ilo.id\n"
+            . "    JOIN inventory.loclibrary__t il ON ilo.library_id = il.id\n"
+            . "    JOIN inventory.loccampus__t ic ON il.campus_id = ic.id\n"
+            . "    WHERE " . implode("\n      AND ", $scopeWhere) . "\n"
+            . "    GROUP BY ih.instance_id, iin.id\n"
+            . ")\n"
+            . "SELECT SUM(scoped_instances.item_count * (EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER))) / NULLIF(SUM(scoped_instances.item_count), 0) AS average_age_years\n"
+            . "FROM scoped_instances\n"
+            . "LEFT JOIN inventory.instance__t__publication iip ON iip.id = scoped_instances.instance_id\n"
+            . "WHERE " . implode("\n  AND ", $publicationWhere);
 
         return [
             'sql' => $sql,

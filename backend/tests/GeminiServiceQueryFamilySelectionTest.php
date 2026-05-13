@@ -79,6 +79,14 @@ assertSameValue(
     'Reference-collection age prompts should still route onto the deterministic collection-age family when the library and collection phrases are reversed.'
 );
 
+$itemsInReferenceCollectionPrompt = 'What is the average age of items in the Neilson Reference collection?';
+$resolvedItemsInReferenceCollection = $familyResolver->invoke(null, $itemsInReferenceCollectionPrompt, 'Smith College');
+assertSameValue(
+    'inventory_collection_age',
+    $resolvedItemsInReferenceCollection['familyKey'] ?? null,
+    'Collection-age prompts that phrase the scope as items in the Neilson Reference collection should still resolve onto the deterministic collection-age family.'
+);
+
 $locationListingPrompt = 'List of materials in Josten Library in the Treasure Case location. Include title, author, pub date, barcode and instance number.';
 $resolvedLocationListing = $familyResolver->invoke(null, $locationListingPrompt, 'Smith College');
 assertSameValue(
@@ -127,6 +135,11 @@ assertContainsText(
     'Allowed outputs: ["average_age_years"]',
     $collectionAgeSlotPrompt,
     'Collection-age family slot prompts should constrain the output contract to the supported age metric.'
+);
+assertContainsText(
+    'Only set slots.location when the prompt explicitly names a collection or sub-location scope; if the prompt only names a library, omit slots.location.',
+    $collectionAgeSlotPrompt,
+    'Collection-age family slot prompts should tell the model that optional location scope is explicit-only.'
 );
 
 $trendMatrixPrompt = 'Show circulation numbers for 2026, 2025, 2024, and 2023 by primary call number class in Neilson Library.';

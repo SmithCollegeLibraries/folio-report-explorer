@@ -2,17 +2,18 @@
   "metadata": {
     "artifactVersion": 2,
     "generatedAt": "2026-05-11T00:00:00+00:00",
-    "focusSlice": "inventory_contributor_campus_holdings_item_barcode",
+    "focusSlice": "deterministic_query_family_core",
     "sourceCounts": {
       "schemaTables": 0,
       "mappedTables": 0,
       "subtables": 0,
       "semanticTables": 0,
-      "focusEntities": 10,
-      "focusEdges": 7
+      "focusEntities": 11,
+      "focusEdges": 9
     }
   },
   "contractKeyToSqlTable": {
+    "circulation_loans": "circulation.loan__t",
     "inventory_campuses": "inventory.loccampus__t",
     "inventory_contributor_name_types": "inventory.contributor_name_type__t",
     "inventory_holdings": "inventory.holdings_record__t",
@@ -25,6 +26,7 @@
     "inventory_material_types": "inventory.material_type__t"
   },
   "sqlTableToContractKey": {
+    "circulation.loan__t": "circulation_loans",
     "inventory.contributor_name_type__t": "inventory_contributor_name_types",
     "inventory.holdings_record__t": "inventory_holdings",
     "inventory.instance__t": "inventory_instances",
@@ -37,6 +39,11 @@
     "inventory.material_type__t": "inventory_material_types"
   },
   "entities": {
+    "circulation_loans": {
+      "contractKey": "circulation_loans",
+      "sqlTable": "circulation.loan__t",
+      "entityKind": "base"
+    },
     "inventory_campuses": {
       "contractKey": "inventory_campuses",
       "sqlTable": "inventory.loccampus__t",
@@ -91,6 +98,34 @@
     }
   },
   "edges": [
+    {
+      "key": "circulation_loans.item_effective_location_id_at_check_out->inventory_locations.id",
+      "from": "circulation_loans",
+      "to": "inventory_locations",
+      "localColumn": "item_effective_location_id_at_check_out",
+      "targetColumn": "id",
+      "edgeKind": "explicit_override",
+      "joinCardinality": "many_to_one",
+      "semanticRole": "loan_checkout_location",
+      "confidence": "high",
+      "supportsDeterministicCompilation": true,
+      "source": "query_family_slice",
+      "typeCompatibility": "exact"
+    },
+    {
+      "key": "circulation_loans.item_id->inventory_items.id",
+      "from": "circulation_loans",
+      "to": "inventory_items",
+      "localColumn": "item_id",
+      "targetColumn": "id",
+      "edgeKind": "explicit_override",
+      "joinCardinality": "many_to_one",
+      "semanticRole": "loan_to_item",
+      "confidence": "high",
+      "supportsDeterministicCompilation": true,
+      "source": "query_family_slice",
+      "typeCompatibility": "exact"
+    },
     {
       "key": "inventory_instance__t__contributors.contributors__contributor_name_type_id->inventory_contributor_name_types.id",
       "from": "inventory_instance__t__contributors",

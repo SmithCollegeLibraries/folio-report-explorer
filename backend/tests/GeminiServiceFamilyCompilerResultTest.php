@@ -5,6 +5,7 @@ $sqlBuilderPath = __DIR__ . '/../services/SqlBuilderService.php';
 $graphBuilderPath = __DIR__ . '/../services/CanonicalQueryGraphArtifactBuilder.php';
 $graphServicePath = __DIR__ . '/../services/CanonicalQueryGraphService.php';
 $contractServicePath = __DIR__ . '/../services/QueryFamilyContractService.php';
+$manifestServicePath = __DIR__ . '/../services/QueryFamilySchemaManifestService.php';
 $slotServicePath = __DIR__ . '/../services/QueryFamilySlotService.php';
 $compilerServicePath = __DIR__ . '/../services/QueryFamilyCompilerService.php';
 $geminiServicePath = __DIR__ . '/../services/GeminiService.php';
@@ -15,6 +16,7 @@ foreach ([
     'CanonicalQueryGraphArtifactBuilder' => $graphBuilderPath,
     'CanonicalQueryGraphService' => $graphServicePath,
     'QueryFamilyContractService' => $contractServicePath,
+    'QueryFamilySchemaManifestService' => $manifestServicePath,
     'QueryFamilySlotService' => $slotServicePath,
     'QueryFamilyCompilerService' => $compilerServicePath,
     'GeminiService' => $geminiServicePath,
@@ -37,6 +39,9 @@ if (!class_exists('Yii')) {
             }
             if ($alias === '@app/data/query_family_contracts.json') {
                 return __DIR__ . '/../data/query_family_contracts.json';
+            }
+            if ($alias === '@app/data/query_family_schema_manifests.json') {
+                return __DIR__ . '/../data/query_family_schema_manifests.json';
             }
             if ($alias === '@app/data/table_mapping_cache.json') {
                 return __DIR__ . '/../data/table_mapping_cache.json';
@@ -79,6 +84,7 @@ require_once $sqlBuilderPath;
 require_once $graphBuilderPath;
 require_once $graphServicePath;
 require_once $contractServicePath;
+require_once $manifestServicePath;
 require_once $slotServicePath;
 require_once $compilerServicePath;
 require_once $geminiServicePath;
@@ -240,9 +246,9 @@ assertContainsText(
 
 $ageSql = $ageResult['sql'] ?? '';
 assertContainsText(
-    'AVG(EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER)) AS average_age_years',
+    'SUM(scoped_instances.item_count * (EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER))) / NULLIF(SUM(scoped_instances.item_count), 0) AS average_age_years',
     $ageSql,
-    'Compiled collection-age SQL should compute average age from the instance publication year.'
+    'Compiled collection-age SQL should compute weighted average age from the instance publication year after collapsing scoped items by instance.'
 );
 assertContainsText(
     "il.name ILIKE '%Neilson Library%'",

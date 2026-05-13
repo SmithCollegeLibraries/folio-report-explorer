@@ -47,3 +47,7 @@ public/
 
 # OS
 Thumbs.db
+
+# Local diagnostics
+/shadow_report.txt
+/test_db.php

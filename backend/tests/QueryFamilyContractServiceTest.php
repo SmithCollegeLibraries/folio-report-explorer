@@ -87,6 +87,11 @@ assertTrueValue(
     in_array('contributor_name', $selection['contract']['outputs']['allowed'] ?? [], true),
     'The covered contributor/campus/item contract should allow contributor_name as a supported output.'
 );
+assertSameValue(
+    'explicit_prompt_only',
+    $contracts['inventory_collection_age']['slots']['inferencePolicies']['location'] ?? null,
+    'The collection-age contract should declare location as explicit_prompt_only so optional narrowing scope is governed by contract instead of local heuristics.'
+);
 
 $trendSelection = QueryFamilyContractService::selectContract([
     'availableEntityKeys' => [

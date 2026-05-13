@@ -37,5 +37,6 @@ Run a safe daily shadow-mode check and produce objective evidence for Step 8 cut
 
 ## Decision Notes
 - Mark each day as pass/fail against team-agreed thresholds.
+- Treat any covered-family `legacy_freeform -> builder_intent` divergence as a blocked day until the mismatch is explained or removed.
 - Require the full validation period before default cutover.
 - If high-severity regressions appear, keep legacy primary and investigate before expanding cohort.

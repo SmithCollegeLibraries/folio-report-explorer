@@ -59,6 +59,20 @@ assertSameValue(
     $normalizedPayload['slots']['match_policy'] ?? null,
     'Exact-vs-fuzzy intent should stay explicit in the normalized slot payload.'
 );
+assertTrueValue(
+    method_exists(QueryFamilySlotService::class, 'slotRequiresExplicitPromptEvidence'),
+    'QueryFamilySlotService should expose a shared slot-policy helper for explicit prompt evidence rules.'
+);
+assertSameValue(
+    true,
+    QueryFamilySlotService::slotRequiresExplicitPromptEvidence('inventory_collection_age', 'location'),
+    'Collection-age location scope should require explicit prompt evidence according to the checked-in family contract.'
+);
+assertSameValue(
+    false,
+    QueryFamilySlotService::slotRequiresExplicitPromptEvidence('inventory_collection_age', 'library'),
+    'Collection-age library scope should remain recoverable from direct library wording rather than being marked explicit-only.'
+);
 
 $intent = QueryFamilySlotService::toQueryIntent($normalizedPayload);
 
@@ -356,9 +370,9 @@ assertSameValue(
 
 $collectionLocationMatch = QueryFamilySlotService::resolveSlotMatch('location', 'Reference collection', 'case_insensitive_contains');
 assertSameValue(
-    '%Reference%',
+    '%Reference collection%',
     $collectionLocationMatch['value'] ?? null,
-    'Collection-age location slot matching should collapse generic collection suffixes so reference-collection prompts filter on the shelving label rather than a literal "Reference collection" string.'
+    'Collection-age location slot matching should preserve the explicit Reference collection phrase so deterministic location filters do not widen to a generic Reference match.'
 );
 
 $trendValidation = QueryFamilySlotService::validateFamilyPayload([

@@ -62,10 +62,13 @@ function getApiErrorMessage(error: unknown): string {
   return 'Request failed.';
 }
 
-function formatNlError(error: unknown): string {
+export function formatNlError(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (isAxiosError(error) && error.response?.status === 403) {
     return `Query blocked: ${message}`;
+  }
+  if (isAxiosError(error) && error.response?.status === 422) {
+    return `Query validation failed: ${message}`;
   }
   return `AI error: ${message}`;
 }

@@ -5,7 +5,7 @@ namespace app\services;
 class CanonicalQueryGraphArtifactBuilder
 {
     const ARTIFACT_VERSION = 2;
-    const FOCUS_SLICE_KEY = 'inventory_contributor_campus_holdings_item_barcode';
+    const FOCUS_SLICE_KEY = 'deterministic_query_family_core';
 
     public static function build(
         array $schemaTables,
@@ -18,6 +18,11 @@ class CanonicalQueryGraphArtifactBuilder
         $semanticTables = is_array($semanticContext['tables'] ?? null) ? $semanticContext['tables'] : [];
 
         $entities = [
+            'circulation_loans' => [
+                'contractKey' => 'circulation_loans',
+                'sqlTable' => 'circulation.loan__t',
+                'entityKind' => 'base',
+            ],
             'inventory_campuses' => [
                 'contractKey' => 'inventory_campuses',
                 'sqlTable' => 'inventory.loccampus__t',
@@ -83,6 +88,34 @@ class CanonicalQueryGraphArtifactBuilder
         ksort($sqlTableToContractKey, SORT_STRING);
 
         $edges = [
+            [
+                'key' => 'circulation_loans.item_effective_location_id_at_check_out->inventory_locations.id',
+                'from' => 'circulation_loans',
+                'to' => 'inventory_locations',
+                'localColumn' => 'item_effective_location_id_at_check_out',
+                'targetColumn' => 'id',
+                'edgeKind' => 'explicit_override',
+                'joinCardinality' => 'many_to_one',
+                'semanticRole' => 'loan_checkout_location',
+                'confidence' => 'high',
+                'supportsDeterministicCompilation' => true,
+                'source' => 'query_family_slice',
+                'typeCompatibility' => 'exact',
+            ],
+            [
+                'key' => 'circulation_loans.item_id->inventory_items.id',
+                'from' => 'circulation_loans',
+                'to' => 'inventory_items',
+                'localColumn' => 'item_id',
+                'targetColumn' => 'id',
+                'edgeKind' => 'explicit_override',
+                'joinCardinality' => 'many_to_one',
+                'semanticRole' => 'loan_to_item',
+                'confidence' => 'high',
+                'supportsDeterministicCompilation' => true,
+                'source' => 'query_family_slice',
+                'typeCompatibility' => 'exact',
+            ],
             [
                 'key' => 'inventory_instance__t__contributors.contributors__contributor_name_type_id->inventory_contributor_name_types.id',
                 'from' => 'inventory_instance__t__contributors',

@@ -1,0 +1,251 @@
+{
+    "metadata": {
+        "artifactVersion": 1,
+        "generatedAt": "2026-05-12T16:20:00+00:00",
+        "familyCount": 5,
+        "rolloutScope": [
+            "circulation_trends_matrix",
+            "circulation_top_items",
+            "inventory_collection_age",
+            "inventory_contributor_campus_item_barcode",
+            "inventory_library_location_listing"
+        ],
+        "pendingFamilies": []
+    },
+    "families": {
+        "circulation_trends_matrix": {
+            "familyKey": "circulation_trends_matrix",
+            "requiredEntities": [
+                "circulation_loans",
+                "inventory_items",
+                "inventory_locations",
+                "inventory_libraries",
+                "inventory_campuses"
+            ],
+            "requiredColumns": [
+                { "table": "circulation_loans", "column": "action", "type": "text" },
+                { "table": "circulation_loans", "column": "item_id", "type": "uuid" },
+                { "table": "circulation_loans", "column": "item_effective_location_id_at_check_out", "type": "uuid" },
+                { "table": "circulation_loans", "column": "loan_date", "type": "text" },
+                { "table": "inventory_items", "column": "id", "type": "uuid" },
+                { "table": "inventory_items", "column": "effective_call_number_components__call_number", "type": "text" },
+                { "table": "inventory_locations", "column": "id", "type": "uuid" },
+                { "table": "inventory_locations", "column": "name", "type": "text" },
+                { "table": "inventory_locations", "column": "library_id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "name", "type": "text" },
+                { "table": "inventory_libraries", "column": "campus_id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "name", "type": "text" }
+            ],
+            "requiredEdges": [
+                { "fromTable": "circulation_loans", "fromColumn": "item_id", "toTable": "inventory_items", "toColumn": "id" },
+                { "fromTable": "circulation_loans", "fromColumn": "item_effective_location_id_at_check_out", "toTable": "inventory_locations", "toColumn": "id" },
+                { "fromTable": "inventory_locations", "fromColumn": "library_id", "toTable": "inventory_libraries", "toColumn": "id" },
+                { "fromTable": "inventory_libraries", "fromColumn": "campus_id", "toTable": "inventory_campuses", "toColumn": "id" }
+            ]
+        },
+        "circulation_top_items": {
+            "familyKey": "circulation_top_items",
+            "requiredEntities": [
+                "inventory_instances",
+                "inventory_holdings",
+                "inventory_items",
+                "inventory_material_types",
+                "inventory_locations",
+                "inventory_libraries",
+                "inventory_campuses",
+                "circulation.audit_loan__t",
+                "inventory.item__t__notes"
+            ],
+            "requiredColumns": [
+                { "table": "inventory_instances", "column": "id", "type": "uuid" },
+                { "table": "inventory_instances", "column": "title", "type": "text" },
+                { "table": "inventory_holdings", "column": "instance_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "id", "type": "uuid" },
+                { "table": "inventory_items", "column": "hrid", "type": "text" },
+                { "table": "inventory_items", "column": "barcode", "type": "text" },
+                { "table": "inventory_items", "column": "holdings_record_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "material_type_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "effective_location_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "effective_call_number_components__call_number", "type": "text" },
+                { "table": "inventory_material_types", "column": "id", "type": "uuid" },
+                { "table": "inventory_material_types", "column": "name", "type": "text" },
+                { "table": "inventory_locations", "column": "id", "type": "uuid" },
+                { "table": "inventory_locations", "column": "name", "type": "text" },
+                { "table": "inventory_locations", "column": "library_id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "name", "type": "text" },
+                { "table": "inventory_libraries", "column": "campus_id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "name", "type": "text" },
+                { "table": "circulation.audit_loan__t", "column": "loan__action", "type": "text" },
+                { "table": "circulation.audit_loan__t", "column": "loan__item_id", "type": "uuid" },
+                { "table": "circulation.audit_loan__t", "column": "loan__loan_date", "type": "text" },
+                { "table": "inventory.item__t__notes", "column": "hrid", "type": "text" },
+                { "table": "inventory.item__t__notes", "column": "notes__note", "type": "text" },
+                { "table": "inventory.item__t__notes", "column": "notes__item_note_type_id", "type": "uuid" }
+            ],
+            "requiredEdges": [
+                { "fromTable": "inventory_instances", "fromColumn": "id", "toTable": "inventory_holdings", "toColumn": "instance_id" },
+                { "fromTable": "inventory_holdings", "fromColumn": "id", "toTable": "inventory_items", "toColumn": "holdings_record_id" },
+                { "fromTable": "inventory_items", "fromColumn": "effective_location_id", "toTable": "inventory_locations", "toColumn": "id" },
+                { "fromTable": "inventory_locations", "fromColumn": "library_id", "toTable": "inventory_libraries", "toColumn": "id" },
+                { "fromTable": "inventory_libraries", "fromColumn": "campus_id", "toTable": "inventory_campuses", "toColumn": "id" },
+                { "fromTable": "inventory_items", "fromColumn": "material_type_id", "toTable": "inventory_material_types", "toColumn": "id" }
+            ]
+        },
+        "inventory_collection_age": {
+            "familyKey": "inventory_collection_age",
+            "requiredEntities": [
+                "inventory_items",
+                "inventory_holdings",
+                "inventory_instances",
+                "inventory_instance__t__publication",
+                "inventory_locations",
+                "inventory_libraries",
+                "inventory_campuses"
+            ],
+            "requiredColumns": [
+                { "table": "inventory_items", "column": "holdings_record_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "effective_location_id", "type": "uuid" },
+                { "table": "inventory_holdings", "column": "id", "type": "uuid" },
+                { "table": "inventory_holdings", "column": "instance_id", "type": "uuid" },
+                { "table": "inventory_instances", "column": "id", "type": "uuid" },
+                { "table": "inventory_instance__t__publication", "column": "publication__date_of_publication", "type": "text" },
+                { "table": "inventory_locations", "column": "id", "type": "uuid" },
+                { "table": "inventory_locations", "column": "name", "type": "text" },
+                { "table": "inventory_locations", "column": "library_id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "name", "type": "text" },
+                { "table": "inventory_libraries", "column": "campus_id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "name", "type": "text" }
+            ],
+            "requiredEdges": [
+                { "fromTable": "inventory_items", "fromColumn": "holdings_record_id", "toTable": "inventory_holdings", "toColumn": "id" },
+                { "fromTable": "inventory_holdings", "fromColumn": "instance_id", "toTable": "inventory_instances", "toColumn": "id" },
+                { "fromTable": "inventory_instances", "fromColumn": "id", "toTable": "inventory_instance__t__publication", "toColumn": "id" },
+                { "fromTable": "inventory_items", "fromColumn": "effective_location_id", "toTable": "inventory_locations", "toColumn": "id" },
+                { "fromTable": "inventory_locations", "fromColumn": "library_id", "toTable": "inventory_libraries", "toColumn": "id" },
+                { "fromTable": "inventory_libraries", "fromColumn": "campus_id", "toTable": "inventory_campuses", "toColumn": "id" }
+            ]
+        },
+        "inventory_contributor_campus_item_barcode": {
+            "familyKey": "inventory_contributor_campus_item_barcode",
+            "requiredEntities": [
+                "inventory_instances",
+                "inventory_instance__t__contributors",
+                "inventory_contributor_name_types",
+                "inventory_holdings",
+                "inventory_items",
+                "inventory_locations",
+                "inventory_libraries",
+                "inventory_campuses"
+            ],
+            "requiredColumns": [
+                { "table": "inventory_instances", "column": "id", "type": "uuid" },
+                { "table": "inventory_instances", "column": "hrid", "type": "text" },
+                { "table": "inventory_instances", "column": "title", "type": "text" },
+                { "table": "inventory_instances", "column": "dates__date1", "type": "text" },
+                { "table": "inventory_instance__t__contributors", "column": "contributors__name", "type": "text" },
+                { "table": "inventory_instance__t__contributors", "column": "contributors__contributor_name_type_id", "type": "uuid" },
+                { "table": "inventory_contributor_name_types", "column": "id", "type": "uuid" },
+                { "table": "inventory_contributor_name_types", "column": "name", "type": "text" },
+                { "table": "inventory_holdings", "column": "id", "type": "uuid" },
+                { "table": "inventory_holdings", "column": "instance_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "id", "type": "uuid" },
+                { "table": "inventory_items", "column": "barcode", "type": "text" },
+                { "table": "inventory_items", "column": "holdings_record_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "effective_location_id", "type": "uuid" },
+                { "table": "inventory_locations", "column": "id", "type": "uuid" },
+                { "table": "inventory_locations", "column": "library_id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "campus_id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "name", "type": "text" }
+            ],
+            "requiredEdges": [
+                { "fromTable": "inventory_instances", "fromColumn": "id", "toTable": "inventory_instance__t__contributors", "toColumn": "id" },
+                { "fromTable": "inventory_instance__t__contributors", "fromColumn": "contributors__contributor_name_type_id", "toTable": "inventory_contributor_name_types", "toColumn": "id" },
+                { "fromTable": "inventory_instances", "fromColumn": "id", "toTable": "inventory_holdings", "toColumn": "instance_id" },
+                { "fromTable": "inventory_holdings", "fromColumn": "id", "toTable": "inventory_items", "toColumn": "holdings_record_id" },
+                { "fromTable": "inventory_items", "fromColumn": "effective_location_id", "toTable": "inventory_locations", "toColumn": "id" },
+                { "fromTable": "inventory_locations", "fromColumn": "library_id", "toTable": "inventory_libraries", "toColumn": "id" },
+                { "fromTable": "inventory_libraries", "fromColumn": "campus_id", "toTable": "inventory_campuses", "toColumn": "id" }
+            ],
+            "conditionalRequirements": [
+                {
+                    "slot": "material_type",
+                    "requiredEntities": [
+                        "inventory_material_types"
+                    ],
+                    "requiredColumns": [
+                        { "table": "inventory_items", "column": "material_type_id", "type": "uuid" },
+                        { "table": "inventory_material_types", "column": "id", "type": "uuid" },
+                        { "table": "inventory_material_types", "column": "name", "type": "text" }
+                    ],
+                    "requiredEdges": [
+                        { "fromTable": "inventory_items", "fromColumn": "material_type_id", "toTable": "inventory_material_types", "toColumn": "id" }
+                    ]
+                }
+            ]
+        },
+        "inventory_library_location_listing": {
+            "familyKey": "inventory_library_location_listing",
+            "requiredEntities": [
+                "inventory_instances",
+                "inventory_holdings",
+                "inventory_items",
+                "inventory_locations",
+                "inventory_libraries",
+                "inventory_campuses"
+            ],
+            "requiredColumns": [
+                { "table": "inventory_instances", "column": "id", "type": "uuid" },
+                { "table": "inventory_instances", "column": "hrid", "type": "text" },
+                { "table": "inventory_instances", "column": "title", "type": "text" },
+                { "table": "inventory_instances", "column": "dates__date1", "type": "text" },
+                { "table": "inventory_holdings", "column": "id", "type": "uuid" },
+                { "table": "inventory_holdings", "column": "instance_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "id", "type": "uuid" },
+                { "table": "inventory_items", "column": "barcode", "type": "text" },
+                { "table": "inventory_items", "column": "holdings_record_id", "type": "uuid" },
+                { "table": "inventory_items", "column": "effective_location_id", "type": "uuid" },
+                { "table": "inventory_locations", "column": "id", "type": "uuid" },
+                { "table": "inventory_locations", "column": "code", "type": "text" },
+                { "table": "inventory_locations", "column": "name", "type": "text" },
+                { "table": "inventory_locations", "column": "library_id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "id", "type": "uuid" },
+                { "table": "inventory_libraries", "column": "name", "type": "text" },
+                { "table": "inventory_libraries", "column": "campus_id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "id", "type": "uuid" },
+                { "table": "inventory_campuses", "column": "name", "type": "text" }
+            ],
+            "requiredEdges": [
+                { "fromTable": "inventory_instances", "fromColumn": "id", "toTable": "inventory_holdings", "toColumn": "instance_id" },
+                { "fromTable": "inventory_holdings", "fromColumn": "id", "toTable": "inventory_items", "toColumn": "holdings_record_id" },
+                { "fromTable": "inventory_items", "fromColumn": "effective_location_id", "toTable": "inventory_locations", "toColumn": "id" },
+                { "fromTable": "inventory_locations", "fromColumn": "library_id", "toTable": "inventory_libraries", "toColumn": "id" },
+                { "fromTable": "inventory_libraries", "fromColumn": "campus_id", "toTable": "inventory_campuses", "toColumn": "id" }
+            ],
+            "conditionalRequirements": [
+                {
+                    "requestedOutputsAnyOf": [
+                        "author",
+                        "contributor_name"
+                    ],
+                    "requiredEntities": [
+                        "inventory_instance__t__contributors"
+                    ],
+                    "requiredColumns": [
+                        { "table": "inventory_instance__t__contributors", "column": "contributors__name", "type": "text" }
+                    ],
+                    "requiredEdges": [
+                        { "fromTable": "inventory_instances", "fromColumn": "id", "toTable": "inventory_instance__t__contributors", "toColumn": "id" }
+                    ]
+                }
+            ]
+        }
+    }
+}

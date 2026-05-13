@@ -7,6 +7,23 @@ class QueryFamilySlotService
     const DEFAULT_LIMIT = 100;
     const DEFAULT_MATCH_POLICY = 'case_insensitive_contains';
 
+    public static function slotRequiresExplicitPromptEvidence(string $familyKey, string $slotName): bool
+    {
+        try {
+            $contracts = QueryFamilyContractService::loadContracts();
+        } catch (\RuntimeException $e) {
+            return false;
+        }
+
+        $contract = $contracts[trim($familyKey)] ?? null;
+        if (!is_array($contract)) {
+            return false;
+        }
+
+        $inferencePolicy = trim((string)(($contract['slots']['inferencePolicies'] ?? [])[$slotName] ?? ''));
+        return $inferencePolicy === QueryFamilyContractService::SLOT_INFERENCE_POLICY_EXPLICIT_PROMPT_ONLY;
+    }
+
     public static function validateFamilyPayload($payload, array $defaults = []): array
     {
         $errors = [];
@@ -371,7 +388,7 @@ class QueryFamilySlotService
 
     private static function normalizeLocationScopeLabel(string $value): string
     {
-        $normalized = trim((string) preg_replace('/\s+(collection|location)\s*$/i', '', $value));
+        $normalized = trim((string) preg_replace('/\s+location\s*$/i', '', $value));
         return $normalized === '' ? $value : $normalized;
     }
 

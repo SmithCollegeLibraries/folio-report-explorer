@@ -126,6 +126,7 @@ $config = [
 
                 // Settings (dev)
                 'GET settings' => 'folio-query/settings',
+                'GET nl2sql-preflight' => 'folio-query/nl2sql-preflight',
                 'POST settings' => 'folio-query/settings-save',
                 'POST settings/test' => 'folio-query/settings-test',
 
@@ -176,6 +177,13 @@ $config = [
                 [
                     'class' => 'yii\log\FileTarget',
                     'levels' => ['error', 'warning'],
+                    'logVars' => [],
+                ],
+                [
+                    'class' => 'yii\log\FileTarget',
+                    'levels' => ['info'],
+                    'categories' => ['nl2sql.telemetry'],
+                    'logVars' => [],
                 ],
             ],
         ],

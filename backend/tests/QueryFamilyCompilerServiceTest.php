@@ -5,6 +5,7 @@ $sqlBuilderPath = __DIR__ . '/../services/SqlBuilderService.php';
 $graphBuilderPath = __DIR__ . '/../services/CanonicalQueryGraphArtifactBuilder.php';
 $graphServicePath = __DIR__ . '/../services/CanonicalQueryGraphService.php';
 $contractServicePath = __DIR__ . '/../services/QueryFamilyContractService.php';
+$manifestServicePath = __DIR__ . '/../services/QueryFamilySchemaManifestService.php';
 $slotServicePath = __DIR__ . '/../services/QueryFamilySlotService.php';
 $compilerServicePath = __DIR__ . '/../services/QueryFamilyCompilerService.php';
 
@@ -14,6 +15,7 @@ foreach ([
     'CanonicalQueryGraphArtifactBuilder' => $graphBuilderPath,
     'CanonicalQueryGraphService' => $graphServicePath,
     'QueryFamilyContractService' => $contractServicePath,
+    'QueryFamilySchemaManifestService' => $manifestServicePath,
     'QueryFamilySlotService' => $slotServicePath,
     'QueryFamilyCompilerService' => $compilerServicePath,
 ] as $label => $path) {
@@ -35,6 +37,9 @@ if (!class_exists('Yii')) {
             }
             if ($alias === '@app/data/query_family_contracts.json') {
                 return __DIR__ . '/../data/query_family_contracts.json';
+            }
+            if ($alias === '@app/data/query_family_schema_manifests.json') {
+                return __DIR__ . '/../data/query_family_schema_manifests.json';
             }
             if ($alias === '@app/data/table_mapping_cache.json') {
                 return __DIR__ . '/../data/table_mapping_cache.json';
@@ -69,6 +74,7 @@ require_once $sqlBuilderPath;
 require_once $graphBuilderPath;
 require_once $graphServicePath;
 require_once $contractServicePath;
+require_once $manifestServicePath;
 require_once $slotServicePath;
 require_once $compilerServicePath;
 
@@ -87,6 +93,14 @@ function assertContainsText(string $needle, string $haystack, string $message): 
 {
     if (strpos($haystack, $needle) === false) {
         fwrite(STDERR, $message . "\nMissing text: {$needle}\nSQL: {$haystack}\n");
+        exit(1);
+    }
+}
+
+function assertNotContainsText(string $needle, string $haystack, string $message): void
+{
+    if (strpos($haystack, $needle) !== false) {
+        fwrite(STDERR, $message . "\nUnexpected text: {$needle}\nSQL: {$haystack}\n");
         exit(1);
     }
 }
@@ -542,7 +556,7 @@ $compiledAge = QueryFamilyCompilerService::compileToQueryDefinition([
     'slots' => [
         'campus' => 'Smith College',
         'library' => 'Neilson Library',
-        'location' => 'Reference',
+        'location' => 'Neilson Reference',
         'requested_outputs' => ['average_age_years'],
         'match_policy' => 'case_insensitive_contains',
     ],
@@ -611,9 +625,9 @@ assertSameValue(
     'Collection-age library filters should keep contains matching because stored library names include campus prefixes.'
 );
 assertSameValue(
-    '%Reference%',
+    '%Neilson Reference%',
     $compiledAge['filters'][2]['value'] ?? null,
-    'Collection-age reference prompts should compile reference as a location filter rather than a material type or status filter.'
+    'Collection-age reference prompts should compile the concrete Neilson Reference location phrase instead of an abstract reference-collection label that does not exist in data.'
 );
 
 $ageBuilt = QueryFamilyCompilerService::compileToSql([
@@ -621,7 +635,7 @@ $ageBuilt = QueryFamilyCompilerService::compileToSql([
     'slots' => [
         'campus' => 'Smith College',
         'library' => 'Neilson Library',
-        'location' => 'Reference',
+        'location' => 'Neilson Reference',
         'requested_outputs' => ['average_age_years'],
         'match_policy' => 'case_insensitive_contains',
     ],
@@ -629,9 +643,24 @@ $ageBuilt = QueryFamilyCompilerService::compileToSql([
 
 $ageSql = $ageBuilt['sql'] ?? '';
 assertContainsText(
-    'AVG(EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER)) AS average_age_years',
+    'SUM(scoped_instances.item_count * (EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER))) / NULLIF(SUM(scoped_instances.item_count), 0) AS average_age_years',
     $ageSql,
-    'Collection-age SQL should compute average age from the first four digits of the instance publication year.'
+    'Collection-age SQL should compute the average age from the first four digits of the instance publication year while preserving per-item weighting through scoped instance counts.'
+);
+assertContainsText(
+    'WITH scoped_instances AS (',
+    $ageSql,
+    'Collection-age SQL should scope and aggregate instance targets before joining publication rows so library-wide age requests do not scan publication data per item row.'
+);
+assertContainsText(
+    'COUNT(*) AS item_count',
+    $ageSql,
+    'Collection-age SQL should count items per instance inside the scoped target CTE.'
+);
+assertContainsText(
+    'GROUP BY ih.instance_id, iin.id',
+    $ageSql,
+    'Collection-age SQL should collapse scoped items by instance before computing the final weighted average age.'
 );
 assertContainsText(
     'JOIN inventory.holdings_record__t',
@@ -657,6 +686,64 @@ assertContainsText(
     'ilo.name ILIKE :p2',
     $ageSql,
     'Collection-age SQL should scope reference prompts through location semantics.'
+);
+assertNotContainsText(
+    'LIMIT 100',
+    $ageSql,
+    'Collection-age aggregate SQL should not append a LIMIT clause because the aggregate already returns a single row and the limit does not reduce execution cost.'
+);
+
+$compiledAgeLibraryOnly = QueryFamilyCompilerService::compileToQueryDefinition([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Neilson Library',
+        'requested_outputs' => ['average_age_years'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+assertSameValue(
+    2,
+    count($compiledAgeLibraryOnly['filters'] ?? []),
+    'Library-only collection-age query definitions should include only campus and library filters when no explicit location scope is present.'
+);
+assertSameValue(
+    '%Neilson Library%',
+    $compiledAgeLibraryOnly['filters'][1]['value'] ?? null,
+    'Library-only collection-age query definitions should preserve the requested library scope.'
+);
+
+$ageLibraryOnlyBuilt = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Neilson Library',
+        'requested_outputs' => ['average_age_years'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+$ageLibraryOnlySql = $ageLibraryOnlyBuilt['sql'] ?? '';
+assertContainsText(
+    'il.name ILIKE :p1',
+    $ageLibraryOnlySql,
+    'Library-only collection-age SQL should still scope the report to the requested library.'
+);
+assertContainsText(
+    'WITH scoped_instances AS (',
+    $ageLibraryOnlySql,
+    'Library-only collection-age SQL should also scope and aggregate instances before joining publication data.'
+);
+assertNotContainsText(
+    'ilo.name ILIKE',
+    $ageLibraryOnlySql,
+    'Library-only collection-age SQL should not invent a location predicate when the prompt never requested a location.'
+);
+assertNotContainsText(
+    'LIMIT 100',
+    $ageLibraryOnlySql,
+    'Library-only collection-age aggregate SQL should not append a LIMIT clause.'
 );
 
 $trendCompiled = QueryFamilyCompilerService::compileToQueryDefinition([

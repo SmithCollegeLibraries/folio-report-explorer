@@ -5,6 +5,7 @@ namespace app\services;
 class QueryFamilyContractService
 {
     const ARTIFACT_VERSION = 1;
+    const SLOT_INFERENCE_POLICY_EXPLICIT_PROMPT_ONLY = 'explicit_prompt_only';
 
     public static function getArtifactPath(): string
     {
@@ -66,6 +67,25 @@ class QueryFamilyContractService
 
             if (!is_array($contract['slots']['supported'] ?? null) || empty($contract['slots']['supported'])) {
                 throw new \RuntimeException("Query family contract {$contractKey} must define slots.supported.");
+            }
+
+            $supportedSlots = self::sortedUniqueStrings($contract['slots']['supported'] ?? []);
+            $inferencePolicies = $contract['slots']['inferencePolicies'] ?? [];
+            if ($inferencePolicies !== [] && !is_array($inferencePolicies)) {
+                throw new \RuntimeException("Query family contract {$contractKey} must define slots.inferencePolicies as an object when present.");
+            }
+
+            foreach ($inferencePolicies as $slotName => $policy) {
+                $slotName = trim((string)$slotName);
+                $policy = trim((string)$policy);
+
+                if ($slotName === '' || !in_array($slotName, $supportedSlots, true)) {
+                    throw new \RuntimeException("Query family contract {$contractKey} defines an inference policy for an unsupported slot.");
+                }
+
+                if ($policy !== self::SLOT_INFERENCE_POLICY_EXPLICIT_PROMPT_ONLY) {
+                    throw new \RuntimeException("Query family contract {$contractKey} defines an unsupported slot inference policy: {$policy}.");
+                }
             }
 
             if (!is_array($contract['outputs']['allowed'] ?? null) || empty($contract['outputs']['allowed'])) {

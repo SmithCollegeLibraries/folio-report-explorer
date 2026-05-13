@@ -276,7 +276,10 @@
                     "age_basis",
                     "aggregation",
                     "unit"
-                ]
+                ],
+                "inferencePolicies": {
+                    "location": "explicit_prompt_only"
+                }
             },
             "outputs": {
                 "allowed": [

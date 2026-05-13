@@ -5,6 +5,7 @@ $sqlBuilderPath = __DIR__ . '/../services/SqlBuilderService.php';
 $graphBuilderPath = __DIR__ . '/../services/CanonicalQueryGraphArtifactBuilder.php';
 $graphServicePath = __DIR__ . '/../services/CanonicalQueryGraphService.php';
 $contractServicePath = __DIR__ . '/../services/QueryFamilyContractService.php';
+$manifestServicePath = __DIR__ . '/../services/QueryFamilySchemaManifestService.php';
 $slotServicePath = __DIR__ . '/../services/QueryFamilySlotService.php';
 $compilerServicePath = __DIR__ . '/../services/QueryFamilyCompilerService.php';
 $queryIntentServicePath = __DIR__ . '/../services/QueryIntentService.php';
@@ -16,6 +17,7 @@ foreach ([
     'CanonicalQueryGraphArtifactBuilder' => $graphBuilderPath,
     'CanonicalQueryGraphService' => $graphServicePath,
     'QueryFamilyContractService' => $contractServicePath,
+    'QueryFamilySchemaManifestService' => $manifestServicePath,
     'QueryFamilySlotService' => $slotServicePath,
     'QueryFamilyCompilerService' => $compilerServicePath,
     'QueryIntentService' => $queryIntentServicePath,
@@ -39,6 +41,9 @@ if (!class_exists('Yii')) {
             }
             if ($alias === '@app/data/query_family_contracts.json') {
                 return __DIR__ . '/../data/query_family_contracts.json';
+            }
+            if ($alias === '@app/data/query_family_schema_manifests.json') {
+                return __DIR__ . '/../data/query_family_schema_manifests.json';
             }
             if ($alias === '@app/data/table_mapping_cache.json') {
                 return __DIR__ . '/../data/table_mapping_cache.json';
@@ -81,12 +86,26 @@ require_once $sqlBuilderPath;
 require_once $graphBuilderPath;
 require_once $graphServicePath;
 require_once $contractServicePath;
+require_once $manifestServicePath;
 require_once $slotServicePath;
 require_once $compilerServicePath;
 require_once $queryIntentServicePath;
 require_once $geminiServicePath;
 
+use app\services\FolioSchemaService;
 use app\services\GeminiService;
+
+$mapProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredMap');
+$columnProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredColumns');
+$subtableProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredSubtables');
+
+$tableMapCache = json_decode((string) file_get_contents(__DIR__ . '/../data/table_mapping_cache.json'), true);
+$columnCache = json_decode((string) file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
+$subtableCache = json_decode((string) file_get_contents(__DIR__ . '/../data/subtable_cache.json'), true);
+
+$mapProperty->setValue(null, is_array($tableMapCache['mapping'] ?? null) ? $tableMapCache['mapping'] : []);
+$columnProperty->setValue(null, is_array($columnCache['columns'] ?? null) ? $columnCache['columns'] : []);
+$subtableProperty->setValue(null, is_array($subtableCache['subtables'] ?? null) ? $subtableCache['subtables'] : []);
 
 function assertSameValue($expected, $actual, string $message): void
 {
@@ -101,6 +120,28 @@ function assertContainsText(string $needle, string $haystack, string $message): 
     if (strpos($haystack, $needle) === false) {
         fwrite(STDERR, $message . "\nMissing text: {$needle}\nText: {$haystack}\n");
         exit(1);
+    }
+}
+
+function assertNotContainsText(string $needle, string $haystack, string $message): void
+{
+    if (strpos($haystack, $needle) !== false) {
+        fwrite(STDERR, $message . "\nUnexpected text: {$needle}\nText: {$haystack}\n");
+        exit(1);
+    }
+}
+
+function assertThrowsRuntimeException(callable $callback, string $expectedText, string $message): void
+{
+    try {
+        $callback();
+        fwrite(STDERR, $message . "\nExpected RuntimeException containing: {$expectedText}\n");
+        exit(1);
+    } catch (RuntimeException $e) {
+        if (strpos($e->getMessage(), $expectedText) === false) {
+            fwrite(STDERR, $message . "\nExpected text: {$expectedText}\nActual: {$e->getMessage()}\n");
+            exit(1);
+        }
     }
 }
 
@@ -213,7 +254,69 @@ assertSameValue(
 
 $mismatchCompilerCalled = false;
 $mismatchFallbackCalls = 0;
-$mismatchResponse = $familyRouteHelper->invoke(
+Yii::$app->params['nl2sqlForceLegacy'] = false;
+
+assertThrowsRuntimeException(
+    function () use ($familyRouteHelper, &$mismatchCompilerCalled, &$mismatchFallbackCalls): void {
+        $familyRouteHelper->invoke(
+            null,
+            [
+                'familyKey' => 'circulation_top_items',
+                'slots' => [
+                    'campus' => 'Smith College',
+                    'library' => 'Neilson Library',
+                    'material_type' => 'book',
+                    'requested_outputs' => ['ranked_circulation_items'],
+                ],
+            ],
+            [
+                'familyKey' => 'inventory_library_location_listing',
+            ],
+            'List of materials in Neilson Library. Include title and barcode.',
+            'Smith College',
+            [
+                'model' => 'test-model',
+                'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
+                'promptFingerprint' => 'request-path-mismatch-fingerprint',
+                'finishReason' => 'STOP',
+                'attempts' => 1,
+                'elapsedMs' => 5,
+            ],
+            function () use (&$mismatchCompilerCalled): array {
+                $mismatchCompilerCalled = true;
+                return [
+                    'sql' => 'SELECT should_not_run',
+                ];
+            },
+            function () use (&$mismatchFallbackCalls): array {
+                $mismatchFallbackCalls++;
+                return [
+                    'sql' => 'SELECT mismatch_fallback_stub',
+                    'explanation' => 'Family mismatch fallback stub.',
+                    'dataSource' => 'folio',
+                ];
+            }
+        );
+    },
+    'legacy fallback is disabled for this route',
+    'Covered-family mismatches should fail safe instead of silently downgrading to legacy freeform SQL.'
+);
+
+assertSameValue(
+    false,
+    $mismatchCompilerCalled,
+    'The request-path family router should not dispatch a model-returned family when it differs from the detected family.'
+);
+assertSameValue(
+    0,
+    $mismatchFallbackCalls,
+    'The request-path family router should not invoke legacy fallback when the family guard is active.'
+);
+
+Yii::$app->params['nl2sqlForceLegacy'] = true;
+
+$overrideMismatchFallbackCalls = 0;
+$overrideMismatchResponse = $familyRouteHelper->invoke(
     null,
     [
         'familyKey' => 'circulation_top_items',
@@ -232,7 +335,7 @@ $mismatchResponse = $familyRouteHelper->invoke(
     [
         'model' => 'test-model',
         'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
-        'promptFingerprint' => 'request-path-mismatch-fingerprint',
+        'promptFingerprint' => 'request-path-mismatch-override-fingerprint',
         'finishReason' => 'STOP',
         'attempts' => 1,
         'elapsedMs' => 5,
@@ -243,8 +346,8 @@ $mismatchResponse = $familyRouteHelper->invoke(
             'sql' => 'SELECT should_not_run',
         ];
     },
-    function () use (&$mismatchFallbackCalls): array {
-        $mismatchFallbackCalls++;
+    function () use (&$overrideMismatchFallbackCalls): array {
+        $overrideMismatchFallbackCalls++;
         return [
             'sql' => 'SELECT mismatch_fallback_stub',
             'explanation' => 'Family mismatch fallback stub.',
@@ -254,29 +357,87 @@ $mismatchResponse = $familyRouteHelper->invoke(
 );
 
 assertSameValue(
-    false,
-    $mismatchCompilerCalled,
-    'The request-path family router should not dispatch a model-returned family when it differs from the detected family.'
-);
-assertSameValue(
     1,
-    $mismatchFallbackCalls,
-    'The request-path family router should fall back exactly once when the model returns a mismatched family key.'
+    $overrideMismatchFallbackCalls,
+    'Emergency override should restore legacy fallback for covered-family mismatch responses.'
 );
 assertSameValue(
     'legacy_fallback',
-    $mismatchResponse['route'] ?? null,
-    'Mismatched family-key responses should fall back to the legacy route instead of switching contracts silently.'
+    $overrideMismatchResponse['route'] ?? null,
+    'Emergency override should preserve the legacy route for covered-family mismatches.'
 );
 assertSameValue(
     'family_contract_mismatch',
-    $mismatchResponse['routeReason'] ?? null,
-    'Mismatched family-key responses should report the family_contract_mismatch route reason.'
+    $overrideMismatchResponse['routeReason'] ?? null,
+    'Emergency override should preserve the family_contract_mismatch route reason.'
+);
+
+$collectionAgeMismatchFallbackCalls = 0;
+Yii::$app->params['nl2sqlForceLegacy'] = false;
+$collectionAgeMismatchResponse = $familyRouteHelper->invoke(
+    null,
+    [
+        'familyKey' => 'circulation_top_items',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Neilson Library',
+            'material_type' => 'book',
+            'requested_outputs' => ['ranked_circulation_items'],
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_collection_age',
+    ],
+    'What is the average age of items in the Neilson Reference collection?',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
+        'promptFingerprint' => 'request-path-collection-age-mismatch-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    null,
+    function () use (&$collectionAgeMismatchFallbackCalls): array {
+        $collectionAgeMismatchFallbackCalls++;
+        return [
+            'sql' => 'SELECT AVG(EXTRACT(EPOCH FROM (CURRENT_DATE - ii.metadata__created_date::date))/86400) AS average_age_days FROM inventory.item__t ii',
+            'explanation' => 'Bad collection-age legacy fallback stub.',
+            'dataSource' => 'folio',
+        ];
+    }
+);
+
+assertSameValue(
+    0,
+    $collectionAgeMismatchFallbackCalls,
+    'Collection-age family mismatches should recover from prompt scope instead of dropping to the legacy freeform fallback.'
 );
 assertSameValue(
-    'SELECT mismatch_fallback_stub',
-    $mismatchResponse['sql'] ?? null,
-    'Mismatched family-key responses should return the injected legacy fallback payload.'
+    'builder_intent',
+    $collectionAgeMismatchResponse['route'] ?? null,
+    'Collection-age family mismatches should stay on the deterministic builder route after prompt recovery.'
+);
+assertSameValue(
+    'family_contract_supported:inventory_collection_age',
+    $collectionAgeMismatchResponse['routeReason'] ?? null,
+    'Collection-age family mismatches should recover back onto the supported collection-age family route.'
+);
+assertContainsText(
+    'LEFT JOIN inventory.instance__t__publication',
+    $collectionAgeMismatchResponse['sql'] ?? '',
+    'Recovered collection-age mismatches should compile against the instance publication subtable.'
+);
+assertContainsText(
+    'publication__date_of_publication',
+    $collectionAgeMismatchResponse['sql'] ?? '',
+    'Recovered collection-age mismatches should anchor age calculations on bibliographic publication year.'
+);
+assertNotContainsText(
+    'metadata__created_date',
+    $collectionAgeMismatchResponse['sql'] ?? '',
+    'Recovered collection-age mismatches should not fall back to metadata__created_date age arithmetic.'
 );
 
 $genericResponse = $familyRouteHelper->invoke(

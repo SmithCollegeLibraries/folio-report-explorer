@@ -33,12 +33,51 @@ set +a
 
 # Defaults
 APP_BASE_PATH="${APP_BASE_PATH:-}"
-VITE_BASE_PATH="${VITE_BASE_PATH:-/}"
+if [ -n "$APP_BASE_PATH" ] && [ "$APP_BASE_PATH" != "/" ]; then
+    case "$APP_BASE_PATH" in
+        /*) ;;
+        *) APP_BASE_PATH="/$APP_BASE_PATH" ;;
+    esac
+    APP_BASE_PATH="${APP_BASE_PATH%/}"
+else
+    APP_BASE_PATH=""
+fi
+
+VITE_BASE_PATH="${VITE_BASE_PATH:-}"
+if [ -z "$VITE_BASE_PATH" ]; then
+    if [ -n "$APP_BASE_PATH" ]; then
+        VITE_BASE_PATH="$APP_BASE_PATH/"
+    else
+        VITE_BASE_PATH="/"
+    fi
+else
+    case "$VITE_BASE_PATH" in
+        /*) ;;
+        *) VITE_BASE_PATH="/$VITE_BASE_PATH" ;;
+    esac
+    case "$VITE_BASE_PATH" in
+        */) ;;
+        *) VITE_BASE_PATH="$VITE_BASE_PATH/" ;;
+    esac
+fi
 
 echo "=== Folio Report Explorer Deploy ==="
 echo "  Repo/Web root: $SCRIPT_DIR"
 echo "  Base path:     ${APP_BASE_PATH:-/ (root)}"
+echo "  Vite base:     $VITE_BASE_PATH"
 echo ""
+
+if [ -z "$APP_BASE_PATH" ] && [ "$VITE_BASE_PATH" = "/" ]; then
+    SUGGESTED_BASE="/$(basename "$SCRIPT_DIR")"
+    echo "WARNING: APP_BASE_PATH is unset, so the frontend is being built for root (/)."
+    echo "         If this app is served from a subpath, set APP_BASE_PATH=$SUGGESTED_BASE in .env and rerun deploy."
+    echo ""
+fi
+
+if [ -n "$APP_BASE_PATH" ] && [ "$VITE_BASE_PATH" != "$APP_BASE_PATH/" ]; then
+    echo "WARNING: VITE_BASE_PATH ($VITE_BASE_PATH) does not match APP_BASE_PATH ($APP_BASE_PATH)."
+    echo "         Frontend assets may 404 if these diverge on a subpath deploy."
+fi
 
 # ── 1. Pull latest code ────────────────────────────────────────────
 echo "→ Pulling latest code..."

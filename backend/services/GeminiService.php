@@ -130,7 +130,7 @@ class GeminiService
      */
     public static function generateSqlWithShadow($prompt, $campus = null, $userId = null)
     {
-        $primaryMode = self::resolvePrimaryMode();
+        $primaryMode = self::resolvePrimaryModeForPrompt($prompt, $campus);
         $primary = $primaryMode === 'intent'
             ? self::generateSql($prompt, $campus, false, true)
             : self::generateSql($prompt, $campus, true, false);
@@ -542,6 +542,9 @@ PROMPT;
   System-wide reference data (material types, instance types, fund types, fiscal years, etc.) does NOT need campus filtering.";
         }
 
+      $legacyPromptFamilyGuidance = self::buildLegacyPromptFamilyGuidance($prompt, $campus);
+    $legacyPromptUserInput = self::buildLegacyPromptUserInput($prompt, $campus);
+
         $systemPrompt = <<<PROMPT
 You are a PostgreSQL query generator for a FOLIO library management system.
 The database uses LDLite (a lightweight version of MetaDB) with schema-qualified table names.
@@ -620,6 +623,7 @@ RULES:
     Never output multiple semicolon-delimited statements, even if the user asks for "also"
     or multiple follow-ups in one prompt. If needed, combine logic into one query.
 {$campusRule}
+{$legacyPromptFamilyGuidance}
 
 SCHEMA:
 {$schemaContext}
@@ -640,7 +644,7 @@ PROMPT;
                 ],
                 'contents' => [
                     [
-                        'parts' => [['text' => $prompt]],
+                        'parts' => [['text' => $legacyPromptUserInput]],
                     ],
                 ],
                 'generationConfig' => [
@@ -953,6 +957,64 @@ PROMPT;
         ];
     }
 
+    private static function buildLegacyPromptFamilyGuidance($prompt, $campus = null): string
+    {
+        $queryFamily = self::resolvePromptQueryFamily($prompt, $campus);
+        $familyKey = trim((string)($queryFamily['familyKey'] ?? ''));
+        if ($familyKey !== 'inventory_collection_age') {
+            return '';
+        }
+
+        return <<<GUIDANCE
+
+PROMPT-SPECIFIC GUIDANCE:
+- For collection-age prompts, compute age from bibliographic publication year, not from record-created, status, or cataloging timestamps.
+- Use the holdings-to-instance publication path: inventory.item__t -> inventory.holdings_record__t -> inventory.instance__t -> inventory.instance__t__publication and read publication__date_of_publication when it starts with a 4-digit year.
+- Never use metadata__created_date, status__date, or cataloged_date as the age source for collection-age reports.
+- For collection-age prompts with library or collection scope, join inventory.item__t.effective_location_id -> inventory.location__t -> inventory.loclibrary__t -> inventory.loccampus__t and apply separate library-name and location-name filters instead of collapsing both concepts into one inventory.location__t keyword match.
+GUIDANCE;
+    }
+
+    private static function buildLegacyPromptUserInput($prompt, $campus = null): string
+    {
+        $prompt = trim((string)$prompt);
+        if ($prompt === '') {
+            return $prompt;
+        }
+
+        $queryFamily = self::resolvePromptQueryFamily($prompt, $campus);
+        $familyKey = trim((string)($queryFamily['familyKey'] ?? ''));
+        if ($familyKey !== 'inventory_collection_age') {
+            return $prompt;
+        }
+
+        $library = self::extractCollectionAgeLibraryScope($prompt);
+        $location = self::extractCollectionAgeLocationScope($prompt);
+
+        $lines = [
+            $prompt,
+            '',
+            'Interpretation constraints for this request:',
+            'Compute average age in years from bibliographic publication year using inventory.instance__t__publication.publication__date_of_publication.',
+            'Do not use metadata__created_date, status__date, or cataloged_date as the age source.',
+            'Use the age join path inventory.item__t -> inventory.holdings_record__t -> inventory.instance__t -> inventory.instance__t__publication.',
+            'Use the scope join path inventory.item__t.effective_location_id -> inventory.location__t -> inventory.loclibrary__t -> inventory.loccampus__t.',
+            'Apply separate library and location filters instead of merging both concepts into a single inventory.location__t keyword match.',
+        ];
+
+        if ($library !== '') {
+            $lines[] = 'Library scope: ' . $library;
+            $lines[] = "Use a library predicate that preserves the full phrase '%{$library}%' instead of shortening it to a generic keyword match.";
+        }
+
+        if ($location !== '') {
+            $lines[] = 'Location scope: ' . $location;
+            $lines[] = "Use a location predicate that preserves the full phrase '%{$location}%' instead of shortening it to a generic keyword match.";
+        }
+
+        return implode("\n", $lines);
+    }
+
     private static function maybeRouteQueryFamilyIntentResponse(
         array $intent,
         ?array $queryFamily,
@@ -969,6 +1031,14 @@ PROMPT;
         $expectedFamilyKey = trim((string)($queryFamily['familyKey'] ?? ''));
         $returnedFamilyKey = trim((string)($intent['familyKey'] ?? ''));
         if ($expectedFamilyKey !== '' && $returnedFamilyKey !== $expectedFamilyKey) {
+            $mismatchTelemetryContext = self::withSlotProvenanceTelemetry(
+                $telemetryContext,
+                self::buildInitialFamilySlotProvenance(
+                    $returnedFamilyKey,
+                    is_array($intent['slots'] ?? null) ? $intent['slots'] : []
+                )
+            );
+
             if ($legacyFallbackFactory === null) {
                 $legacyFallbackFactory = function () use ($prompt, $campus): array {
                     return self::generateSql($prompt, $campus, true);
@@ -986,7 +1056,24 @@ PROMPT;
                 'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
                 'expectedFamilyKey' => $expectedFamilyKey,
                 'returnedFamilyKey' => $returnedFamilyKey === '' ? null : $returnedFamilyKey,
-            ] + $telemetryContext);
+            ] + $mismatchTelemetryContext);
+
+            $promptRecoveredResponse = self::buildPromptRecoveredQueryFamilyIntentResponse(
+                $queryFamily,
+                $prompt,
+                $campus,
+                $mismatchTelemetryContext
+            );
+            if ($promptRecoveredResponse !== null) {
+                return $promptRecoveredResponse;
+            }
+
+            self::guardCoveredFamilyFallback(
+                $expectedFamilyKey,
+                $reason,
+                $mismatchTelemetryContext
+            );
+
             self::logRouteSelection('legacy_fallback', $reason . ':' . $expectedFamilyKey, [
                 'query' => [],
             ]);
@@ -1006,7 +1093,7 @@ PROMPT;
                 'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
                 'expectedFamilyKey' => $expectedFamilyKey,
                 'returnedFamilyKey' => $returnedFamilyKey === '' ? null : $returnedFamilyKey,
-            ] + $telemetryContext);
+            ] + $mismatchTelemetryContext);
             return $fallback;
         }
 
@@ -1035,6 +1122,88 @@ PROMPT;
             $campus,
             $telemetryContext
         );
+    }
+
+    private static function buildPromptRecoveredQueryFamilyIntentResponse(
+        array $queryFamily,
+        $prompt,
+        $campus,
+        array $telemetryContext
+    ): ?array {
+        $expectedFamilyKey = trim((string)($queryFamily['familyKey'] ?? ''));
+        if ($expectedFamilyKey !== 'inventory_collection_age') {
+            return null;
+        }
+
+        try {
+            return self::buildQueryFamilyIntentResponse(
+                [
+                    'familyKey' => $expectedFamilyKey,
+                    'slots' => [
+                        'requested_outputs' => ['average_age_years'],
+                    ],
+                ],
+                $queryFamily,
+                $prompt,
+                $campus,
+                $telemetryContext
+            );
+        } catch (\InvalidArgumentException | \RuntimeException $e) {
+            self::logValidationFailure('family_contract_prompt_recovery', [
+                'route' => 'intent_json',
+                'model' => $telemetryContext['model'] ?? null,
+                'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+                'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+                'finishReason' => $telemetryContext['finishReason'] ?? null,
+                'attempts' => $telemetryContext['attempts'] ?? null,
+                'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+                'expectedFamilyKey' => $expectedFamilyKey,
+                'error' => $e->getMessage(),
+            ] + $telemetryContext);
+        }
+
+        return null;
+    }
+
+    private static function guardCoveredFamilyFallback(
+        string $familyKey,
+        string $failureReason,
+        array $telemetryContext,
+        ?\Throwable $error = null
+    ): void {
+        if (!empty(Yii::$app->params['nl2sqlForceLegacy'])) {
+            return;
+        }
+
+        self::logValidationFailure('family_fallback_guard', [
+            'route' => 'guarded_failure',
+            'routeReason' => $failureReason,
+            'familyKey' => $familyKey === '' ? null : $familyKey,
+            'forceLegacyEnabled' => false,
+            'error' => $error ? $error->getMessage() : null,
+        ] + $telemetryContext);
+
+        throw new \RuntimeException(
+            self::buildCoveredFamilyFallbackGuardMessage($familyKey, $failureReason)
+        );
+    }
+
+    private static function buildCoveredFamilyFallbackGuardMessage(string $familyKey, string $failureReason): string
+    {
+        $familyLabel = trim(str_replace('_', ' ', $familyKey));
+        if ($familyLabel === '') {
+            $familyLabel = 'deterministic report';
+        }
+
+        if ($failureReason === 'family_contract_mismatch') {
+            return 'I could not safely interpret this ' . $familyLabel
+                . ' request, and legacy fallback is disabled for this route to avoid incorrect results. '
+                . 'Please restate the report scope and requested fields more explicitly.';
+        }
+
+        return 'I could not safely generate this ' . $familyLabel
+            . ' request, and legacy fallback is disabled for this route to avoid incorrect results. '
+            . 'Please try a more explicit request or contact an administrator if the problem persists.';
     }
 
     /**
@@ -1163,6 +1332,25 @@ PROMPT;
     }
 
     /**
+     * Covered families should prefer deterministic intent mode unless legacy is explicitly forced.
+     */
+    private static function resolvePrimaryModeForPrompt($prompt, $campus = null)
+    {
+        $primaryMode = self::resolvePrimaryMode();
+        if ($primaryMode !== 'legacy') {
+            return $primaryMode;
+        }
+
+        if (!empty(Yii::$app->params['nl2sqlForceLegacy'])) {
+            return 'legacy';
+        }
+
+        return self::resolvePromptQueryFamily($prompt, $campus) !== null
+            ? 'intent'
+            : 'legacy';
+    }
+
+    /**
      * Determine if the current user/prompt should run shadow comparison.
      */
     private static function shouldRunShadowForUser($userId, $prompt)
@@ -1226,6 +1414,141 @@ PROMPT;
     }
 
     /**
+     * Build a family-specific semantic comparison signature for SQL pairs that
+     * are known to be structurally different but semantically equivalent.
+     */
+    private static function buildSemanticSqlComparisonSignature($sql)
+    {
+        $sql = trim((string)$sql);
+        if ($sql === '') {
+            return null;
+        }
+
+        $normalized = self::normalizeSqlForHash($sql);
+        if (!self::looksLikeCollectionAgeSemanticSql($normalized)) {
+            return null;
+        }
+
+        $publicationAlias = self::extractSqlTableAlias($sql, 'inventory.instance__t__publication');
+        $libraryAlias = self::extractSqlTableAlias($sql, 'inventory.loclibrary__t');
+        $locationAlias = self::extractSqlTableAlias($sql, 'inventory.location__t');
+        $campusAlias = self::extractSqlTableAlias($sql, 'inventory.loccampus__t');
+
+        if ($publicationAlias === '' || $libraryAlias === '' || $locationAlias === '' || $campusAlias === '') {
+            return null;
+        }
+
+        $libraryFilter = self::extractSqlAliasIlikeValue($sql, $libraryAlias);
+        $locationFilter = self::extractSqlAliasIlikeValue($sql, $locationAlias);
+        $campusFilter = self::extractSqlAliasCampusValue($sql, $campusAlias);
+        if ($libraryFilter === '' || $campusFilter === '') {
+            return null;
+        }
+
+        $signature = [
+            'family' => 'inventory_collection_age',
+            'age_basis' => 'publication_year',
+            'campus' => self::canonicalizeSqlComparisonLiteral($campusFilter),
+            'library' => self::canonicalizeSqlComparisonLiteral($libraryFilter),
+            'location' => $locationFilter === ''
+                ? null
+                : self::canonicalizeSqlComparisonLiteral($locationFilter),
+        ];
+
+        return json_encode($signature, JSON_UNESCAPED_SLASHES);
+    }
+
+    private static function looksLikeCollectionAgeSemanticSql(string $normalizedSql): bool
+    {
+        $requiredFragments = [
+            'publication__date_of_publication',
+            'inventory.item__t',
+            'inventory.holdings_record__t',
+            'inventory.instance__t',
+            'inventory.instance__t__publication',
+            'inventory.location__t',
+            'inventory.loclibrary__t',
+            'inventory.loccampus__t',
+            "publication__date_of_publication ~ '^\\d{4}'",
+        ];
+
+        foreach ($requiredFragments as $fragment) {
+            if (strpos($normalizedSql, $fragment) === false) {
+                return false;
+            }
+        }
+
+        if (
+            strpos($normalizedSql, 'avg(') === false
+            && strpos($normalizedSql, 'sum(scoped_instances.item_count * (extract(year from current_date) - cast(substring(') === false
+        ) {
+            return false;
+        }
+
+        if (strpos($normalizedSql, 'extract(year from current_date) - cast(substring(') === false) {
+            return false;
+        }
+
+        return preg_match('/\b(metadata__created_date|status__date|cataloged_date)\b/i', $normalizedSql) !== 1;
+    }
+
+    private static function extractSqlTableAlias(string $sql, string $tableName): string
+    {
+        $pattern = '/\b(?:from|join|left\s+join)\s+' . preg_quote($tableName, '/') . '\s+(?:as\s+)?([a-z_][a-z0-9_]*)\b/i';
+        if (preg_match($pattern, $sql, $matches) === 1) {
+            return strtolower((string)($matches[1] ?? ''));
+        }
+
+        return '';
+    }
+
+    private static function extractSqlAliasIlikeValue(string $sql, string $alias): string
+    {
+        $pattern = '/\b' . preg_quote($alias, '/') . '\.name\s+ilike\s+\'((?:[^\']|\'\')*)\'/i';
+        if (preg_match($pattern, $sql, $matches) === 1) {
+            return str_replace("''", "'", (string)($matches[1] ?? ''));
+        }
+
+        $lowerPattern = '/lower\(\s*' . preg_quote($alias, '/') . '\.name\s*\)\s*ilike\s*lower\(\s*\'((?:[^\']|\'\')*)\'\s*\)/i';
+        if (preg_match($lowerPattern, $sql, $matches) === 1) {
+            return str_replace("''", "'", (string)($matches[1] ?? ''));
+        }
+
+        return '';
+    }
+
+    private static function extractSqlAliasCampusValue(string $sql, string $alias): string
+    {
+        $ilikePattern = '/\b' . preg_quote($alias, '/') . '\.name\s+ilike\s+\'((?:[^\']|\'\')*)\'/i';
+        if (preg_match($ilikePattern, $sql, $matches) === 1) {
+            return str_replace("''", "'", (string)($matches[1] ?? ''));
+        }
+
+        $lowerPattern = '/lower\(\s*' . preg_quote($alias, '/') . '\.name\s*\)\s*=\s*lower\(\s*\'((?:[^\']|\'\')*)\'\s*\)/i';
+        if (preg_match($lowerPattern, $sql, $matches) === 1) {
+            return str_replace("''", "'", (string)($matches[1] ?? ''));
+        }
+
+        return '';
+    }
+
+    private static function extractSqlLimitValue(string $sql): ?string
+    {
+        if (preg_match('/\blimit\s+(\d+)\b/i', $sql, $matches) === 1) {
+            return (string)($matches[1] ?? '');
+        }
+
+        return null;
+    }
+
+    private static function canonicalizeSqlComparisonLiteral(string $value): string
+    {
+        $normalized = strtolower(trim($value));
+        $normalized = preg_replace('/\s+/', ' ', $normalized);
+        return trim((string)$normalized);
+    }
+
+    /**
      * Log shadow comparison metrics without affecting the primary response.
      */
     private static function logShadowComparison(array $primary, array $shadow, array $context)
@@ -1240,6 +1563,25 @@ PROMPT;
             ? substr(hash('sha256', self::normalizeSqlForHash($shadowSql)), 0, 16)
             : null;
 
+        $primarySemanticSignature = self::buildSemanticSqlComparisonSignature($primarySql);
+        $shadowSemanticSignature = self::buildSemanticSqlComparisonSignature($shadowSql);
+        $primarySemanticHash = $primarySemanticSignature !== null
+            ? substr(hash('sha256', $primarySemanticSignature), 0, 16)
+            : null;
+        $shadowSemanticHash = $shadowSemanticSignature !== null
+            ? substr(hash('sha256', $shadowSemanticSignature), 0, 16)
+            : null;
+
+        $sqlComparisonMethod = 'raw_sql_hash';
+        $sqlComparisonMatch = $primaryHash !== null && $shadowHash !== null
+            ? $primaryHash === $shadowHash
+            : null;
+
+        if ($primarySemanticHash !== null && $shadowSemanticHash !== null) {
+            $sqlComparisonMethod = 'semantic_sql_signature';
+            $sqlComparisonMatch = $primarySemanticHash === $shadowSemanticHash;
+        }
+
         self::logNlTelemetry('nl2sql.shadow_compare', array_merge($context, [
             'primaryRoute' => $primary['route'] ?? null,
             'primaryRouteReason' => $primary['routeReason'] ?? null,
@@ -1252,6 +1594,10 @@ PROMPT;
             'sqlHashMatch' => $primaryHash !== null && $shadowHash !== null
                 ? $primaryHash === $shadowHash
                 : null,
+            'primarySemanticSqlHash' => $primarySemanticHash,
+            'shadowSemanticSqlHash' => $shadowSemanticHash,
+            'sqlComparisonMethod' => $sqlComparisonMethod,
+            'sqlComparisonMatch' => $sqlComparisonMatch,
             'primarySqlLength' => strlen((string)$primarySql),
             'shadowSqlLength' => strlen((string)$shadowSql),
         ]));
@@ -1339,7 +1685,7 @@ PROMPT;
                         self::isQuotaExhaustedResponse($statusCode, $errorMessage) &&
                         !empty((string)(Yii::$app->params['openaiApiKey'] ?? ''))
                     ) {
-                        return self::sendOpenAiFallbackRequest($payload, $metricContext, $startedAt);
+                        return self::sendOpenAiFallbackRequest($payload, $metricContext, $startedAt, $statusCode, $errorMessage);
                     }
 
                     $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
@@ -1583,20 +1929,19 @@ PROMPT;
      * quota is exhausted. Re-uses the same Gemini-shape payload and metric
      * context so callers require no changes.
      *
-     * @param array  $payload       Gemini-shape payload (will be translated internally)
-     * @param string $metricContext Logging context string
-     * @param float  $startedAt     microtime(true) from the original request
+     * @param array    $payload       Gemini-shape payload (will be translated internally)
+     * @param string   $metricContext Logging context string
+     * @param float    $startedAt     microtime(true) from the original request
+     * @param int|null $statusCode    Source-provider HTTP status when available
+     * @param string   $errorMessage  Source-provider error message used for reason classification
      * @return array {response, attempts, elapsedMs, providerFallback}
      * @throws \RuntimeException
      */
-    private static function sendOpenAiFallbackRequest(array $payload, $metricContext, $startedAt)
+    private static function sendOpenAiFallbackRequest(array $payload, $metricContext, $startedAt, $statusCode = null, $errorMessage = '')
     {
         $apiKey = (string)(Yii::$app->params['openaiApiKey'] ?? '');
 
-        Yii::warning(
-            'Gemini quota exhausted — falling back to OpenAI for this request.',
-            'nl2sql.provider_fallback'
-        );
+        self::logProviderFallback('gemini', 'openai', $metricContext, $statusCode, $errorMessage);
 
         try {
             $client = new Client();
@@ -1684,6 +2029,32 @@ PROMPT;
         }
 
         Yii::info('Gemini request success: ' . json_encode($payload), 'nl2sql.retry');
+    }
+
+    /**
+     * Normalize provider fallback causes into stable report-friendly reason codes.
+     */
+    private static function classifyProviderFallbackReason($statusCode, $errorMessage)
+    {
+        if (self::isQuotaExhaustedResponse($statusCode, $errorMessage)) {
+            return 'quota_exhausted';
+        }
+
+        return 'provider_failure';
+    }
+
+    /**
+     * Emit structured provider-fallback telemetry for daily shadow reporting.
+     */
+    private static function logProviderFallback($sourceProvider, $targetProvider, $context, $statusCode = null, $errorMessage = '')
+    {
+        self::logNlTelemetry('nl2sql.provider_fallback', [
+            'context' => (string)$context,
+            'sourceProvider' => (string)$sourceProvider,
+            'targetProvider' => (string)$targetProvider,
+            'reasonCode' => self::classifyProviderFallbackReason($statusCode, $errorMessage),
+            'statusCode' => $statusCode === null ? null : (int)$statusCode,
+        ], true);
     }
 
     /**
@@ -1973,10 +2344,16 @@ PROMPT;
         array $telemetryContext,
         $familyResultBuilder = null
     ): array {
-        $intent = self::recoverPromptScopedFamilySlots(
+        $recoveredIntent = self::recoverPromptScopedFamilySlotsWithProvenance(
             $intent,
             (string)$prompt,
             $campus
+        );
+        $intent = $recoveredIntent['intent'];
+        $slotProvenance = $recoveredIntent['slotProvenance'] ?? [];
+        $telemetryContext = self::withSlotProvenanceTelemetry(
+            $telemetryContext,
+            $slotProvenance
         );
 
         $slotValidation = QueryFamilySlotService::validateFamilyPayload($intent, [
@@ -2021,6 +2398,15 @@ PROMPT;
             $normalizedPayload,
             (string)$prompt,
             $campus
+        );
+        $slotProvenance = self::finalizeRecoveredSlotProvenance(
+            $normalizedPayload,
+            $slotProvenance,
+            $campus
+        );
+        $telemetryContext = self::withSlotProvenanceTelemetry(
+            $telemetryContext,
+            $slotProvenance
         );
 
         $routeReason = 'family_contract_supported:'
@@ -2081,18 +2467,29 @@ PROMPT;
         return $compiledFamily;
     }
 
-    private static function recoverPromptScopedFamilySlots(array $intent, string $prompt, $campus = null): array
+    private static function recoverPromptScopedFamilySlotsWithProvenance(array $intent, string $prompt, $campus = null): array
     {
         $familyKey = trim((string)($intent['familyKey'] ?? ''));
         if (!is_array($intent['slots'] ?? null)) {
-            return $intent;
+            return [
+                'intent' => $intent,
+                'slotProvenance' => [],
+            ];
         }
 
+        $slotProvenance = self::buildInitialFamilySlotProvenance(
+            $familyKey,
+            $intent['slots']
+        );
+
         if ($familyKey === 'inventory_collection_age') {
-            $intent['slots'] = self::recoverCollectionAgeFamilySlotsFromPrompt(
+            $collectionAgeRecovery = self::recoverCollectionAgeFamilySlotsFromPrompt(
                 $intent['slots'],
-                $prompt
+                $prompt,
+                $slotProvenance
             );
+            $intent['slots'] = $collectionAgeRecovery['slots'];
+            $slotProvenance = $collectionAgeRecovery['slotProvenance'];
         }
 
         if ($familyKey === 'inventory_library_location_listing') {
@@ -2102,7 +2499,104 @@ PROMPT;
             );
         }
 
-        return $intent;
+        return [
+            'intent' => $intent,
+            'slotProvenance' => $slotProvenance,
+        ];
+    }
+
+    private static function buildInitialFamilySlotProvenance(string $familyKey, array $slots): array
+    {
+        $provenance = [];
+        foreach (self::getSupportedQueryFamilySlots($familyKey) as $slotName) {
+            if (!array_key_exists($slotName, $slots)) {
+                continue;
+            }
+
+            if (!self::slotValueHasTelemetryContent($slots[$slotName])) {
+                continue;
+            }
+
+            $provenance[$slotName] = 'model_output';
+        }
+
+        ksort($provenance, SORT_STRING);
+        return $provenance;
+    }
+
+    private static function getSupportedQueryFamilySlots(string $familyKey): array
+    {
+        try {
+            $contracts = QueryFamilyContractService::loadContracts();
+        } catch (\RuntimeException $e) {
+            return [];
+        }
+
+        $contract = $contracts[$familyKey] ?? null;
+        if (!is_array($contract)) {
+            return [];
+        }
+
+        return array_values($contract['slots']['supported'] ?? []);
+    }
+
+    private static function slotValueHasTelemetryContent($value): bool
+    {
+        if (is_array($value)) {
+            return !empty($value);
+        }
+
+        if (!is_scalar($value)) {
+            return false;
+        }
+
+        return trim((string)$value) !== '';
+    }
+
+    private static function finalizeRecoveredSlotProvenance(array $normalizedPayload, array $slotProvenance, $campus = null): array
+    {
+        $familyKey = trim((string)($normalizedPayload['familyKey'] ?? ''));
+        $normalizedSlots = $normalizedPayload['slots'] ?? null;
+        if (!is_array($normalizedSlots)) {
+            return $slotProvenance;
+        }
+
+        foreach (self::getSupportedQueryFamilySlots($familyKey) as $slotName) {
+            if (isset($slotProvenance[$slotName])) {
+                continue;
+            }
+
+            $value = $normalizedSlots[$slotName] ?? null;
+            if (!self::slotValueHasTelemetryContent($value)) {
+                continue;
+            }
+
+            if (
+                $slotName === 'campus'
+                && is_scalar($campus)
+                && trim((string)$campus) !== ''
+                && strcasecmp(trim((string)$value), trim((string)$campus)) === 0
+            ) {
+                $slotProvenance[$slotName] = 'default_context';
+                continue;
+            }
+
+            $slotProvenance[$slotName] = 'normalized_payload';
+        }
+
+        ksort($slotProvenance, SORT_STRING);
+        return $slotProvenance;
+    }
+
+    private static function withSlotProvenanceTelemetry(array $telemetryContext, array $slotProvenance): array
+    {
+        if ($slotProvenance === []) {
+            return $telemetryContext;
+        }
+
+        ksort($slotProvenance, SORT_STRING);
+        $telemetryContext['slotProvenance'] = $slotProvenance;
+        return $telemetryContext;
     }
 
     private static function recoverInventoryListingFamilySlotsFromPrompt(array $slots, string $prompt): array
@@ -2127,36 +2621,57 @@ PROMPT;
         return $slots;
     }
 
-    private static function recoverCollectionAgeFamilySlotsFromPrompt(array $slots, string $prompt): array
+    private static function recoverCollectionAgeFamilySlotsFromPrompt(array $slots, string $prompt, array $slotProvenance = []): array
     {
         if (trim($prompt) === '') {
-            return $slots;
+            return [
+                'slots' => $slots,
+                'slotProvenance' => $slotProvenance,
+            ];
         }
 
-        $library = trim((string)($slots['library'] ?? ''));
-        if ($library === '') {
-            $recoveredLibrary = self::extractCollectionAgeLibraryScope($prompt);
-            if ($recoveredLibrary !== '') {
-                $slots['library'] = $recoveredLibrary;
+        $locationRequiresExplicitPrompt = QueryFamilySlotService::slotRequiresExplicitPromptEvidence(
+            'inventory_collection_age',
+            'location'
+        );
+
+        $existingLibrary = trim((string)($slots['library'] ?? ''));
+        $recoveredLibrary = self::extractCollectionAgeLibraryScope($prompt);
+        if ($recoveredLibrary !== '') {
+            $slots['library'] = $recoveredLibrary;
+            if ($existingLibrary === '') {
+                $slotProvenance['library'] = 'prompt_explicit';
+            } elseif (strcasecmp($existingLibrary, $recoveredLibrary) !== 0) {
+                $slotProvenance['library'] = 'prompt_repaired';
             }
         }
 
-        $location = trim((string)($slots['location'] ?? ''));
-        if ($location === '') {
-            $recoveredLocation = self::extractCollectionAgeLocationScope($prompt);
-            if ($recoveredLocation !== '') {
-                $slots['location'] = $recoveredLocation;
+        $existingLocation = trim((string)($slots['location'] ?? ''));
+        $recoveredLocation = self::extractCollectionAgeLocationScope($prompt);
+        if ($recoveredLocation !== '') {
+            $slots['location'] = $recoveredLocation;
+            if ($existingLocation === '') {
+                $slotProvenance['location'] = 'prompt_explicit';
+            } elseif (strcasecmp($existingLocation, $recoveredLocation) !== 0) {
+                $slotProvenance['location'] = 'prompt_repaired';
             }
+        } elseif ($locationRequiresExplicitPrompt && !self::promptMentionsExplicitCollectionAgeLocationScope($prompt)) {
+            unset($slots['location']);
+            $slotProvenance['location'] = 'policy_omitted_explicit_prompt_only';
         }
 
-        return $slots;
+        ksort($slotProvenance, SORT_STRING);
+        return [
+            'slots' => $slots,
+            'slotProvenance' => $slotProvenance,
+        ];
     }
 
     private static function extractCollectionAgeLibraryScope(string $prompt): string
     {
         $patterns = [
             '/\b(?:in|at|from|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\b/i',
-            '/\b(?:of|in|at|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?)\s+reference collection\b/i',
+            '/\b(?:of|in|at|for)\s+(?:items\s+in\s+)?(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?)\s+reference collection\b/i',
         ];
 
         foreach ($patterns as $pattern) {
@@ -2181,11 +2696,52 @@ PROMPT;
 
     private static function extractCollectionAgeLocationScope(string $prompt): string
     {
+        $namedReferenceLocation = self::extractNamedReferenceCollectionLocationScope($prompt);
+        if ($namedReferenceLocation !== '') {
+            return $namedReferenceLocation;
+        }
+
+        if (
+            QueryFamilySlotService::slotRequiresExplicitPromptEvidence('inventory_collection_age', 'location')
+            && !self::promptMentionsExplicitCollectionAgeLocationScope($prompt)
+        ) {
+            return '';
+        }
+
+        $library = self::extractCollectionAgeLibraryScope($prompt);
+        if (preg_match('/^(.+?)\s+library$/i', $library, $matches) === 1) {
+            $baseName = self::normalizeRecoveredPromptScope((string)($matches[1] ?? ''));
+            if ($baseName !== '') {
+                return $baseName . ' Reference';
+            }
+        }
+
         if (preg_match('/\breference collection\b/i', $prompt) === 1) {
             return 'Reference collection';
         }
 
         return '';
+    }
+
+    private static function promptMentionsExplicitCollectionAgeLocationScope(string $prompt): bool
+    {
+        return preg_match('/\breference collection\b/i', $prompt) === 1;
+    }
+
+    private static function extractNamedReferenceCollectionLocationScope(string $prompt): string
+    {
+        $pattern = '/\b(?:of|in|at|for)\s+(?:items\s+in\s+)?(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?)\s+reference collection\b/i';
+        if (preg_match($pattern, $prompt, $matches) !== 1) {
+            return '';
+        }
+
+        $baseName = self::normalizeRecoveredPromptScope((string)($matches[1] ?? ''));
+        $baseName = trim((string) preg_replace('/\s+library\s*$/i', '', $baseName));
+        if ($baseName === '' || in_array(strtolower($baseName), ['a', 'an', 'the', 'this', 'that', 'item', 'items'], true)) {
+            return '';
+        }
+
+        return $baseName . ' Reference';
     }
 
     private static function normalizeRecoveredPromptScope(string $value): string
@@ -2486,6 +3042,14 @@ PROMPT;
             return $compiler($normalizedPayload, $routeReason);
         } catch (\InvalidArgumentException | \RuntimeException $e) {
             $reason = 'family_compiler_failed';
+
+            self::guardCoveredFamilyFallback(
+                trim((string)($normalizedPayload['familyKey'] ?? '')),
+                $reason,
+                $telemetryContext,
+                $e
+            );
+
             self::logRouteSelection('legacy_fallback', $reason . ': ' . $e->getMessage(), [
                 'query' => [],
             ]);
@@ -3998,6 +4562,7 @@ RULE;
         $matchPolicies = json_encode(array_values($contract['matchPolicy']['supported'] ?? []), JSON_UNESCAPED_SLASHES);
         $defaultMatchPolicy = trim((string)($contract['matchPolicy']['default'] ?? 'case_insensitive_contains'));
         $slotContract = self::buildQueryFamilySlotPromptContract($contract, $defaultMatchPolicy);
+        $slotInferenceRules = self::buildQueryFamilySlotInferenceRules($contract);
 
         return <<<PROMPT
 You are a deterministic query-family slot extractor for a FOLIO inventory workflow.
@@ -4014,6 +4579,7 @@ Rules:
 6. Choose exact_phrase when the prompt uses quotation marks or wording such as named, listed as, or called for a contributor or other named entity; otherwise use {$defaultMatchPolicy}.
 7. Do NOT return tables, joins, SQL operators, SQL snippets, raw schema names, or query objects.
 8. Do NOT include markdown, code fences, or commentary.
+{$slotInferenceRules}
 {$campusRule}
 PROMPT;
     }
@@ -4049,5 +4615,33 @@ PROMPT;
         $lines[] = '}';
 
         return implode("\n", $lines);
+    }
+
+    private static function buildQueryFamilySlotInferenceRules(array $contract): string
+    {
+        $policies = $contract['slots']['inferencePolicies'] ?? [];
+        if (!is_array($policies) || $policies === []) {
+            return '';
+        }
+
+        $lines = [
+            '',
+            'Slot inference rules:',
+        ];
+
+        foreach ($policies as $slotName => $policy) {
+            if ($policy !== QueryFamilyContractService::SLOT_INFERENCE_POLICY_EXPLICIT_PROMPT_ONLY) {
+                continue;
+            }
+
+            if (($contract['familyKey'] ?? '') === 'inventory_collection_age' && $slotName === 'location') {
+                $lines[] = '- Only set slots.location when the prompt explicitly names a collection or sub-location scope; if the prompt only names a library, omit slots.location.';
+                continue;
+            }
+
+            $lines[] = '- Only set slots.' . $slotName . ' when the prompt explicitly asks for that scope; otherwise omit slots.' . $slotName . '.';
+        }
+
+        return count($lines) > 2 ? implode("\n", $lines) : '';
     }
 }

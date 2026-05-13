@@ -11,6 +11,8 @@ use app\services\GeminiService;
 use app\services\SettingsService;
 use app\services\DatabaseRetryService;
 use app\services\IndexRecommendationService;
+use app\services\Nl2sqlRuntimePreflightService;
+use app\services\SqlPreflightService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -37,6 +39,7 @@ use Firebase\JWT\JWT;
  *   GET  /api/saved/<id>        — get a saved query
  *   DELETE /api/saved/<id>      — delete a saved query
  *   GET  /api/health            — health check
+ *   GET  /api/nl2sql-preflight  — effective NL2SQL runtime parity summary
  */
 class FolioQueryController extends Controller
 {
@@ -85,7 +88,7 @@ class FolioQueryController extends Controller
                     [
                         'allow' => true,
                         'actions' => [
-                            'settings', 'settings-save', 'settings-test',
+                            'settings', 'settings-save', 'settings-test', 'nl2sql-preflight',
                             'training-list', 'training-detail', 'training-create',
                             'training-update', 'training-delete', 'training-correct',
                             'report-create', 'report-update', 'report-delete',
@@ -211,6 +214,111 @@ class FolioQueryController extends Controller
     }
 
     /**
+     * Only generated FOLIO SQL should be preflighted on /api/execute.
+     * Manual SQL still gets its validation from the execution path itself.
+     *
+     * @param string $dataSource
+     * @param string $source
+     * @return bool
+     */
+    private function shouldPreflightExecuteSql($dataSource, $source)
+    {
+        return $this->normalizeDataSource($dataSource) === 'folio'
+            && strtolower(trim((string) $source)) !== 'manual';
+    }
+
+    /**
+     * Create a stable prompt fingerprint for telemetry without logging prompt text.
+     *
+     * @param string $prompt
+     * @return string
+     */
+    private function fingerprintPrompt($prompt)
+    {
+        return substr(hash('sha256', trim((string) $prompt)), 0, 16);
+    }
+
+    /**
+     * Normalize SQL for stable telemetry hashing.
+     *
+     * @param string $sql
+     * @return string
+     */
+    private function normalizeSqlForTelemetry($sql)
+    {
+        $normalized = preg_replace('/\s+/', ' ', strtolower(trim((string) $sql)));
+        return trim((string) $normalized);
+    }
+
+    /**
+     * Bucket PostgreSQL preflight failures into stable error families.
+     *
+     * @param string $error
+     * @return string
+     */
+    private function classifyPreflightErrorFamily($error)
+    {
+        $message = strtolower(trim((string) $error));
+        if ($message === '') {
+            return 'unknown_error';
+        }
+        if (strpos($message, 'syntax error') !== false) {
+            return 'syntax_error';
+        }
+        if (strpos($message, 'operator does not exist') !== false) {
+            return 'operator_error';
+        }
+        if (strpos($message, 'function ') !== false && strpos($message, ' does not exist') !== false) {
+            return 'function_error';
+        }
+        if (strpos($message, 'column ') !== false && strpos($message, ' does not exist') !== false) {
+            return 'missing_column';
+        }
+        if (strpos($message, 'relation ') !== false && strpos($message, ' does not exist') !== false) {
+            return 'missing_table';
+        }
+        if (strpos($message, 'type ') !== false && strpos($message, ' does not exist') !== false) {
+            return 'missing_type';
+        }
+        if (strpos($message, 'permission denied') !== false) {
+            return 'permission_error';
+        }
+        return 'unknown_error';
+    }
+
+    /**
+     * Emit structured telemetry for PostgreSQL preflight validation failures.
+     *
+     * @param string $endpoint
+     * @param string $error
+     * @param string $dataSource
+     * @param string $source
+     * @param string $sql
+     * @param array $context
+     * @return void
+     */
+    private function logPreflightValidationFailure($endpoint, $error, $dataSource, $source, $sql, array $context = [])
+    {
+        $payload = array_merge([
+            'event' => 'nl2sql.validation_failure',
+            'timestamp' => gmdate('c'),
+            'stage' => 'postgres_preflight',
+            'endpoint' => (string) $endpoint,
+            'source' => strtolower(trim((string) $source)),
+            'dataSource' => $this->normalizeDataSource($dataSource),
+            'errorFamily' => $this->classifyPreflightErrorFamily($error),
+            'error' => trim((string) $error),
+            'sqlHash' => substr(hash('sha256', $this->normalizeSqlForTelemetry($sql)), 0, 16),
+            'sqlLength' => strlen((string) $sql),
+        ], $context);
+
+        Yii::warning(
+            'NL2SQL telemetry: ' . json_encode($payload),
+            GeminiService::NL2SQL_TELEMETRY_CATEGORY
+        );
+    }
+
+    /**
      * Estimate query complexity using EXPLAIN (FORMAT JSON).
      * Returns null when estimation is unavailable.
      *
@@ -224,79 +332,11 @@ class FolioQueryController extends Controller
             return null;
         }
 
-        try {
-            $db = Yii::$app->folioDb;
-            $db->createCommand("SET statement_timeout = 10000")->execute();
-            try {
-                $row = $db->createCommand('EXPLAIN (FORMAT JSON) ' . $sql)->queryOne();
-            } finally {
-                $db->createCommand("SET statement_timeout = " . (int) Yii::$app->params['queryTimeoutMs'])->execute();
-            }
-
-            if ($row === false || empty($row)) {
-                return null;
-            }
-
-            $first = array_values($row)[0] ?? null;
-            if ($first === null) {
-                return null;
-            }
-
-            if (is_string($first)) {
-                $decoded = json_decode($first, true);
-            } elseif (is_array($first)) {
-                $decoded = $first;
-            } else {
-                return null;
-            }
-
-            if (!is_array($decoded) || empty($decoded[0]['Plan'])) {
-                return null;
-            }
-
-            // Walk the full plan tree to find the maximum cost across all nodes.
-            // A top-level LIMIT node can have a tiny cost even when an underlying
-            // Materialize/CTE node is enormously expensive — reading only the root
-            // would cause us to miss the real cost.
-            $stack = [$decoded[0]['Plan']];
-            $maxCost = 0.0;
-            $topRows = null;
-            $first = true;
-            while (!empty($stack)) {
-                $node = array_pop($stack);
-                if ($first) {
-                    $topRows = isset($node['Plan Rows']) ? (int) $node['Plan Rows'] : null;
-                    $first = false;
-                }
-                if (isset($node['Total Cost'])) {
-                    $maxCost = max($maxCost, (float) $node['Total Cost']);
-                }
-                foreach (['Plans', 'InitPlans'] as $key) {
-                    if (!empty($node[$key]) && is_array($node[$key])) {
-                        foreach ($node[$key] as $child) {
-                            $stack[] = $child;
-                        }
-                    }
-                }
-            }
-
-            return [
-                'rows' => $topRows,
-                'cost' => $maxCost > 0 ? $maxCost : null,
-            ];
-        } catch (\Throwable $e) {
-            $msg = $e->getMessage();
-            // Statement timeout means EXPLAIN itself was cut short — can't validate but not necessarily invalid SQL.
-            if (stripos($msg, 'statement timeout') !== false || stripos($msg, 'canceling statement') !== false) {
-                return null;
-            }
-            // Extract the useful part of PostgreSQL error messages.
-            // Yii wraps them as: "SQLSTATE[42601]: Syntax error: 7 ERROR:  syntax error at or near ..."
-            if (preg_match('/ERROR:\s*(.+?)(?:\n|HINT:|DETAIL:|$)/s', $msg, $m)) {
-                return ['error' => trim($m[1])];
-            }
-            return ['error' => $msg];
-        }
+        return SqlPreflightService::estimateQueryComplexity(
+            Yii::$app->folioDb,
+            (string) $sql,
+            (int) Yii::$app->params['queryTimeoutMs']
+        );
     }
 
     // ─── Schema endpoints ─────────────────────────────────────────────
@@ -456,6 +496,15 @@ class FolioQueryController extends Controller
             return ['error' => $e->getMessage()];
         }
 
+        if ($this->shouldPreflightExecuteSql($dataSource, $source)) {
+            $estimate = $this->estimateQueryComplexity($sql, $dataSource);
+            if (isset($estimate['error'])) {
+                $this->logPreflightValidationFailure('api.execute', (string) $estimate['error'], $dataSource, $source, $sql);
+                Yii::$app->response->statusCode = 422;
+                return ['error' => $estimate['error']];
+            }
+        }
+
         // Enforce LIMIT
         $maxRows = Yii::$app->params['maxQueryRows'];
         if (!preg_match('/\bLIMIT\s+\d+/i', $sql)) {
@@ -597,6 +646,7 @@ class FolioQueryController extends Controller
             $estimate = $this->estimateQueryComplexity($sql, $dataSource);
             // Surface PostgreSQL validation errors immediately instead of queuing a doomed 30-minute job.
             if (isset($estimate['error'])) {
+                $this->logPreflightValidationFailure('api.query_submit', (string) $estimate['error'], $dataSource, $source, $sql);
                 Yii::$app->response->statusCode = 422;
                 return ['error' => $estimate['error']];
             }
@@ -815,6 +865,27 @@ class FolioQueryController extends Controller
             }
             if (isset($result['sql'])) {
                 $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
+
+                $estimate = $this->estimateQueryComplexity(
+                    (string) $result['sql'],
+                    (string) ($result['dataSource'] ?? 'folio')
+                );
+                if (isset($estimate['error'])) {
+                    $this->logPreflightValidationFailure(
+                        'api.nl',
+                        (string) $estimate['error'],
+                        (string) ($result['dataSource'] ?? 'folio'),
+                        'nl',
+                        (string) $result['sql'],
+                        [
+                            'route' => $result['route'] ?? null,
+                            'routeReason' => $result['routeReason'] ?? null,
+                            'promptFingerprint' => $this->fingerprintPrompt($prompt),
+                        ]
+                    );
+                    Yii::$app->response->statusCode = 422;
+                    return ['error' => $estimate['error']];
+                }
             }
 
             $result['suggestions'] = [];
@@ -1395,6 +1466,14 @@ class FolioQueryController extends Controller
     public function actionSettings()
     {
         return SettingsService::forDisplay();
+    }
+
+    /**
+     * GET /api/nl2sql-preflight — return effective NL2SQL runtime parity details.
+     */
+    public function actionNl2sqlPreflight()
+    {
+        return Nl2sqlRuntimePreflightService::buildFromAppContext();
     }
 
     /**
