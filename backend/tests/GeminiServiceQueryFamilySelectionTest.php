@@ -132,9 +132,9 @@ assertContainsText(
     'Collection-age family slot prompts should expose the supported age-family slots to the model.'
 );
 assertContainsText(
-    'Allowed outputs: ["average_age_years"]',
+    'Allowed outputs: ["average_age_years","item_count"]',
     $collectionAgeSlotPrompt,
-    'Collection-age family slot prompts should constrain the output contract to the supported age metric.'
+    'Collection-age family slot prompts should expose both count and age metrics for combined collection summary prompts.'
 );
 assertContainsText(
     'Only set slots.location when the prompt explicitly names a collection or sub-location scope; if the prompt only names a library, omit slots.location.',

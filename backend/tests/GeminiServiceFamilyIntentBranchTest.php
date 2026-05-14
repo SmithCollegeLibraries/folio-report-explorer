@@ -599,6 +599,51 @@ assertSameValue('Hillyer', $collectionAgeHillyerLocationPayloadSeen['normalizedP
 assertSameValue('Locked Stack', $collectionAgeHillyerLocationPayloadSeen['normalizedPayload']['slots']['location'] ?? null, 'Hillyer locked-stacks prompts should recover the explicit locked-stack location scope instead of compiling as Hillyer-wide totals.');
 assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeHillyerLocationPayloadSeen['routeReason'] ?? null, 'Hillyer locked-stacks prompts should remain on the supported collection-age route after prompt recovery.');
 
+$collectionAgeZineLocationPayloadSeen = null;
+$collectionAgeZineLocationResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_collection_age',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'zine collection at Hillyer library',
+            'requested_outputs' => ['average_age_years', 'item_count'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_collection_age',
+    ],
+    'How many items are in the zine collection at Hillyer library and what is their average age?',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'collection-age-hillyer-zine-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload, string $routeReason) use (&$collectionAgeZineLocationPayloadSeen): array {
+        $collectionAgeZineLocationPayloadSeen = [
+            'normalizedPayload' => $normalizedPayload,
+            'routeReason' => $routeReason,
+        ];
+
+        return [
+            'sql' => 'SELECT normalized_collection_age_hillyer_zine_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue('legacy_fallback', $collectionAgeZineLocationResult['route'] ?? null, 'Hillyer zine collection-age prompts should preserve the family compiler helper result when compilation is stubbed.');
+assertSameValue('Hillyer', $collectionAgeZineLocationPayloadSeen['normalizedPayload']['slots']['library'] ?? null, 'Hillyer zine prompts should repair a model-collapsed library phrase back to a broad Hillyer library token that matches SC Hillyer Art Library.');
+assertSameValue('Zine Collection', $collectionAgeZineLocationPayloadSeen['normalizedPayload']['slots']['location'] ?? null, 'Hillyer zine prompts should recover the named zine collection as a location scope instead of a library predicate.');
+assertSameValue(['average_age_years', 'item_count'], $collectionAgeZineLocationPayloadSeen['normalizedPayload']['slots']['requested_outputs'] ?? null, 'Hillyer zine prompts should preserve the requested count plus average-age outputs.');
+assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeZineLocationPayloadSeen['routeReason'] ?? null, 'Hillyer zine prompts should remain on the supported collection-age route after prompt recovery.');
+
 $collectionAgeMalformedSlotPayloadSeen = null;
 $collectionAgeMalformedSlotResult = $familyBranch->invoke(
     null,

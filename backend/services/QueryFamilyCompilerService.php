@@ -54,7 +54,7 @@ class QueryFamilyCompilerService
         }
 
         if ($normalizedPayload['familyKey'] === 'inventory_collection_age') {
-            return self::buildCollectionAgeSql($queryDef);
+            return self::buildCollectionAgeSql($queryDef, $normalizedPayload['slots']);
         }
 
         return SqlBuilderService::build(self::translateQueryDefinitionForSqlBuilder($queryDef));
@@ -446,12 +446,13 @@ class QueryFamilyCompilerService
         ];
     }
 
-    private static function buildCollectionAgeSql(array $queryDef): array
+    private static function buildCollectionAgeSql(array $queryDef, array $slots): array
     {
         $filters = self::indexFilters($queryDef['filters'] ?? []);
         $params = [];
         $scopeWhere = [];
         $parameterIndex = 0;
+        $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : ['average_age_years'];
 
         foreach ([
             ['inventory_campuses', 'name', 'ic.name'],
@@ -469,10 +470,24 @@ class QueryFamilyCompilerService
             $parameterIndex++;
         }
 
-        $publicationWhere = [
-            'iip.publication__date_of_publication IS NOT NULL',
-            "iip.publication__date_of_publication ~ '^\\d{4}'",
-        ];
+        $publicationDateIsValid = "iip.publication__date_of_publication IS NOT NULL AND iip.publication__date_of_publication ~ '^\\d{4}'";
+        $publicationAgeYears = 'EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER)';
+        $selectExpressions = [];
+        if (in_array('item_count', $requestedOutputs, true)) {
+            $selectExpressions[] = 'SUM(scoped_instances.item_count) AS item_count';
+        }
+
+        if (in_array('average_age_years', $requestedOutputs, true)) {
+            if (in_array('item_count', $requestedOutputs, true)) {
+                $selectExpressions[] = "SUM(CASE WHEN {$publicationDateIsValid} THEN scoped_instances.item_count * ({$publicationAgeYears}) ELSE 0 END) / NULLIF(SUM(CASE WHEN {$publicationDateIsValid} THEN scoped_instances.item_count ELSE 0 END), 0) AS average_age_years";
+            } else {
+                $selectExpressions[] = "SUM(scoped_instances.item_count * ({$publicationAgeYears})) / NULLIF(SUM(scoped_instances.item_count), 0) AS average_age_years";
+            }
+        }
+
+        if ($selectExpressions === []) {
+            throw new \InvalidArgumentException('unsupported_collection_age_output: Collection-age SQL requires at least one supported output.');
+        }
 
         $sql = "WITH scoped_instances AS (\n"
             . "    SELECT iin.id AS instance_id,\n"
@@ -486,10 +501,13 @@ class QueryFamilyCompilerService
             . "    WHERE " . implode("\n      AND ", $scopeWhere) . "\n"
             . "    GROUP BY ih.instance_id, iin.id\n"
             . ")\n"
-            . "SELECT SUM(scoped_instances.item_count * (EXTRACT(YEAR FROM CURRENT_DATE) - CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER))) / NULLIF(SUM(scoped_instances.item_count), 0) AS average_age_years\n"
+            . "SELECT " . implode(",\n       ", $selectExpressions) . "\n"
             . "FROM scoped_instances\n"
-            . "LEFT JOIN inventory.instance__t__publication iip ON iip.id = scoped_instances.instance_id\n"
-            . "WHERE " . implode("\n  AND ", $publicationWhere);
+            . "LEFT JOIN inventory.instance__t__publication iip ON iip.id = scoped_instances.instance_id";
+
+        if (!in_array('item_count', $requestedOutputs, true) && in_array('average_age_years', $requestedOutputs, true)) {
+            $sql .= "\nWHERE iip.publication__date_of_publication IS NOT NULL\n  AND iip.publication__date_of_publication ~ '^\\d{4}'";
+        }
 
         return [
             'sql' => $sql,

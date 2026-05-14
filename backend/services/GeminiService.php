@@ -2630,6 +2630,17 @@ PROMPT;
             ];
         }
 
+        if (self::promptRequestsCollectionAgeItemCount($prompt)) {
+            $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
+            $requestedOutputs[] = 'item_count';
+            if (!in_array('average_age_years', $requestedOutputs, true)) {
+                $requestedOutputs[] = 'average_age_years';
+            }
+            $slots['requested_outputs'] = array_values(array_unique($requestedOutputs));
+            sort($slots['requested_outputs'], SORT_STRING);
+            $slotProvenance['requested_outputs'] = 'prompt_repaired';
+        }
+
         $locationRequiresExplicitPrompt = QueryFamilySlotService::slotRequiresExplicitPromptEvidence(
             'inventory_collection_age',
             'location'
@@ -2670,6 +2681,11 @@ PROMPT;
 
     private static function extractCollectionAgeLibraryScope(string $prompt): string
     {
+        $namedCollectionScope = self::extractNamedCollectionAgeCollectionScope($prompt);
+        if (($namedCollectionScope['library'] ?? '') !== '') {
+            return (string)$namedCollectionScope['library'];
+        }
+
         $patterns = [
             '/\b(?:in|at|from|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\b/i',
             '/\bof\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\s+collections?\b/i',
@@ -2691,11 +2707,6 @@ PROMPT;
             }
 
             return $library;
-        }
-
-        $namedCollectionScope = self::extractNamedCollectionAgeCollectionScope($prompt);
-        if (($namedCollectionScope['library'] ?? '') !== '') {
-            return (string)$namedCollectionScope['library'];
         }
 
         return '';
@@ -2783,6 +2794,13 @@ PROMPT;
                 'pattern' => '/\b(?:of|in|at|from|for)\s+(?:items\s+in\s+)?(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?)\s+collection\s+in\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\b/i',
                 'libraryIndex' => 2,
                 'locationIndex' => 1,
+                'locationSuffix' => '',
+            ],
+            [
+                'pattern' => '/\b(?:of|in|at|from|for)\s+(?:items\s+in\s+)?(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?)\s+collection\s+(?:at|from|for)\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'\-]*?library)\b/i',
+                'libraryIndex' => 2,
+                'locationIndex' => 1,
+                'locationSuffix' => ' Collection',
             ],
         ];
 
@@ -2794,6 +2812,7 @@ PROMPT;
             $library = self::normalizeRecoveredPromptScope((string)($matches[$patternSpec['libraryIndex']] ?? ''));
             $location = self::normalizeRecoveredPromptScope((string)($matches[$patternSpec['locationIndex']] ?? ''));
             $location = trim((string) preg_replace('/\s+collection\s*$/i', '', $location));
+            $locationSuffix = (string)($patternSpec['locationSuffix'] ?? '');
 
             if ($library === '' || $location === '') {
                 continue;
@@ -2802,9 +2821,22 @@ PROMPT;
             if (preg_match('/\blibrary\b/i', $library) !== 1) {
                 $library .= ' Library';
             }
+            $library = trim((string) preg_replace('/\blibrary\b/i', 'Library', $library));
+            if ($locationSuffix !== '') {
+                $library = trim((string) preg_replace('/\s+Library\s*$/i', '', $library));
+            }
 
             if (in_array(strtolower($location), ['a', 'an', 'the', 'this', 'that', 'item', 'items', 'reference'], true)) {
                 continue;
+            }
+
+            $locationWasLowercase = $location === strtolower($location);
+            if ($locationSuffix !== '' && stripos($location, trim($locationSuffix)) === false) {
+                $location .= $locationSuffix;
+            }
+
+            if ($locationWasLowercase) {
+                $location = ucwords($location);
             }
 
             return [
@@ -2839,6 +2871,11 @@ PROMPT;
         }
 
         return '';
+    }
+
+    private static function promptRequestsCollectionAgeItemCount(string $prompt): bool
+    {
+        return preg_match('/\b(how many|number of|count of|total items?|item count)\b/i', $prompt) === 1;
     }
 
     private static function normalizeCollectionAgeLocationScope(string $value, string $libraryScope = ''): string

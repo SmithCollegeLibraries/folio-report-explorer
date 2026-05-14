@@ -92,6 +92,10 @@ assertSameValue(
     $contracts['inventory_collection_age']['slots']['inferencePolicies']['location'] ?? null,
     'The collection-age contract should declare location as explicit_prompt_only so optional narrowing scope is governed by contract instead of local heuristics.'
 );
+assertTrueValue(
+    in_array('item_count', $contracts['inventory_collection_age']['outputs']['allowed'] ?? [], true),
+    'The collection-age contract should allow item_count so prompts asking how many items and average age can stay on the deterministic family.'
+);
 
 $trendSelection = QueryFamilyContractService::selectContract([
     'availableEntityKeys' => [

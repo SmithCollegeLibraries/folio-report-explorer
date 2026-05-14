@@ -773,6 +773,44 @@ assertSameValue(
     'Location-scoped collection-age SQL should preserve the explicit locked-stack location phrase as a contains match.'
 );
 
+$ageCountAndAverageBuilt = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Hillyer',
+        'location' => 'Zine Collection',
+        'requested_outputs' => ['item_count', 'average_age_years'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+$ageCountAndAverageSql = $ageCountAndAverageBuilt['sql'] ?? '';
+assertContainsText(
+    'SUM(scoped_instances.item_count) AS item_count',
+    $ageCountAndAverageSql,
+    'Collection-age SQL should include the scoped item count when the prompt asks how many items are in the collection.'
+);
+assertContainsText(
+    'AS average_age_years',
+    $ageCountAndAverageSql,
+    'Collection-age SQL should still include average age when count and age are requested together.'
+);
+assertContainsText(
+    'ilo.name ILIKE :p2',
+    $ageCountAndAverageSql,
+    'Collection-age SQL should compile the explicit zine collection as a location predicate.'
+);
+assertSameValue(
+    '%Hillyer%',
+    $ageCountAndAverageBuilt['params'][':p1'] ?? null,
+    'Collection-age SQL should use a broad Hillyer library token so it matches the real SC Hillyer Art Library label.'
+);
+assertSameValue(
+    '%Zine Collection%',
+    $ageCountAndAverageBuilt['params'][':p2'] ?? null,
+    'Collection-age SQL should preserve the zine collection location phrase as a contains match.'
+);
+
 $trendCompiled = QueryFamilyCompilerService::compileToQueryDefinition([
     'familyKey' => 'circulation_trends_matrix',
     'slots' => [

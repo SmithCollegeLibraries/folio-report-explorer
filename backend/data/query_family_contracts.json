@@ -283,7 +283,8 @@
             },
             "outputs": {
                 "allowed": [
-                    "average_age_years"
+                    "average_age_years",
+                    "item_count"
                 ],
                 "holdingsScoped": []
             },
