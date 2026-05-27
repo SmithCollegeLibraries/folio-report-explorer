@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS query_jobs (
     sql_hash CHAR(64) NULL COMMENT 'SHA-256 hash for dedup',
     params JSON,
     source ENUM('builder', 'nl', 'manual', 'report') DEFAULT 'builder',
+    name TEXT NULL COMMENT 'Human-readable query/request title',
     data_source ENUM('folio', 'local') DEFAULT 'folio',
     user_id INT NULL,
     status ENUM('pending', 'running', 'completed', 'failed', 'cancelled') DEFAULT 'pending',

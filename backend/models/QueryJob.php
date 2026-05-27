@@ -13,7 +13,7 @@ use yii\db\ActiveRecord;
  * @property string $params JSON
  * @property string $source builder|nl|manual
  * @property string $data_source folio|local|composite
- * @property string $name  human-readable label
+ * @property string $name  human-readable label/title
  * @property int    $user_id
  * @property string $status pending|running|completed|failed|cancelled|pending_export
  * @property string $result_columns JSON column names
@@ -41,14 +41,13 @@ class QueryJob extends ActiveRecord
     {
         $rules = [
             [['id', 'sql_text'], 'required'],
-            [['sql_text', 'result_rows', 'error_message'], 'string'],
+            [['sql_text', 'result_rows', 'error_message', 'name'], 'string'],
             [['params', 'result_columns'], 'string'],
             [['sql_hash'], 'string', 'max' => 64],
             [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
             [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled', 'pending_export']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
             [['progress_message'], 'string', 'max' => 255],
-            [['name'], 'string', 'max' => 255],
             [['id'], 'string', 'max' => 36],
             [['output_mode'], 'in', 'range' => ['table', 'file']],
             [['export_file_path'], 'string', 'max' => 500],

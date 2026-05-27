@@ -675,7 +675,7 @@ class FolioQueryController extends Controller
         // Create job
         $job = QueryJob::createJob($sql, $params, $source, $dataSource);
         $job->user_id = $this->getCurrentUserId();
-        $job->name = isset($body['name']) ? substr(trim($body['name']), 0, 255) : null;
+        $job->name = isset($body['name']) ? trim($body['name']) : null;
         $job->sql_hash = hash('sha256', $sql . json_encode($params));
         if ($job->hasAttribute('output_mode')) {
             $job->output_mode = $outputMode;
@@ -2565,7 +2565,7 @@ class FolioQueryController extends Controller
         }
 
         $body = Yii::$app->request->getBodyParams();
-        $name = isset($body['name']) ? substr(trim($body['name']), 0, 255) : null;
+    $name = isset($body['name']) ? trim($body['name']) : null;
         $job->name = $name;
         if (!$job->save(false)) {
             Yii::$app->response->statusCode = 500;
