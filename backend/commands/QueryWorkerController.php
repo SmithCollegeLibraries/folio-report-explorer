@@ -27,7 +27,7 @@ class QueryWorkerController extends Controller
      */
     public function actionRun()
     {
-        $this->stdout("Query worker started. Polling every {$this->sleep}s...\n");
+        $this->stdout("Query worker started. Polling every {$this->sleep}s. FOLIO concurrency limit: " . $this->maxConcurrentFolioJobs() . "...\n");
 
         while (true) {
             try {
@@ -71,23 +71,54 @@ class QueryWorkerController extends Controller
     }
 
     /**
-     * Check whether a FOLIO query is already running (across both workers).
-     * Prevents concurrent heavy queries against the shared Postgres database.
+     * Maximum number of concurrent jobs allowed to use the FOLIO Postgres connection.
      *
-     * @return bool
+     * @return int
      */
-    private function isFolioQueryRunning()
+    private function maxConcurrentFolioJobs()
+    {
+        $configured = getenv('QUERY_WORKER_MAX_FOLIO_JOBS');
+        if ($configured === false || trim((string)$configured) === '') {
+            return 2;
+        }
+
+        return max(1, (int)$configured);
+    }
+
+    /**
+     * Count jobs currently using the FOLIO Postgres connection.
+     *
+     * @return int
+     */
+    private function runningFolioJobCount()
     {
         return (int) QueryJob::find()
             ->where(['status' => 'running'])
-            ->andWhere(['or', ['data_source' => 'folio'], ['data_source' => null], ['data_source' => '']])
-            ->count() > 0;
+            ->andWhere([
+                'or',
+                ['data_source' => 'folio'],
+                ['data_source' => 'composite'],
+                ['data_source' => null],
+                ['data_source' => ''],
+            ])
+            ->count();
+    }
+
+    /**
+     * Whether a queued job will use the FOLIO Postgres connection.
+     *
+     * @param string $dataSource
+     * @return bool
+     */
+    private function usesFolioConnection($dataSource)
+    {
+        return in_array(strtolower((string)$dataSource), ['folio', 'composite', ''], true);
     }
 
     /**
      * Atomically claim the next pending job.
      * Uses UPDATE ... WHERE to prevent double-claiming.
-     * Skips FOLIO jobs while another FOLIO query is already running.
+    * Skips FOLIO jobs while the configured FOLIO concurrency limit is reached.
      *
      * @return QueryJob|null
      */
@@ -103,9 +134,8 @@ class QueryWorkerController extends Controller
             return null;
         }
 
-        // If this job targets FOLIO Postgres, wait until no other FOLIO query is running
         $jobDataSource = $job->hasAttribute('data_source') ? strtolower((string) ($job->data_source ?: 'folio')) : 'folio';
-        if ($jobDataSource === 'folio' && $this->isFolioQueryRunning()) {
+        if ($this->usesFolioConnection($jobDataSource) && $this->runningFolioJobCount() >= $this->maxConcurrentFolioJobs()) {
             return null;
         }
 

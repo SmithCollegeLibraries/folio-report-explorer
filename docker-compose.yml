@@ -34,6 +34,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
+      - QUERY_WORKER_MAX_FOLIO_JOBS=${QUERY_WORKER_MAX_FOLIO_JOBS:-2}
       - YII_ENV=${YII_ENV:-dev}
     depends_on:
       mysql:
@@ -94,6 +95,7 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
+      - QUERY_WORKER_MAX_FOLIO_JOBS=${QUERY_WORKER_MAX_FOLIO_JOBS:-2}
       - YII_ENV=${YII_ENV:-dev}
     depends_on:
       php:

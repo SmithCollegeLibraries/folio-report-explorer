@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -146,7 +146,7 @@ export default function HistoryTable({
         return (
           <div className="max-w-[260px] md:max-w-[340px] xl:max-w-[420px]">
             {item.name
-              ? <span className="font-medium text-gray-800 line-clamp-1">{item.name}</span>
+              ? <span className="block font-medium text-gray-800 whitespace-normal break-words leading-snug">{item.name}</span>
               : <span className="italic text-gray-400 text-xs">Unnamed query</span>}
             <p className="text-[11px] text-gray-400 mt-0.5 truncate">SQL available in actions</p>
           </div>
@@ -490,9 +490,8 @@ export default function HistoryTable({
             const showExpandedSql = expandedSql.has(item.jobId);
 
             return (
-              <>
+              <Fragment key={row.id}>
                 <tr
-                  key={row.id}
                   className={`group transition-colors ${rowBg} ${isCompleted ? 'cursor-pointer hover:bg-folio-50' : 'cursor-default'}`}
                   onClick={() => !isRenaming && isCompleted && onOpen(item)}
                 >
@@ -569,7 +568,7 @@ export default function HistoryTable({
                     </td>
                   </tr>
                 )}
-              </>
+              </Fragment>
             );
           })}
         </tbody>
