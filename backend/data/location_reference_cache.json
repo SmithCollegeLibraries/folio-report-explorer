@@ -1,0 +1,104 @@
+{
+    "_note": "Local cache of FOLIO location hierarchy names used to disambiguate NL2SQL prompts. Regenerate from the live FOLIO database with php yii data-patterns/generate.",
+    "_discovered_at": "2026-05-27T00:00:00+00:00",
+    "references": [
+        {
+            "table": "inventory.location__t",
+            "name": "SC Special Collections Browsing",
+            "library_name": "SC Special Collections",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.location__t",
+            "name": "SC Rare Book Collection Reference",
+            "library_name": "SC Special Collections",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.location__t",
+            "name": "SC Neilson Reference",
+            "library_name": "SC Neilson Library",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.location__t",
+            "name": "SC Neilson Reference Oversize",
+            "library_name": "SC Neilson Library",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.location__t",
+            "name": "SC Art Zine Collection",
+            "library_name": "SC Hillyer Art Library",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.loclibrary__t",
+            "name": "SC Special Collections",
+            "code": "SCPC",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.loclibrary__t",
+            "name": "SC Neilson Library",
+            "code": "SCNLS",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.loclibrary__t",
+            "name": "SC Hillyer Art Library",
+            "code": "SCHIL",
+            "campus_code": "SC",
+            "campus_name": "Smith College"
+        },
+        {
+            "table": "inventory.loccampus__t",
+            "name": "Smith College",
+            "code": "SC",
+            "campus_code": "SC"
+        },
+        {
+            "table": "inventory.loccampus__t",
+            "name": "Amherst College",
+            "code": "AC",
+            "campus_code": "AC"
+        },
+        {
+            "table": "inventory.loccampus__t",
+            "name": "Mount Holyoke College",
+            "code": "MH",
+            "campus_code": "MH"
+        },
+        {
+            "table": "inventory.loccampus__t",
+            "name": "Hampshire College",
+            "code": "HC",
+            "campus_code": "HC"
+        },
+        {
+            "table": "inventory.loccampus__t",
+            "name": "University Of Massachusetts",
+            "code": "UM",
+            "campus_code": "UM"
+        },
+        {
+            "table": "inventory.loccampus__t",
+            "name": "Five Colleges Collections",
+            "code": "RP",
+            "campus_code": "RP"
+        },
+        {
+            "table": "inventory.loccampus__t",
+            "name": "National Yiddish Book Center",
+            "code": "YB",
+            "campus_code": "YB"
+        }
+    ]
+}

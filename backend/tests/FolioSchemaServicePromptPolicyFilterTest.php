@@ -17,20 +17,92 @@ if (!class_exists('Yii')) {
             if ($alias === '@app/data/data_patterns.json') {
                 return __DIR__ . '/../data/data_patterns.json';
             }
+            if ($alias === '@app/data/location_reference_cache.json') {
+                return __DIR__ . '/../data/location_reference_cache.json';
+            }
             if ($alias === '@app/data/table_mapping_cache.json') {
-                return __DIR__ . '/../data/table_mapping_cache.json';
+                return sys_get_temp_dir() . '/folio_report_explorer_prompt_policy_table_mapping_cache.json';
             }
             if ($alias === '@app/data/column_cache.json') {
-                return __DIR__ . '/../data/column_cache.json';
+                return sys_get_temp_dir() . '/folio_report_explorer_prompt_policy_column_cache.json';
             }
             if ($alias === '@app/data/subtable_cache.json') {
-                return __DIR__ . '/../data/subtable_cache.json';
+                return sys_get_temp_dir() . '/folio_report_explorer_prompt_policy_subtable_cache.json';
             }
 
             return $alias;
         }
+
+        public static function warning($message)
+        {
+        }
     }
 }
+
+$unavailableFolioDb = new class {
+    public function quoteValue($value)
+    {
+        return "'" . str_replace("'", "''", (string)$value) . "'";
+    }
+
+    public function createCommand($sql = '')
+    {
+        return new class((string)$sql) {
+            private $sql;
+
+            public function __construct(string $sql)
+            {
+                $this->sql = $sql;
+            }
+
+            public function queryAll()
+            {
+                if (strpos($this->sql, 'information_schema.tables') !== false) {
+                    return [
+                        ['table_schema' => 'folio_source_record', 'table_name' => 'records__t'],
+                    ];
+                }
+
+                if (strpos($this->sql, 'information_schema.columns') !== false) {
+                    return [
+                        [
+                            'table_schema' => 'folio_source_record',
+                            'table_name' => 'records__t',
+                            'column_name' => 'parsed_record__content',
+                            'data_type' => 'jsonb',
+                            'character_maximum_length' => null,
+                            'is_nullable' => 'YES',
+                            'column_default' => null,
+                            'ordinal_position' => 1,
+                        ],
+                        [
+                            'table_schema' => 'folio_source_record',
+                            'table_name' => 'records__t',
+                            'column_name' => 'external_ids_holder__instance_id',
+                            'data_type' => 'text',
+                            'character_maximum_length' => null,
+                            'is_nullable' => 'YES',
+                            'column_default' => null,
+                            'ordinal_position' => 2,
+                        ],
+                        [
+                            'table_schema' => 'folio_source_record',
+                            'table_name' => 'records__t',
+                            'column_name' => 'deleted',
+                            'data_type' => 'boolean',
+                            'character_maximum_length' => null,
+                            'is_nullable' => 'YES',
+                            'column_default' => null,
+                            'ordinal_position' => 3,
+                        ],
+                    ];
+                }
+
+                throw new Exception('FOLIO DB not available in prompt policy filter test harness.');
+            }
+        };
+    }
+};
 
 Yii::$app = (object) [
     'cache' => null,
@@ -40,6 +112,7 @@ Yii::$app = (object) [
             throw new Exception('DB not available in prompt policy filter test harness.');
         }
     },
+    'folioDb' => $unavailableFolioDb,
     'params' => [
         'schemaPath' => __DIR__ . '/../data/folio_schema.json',
         'derivedPath' => __DIR__ . '/../data/folio_derived_tables.json',
@@ -100,6 +173,46 @@ assertContainsText(
     'COALESCE(deleted, false) = false',
     $schemaContext,
     'Schema context should surface the live deleted-flag filter when records__t has no state column.'
+);
+
+$rareHoldingsContext = FolioSchemaService::buildSchemaContext(
+    'I am looking for a report of all holdings with the location "SC Rare Book Collection Reference". For each book, I also want to see which other institutions in the 5 Colleges also hold the same title.'
+);
+
+assertContainsText(
+    'same-title holdings overlap',
+    $rareHoldingsContext,
+    'Same-title holdings prompts should retrieve performance guidance for Five Colleges holdings overlap reports.'
+);
+assertContainsText(
+    'target_rare_titles AS MATERIALIZED',
+    $rareHoldingsContext,
+    'Same-title holdings prompts should retrieve the target-first CTE example instead of broad non-Smith materialization.'
+);
+assertContainsText(
+    'other_inst.title_key = target_rare_titles.title_key',
+    $rareHoldingsContext,
+    'Same-title holdings prompts should retrieve an equality title-key join, not an OR/correlated-subquery join.'
+);
+
+$specialCollectionsBrowsingContext = FolioSchemaService::buildSchemaContext(
+    'List the records in the SC Special Collections Browsing collection, with their HRID, Call Number Prefix, Call Number, Author, and Title.'
+);
+
+assertContainsText(
+    '--- Resolved Location References ---',
+    $specialCollectionsBrowsingContext,
+    'Collection-name prompts should include resolved location reference matches from the local location cache.'
+);
+assertContainsText(
+    "inventory.location__t.name = 'SC Special Collections Browsing'",
+    $specialCollectionsBrowsingContext,
+    'SC Special Collections Browsing should resolve to inventory.location__t.name, not inventory.loclibrary__t.name.'
+);
+assertContainsText(
+    'For resolved inventory.location__t matches, filter the location alias, for example loc.name ILIKE',
+    $specialCollectionsBrowsingContext,
+    'Resolved location matches should explicitly instruct the model to filter loc.name rather than lib.name.'
 );
 
 fwrite(STDOUT, "FolioSchemaService prompt policy filter test passed\n");

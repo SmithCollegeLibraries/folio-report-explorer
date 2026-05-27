@@ -1813,6 +1813,237 @@ class FolioSchemaService
     }
 
     /**
+     * Load local location/library/campus reference names for prompt-time disambiguation.
+     *
+     * @return array<int, array<string, string>>
+     */
+    public static function loadLocationReferenceCache(): array
+    {
+        $paths = [];
+        try {
+            $paths[] = Yii::getAlias('@runtime/cache/location_reference_cache.json');
+        } catch (\Exception $e) {
+            // Runtime alias is unavailable in lightweight test harnesses.
+        }
+
+        $paths[] = Yii::getAlias('@app/data/location_reference_cache.json');
+        $data = null;
+
+        foreach (array_unique($paths) as $path) {
+            if (!file_exists($path)) {
+                continue;
+            }
+
+            $decoded = json_decode(file_get_contents($path), true);
+            if (is_array($decoded)) {
+                $data = $decoded;
+                break;
+            }
+        }
+
+        if (!is_array($data)) {
+            return [];
+        }
+
+        $references = $data['references'] ?? [];
+        if (empty($references) && isset($data['tables']) && is_array($data['tables'])) {
+            foreach ($data['tables'] as $tableName => $rows) {
+                if (!is_array($rows)) {
+                    continue;
+                }
+                foreach ($rows as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $row['table'] = (string)$tableName;
+                    $references[] = $row;
+                }
+            }
+        }
+
+        $clean = [];
+        foreach ($references as $reference) {
+            if (!is_array($reference)) {
+                continue;
+            }
+            $tableName = trim((string)($reference['table'] ?? ''));
+            $name = trim((string)($reference['name'] ?? ''));
+            if ($tableName === '' || $name === '') {
+                continue;
+            }
+            if (!in_array($tableName, ['inventory.location__t', 'inventory.loclibrary__t', 'inventory.loccampus__t'], true)) {
+                continue;
+            }
+
+            $clean[] = [
+                'table' => $tableName,
+                'name' => $name,
+                'code' => trim((string)($reference['code'] ?? '')),
+                'library_name' => trim((string)($reference['library_name'] ?? '')),
+                'campus_name' => trim((string)($reference['campus_name'] ?? '')),
+                'campus_code' => trim((string)($reference['campus_code'] ?? '')),
+            ];
+        }
+
+        return $clean;
+    }
+
+    private static function normalizeLocationReferenceText(string $text): string
+    {
+        $normalized = strtolower($text);
+        $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
+        $normalized = preg_replace('/\s+/', ' ', trim((string)$normalized));
+        return $normalized;
+    }
+
+    private static function stripCampusPrefixFromLocationName(string $normalizedName): string
+    {
+        return trim((string)preg_replace('/^[a-z]{2}\s+/', '', $normalizedName));
+    }
+
+    private static function promptContainsLocationReference(string $normalizedPrompt, string $normalizedCandidate): bool
+    {
+        if ($normalizedCandidate === '' || strlen($normalizedCandidate) < 6) {
+            return false;
+        }
+
+        return strpos($normalizedPrompt, $normalizedCandidate) !== false;
+    }
+
+    /**
+     * Resolve local location hierarchy names mentioned in the prompt.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private static function resolvePromptLocationReferences(string $prompt): array
+    {
+        $normalizedPrompt = self::normalizeLocationReferenceText($prompt);
+        if ($normalizedPrompt === '') {
+            return [];
+        }
+
+        $references = self::loadLocationReferenceCache();
+        if (empty($references)) {
+            return [];
+        }
+
+        $matches = [];
+        $seen = [];
+        $collectionWordPresent = preg_match('/\b(collection|collections|browsing|reference)\b/i', $prompt) === 1;
+
+        foreach ($references as $reference) {
+            $name = (string)$reference['name'];
+            $normalizedName = self::normalizeLocationReferenceText($name);
+            $normalizedNameWithoutPrefix = self::stripCampusPrefixFromLocationName($normalizedName);
+            $normalizedCode = self::normalizeLocationReferenceText((string)$reference['code']);
+            $score = 0;
+            $matchedBy = '';
+
+            if (self::promptContainsLocationReference($normalizedPrompt, $normalizedName)) {
+                $score = 1000 + strlen($normalizedName);
+                $matchedBy = 'name';
+            } elseif (self::promptContainsLocationReference($normalizedPrompt, $normalizedNameWithoutPrefix)) {
+                $score = 700 + strlen($normalizedNameWithoutPrefix);
+                $matchedBy = 'name_without_prefix';
+            } elseif ($normalizedCode !== '' && strlen($normalizedCode) >= 3 && preg_match('/\b' . preg_quote($normalizedCode, '/') . '\b/', $normalizedPrompt) === 1) {
+                $score = 500 + strlen($normalizedCode);
+                $matchedBy = 'code';
+            }
+
+            if ($score === 0) {
+                continue;
+            }
+
+            if ($collectionWordPresent && $reference['table'] === 'inventory.location__t') {
+                $score += 150;
+            }
+            if ($reference['table'] === 'inventory.location__t') {
+                $score += 25;
+            }
+
+            $key = $reference['table'] . '|' . strtolower($name);
+            if (isset($seen[$key]) && $seen[$key] >= $score) {
+                continue;
+            }
+            $seen[$key] = $score;
+
+            $reference['score'] = $score;
+            $reference['matched_by'] = $matchedBy;
+            $matches[] = $reference;
+        }
+
+        usort($matches, function ($left, $right) {
+            if ($left['score'] !== $right['score']) {
+                return $right['score'] <=> $left['score'];
+            }
+            return strlen((string)$right['name']) <=> strlen((string)$left['name']);
+        });
+
+        return array_slice($matches, 0, 8);
+    }
+
+    private static function quotePromptLiteral(string $value): string
+    {
+        return "'" . str_replace("'", "''", $value) . "'";
+    }
+
+    /**
+     * Build prompt lines for exact local location hierarchy matches.
+     *
+     * @return array<int, string>
+     */
+    private static function buildResolvedLocationReferenceLines(string $prompt): array
+    {
+        $matches = self::resolvePromptLocationReferences($prompt);
+        if (empty($matches)) {
+            return [];
+        }
+
+        $lines = [
+            "\n--- Resolved Location References ---",
+            'Local location hierarchy cache matches found in the user prompt. Use these exact table/column targets before inferring scope from generic wording like collection, library, or institution.',
+        ];
+
+        $firstMatchByTable = [];
+
+        foreach ($matches as $match) {
+            if (!isset($firstMatchByTable[$match['table']])) {
+                $firstMatchByTable[$match['table']] = $match;
+            }
+
+            $line = '- ' . $match['table'] . '.name = ' . self::quotePromptLiteral((string)$match['name']);
+            $details = [];
+            if ($match['code'] !== '') {
+                $details[] = 'code ' . self::quotePromptLiteral((string)$match['code']);
+            }
+            if ($match['library_name'] !== '') {
+                $details[] = 'library ' . self::quotePromptLiteral((string)$match['library_name']);
+            }
+            if ($match['campus_code'] !== '') {
+                $details[] = 'campus code ' . self::quotePromptLiteral((string)$match['campus_code']);
+            } elseif ($match['campus_name'] !== '') {
+                $details[] = 'campus ' . self::quotePromptLiteral((string)$match['campus_name']);
+            }
+            if (!empty($details)) {
+                $line .= ' (' . implode('; ', $details) . ')';
+            }
+            $lines[] = $line;
+        }
+
+        if (isset($firstMatchByTable['inventory.location__t'])) {
+            $lines[] = 'For resolved inventory.location__t matches, filter the location alias, for example loc.name ILIKE ' . self::quotePromptLiteral((string)$firstMatchByTable['inventory.location__t']['name']) . ' or loc.code when a code is available. Do not move that predicate to inventory.loclibrary__t.';
+        }
+        if (isset($firstMatchByTable['inventory.loclibrary__t'])) {
+            $lines[] = 'For resolved inventory.loclibrary__t matches, filter the library alias, for example lib.name ILIKE ' . self::quotePromptLiteral((string)$firstMatchByTable['inventory.loclibrary__t']['name']) . '.';
+        }
+        if (isset($firstMatchByTable['inventory.loccampus__t'])) {
+            $lines[] = 'For resolved inventory.loccampus__t matches, filter the campus alias, for example camp.name ILIKE ' . self::quotePromptLiteral((string)$firstMatchByTable['inventory.loccampus__t']['name']) . '.';
+        }
+
+        return $lines;
+    }
+
+    /**
      * Get all table names.
      * @return array
      */
@@ -2056,6 +2287,11 @@ class FolioSchemaService
         $lines[] = "  2. Or if the campus is known, use the full prefixed name: WHERE name ILIKE 'SC Neilson%'";
         $lines[] = "When a user asks about a specific campus (e.g. 'Smith College items'), filter by campus code prefix";
         $lines[] = "  or join to loccampus__t on the campus name.";
+
+        $locationReferenceLines = self::buildResolvedLocationReferenceLines((string)$prompt);
+        foreach ($locationReferenceLines as $line) {
+            $lines[] = $line;
+        }
 
         // Append domain vocabulary
         if (!empty($vocabulary)) {

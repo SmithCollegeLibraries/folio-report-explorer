@@ -193,6 +193,14 @@ for migration in mysql/migrations/*.sql; do
     fi
 done
 
+# ── 9b. Refresh runtime cache used by NL2SQL location resolution ───
+echo "→ Refreshing NL2SQL location reference cache..."
+if php backend/yii data-patterns/location-references; then
+    echo "  Refreshed: runtime location_reference_cache.json"
+else
+    echo "  WARNING: Could not refresh NL2SQL location cache; using existing committed cache file."
+fi
+
 # ── 10. Seed database (idempotent — uses REPLACE INTO) ─────────────
 if [ "${SEED_DB:-false}" = "true" ]; then
     echo "→ Seeding database..."
