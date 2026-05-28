@@ -50,6 +50,31 @@ class FolioSchemaService
     const MAX_VOCABULARY_HINTS = 180;
     const MAX_EXAMPLES = 20;
 
+    const LOCAL_LOCATION_ALIASES = [
+        [
+            'alias' => 'MRBC',
+            'meaning' => 'SC Rare Book Collection',
+            'terms' => ['mrbc', 'mortimer', 'mortimer rare book collection'],
+            'table' => 'inventory.location__t',
+            'filter_hint' => "loc.name ILIKE 'SC Rare Book Collection' or loc.code = 'MRBC' if that code is present",
+            'campus_code' => 'SC',
+            'campus_name' => 'Smith College',
+        ],
+    ];
+
+    const CLASSIFICATION_TYPE_NAMES = [
+        'UDC',
+        'LC',
+        'LC (local)',
+        'NLM',
+        'SUDOC',
+        'National Agriculture Library',
+        'GDC',
+        'Canadian Classification',
+        'Additional Dewey',
+        'Dewey',
+    ];
+
     /**
      * Schemas to completely exclude from direct MetaDB discovery.
      * These are either internal MetaDB/system schemas, test data, or
@@ -1911,6 +1936,38 @@ class FolioSchemaService
     }
 
     /**
+     * Resolve local shorthand names that are not reliably present as exact FOLIO names/codes.
+     *
+     * @return array<int, array<string, string>>
+     */
+    private static function resolvePromptLocationAliases(string $prompt): array
+    {
+        $normalizedPrompt = self::normalizeLocationReferenceText($prompt);
+        if ($normalizedPrompt === '') {
+            return [];
+        }
+
+        $matches = [];
+        foreach (self::LOCAL_LOCATION_ALIASES as $alias) {
+            foreach ($alias['terms'] as $term) {
+                $normalizedTerm = self::normalizeLocationReferenceText((string)$term);
+                if ($normalizedTerm === '') {
+                    continue;
+                }
+
+                if (preg_match('/\b' . preg_quote($normalizedTerm, '/') . '\b/', $normalizedPrompt) !== 1) {
+                    continue;
+                }
+
+                $matches[] = $alias;
+                break;
+            }
+        }
+
+        return $matches;
+    }
+
+    /**
      * Resolve local location hierarchy names mentioned in the prompt.
      *
      * @return array<int, array<string, mixed>>
@@ -1995,14 +2052,20 @@ class FolioSchemaService
     private static function buildResolvedLocationReferenceLines(string $prompt): array
     {
         $matches = self::resolvePromptLocationReferences($prompt);
-        if (empty($matches)) {
+        $aliasMatches = self::resolvePromptLocationAliases($prompt);
+        if (empty($matches) && empty($aliasMatches)) {
             return [];
         }
 
         $lines = [
             "\n--- Resolved Location References ---",
-            'Local location hierarchy cache matches found in the user prompt. Use these exact table/column targets before inferring scope from generic wording like collection, library, or institution.',
+            'Local location hierarchy cache or alias matches found in the user prompt. Use these exact table/column targets before inferring scope from generic wording like collection, library, or institution.',
         ];
+
+        foreach ($aliasMatches as $alias) {
+            $lines[] = '- Local alias: ' . $alias['alias'] . ' means ' . $alias['meaning'] . '; filter ' . $alias['table'] . ' using ' . $alias['filter_hint'] . ' (campus code ' . self::quotePromptLiteral((string)$alias['campus_code']) . ', campus ' . self::quotePromptLiteral((string)$alias['campus_name']) . ').';
+            $lines[] = 'Do not filter inventory.instance__t.hrid for ' . $alias['alias'] . '; ' . $alias['alias'] . ' is a local collection/location alias, not an instance HRID prefix.';
+        }
 
         $firstMatchByTable = [];
 
@@ -2039,6 +2102,141 @@ class FolioSchemaService
         if (isset($firstMatchByTable['inventory.loccampus__t'])) {
             $lines[] = 'For resolved inventory.loccampus__t matches, filter the campus alias, for example camp.name ILIKE ' . self::quotePromptLiteral((string)$firstMatchByTable['inventory.loccampus__t']['name']) . '.';
         }
+
+        return $lines;
+    }
+
+    private static function promptMentionsInstanceClassification(string $prompt): bool
+    {
+        if (trim($prompt) === '') {
+            return false;
+        }
+
+        return preg_match('/\b(classification\s+number|classification\s+numbers|classifications?|dewey|additional\s+dewey|lc\s+local|sudoc|udc|nlm)\b/i', $prompt) === 1;
+    }
+
+    /**
+     * Build naming guidance for instance classification types.
+     *
+     * @return array<int, string>
+     */
+    private static function buildClassificationTypeReferenceLines(string $prompt): array
+    {
+        if (!self::promptMentionsInstanceClassification($prompt)) {
+            return [];
+        }
+
+        return [
+            "\n--- Instance Classification Type Naming Rule ---",
+            'For bibliographic/instance classification-number prompts, use inventory.instance__t__classifications joined to inventory.classification_type__t.',
+            'Classification numbers live in instance__t__classifications.classifications__classification_number.',
+            'inventory.classification_type__t.name values: ' . implode(', ', self::CLASSIFICATION_TYPE_NAMES),
+            "Use ct.name = 'Dewey' for Dewey classification-number prompts. Do not use 'Dewey Decimal classification' with inventory.classification_type__t; that wording belongs to inventory.call_number_type__t.",
+        ];
+    }
+
+    private static function extractPromptMarcFieldRequest(string $prompt): ?array
+    {
+        $prompt = trim($prompt);
+        if ($prompt === '') {
+            return null;
+        }
+
+        $mentionsMarc = preg_match('/\bmarc\b|\bsubfield\b|\$[a-z0-9]\b|\b[0-9]xx\s+fields?\b/i', $prompt) === 1;
+        $tag = null;
+        $tagPattern = null;
+
+        if (preg_match('/\b(?:marc\s+)?(?:field|tag)\s*([0-9]{3})\b/i', $prompt, $matches) === 1) {
+            $tag = $matches[1];
+        } elseif ($mentionsMarc && preg_match('/\b([0-9]{3})\b/i', $prompt, $matches) === 1) {
+            $tag = $matches[1];
+        } elseif (preg_match('/\b([0-9])xx\s+fields?\b/i', $prompt, $matches) === 1) {
+            $tagPattern = '^' . $matches[1] . '[0-9][0-9]$';
+        }
+
+        if ($tag === null && $tagPattern === null) {
+            return null;
+        }
+
+        $subfield = null;
+        if (preg_match('/\bsubfield\s+([a-z0-9])\b/i', $prompt, $matches) === 1) {
+            $subfield = strtolower($matches[1]);
+        } elseif (preg_match('/\$([a-z0-9])\b/i', $prompt, $matches) === 1) {
+            $subfield = strtolower($matches[1]);
+        }
+
+        return [
+            'tag' => $tag,
+            'tagPattern' => $tagPattern,
+            'subfield' => $subfield,
+        ];
+    }
+
+    /**
+     * Build source-record guidance for MARC field extraction/aggregation prompts.
+     *
+     * @return array<int, string>
+     */
+    private static function buildMarcFieldSourceRecordLines(
+        string $prompt,
+        ?string $parsedRecordContentType,
+        bool $recordsHasStateColumn,
+        bool $recordsHasDeletedColumn,
+        bool $recordsHasExternalIdColumn,
+        bool $recordsHasInstanceIdColumn
+    ): array {
+        $marcFieldRequest = self::extractPromptMarcFieldRequest($prompt);
+        if ($marcFieldRequest === null) {
+            return [];
+        }
+
+        $joinColumn = $recordsHasInstanceIdColumn && !$recordsHasExternalIdColumn
+            ? 'external_ids_holder__instance_id'
+            : 'external_id';
+        $currentRecordFilter = '';
+        if (!$recordsHasStateColumn && $recordsHasDeletedColumn) {
+            $currentRecordFilter = ' AND COALESCE(sr.deleted, false) = false';
+        } elseif ($recordsHasStateColumn) {
+            $currentRecordFilter = " AND sr.state = 'ACTUAL'";
+        }
+
+        $tag = $marcFieldRequest['tag'];
+        $tagPattern = $marcFieldRequest['tagPattern'];
+        $subfield = $marcFieldRequest['subfield'];
+        $tagPredicate = $tag !== null
+            ? "tag.tag = '{$tag}'"
+            : "tag.tag ~ '{$tagPattern}'";
+        $subfieldPredicate = $subfield !== null
+            ? "subfield.subfield_obj ? '{$subfield}'"
+            : "subfield.subfield_obj ? '<requested subfield>'";
+        $valueExpression = $subfield !== null
+            ? "subfield.subfield_obj->>'{$subfield}'"
+            : "subfield.subfield_obj->>'<requested subfield>'";
+
+        $lines = [
+            "\n--- MARC Field Source Record Rule ---",
+            "This is bibliographic/source-record work. Treat 'records' as inventory/source records, not patron or staff user records.",
+            "For any MARC field, tag, indicator, subfield, control-number, or source-record request, scope inventory.instance__t first with holdings/location predicates, then join folio_source_record.records__t; do not expand MARC data before the holdings/location scope.",
+            "For 'holdings are only Smith College', require Smith-scoped holdings and exclude non-Smith holdings with a NOT EXISTS over inventory.holdings_record__t joined through location/library/campus.",
+            "For a named location such as 'SC Internet', filter inventory.location__t in the target instance CTE using the resolved location name/code.",
+        ];
+
+        if (!self::isJsonLikeColumnType($parsedRecordContentType)) {
+            $lines[] = "Use folio_source_record.records__t.parsed_record__content for SRS/source-record MARC data; for exact field/subfield aggregation, prefer extracted MARC rows when available, otherwise use source-record text matching only as a fallback.";
+            return $lines;
+        }
+
+        $lines[] = "For MARC field/subfield extraction or aggregation against SRS JSONB, use this shape after target_instances is materialized:";
+        $lines[] = "WITH target_instances AS MATERIALIZED (SELECT DISTINCT inst.id, inst.hrid FROM inventory.instance__t inst WHERE ... holdings/location scope ... )";
+        $lines[] = "SELECT {$valueExpression} AS marc_value, COUNT(DISTINCT ti.id) AS record_count";
+        $lines[] = "FROM target_instances ti";
+        $lines[] = "JOIN folio_source_record.records__t sr ON sr.{$joinColumn} = ti.id{$currentRecordFilter}";
+        $lines[] = "CROSS JOIN LATERAL jsonb_array_elements(sr.parsed_record__content->'fields') AS marc_field(field_obj)";
+        $lines[] = "CROSS JOIN LATERAL jsonb_each(marc_field.field_obj) AS tag(tag, field_data)";
+        $lines[] = "CROSS JOIN LATERAL jsonb_array_elements(tag.field_data->'subfields') AS subfield(subfield_obj)";
+        $lines[] = "WHERE {$tagPredicate} AND {$subfieldPredicate}";
+        $lines[] = "Indicator filters are optional and only when requested: field_data->>'ind1' = '<requested first indicator>' and/or field_data->>'ind2' = '<requested second indicator>'.";
+        $lines[] = "GROUP BY marc_value ORDER BY record_count DESC;";
 
         return $lines;
     }
@@ -2230,6 +2428,18 @@ class FolioSchemaService
             }
         }
 
+        $marcFieldSourceRecordLines = self::buildMarcFieldSourceRecordLines(
+            (string)$prompt,
+            $parsedRecordContentType,
+            $recordsHasStateColumn,
+            $recordsHasDeletedColumn,
+            $recordsHasExternalIdColumn,
+            $recordsHasInstanceIdColumn
+        );
+        foreach ($marcFieldSourceRecordLines as $line) {
+            $lines[] = $line;
+        }
+
         // Append data patterns — column type warnings and sample values
         $dataPatterns = self::sanitizePromptDataPatterns(self::loadDataPatterns(), $parsedRecordContentType);
         if (!empty($dataPatterns)) {
@@ -2260,6 +2470,10 @@ class FolioSchemaService
 
                 $lines[] = '';
             }
+        }
+
+        foreach (self::buildClassificationTypeReferenceLines((string)$prompt) as $line) {
+            $lines[] = $line;
         }
 
         // Append Five Colleges location naming schema

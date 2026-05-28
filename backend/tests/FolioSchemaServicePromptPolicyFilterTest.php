@@ -215,4 +215,83 @@ assertContainsText(
     'Resolved location matches should explicitly instruct the model to filter loc.name rather than lib.name.'
 );
 
+$marc035Context = FolioSchemaService::buildSchemaContext(
+    'Find all of the records that have a location of SC Internet where the holdings are only Smith College. Summarize the marc field 035 9 subfield a and count how many records are tied to the value in 035 9.'
+);
+
+assertFalseValue(
+    strpos($marc035Context, 'users.users__t') !== false,
+    'MARC/source-record prompts should not include blocked user-table guidance.'
+);
+assertContainsText(
+    '--- MARC Field Source Record Rule ---',
+    $marc035Context,
+    'MARC field prompts should include a generic source-record extraction rule.'
+);
+assertContainsText(
+    'jsonb_array_elements(sr.parsed_record__content',
+    $marc035Context,
+    'MARC field prompts should show how to extract field/subfield values from SRS parsed_record__content.'
+);
+assertContainsText(
+    "field_data->>'ind2' = '<requested second indicator>'",
+    $marc035Context,
+    'MARC field prompts should explain how to preserve requested indicator constraints without hard-coding a tag.'
+);
+
+$marc245Context = FolioSchemaService::buildSchemaContext(
+    'For SC Internet records, summarize MARC field 245 1 subfield a and count records by that value.'
+);
+
+assertContainsText(
+    '--- MARC Field Source Record Rule ---',
+    $marc245Context,
+    'Non-035 MARC field prompts should use the same generic source-record extraction rule.'
+);
+assertContainsText(
+    "tag.tag = '245'",
+    $marc245Context,
+    'MARC field prompts should preserve the requested tag rather than relying on 035-specific handling.'
+);
+
+$marc6xxContext = FolioSchemaService::buildSchemaContext(
+    'For SC Internet records, count records that have MARC 6xx fields.'
+);
+
+assertContainsText(
+    "tag.tag ~ '^6[0-9][0-9]$'",
+    $marc6xxContext,
+    'MARC field-family prompts should preserve 6xx-style families without relying on a specific tag.'
+);
+
+$mrbcDeweyContext = FolioSchemaService::buildSchemaContext(
+    'Show me every bibliographic record in MRBC with a Dewey classification number.'
+);
+
+assertContainsText(
+    'MRBC means SC Rare Book Collection',
+    $mrbcDeweyContext,
+    'MRBC prompts should include the local alias that resolves MRBC to the SC Rare Book Collection location.'
+);
+assertContainsText(
+    'filter inventory.location__t',
+    $mrbcDeweyContext,
+    'MRBC prompts should direct the model to filter location, not instance HRID.'
+);
+assertContainsText(
+    'Do not filter inventory.instance__t.hrid for MRBC',
+    $mrbcDeweyContext,
+    'MRBC prompts should explicitly reject the mistaken instance HRID-prefix interpretation.'
+);
+assertContainsText(
+    "Use ct.name = 'Dewey'",
+    $mrbcDeweyContext,
+    'Dewey classification-number prompts should use the live inventory.classification_type__t label Dewey.'
+);
+assertContainsText(
+    'inventory.classification_type__t.name values: UDC, LC, LC (local), NLM, SUDOC, National Agriculture Library, GDC, Canadian Classification, Additional Dewey, Dewey',
+    $mrbcDeweyContext,
+    'Classification prompts should include the known inventory.classification_type__t naming convention values.'
+);
+
 fwrite(STDOUT, "FolioSchemaService prompt policy filter test passed\n");

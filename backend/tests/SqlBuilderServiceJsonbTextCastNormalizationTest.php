@@ -8,6 +8,23 @@ if (!file_exists($schemaServicePath) || !file_exists($sqlBuilderServicePath)) {
     exit(1);
 }
 
+define('SQLBUILDER_JSONB_TABLE_MAPPING_CACHE', sys_get_temp_dir() . '/folio_report_explorer_sqlbuilder_table_mapping_cache.json');
+define('SQLBUILDER_JSONB_COLUMN_CACHE', sys_get_temp_dir() . '/folio_report_explorer_sqlbuilder_column_cache.json');
+
+function refreshSchemaCacheFixture(string $sourcePath, string $targetPath): void
+{
+    $cache = json_decode((string)file_get_contents($sourcePath), true);
+    if (!is_array($cache)) {
+        fwrite(STDERR, "Invalid schema cache fixture: {$sourcePath}\n");
+        exit(1);
+    }
+    $cache['_discovered_at'] = date('c');
+    file_put_contents($targetPath, json_encode($cache, JSON_PRETTY_PRINT));
+}
+
+refreshSchemaCacheFixture(__DIR__ . '/../data/table_mapping_cache.json', SQLBUILDER_JSONB_TABLE_MAPPING_CACHE);
+refreshSchemaCacheFixture(__DIR__ . '/../data/column_cache.json', SQLBUILDER_JSONB_COLUMN_CACHE);
+
 if (!class_exists('Yii')) {
     class Yii
     {
@@ -16,10 +33,10 @@ if (!class_exists('Yii')) {
         public static function getAlias($alias)
         {
             if ($alias === '@app/data/table_mapping_cache.json') {
-                return __DIR__ . '/../data/table_mapping_cache.json';
+                return SQLBUILDER_JSONB_TABLE_MAPPING_CACHE;
             }
             if ($alias === '@app/data/column_cache.json') {
-                return __DIR__ . '/../data/column_cache.json';
+                return SQLBUILDER_JSONB_COLUMN_CACHE;
             }
 
             return $alias;
