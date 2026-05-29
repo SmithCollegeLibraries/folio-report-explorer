@@ -35,6 +35,16 @@ describe('Ask error formatting', () => {
     expect(message).toBe('The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.');
   });
 
+  it('surfaces client-side Axios timeouts as transient AI service issues', () => {
+    const message = AskPage.formatNlError?.({
+      isAxiosError: true,
+      code: 'ECONNABORTED',
+      message: 'timeout of 60000ms exceeded',
+    });
+
+    expect(message).toBe('The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.');
+  });
+
   it('does not block clarification continuation when telemetry persistence fails', async () => {
     const result = await AskPage.saveClarificationResolutionBestEffort?.(
       async () => {

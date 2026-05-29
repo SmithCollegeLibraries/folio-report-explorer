@@ -68,6 +68,16 @@ function isGenericAxiosStatusMessage(message: string): boolean {
   return /^Request failed with status code \d+$/i.test(message.trim());
 }
 
+function aiTimeoutMessage(): string {
+  return 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.';
+}
+
+function isAxiosTimeoutError(error: unknown, message: string): boolean {
+  if (!isAxiosError(error)) return false;
+  const code = typeof error.code === 'string' ? error.code.toUpperCase() : '';
+  return code === 'ECONNABORTED' || /timeout of \d+ms exceeded/i.test(message);
+}
+
 function isGroupedTitleValidationError(message: string): boolean {
   return /column\s+"?ii\.title"?\s+must appear in the GROUP BY clause or be used in an aggregate function/i.test(message);
 }
@@ -82,6 +92,9 @@ export function formatNlError(error: unknown): string {
     const data = error.response?.data as { errorType?: unknown } | undefined;
     if (data?.errorType === 'ai_timeout') {
       return message;
+    }
+    if (isAxiosTimeoutError(error, message)) {
+      return aiTimeoutMessage();
     }
   }
   if (isAxiosError(error) && error.response?.status === 403) {

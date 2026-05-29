@@ -4,19 +4,20 @@ const post = vi.fn();
 const get = vi.fn();
 const patch = vi.fn();
 const del = vi.fn();
+const create = vi.fn(() => ({
+  post,
+  get,
+  patch,
+  delete: del,
+  interceptors: {
+    request: { use: vi.fn() },
+    response: { use: vi.fn() },
+  },
+}));
 
 vi.mock('axios', () => ({
   default: {
-    create: vi.fn(() => ({
-      post,
-      get,
-      patch,
-      delete: del,
-      interceptors: {
-        request: { use: vi.fn() },
-        response: { use: vi.fn() },
-      },
-    })),
+    create,
     post: vi.fn(),
   },
 }));
@@ -51,5 +52,13 @@ describe('API client follow-up context', () => {
         previousColumns: ['title'],
       },
     });
+  });
+
+  it('configures a long enough timeout for AI generation to return backend timeout errors', async () => {
+    await import('./client');
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      timeout: 180000,
+    }));
   });
 });
