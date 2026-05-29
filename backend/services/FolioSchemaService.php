@@ -2372,6 +2372,8 @@ class FolioSchemaService
         $lines[] = "SUBTABLES: Tables matching pattern schema.parent__t__child are flattened array/object columns.";
         $lines[] = "  They join to their parent on parent__t.id = parent__t__child.id.";
         $lines[] = "  ALWAYS prefer subtables over JSONB queries — e.g. use invoice.invoice_lines__t__fund_distributions instead of data->'fundDistributions'.\n";
+        $lines[] = "Inventory title rule: Titles live on inventory.instance__t.title; inventory.item__t has no title column. When joining items to bibliographic titles, use inventory.item__t -> inventory.holdings_record__t -> inventory.instance__t and select the instance alias title, e.g. inst.title.";
+        $lines[] = "GROUP BY correctness rule: If a query uses GROUP BY, every selected non-aggregate expression must also appear in GROUP BY. For title lists, prefer SELECT DISTINCT inst.id, inst.hrid, inst.title unless the user explicitly asks for counts or grouped totals.\n";
 
         foreach ($orderedMetadbs as $metadbName) {
             // Skip privacy-excluded tables from the AI prompt entirely

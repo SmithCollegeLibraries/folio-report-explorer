@@ -63,6 +63,18 @@ function getApiErrorMessage(error: unknown): string {
   return 'Request failed.';
 }
 
+function isGenericAxiosStatusMessage(message: string): boolean {
+  return /^Request failed with status code \d+$/i.test(message.trim());
+}
+
+function isGroupedTitleValidationError(message: string): boolean {
+  return /column\s+"?ii\.title"?\s+must appear in the GROUP BY clause or be used in an aggregate function/i.test(message);
+}
+
+function groupedTitleValidationMessage(): string {
+  return 'Query validation failed: the generated SQL mixed title columns with grouped results incorrectly. I did not run it. Please regenerate the query; titles should come from inventory.instance__t.title and every selected non-aggregate column must be grouped.';
+}
+
 export function formatNlError(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (isAxiosError(error)) {
@@ -75,9 +87,34 @@ export function formatNlError(error: unknown): string {
     return `Query blocked: ${message}`;
   }
   if (isAxiosError(error) && error.response?.status === 422) {
+    if (isGroupedTitleValidationError(message)) {
+      return groupedTitleValidationMessage();
+    }
     return `Query validation failed: ${message}`;
   }
   return `AI error: ${message}`;
+}
+
+export function formatQuerySubmitError(error: unknown): string {
+  const message = getApiErrorMessage(error);
+
+  if (isAxiosError(error)) {
+    const status = error.response?.status;
+    if (status === 403) {
+      return `Query blocked: ${message}`;
+    }
+    if (status === 422) {
+      if (isGroupedTitleValidationError(message)) {
+        return groupedTitleValidationMessage();
+      }
+      return `Query validation failed: ${message}`;
+    }
+    if (status === 500 && isGenericAxiosStatusMessage(message)) {
+      return 'Submit error: the server hit an internal error while preparing the query job. You did not do anything wrong. Please try again, and contact support if it repeats.';
+    }
+  }
+
+  return `Submit error: ${message}`;
 }
 
 function buildClientFallbackSuggestions(promptText: string, campus: string): string[] {
@@ -588,9 +625,7 @@ export default function Ask() {
         )}
         {nlResult && execMut.isError && (
           <div className="max-w-4xl mx-auto px-4 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-            {(execMut.error as any)?.response?.data?.error
-              ? `Query error: ${(execMut.error as any).response.data.error}`
-              : `Submit error: ${String(execMut.error)}`}
+            {formatQuerySubmitError(execMut.error)}
           </div>
         )}
         {nlResult && jobError && (

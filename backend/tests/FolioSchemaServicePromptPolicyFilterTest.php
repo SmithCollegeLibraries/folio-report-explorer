@@ -319,6 +319,16 @@ assertContainsText(
     'MRBC prompts should explicitly reject the mistaken instance HRID-prefix interpretation.'
 );
 assertContainsText(
+    'Titles live on inventory.instance__t.title; inventory.item__t has no title column.',
+    $mrbcDeweyContext,
+    'Inventory title prompts should remind the model to select inst.title rather than inventing ii.title.'
+);
+assertContainsText(
+    'If a query uses GROUP BY, every selected non-aggregate expression must also appear in GROUP BY.',
+    $mrbcDeweyContext,
+    'Inventory title prompts should include grouped-query correctness guidance.'
+);
+assertContainsText(
     "Use ct.name = 'Dewey'",
     $mrbcDeweyContext,
     'Dewey classification-number prompts should use the live inventory.classification_type__t label Dewey.'

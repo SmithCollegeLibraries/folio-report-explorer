@@ -45,4 +45,32 @@ describe('Ask error formatting', () => {
 
     expect(result).toBe(false);
   });
+
+  it('explains grouped title SQL validation failures in user-facing language', () => {
+    const message = AskPage.formatQuerySubmitError?.({
+      isAxiosError: true,
+      response: {
+        status: 422,
+        data: {
+          error: 'column "ii.title" must appear in the GROUP BY clause or be used in an aggregate function',
+        },
+      },
+      message: 'Request failed with status code 422',
+    });
+
+    expect(message).toBe('Query validation failed: the generated SQL mixed title columns with grouped results incorrectly. I did not run it. Please regenerate the query; titles should come from inventory.instance__t.title and every selected non-aggregate column must be grouped.');
+  });
+
+  it('does not show raw Axios text for query submit 500s without a backend message', () => {
+    const message = AskPage.formatQuerySubmitError?.({
+      isAxiosError: true,
+      response: {
+        status: 500,
+        data: {},
+      },
+      message: 'Request failed with status code 500',
+    });
+
+    expect(message).toBe('Submit error: the server hit an internal error while preparing the query job. You did not do anything wrong. Please try again, and contact support if it repeats.');
+  });
 });
