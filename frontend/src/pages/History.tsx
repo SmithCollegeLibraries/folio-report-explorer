@@ -237,6 +237,10 @@ export default function History() {
     navigate(`/ask?q=${encodeURIComponent(suggestion)}`);
   }, [navigate]);
 
+  const handleAskHistoryFollowUp = useCallback((jobId: string) => {
+    navigate(`/ask?followUpJobId=${encodeURIComponent(jobId)}`);
+  }, [navigate]);
+
   const handleModalRename = (newName: string) => {
     if (!modalItem) return;
     setItems((prev) => prev.map((i) => i.jobId === modalItem.jobId ? { ...i, name: newName || null } : i));
@@ -488,6 +492,7 @@ export default function History() {
           suggestionsError={historySuggestionsError}
           onGenerateSuggestions={handleGenerateHistorySuggestions}
           onRunSuggestion={handleRunHistorySuggestion}
+          onAskFollowUp={handleAskHistoryFollowUp}
         />
       )}
 

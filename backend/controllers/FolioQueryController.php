@@ -339,6 +339,119 @@ class FolioQueryController extends Controller
         );
     }
 
+    /**
+     * Normalize optional NL follow-up context from Ask or History.
+     *
+     * @param mixed $rawContext
+     * @return array|null
+     */
+    private function normalizeFollowUpContext($rawContext)
+    {
+        if (!is_array($rawContext) || empty($rawContext)) {
+            return null;
+        }
+
+        $jobId = trim((string)($rawContext['jobId'] ?? ''));
+        if ($jobId !== '') {
+            return $this->resolveHistoryFollowUpContext($rawContext);
+        }
+
+        $previousSql = trim((string)($rawContext['previousSql'] ?? ''));
+        if ($previousSql === '') {
+            Yii::$app->response->statusCode = 400;
+            return null;
+        }
+
+        $previousColumns = $rawContext['previousColumns'] ?? [];
+        if (!is_array($previousColumns)) {
+            $previousColumns = [];
+        }
+
+        return [
+            'source' => 'ask',
+            'previousPrompt' => trim((string)($rawContext['previousPrompt'] ?? 'Previous Ask query')),
+            'previousSql' => $previousSql,
+            'previousColumns' => array_values(array_filter(array_map('strval', $previousColumns))),
+        ];
+    }
+
+    /**
+     * Resolve follow-up context from a completed historical job.
+     *
+     * @param array $context
+     * @return array|null
+     */
+    private function resolveHistoryFollowUpContext(array $context)
+    {
+        $jobId = trim((string)($context['jobId'] ?? ''));
+        $job = $jobId !== '' ? QueryJob::findOne($jobId) : null;
+        if (!$job) {
+            Yii::$app->response->statusCode = 404;
+            return null;
+        }
+
+        if ((string)$job->status !== 'completed') {
+            Yii::$app->response->statusCode = 409;
+            return null;
+        }
+
+        $userId = $this->getCurrentUserId();
+        $identity = $this->getAppIdentity();
+        $isAdmin = $identity && $identity->isAdmin();
+        if (!$isAdmin && $userId && isset($job->user_id) && (int)$job->user_id !== (int)$userId) {
+            Yii::$app->response->statusCode = 403;
+            return null;
+        }
+
+        $previousSql = trim((string)($job->sql_text ?? ''));
+        if ($previousSql === '') {
+            Yii::$app->response->statusCode = 400;
+            return null;
+        }
+
+        $previousColumns = method_exists($job, 'getDecodedColumns')
+            ? $job->getDecodedColumns()
+            : [];
+
+        return [
+            'source' => 'history',
+            'jobId' => $jobId,
+            'previousPrompt' => trim((string)($job->name ?? '')) ?: 'Previous historical query',
+            'previousSql' => $previousSql,
+            'previousColumns' => is_array($previousColumns) ? array_values(array_filter(array_map('strval', $previousColumns))) : [],
+        ];
+    }
+
+    /**
+     * Expand a terse follow-up into a standalone NL2SQL prompt.
+     *
+     * @param string $prompt
+     * @param array $context
+     * @return string
+     */
+    private function buildFollowUpPrompt($prompt, array $context)
+    {
+        $previousPrompt = trim((string)($context['previousPrompt'] ?? 'Previous query'));
+        $previousSql = trim((string)($context['previousSql'] ?? ''));
+        $previousColumns = $context['previousColumns'] ?? [];
+        if (!is_array($previousColumns)) {
+            $previousColumns = [];
+        }
+        $columnText = !empty($previousColumns)
+            ? implode(', ', array_values(array_filter(array_map('strval', $previousColumns))))
+            : 'not provided';
+
+        return implode("\n\n", [
+            'This is a follow-up request to a previously generated library report.',
+            'Previous request: ' . $previousPrompt,
+            "Previous SQL:\n```sql\n{$previousSql}\n```",
+            'Previous result columns: ' . $columnText,
+            'Follow-up request: ' . trim((string)$prompt),
+            'Preserve all previous filters, joins, CTEs, and result-set semantics unless the follow-up request explicitly changes them.',
+            'Add or modify only the columns, grouping, ordering, or constraints requested by the follow-up. Return one complete executable SQL query for the revised request.',
+        ]);
+    }
+
     // ─── Schema endpoints ─────────────────────────────────────────────
 
     /**
@@ -859,7 +972,24 @@ class FolioQueryController extends Controller
         }
 
         try {
-            $result = GeminiService::generateSqlWithShadow($prompt, $campus ?: null, $userId);
+            $followUpContext = $this->normalizeFollowUpContext($body['followUpContext'] ?? null);
+            if (($body['followUpContext'] ?? null) !== null && $followUpContext === null) {
+                $status = Yii::$app->response->statusCode ?: 400;
+                $messages = [
+                    400 => 'Follow-up context is missing previous SQL.',
+                    403 => 'Forbidden',
+                    404 => 'History job not found.',
+                    409 => 'History job is not completed.',
+                ];
+                Yii::$app->response->statusCode = $status;
+                return ['error' => $messages[$status] ?? 'Invalid follow-up context.'];
+            }
+
+            $effectivePrompt = $followUpContext !== null
+                ? $this->buildFollowUpPrompt($prompt, $followUpContext)
+                : $prompt;
+
+            $result = GeminiService::generateSqlWithShadow($effectivePrompt, $campus ?: null, $userId);
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
             }
@@ -880,7 +1010,7 @@ class FolioQueryController extends Controller
                         [
                             'route' => $result['route'] ?? null,
                             'routeReason' => $result['routeReason'] ?? null,
-                            'promptFingerprint' => $this->fingerprintPrompt($prompt),
+                            'promptFingerprint' => $this->fingerprintPrompt($effectivePrompt),
                         ]
                     );
                     Yii::$app->response->statusCode = 422;
@@ -892,7 +1022,7 @@ class FolioQueryController extends Controller
             if ($includeSuggestions && empty($result['needsClarification'])) {
                 try {
                     $result['suggestions'] = GeminiService::suggestFollowUpQueries(
-                        $prompt,
+                        $effectivePrompt,
                         (string)($result['sql'] ?? ''),
                         (string)($result['explanation'] ?? ''),
                         $campus ?: null

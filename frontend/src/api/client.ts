@@ -34,6 +34,7 @@ import type {
   ExpenseMonitorCode,
   ExpenseMonitorRefreshResponse,
   DashboardWidgetTemplate,
+  FollowUpContext,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -191,11 +192,13 @@ export async function askNl(
   prompt: string,
   campus?: string | null,
   includeSuggestions = true,
+  followUpContext?: FollowUpContext | null,
 ): Promise<NlResponse> {
   const { data } = await api.post('/nl', {
     prompt,
     campus: campus || null,
     includeSuggestions,
+    ...(followUpContext ? { followUpContext } : {}),
   });
   return data;
 }

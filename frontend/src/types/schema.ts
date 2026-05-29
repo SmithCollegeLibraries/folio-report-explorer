@@ -223,6 +223,14 @@ export interface NlResponse {
   routeReason?: string;
 }
 
+export interface FollowUpContext {
+  source: 'ask' | 'history';
+  previousPrompt?: string;
+  previousSql?: string;
+  previousColumns?: string[];
+  jobId?: string;
+}
+
 /** Saved query */
 export interface SavedQuery {
   id: number;

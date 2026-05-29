@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import {
   X, Download, Bookmark, LayoutDashboard, Clock, User,
-  Loader2, Code2, ChevronDown, ChevronUp, Pencil, Lightbulb, Play,
+  Loader2, Code2, ChevronDown, ChevronUp, Pencil, Lightbulb, Play, Sparkles,
 } from 'lucide-react';
 import SourceBadge from '../../components/SourceBadge';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
@@ -28,12 +28,14 @@ interface Props {
   suggestionsError: string | null;
   onGenerateSuggestions: () => void;
   onRunSuggestion: (prompt: string) => void;
+  onAskFollowUp: (jobId: string) => void;
 }
 
 export default function HistoryResultsModal({
   item, job, loading, onClose, onRename, onSave,
   suggestions, suggestionSource, suggestionWarnings,
   suggestionsLoading, suggestionsError, onGenerateSuggestions, onRunSuggestion,
+  onAskFollowUp,
 }: Props) {
   const [sqlOpen, setSqlOpen] = useState(false);
   const hasFilePreview = !!(job?.outputMode === 'file' && (job.columns?.length || 0) > 0 && (job.rows?.length || 0) > 0);
@@ -129,6 +131,12 @@ export default function HistoryResultsModal({
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={() => onAskFollowUp(item.jobId)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-folio-200 text-folio-700 rounded hover:bg-folio-50 transition-colors"
+            >
+              <Sparkles size={14} /> Ask follow-up
+            </button>
             <button
               onClick={() => onSave(false)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 text-gray-600 rounded hover:bg-gray-100 transition-colors"

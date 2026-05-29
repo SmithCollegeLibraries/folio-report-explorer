@@ -8,7 +8,7 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
-import type { NlResponse } from '../types';
+import type { FollowUpContext, NlResponse } from '../types';
 import type { ClarificationOption } from '../types/schema';
 import {
   Send, Play, Copy, Sparkles, RotateCcw, Square, Loader2,
@@ -20,6 +20,7 @@ type AskRequest = {
   question: string;
   shouldExecute?: boolean;
   includeSuggestions?: boolean;
+  followUpContext?: FollowUpContext | null;
 };
 
 const CAMPUS_OPTIONS = [
@@ -198,12 +199,37 @@ export async function saveClarificationResolutionBestEffort(
   }
 }
 
+export function buildCurrentAskFollowUpContext(
+  previousPrompt: string,
+  result: Pick<NlResponse, 'sql'> | null | undefined,
+  previousColumns: string[] = [],
+): FollowUpContext | null {
+  const previousSql = result?.sql?.trim();
+  if (!previousSql) return null;
+
+  return {
+    source: 'ask',
+    previousPrompt: previousPrompt.trim() || 'Previous Ask query',
+    previousSql,
+    previousColumns,
+  };
+}
+
+export function buildHistoryFollowUpContext(jobId: string): FollowUpContext {
+  return {
+    source: 'history',
+    jobId,
+  };
+}
+
 export default function Ask() {
   const [searchParams] = useSearchParams();
   const { user, authEnabled } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [nlResult, setNlResult] = useState<NlResponse | null>(null);
   const [clarificationFreeText, setClarificationFreeText] = useState('');
+  const [followUpContext, setFollowUpContext] = useState<FollowUpContext | null>(null);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [history, setHistory] = useState<
     { prompt: string; result: NlResponse }[]
@@ -237,6 +263,11 @@ export default function Ask() {
     const q = (searchParams.get('q') || '').trim();
     if (q) {
       setPrompt(q);
+    }
+    const followUpJobId = (searchParams.get('followUpJobId') || '').trim();
+    if (followUpJobId) {
+      setFollowUpContext(buildHistoryFollowUpContext(followUpJobId));
+      setFollowUpError(null);
     }
   }, [searchParams]);
 
@@ -325,7 +356,12 @@ export default function Ask() {
 
   const askMut = useMutation({
     mutationFn: (request: AskRequest) =>
-      askNl(request.question, campusForRequest, request.includeSuggestions ?? true),
+      askNl(
+        request.question,
+        campusForRequest,
+        request.includeSuggestions ?? true,
+        request.followUpContext ?? null,
+      ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
       setNlResult(data);
       resetJob();
@@ -334,6 +370,8 @@ export default function Ask() {
       setLastSavedId(null);
       setCorrecting(false);
       setClarificationFreeText('');
+      setFollowUpContext(null);
+      setFollowUpError(null);
       setDetailTab('results');
       prependHistory(request.question, data);
 
@@ -391,7 +429,16 @@ export default function Ask() {
   const handleSubmit = () => {
     const q = prompt.trim();
     if (!q) return;
-    askMut.mutate({ question: q, includeSuggestions: true, shouldExecute: true });
+    if (followUpContext?.source === 'ask' && !followUpContext.previousSql) {
+      setFollowUpError('Follow-up context is missing the previous SQL. Start a new query or choose Ask follow-up again.');
+      return;
+    }
+    askMut.mutate({
+      question: q,
+      includeSuggestions: true,
+      shouldExecute: true,
+      followUpContext,
+    });
   };
 
   const handleCopy = () => {
@@ -411,6 +458,21 @@ export default function Ask() {
       includeSuggestions: true,
       shouldExecute: true,
     });
+  };
+
+  const handleStartCurrentFollowUp = () => {
+    const context = buildCurrentAskFollowUpContext(
+      history[0]?.prompt || prompt,
+      nlResult,
+      results?.columns || [],
+    );
+    if (!context) {
+      setFollowUpError('Follow-up is available after a query has generated SQL.');
+      return;
+    }
+    setFollowUpContext(context);
+    setFollowUpError(null);
+    setPrompt('');
   };
 
   const handleClarificationChoice = async (option: ClarificationOption | null) => {
@@ -519,6 +581,23 @@ export default function Ask() {
             run a query against the FOLIO LDP schema or local supplementary tables.
           </p>
 
+          {followUpContext && (
+            <div className="flex items-center justify-between gap-3 mb-3 border border-folio-200 bg-folio-50 rounded-lg px-3 py-2 text-sm text-folio-800">
+              <span>
+                Asking a follow-up for {followUpContext.source === 'history' ? 'a history query' : 'the current result'}
+              </span>
+              <button
+                onClick={() => {
+                  setFollowUpContext(null);
+                  setFollowUpError(null);
+                }}
+                className="text-xs text-folio-700 hover:text-folio-900"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
           <div className="flex gap-2">
             <textarea
               value={prompt}
@@ -621,6 +700,11 @@ export default function Ask() {
         {askMut.isError && (
           <div className="max-w-4xl mx-auto m-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
             {formatNlError(askMut.error)}
+          </div>
+        )}
+        {followUpError && (
+          <div className="max-w-4xl mx-auto m-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+            {followUpError}
           </div>
         )}
         {nlResult && execMut.isError && (
@@ -805,6 +889,14 @@ export default function Ask() {
                         )}
                       </div>
                       <div className="flex items-center gap-3">
+                        {nlResult.sql && (
+                          <button
+                            onClick={handleStartCurrentFollowUp}
+                            className="flex items-center gap-1 text-xs text-folio-600 hover:text-folio-800"
+                          >
+                            <Sparkles size={12} /> Ask follow-up
+                          </button>
+                        )}
                         <button
                           onClick={() => setDetailTab('details')}
                           className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
@@ -878,6 +970,12 @@ export default function Ask() {
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="text-sm font-semibold">Generated SQL</h3>
                       <div className="flex gap-2">
+                        <button
+                          onClick={handleStartCurrentFollowUp}
+                          className="flex items-center gap-1 text-xs text-folio-600 hover:text-folio-800"
+                        >
+                          <Sparkles size={12} /> Ask follow-up
+                        </button>
                         <button
                           onClick={handleCopy}
                           className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
