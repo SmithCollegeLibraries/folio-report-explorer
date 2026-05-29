@@ -18,4 +18,20 @@ describe('Ask error formatting', () => {
 
     expect(message).toBe('Query validation failed: operator does not exist: jsonb !~~* unknown');
   });
+
+  it('surfaces AI timeout failures as transient service issues', () => {
+    const message = AskPage.formatNlError?.({
+      isAxiosError: true,
+      response: {
+        status: 504,
+        data: {
+          errorType: 'ai_timeout',
+          error: 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.',
+        },
+      },
+      message: 'Request failed with status code 504',
+    });
+
+    expect(message).toBe('The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.');
+  });
 });

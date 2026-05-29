@@ -5,6 +5,8 @@ namespace app\services;
 use Yii;
 use yii\httpclient\Client;
 
+require_once __DIR__ . '/ClarificationService.php';
+
 /**
  * GeminiService — sends natural-language prompts to Google Gemini 2.5 Flash
  * with schema context, receives generated SQL, validates it, and returns.
@@ -130,6 +132,21 @@ class GeminiService
      */
     public static function generateSqlWithShadow($prompt, $campus = null, $userId = null)
     {
+        $clarification = ClarificationService::detectPromptAmbiguity((string)$prompt);
+        if ($clarification !== null) {
+            self::logRouteSelection('clarification', (string)$clarification['routeReason'], [
+                'clarificationKey' => $clarification['clarificationKey'] ?? null,
+            ]);
+            self::logNlTelemetry('nl2sql.generated', [
+                'route' => 'clarification',
+                'routeReason' => $clarification['routeReason'] ?? null,
+                'clarificationType' => $clarification['clarificationType'] ?? null,
+                'clarificationKey' => $clarification['clarificationKey'] ?? null,
+                'dataSource' => null,
+            ]);
+            return $clarification;
+        }
+
         $primaryMode = self::resolvePrimaryModeForPrompt($prompt, $campus);
         $primary = $primaryMode === 'intent'
             ? self::generateSql($prompt, $campus, false, true)
@@ -493,11 +510,18 @@ PROMPT;
 
         $model = self::getAiModel();
 
+        if ($forceIntent && self::promptRequiresLegacyFreeform($prompt)) {
+            $fallback = self::generateSql($prompt, $campus, true, false);
+            $fallback['route'] = 'legacy_fallback';
+            $fallback['routeReason'] = 'structured_intent_unsupported_for_marc_source_records';
+            return $fallback;
+        }
+
         if ($forceIntent) {
             return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model);
         }
 
-        if (!$forceLegacy && self::isIntentModeEnabled()) {
+        if (!$forceLegacy && self::isIntentModeEnabled() && !self::promptRequiresLegacyFreeform($prompt)) {
             return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model);
         }
 
@@ -1336,6 +1360,10 @@ GUIDANCE;
      */
     private static function resolvePrimaryModeForPrompt($prompt, $campus = null)
     {
+        if (self::promptRequiresLegacyFreeform($prompt)) {
+            return 'legacy';
+        }
+
         $primaryMode = self::resolvePrimaryMode();
         if ($primaryMode !== 'legacy') {
             return $primaryMode;
@@ -1348,6 +1376,15 @@ GUIDANCE;
         return self::resolvePromptQueryFamily($prompt, $campus) !== null
             ? 'intent'
             : 'legacy';
+    }
+
+    /**
+     * Some prompt families require SQL expressions/lateral JSON extraction that
+     * the structured QueryIntent contract intentionally cannot represent.
+     */
+    private static function promptRequiresLegacyFreeform($prompt)
+    {
+        return self::promptMentionsMarcConstraint($prompt);
     }
 
     /**
@@ -1883,7 +1920,12 @@ GUIDANCE;
      */
     private static function isTimeoutThrowable(\Throwable $e)
     {
-        return preg_match('/timeout|timed out|deadline exceeded|operation timed out/i', $e->getMessage()) === 1;
+        return self::isAiTimeoutMessage($e->getMessage());
+    }
+
+    public static function isAiTimeoutMessage(string $message): bool
+    {
+        return preg_match('/timeout|timed out|deadline exceeded|operation timed out/i', $message) === 1;
     }
 
     /**

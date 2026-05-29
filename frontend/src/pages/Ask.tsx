@@ -2,13 +2,14 @@ import { useState, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
 import type { NlResponse } from '../types';
+import type { ClarificationOption } from '../types/schema';
 import {
   Send, Play, Copy, Sparkles, RotateCcw, Square, Loader2,
   Maximize2, Save, FileBarChart, Check, ThumbsDown, Pencil, X,
@@ -64,6 +65,12 @@ function getApiErrorMessage(error: unknown): string {
 
 export function formatNlError(error: unknown): string {
   const message = getApiErrorMessage(error);
+  if (isAxiosError(error)) {
+    const data = error.response?.data as { errorType?: unknown } | undefined;
+    if (data?.errorType === 'ai_timeout') {
+      return message;
+    }
+  }
   if (isAxiosError(error) && error.response?.status === 403) {
     return `Query blocked: ${message}`;
   }
@@ -126,6 +133,7 @@ export default function Ask() {
   const { user, authEnabled } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [nlResult, setNlResult] = useState<NlResponse | null>(null);
+  const [clarificationFreeText, setClarificationFreeText] = useState('');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [history, setHistory] = useState<
     { prompt: string; result: NlResponse }[]
@@ -255,6 +263,7 @@ export default function Ask() {
       setSaveSuccess(null);
       setLastSavedId(null);
       setCorrecting(false);
+      setClarificationFreeText('');
       setDetailTab('results');
       prependHistory(request.question, data);
 
@@ -329,6 +338,35 @@ export default function Ask() {
     setPrompt(suggestedPrompt);
     askMut.mutate({
       question: suggestedPrompt,
+      includeSuggestions: true,
+      shouldExecute: true,
+    });
+  };
+
+  const handleClarificationChoice = async (option: ClarificationOption | null) => {
+    if (!nlResult?.needsClarification || !nlResult.clarificationKey) return;
+
+    const originalQuestion = history[0]?.prompt || prompt.trim();
+    const freeText = option ? '' : clarificationFreeText.trim();
+    if (!option && !freeText) return;
+
+    await saveClarificationResolution({
+      originalQuestion,
+      clarificationKey: nlResult.clarificationKey,
+      options: nlResult.options || [],
+      selectedOptionIds: option ? [option.id] : [],
+      freeTextResponse: freeText || null,
+      resolvedFilter: option?.resolvedFilter || null,
+      resultStatus: 'resolved',
+    });
+
+    const clarifiedPrompt = option?.clarifiedPromptSuffix
+      ? `${originalQuestion}\n\nClarification: ${option.clarifiedPromptSuffix}`
+      : `${originalQuestion}\n\nClarification: ${freeText}`;
+
+    setPrompt(clarifiedPrompt);
+    askMut.mutate({
+      question: clarifiedPrompt,
       includeSuggestions: true,
       shouldExecute: true,
     });
@@ -575,7 +613,53 @@ export default function Ask() {
         )}
 
         {/* Main content — only show when not in loading state */}
-        {nlResult && !isLoading && (
+        {nlResult && !isLoading && nlResult.needsClarification && (
+          <div className="max-w-4xl mx-auto p-6">
+            <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
+              <div className="text-sm font-semibold text-amber-900 mb-1">
+                Clarification needed
+              </div>
+              <div className="text-sm text-amber-900 mb-3">
+                {nlResult.question || 'Which option did you mean?'}
+              </div>
+              <div className="space-y-2">
+                {(nlResult.options || []).map((option) => (
+                  <button
+                    key={option.id}
+                    onClick={() => handleClarificationChoice(option)}
+                    className="w-full flex items-center justify-between gap-3 text-left bg-white border border-amber-200 hover:bg-amber-100 px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors"
+                  >
+                    <span>{option.label}</span>
+                    {option.recommended && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                        Recommended
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              {nlResult.freeTextAllowed && (
+                <div className="mt-3 flex gap-2">
+                  <input
+                    value={clarificationFreeText}
+                    onChange={(e) => setClarificationFreeText(e.target.value)}
+                    className="flex-1 border border-amber-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                    placeholder="Or describe what you meant..."
+                  />
+                  <button
+                    onClick={() => handleClarificationChoice(null)}
+                    disabled={!clarificationFreeText.trim()}
+                    className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:opacity-50"
+                  >
+                    Continue
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {nlResult && !isLoading && !nlResult.needsClarification && (
           <div className="max-w-4xl mx-auto p-6 space-y-4">
             {/* Tab toggle bar */}
             <div className="flex items-center gap-1 border-b pb-0">
@@ -750,8 +834,8 @@ export default function Ask() {
                         )}
                         {!isRunning ? (
                           <button
-                            onClick={() => execMut.mutate({ sql: nlResult.sql, dataSource: nlResult.dataSource || 'folio' })}
-                            disabled={execMut.isPending}
+                            onClick={() => nlResult.sql && execMut.mutate({ sql: nlResult.sql, dataSource: nlResult.dataSource || 'folio' })}
+                            disabled={execMut.isPending || !nlResult.sql}
                             className="flex items-center gap-1 bg-green-600 text-white text-xs px-3 py-1 rounded hover:bg-green-700 disabled:opacity-50"
                           >
                             <Play size={12} />
@@ -768,7 +852,7 @@ export default function Ask() {
                         <button
                           onClick={() => {
                             setCorrecting(true);
-                            setCorrectedSql(nlResult.sql);
+                            setCorrectedSql(nlResult.sql || '');
                           }}
                           className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-800"
                           title="Correct this SQL — your fix teaches the AI"

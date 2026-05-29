@@ -1,6 +1,6 @@
 {
     "_note": "Auto-discovered subtables (flattened array columns) from actual database",
-    "_discovered_at": "2026-05-11T20:32:08+00:00",
+    "_discovered_at": "2026-05-28T18:56:30+00:00",
     "_subtable_count": 216,
     "subtables": {
         "agreements.entitlement__t__coverage": {

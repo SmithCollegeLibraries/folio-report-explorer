@@ -686,7 +686,21 @@ class SqlBuilderService
             );
         }
 
+        $sql = self::normalizeJsonbKeyExistsOperator($sql);
+
         return self::normalizeSourceRecordStateFilter($sql);
+    }
+
+    /**
+     * PDO treats PostgreSQL's JSONB ? operator as a positional bind marker.
+     */
+    private static function normalizeJsonbKeyExistsOperator(string $sql): string
+    {
+        return preg_replace(
+            "/\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s+\?\s+('[^']*')/",
+            'jsonb_exists($1, $2)',
+            $sql
+        );
     }
 
     /**
@@ -747,11 +761,22 @@ class SqlBuilderService
      */
     public static function validateTablePolicy($sql)
     {
+        $sql = (string)$sql;
+        if (
+            stripos($sql, 'folio_source_record.records__t') !== false
+            && stripos($sql, 'parsed_record__content') !== false
+            && preg_match('/\bjsonb_(?:array_elements|each|path_query)\s*\([^)]*parsed_record__content/is', $sql) === 1
+        ) {
+            throw new \InvalidArgumentException(
+                'Use marctab.mtNNN per-field tables for MARC field/subfield extraction instead of parsing records__t.parsed_record__content JSON.'
+            );
+        }
+
         $blockedTables = array_map('strtolower', FolioSchemaService::EXCLUDED_TABLES);
         $blockedSchemas = array_map('strtolower', FolioSchemaService::EXCLUDED_SCHEMAS);
 
         // Extract schema-qualified table references from FROM/JOIN clauses.
-        preg_match_all('/(?:FROM|JOIN)\s+([\w-]+(?:\.[\w-]+)?)/i', (string)$sql, $matches);
+        preg_match_all('/(?:FROM|JOIN)\s+([\w-]+(?:\.[\w-]+)?)/i', $sql, $matches);
 
         foreach (($matches[1] ?? []) as $ref) {
             $tableRef = strtolower(trim($ref));
@@ -772,6 +797,10 @@ class SqlBuilderService
 
                 if ($schemaName === 'perms') {
                     throw new \InvalidArgumentException("Query references blocked schema table: {$tableRef}");
+                }
+
+                if ($schemaName === 'marctab' && preg_match('/^mt[0-9]{3}$/i', $tableName) === 1) {
+                    continue;
                 }
 
                 if (in_array($schemaName, $blockedSchemas, true)) {

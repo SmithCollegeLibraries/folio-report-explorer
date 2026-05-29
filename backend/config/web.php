@@ -52,6 +52,7 @@ $config = [
                 'POST build' => 'folio-query/build',
                 'POST execute' => 'folio-query/execute',
                 'POST nl' => 'folio-query/nl',
+                'POST clarifications/resolve' => 'folio-query/clarification-resolve',
                 'GET campuses' => 'folio-query/campus-list',
                 'PATCH user/campus' => 'folio-query/campus-save',
 

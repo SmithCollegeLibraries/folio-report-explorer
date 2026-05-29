@@ -70,6 +70,23 @@ function assertFalseValue(bool $condition, string $message): void
     }
 }
 
+function assertThrowsMessage(callable $callback, string $expectedText, string $message): void
+{
+    try {
+        $callback();
+    } catch (InvalidArgumentException $e) {
+        if (strpos($e->getMessage(), $expectedText) !== false) {
+            return;
+        }
+
+        fwrite(STDERR, $message . "\nExpected exception containing: {$expectedText}\nActual: {$e->getMessage()}\n");
+        exit(1);
+    }
+
+    fwrite(STDERR, $message . "\nExpected InvalidArgumentException was not thrown.\n");
+    exit(1);
+}
+
 $sql = <<<'SQL'
 SELECT fsr.parsed_record__content
 FROM folio_source_record.records__t AS fsr
@@ -123,6 +140,72 @@ assertContainsText(
         'WHERE marc_content NOT ILIKE',
         $aliasNormalized,
         'normalizeForExecution should preserve downstream alias predicates after casting the source projection.'
+);
+
+$jsonbExistsSql = <<<'SQL'
+SELECT subfield.subfield_obj->>'a' AS marc_value
+FROM folio_source_record.records__t AS sr
+CROSS JOIN LATERAL jsonb_array_elements(sr.parsed_record__content->'fields') AS marc_field(field_obj)
+CROSS JOIN LATERAL jsonb_each(marc_field.field_obj) AS tag(tag, field_data)
+CROSS JOIN LATERAL jsonb_array_elements(tag.field_data->'subfields') AS subfield(subfield_obj)
+WHERE subfield.subfield_obj ? 'a'
+SQL;
+
+$jsonbExistsNormalized = SqlBuilderService::normalizeForExecution($jsonbExistsSql);
+
+assertContainsText(
+    "jsonb_exists(subfield.subfield_obj, 'a')",
+    $jsonbExistsNormalized,
+    'normalizeForExecution should replace JSONB key-exists ? operators with jsonb_exists before PDO/preflight sees them.'
+);
+assertFalseValue(
+    strpos($jsonbExistsNormalized, "subfield.subfield_obj ? 'a'") !== false,
+    'normalizeForExecution should remove JSONB ? operators that PDO treats as positional placeholders.'
+);
+
+$marctabSql = <<<'SQL'
+WITH target_instances AS MATERIALIZED (
+    SELECT inst.id, inst.hrid
+    FROM inventory.instance__t AS inst
+)
+SELECT m.content AS marc_value, COUNT(DISTINCT ti.id) AS record_count
+FROM target_instances AS ti
+JOIN marctab.mt035 AS m ON m.instance_hrid = ti.hrid
+WHERE m.ind2 = '9'
+  AND m.sf = 'a'
+GROUP BY m.content
+SQL;
+
+SqlBuilderService::validateTablePolicy($marctabSql);
+
+$marctabSchemaSql = <<<'SQL'
+SELECT m.content
+FROM marctab.some_other_table AS m
+SQL;
+
+assertThrowsMessage(
+    static function () use ($marctabSchemaSql): void {
+        SqlBuilderService::validateTablePolicy($marctabSchemaSql);
+    },
+    'Query references blocked schema: marctab',
+    'SQL policy should only allow the known per-field marctab.mtNNN access path.'
+);
+
+$expensiveMarcJsonSql = <<<'SQL'
+SELECT subfield.subfield_obj->>'a' AS marc_value
+FROM folio_source_record.records__t AS sr
+CROSS JOIN LATERAL jsonb_array_elements(sr.parsed_record__content->'fields') AS marc_field(field_obj)
+CROSS JOIN LATERAL jsonb_each(marc_field.field_obj) AS tag(tag, field_data)
+CROSS JOIN LATERAL jsonb_array_elements(tag.field_data->'subfields') AS subfield(subfield_obj)
+WHERE tag.tag = '035'
+SQL;
+
+assertThrowsMessage(
+    static function () use ($expensiveMarcJsonSql): void {
+        SqlBuilderService::validateTablePolicy($expensiveMarcJsonSql);
+    },
+    'Use marctab.mtNNN per-field tables for MARC field/subfield extraction',
+    'Generated MARC field extraction should not be allowed to scan parsed_record__content JSON.'
 );
 
 fwrite(STDOUT, "SqlBuilderService jsonb text cast normalization test passed\n");

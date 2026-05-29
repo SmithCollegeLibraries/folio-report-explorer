@@ -48,6 +48,15 @@ assertSameValue(
     'Unsupported prompts should preserve the configured legacy primary mode.'
 );
 
+Yii::$app->params['nl2sqlPrimaryMode'] = 'intent';
+Yii::$app->params['nl2sqlIntentMode'] = true;
+
+assertSameValue(
+    'legacy',
+    $modeResolver->invoke(null, 'Find records in SC Internet and summarize MARC field 035 9 subfield a.', 'Smith College'),
+    'MARC field/source-record prompts should use legacy freeform SQL because structured intent columns cannot represent JSON extraction expressions.'
+);
+
 Yii::$app->params['nl2sqlPrimaryMode'] = 'auto';
 Yii::$app->params['nl2sqlIntentMode'] = false;
 

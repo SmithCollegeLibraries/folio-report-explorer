@@ -1,6 +1,6 @@
 {
     "_note": "Auto-discovered columns keyed by MetaDB table name (schema.table__t)",
-    "_discovered_at": "2026-05-11T20:32:04+00:00",
+    "_discovered_at": "2026-05-28T18:56:30+00:00",
     "_tables_with_columns": 123,
     "columns": {
         "agreements.entitlement__t": [
@@ -2283,87 +2283,6 @@
             {
                 "name": "__id",
                 "type": "int4",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "id",
-                "type": "uuid",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "loan_id",
-                "type": "uuid",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "patron_id",
-                "type": "uuid",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "session_id",
-                "type": "uuid",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "action_type",
-                "type": "text",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "metadata__created_date",
-                "type": "timestamptz",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "metadata__updated_date",
-                "type": "timestamptz",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "metadata__created_by_user_id",
-                "type": "uuid",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
-                "name": "metadata__updated_by_user_id",
-                "type": "uuid",
                 "size": null,
                 "nullable": true,
                 "auto_updated": false,

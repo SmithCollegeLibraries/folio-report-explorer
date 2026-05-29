@@ -200,6 +200,21 @@ export async function askNl(
   return data;
 }
 
+export async function saveClarificationResolution(input: {
+  originalQuestion: string;
+  clarificationKey: string;
+  detectedTerms?: string[];
+  options?: unknown[];
+  selectedOptionIds?: string[];
+  freeTextResponse?: string | null;
+  resolvedFilter?: Record<string, unknown> | null;
+  generatedSql?: string | null;
+  resultStatus?: string | null;
+}): Promise<{ id: number; message: string }> {
+  const { data } = await api.post('/clarifications/resolve', input);
+  return data;
+}
+
 export async function fetchCampuses(): Promise<{ code: string; name: string }[]> {
   const { data } = await api.get('/campuses');
   return data;

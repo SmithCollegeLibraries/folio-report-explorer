@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS ai_clarification_events (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NULL,
+    original_question TEXT NOT NULL,
+    clarification_key VARCHAR(255) NOT NULL,
+    detected_terms_json JSON NULL,
+    options_json JSON NULL,
+    selected_option_ids_json JSON NULL,
+    free_text_response TEXT NULL,
+    resolved_filter_json JSON NULL,
+    generated_sql MEDIUMTEXT NULL,
+    result_status VARCHAR(64) NULL,
+    promoted_hint_id INT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_clarification_key (clarification_key),
+    INDEX idx_user_id (user_id),
+    INDEX idx_promoted_hint_id (promoted_hint_id),
+    INDEX idx_created_at (created_at),
+    CONSTRAINT fk_clarification_events_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+    CONSTRAINT fk_clarification_events_hint FOREIGN KEY (promoted_hint_id) REFERENCES ai_training_hints(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

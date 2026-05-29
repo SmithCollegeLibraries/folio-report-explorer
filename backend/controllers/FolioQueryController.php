@@ -889,7 +889,7 @@ class FolioQueryController extends Controller
             }
 
             $result['suggestions'] = [];
-            if ($includeSuggestions) {
+            if ($includeSuggestions && empty($result['needsClarification'])) {
                 try {
                     $result['suggestions'] = GeminiService::suggestFollowUpQueries(
                         $prompt,
@@ -910,9 +910,74 @@ class FolioQueryController extends Controller
             Yii::$app->response->statusCode = 403;
             return ['error' => $e->getMessage()];
         } catch (\RuntimeException $e) {
+            if (GeminiService::isAiTimeoutMessage($e->getMessage())) {
+                Yii::warning(
+                    'NL2SQL AI timeout: ' . $e->getMessage(),
+                    'nl2sql.timeout'
+                );
+                Yii::$app->response->statusCode = 504;
+                return [
+                    'errorType' => 'ai_timeout',
+                    'error' => 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.',
+                ];
+            }
             Yii::$app->response->statusCode = 500;
             return ['error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * POST /api/clarifications/resolve — persist a user's clarification choice.
+     */
+    public function actionClarificationResolve()
+    {
+        $body = Yii::$app->request->getBodyParams();
+
+        $originalQuestion = trim((string)($body['originalQuestion'] ?? ''));
+        $clarificationKey = trim((string)($body['clarificationKey'] ?? ''));
+        if ($originalQuestion === '' || $clarificationKey === '') {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'originalQuestion and clarificationKey are required.'];
+        }
+
+        $selectedOptionIds = $body['selectedOptionIds'] ?? [];
+        if (!is_array($selectedOptionIds)) {
+            $selectedOptionIds = [];
+        }
+
+        $options = $body['options'] ?? [];
+        if (!is_array($options)) {
+            $options = [];
+        }
+
+        $resolvedFilter = $body['resolvedFilter'] ?? null;
+        if ($resolvedFilter !== null && !is_array($resolvedFilter)) {
+            $resolvedFilter = null;
+        }
+
+        $detectedTerms = $body['detectedTerms'] ?? [];
+        if (!is_array($detectedTerms)) {
+            $detectedTerms = [];
+        }
+
+        $db = Yii::$app->db;
+        $db->createCommand()->insert('ai_clarification_events', [
+            'user_id' => $this->getCurrentUserId(),
+            'original_question' => $originalQuestion,
+            'clarification_key' => $clarificationKey,
+            'detected_terms_json' => json_encode(array_values($detectedTerms)),
+            'options_json' => json_encode(array_values($options)),
+            'selected_option_ids_json' => json_encode(array_values($selectedOptionIds)),
+            'free_text_response' => trim((string)($body['freeTextResponse'] ?? '')) ?: null,
+            'resolved_filter_json' => $resolvedFilter !== null ? json_encode($resolvedFilter) : null,
+            'generated_sql' => trim((string)($body['generatedSql'] ?? '')) ?: null,
+            'result_status' => trim((string)($body['resultStatus'] ?? '')) ?: null,
+        ])->execute();
+
+        return [
+            'id' => (int)$db->getLastInsertID(),
+            'message' => 'Clarification saved.',
+        ];
     }
 
     /**

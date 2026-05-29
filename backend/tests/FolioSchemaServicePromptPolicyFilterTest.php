@@ -1,9 +1,10 @@
 <?php
 
 $schemaServicePath = __DIR__ . '/../services/FolioSchemaService.php';
+$clarificationServicePath = __DIR__ . '/../services/ClarificationService.php';
 
-if (!file_exists($schemaServicePath)) {
-    fwrite(STDERR, "FolioSchemaService is missing at {$schemaServicePath}\n");
+if (!file_exists($schemaServicePath) || !file_exists($clarificationServicePath)) {
+    fwrite(STDERR, "Required service is missing for FolioSchemaService prompt policy test\n");
     exit(1);
 }
 
@@ -119,6 +120,7 @@ Yii::$app = (object) [
     ],
 ];
 
+require_once $clarificationServicePath;
 require_once $schemaServicePath;
 
 use app\services\FolioSchemaService;
@@ -143,13 +145,10 @@ $schemaContext = FolioSchemaService::buildSchemaContext(
     'Show all FOLIO instances of Smith College books that are missing a MARC 300 field, including their call number and current location.'
 );
 
-assertFalseValue(
-    strpos($schemaContext, 'marctab.mt300') !== false,
-    'Schema context should not include marctab-specific prompt guidance when the marctab schema is blocked by table policy.'
-);
-assertFalseValue(
-    strpos($schemaContext, 'Use marctab.mtNNN') !== false,
-    'Schema context should not instruct the model to use marctab tables when those queries will be blocked.'
+assertContainsText(
+    'marctab.mt300',
+    $schemaContext,
+    'Schema context should steer exact MARC field presence checks to the per-field marctab table.'
 );
 assertContainsText(
     'parsed_record__content:jsonb',
@@ -160,10 +159,9 @@ assertFalseValue(
     preg_match('/parsed_record__content\s+NOT\s+ILIKE/i', $schemaContext) === 1,
     'Schema context should not suggest direct NOT ILIKE on parsed_record__content when the live schema type is jsonb.'
 );
-assertContainsText(
-    'parsed_record__content::text NOT ILIKE',
-    $schemaContext,
-    'Schema context should cast parsed_record__content to text before NOT ILIKE when the live schema type is jsonb.'
+assertFalseValue(
+    strpos($schemaContext, 'parsed_record__content::text NOT ILIKE') !== false,
+    'Schema context should not steer MARC field presence checks to parsed_record__content text scans.'
 );
 assertFalseValue(
     strpos($schemaContext, "state = 'ACTUAL'") !== false,
@@ -176,7 +174,7 @@ assertContainsText(
 );
 
 $rareHoldingsContext = FolioSchemaService::buildSchemaContext(
-    'I am looking for a report of all holdings with the location "SC Rare Book Collection Reference". For each book, I also want to see which other institutions in the 5 Colleges also hold the same title.'
+    'I am looking for a report of all holdings with the location "SC Rare Book Collection Reference". For each book, I also want to see which other institutions in the 5 Collegse also hold the same title.'
 );
 
 assertContainsText(
@@ -193,6 +191,11 @@ assertContainsText(
     'other_inst.title_key = target_rare_titles.title_key',
     $rareHoldingsContext,
     'Same-title holdings prompts should retrieve an equality title-key join, not an OR/correlated-subquery join.'
+);
+assertContainsText(
+    'Treat "5 Collegse" as "Five Colleges"',
+    $rareHoldingsContext,
+    'Five Colleges typo variants should be normalized in prompt guidance.'
 );
 
 $specialCollectionsBrowsingContext = FolioSchemaService::buildSchemaContext(
@@ -229,14 +232,46 @@ assertContainsText(
     'MARC field prompts should include a generic source-record extraction rule.'
 );
 assertContainsText(
-    'jsonb_array_elements(sr.parsed_record__content',
+    'JOIN marctab.mt035 m ON m.instance_hrid = ti.hrid',
     $marc035Context,
-    'MARC field prompts should show how to extract field/subfield values from SRS parsed_record__content.'
+    'MARC field prompts should use the per-field marctab table instead of the slow folio_source_record.marctab view.'
+);
+assertFalseValue(
+    strpos($marc035Context, 'JOIN folio_source_record.marctab') !== false,
+    'MARC field prompts should not steer exact-tag queries to the slow folio_source_record.marctab view.'
+);
+assertFalseValue(
+    strpos($marc035Context, 'jsonb_array_elements(sr.parsed_record__content') !== false,
+    'MARC field prompts should not steer generated SQL toward expensive parsed_record__content JSON expansion.'
+);
+assertFalseValue(
+    strpos($marc035Context, 'subfield.subfield_obj ?') !== false,
+    'MARC field prompt guidance should not use the PostgreSQL ? JSONB operator because PDO treats it as a bind placeholder.'
 );
 assertContainsText(
-    "field_data->>'ind2' = '<requested second indicator>'",
+    "m.ind2 = '9'",
     $marc035Context,
-    'MARC field prompts should explain how to preserve requested indicator constraints without hard-coding a tag.'
+    'MARC field prompts should interpret shorthand 035 9 as a second-indicator constraint.'
+);
+assertContainsText(
+    "m.sf = 'a'",
+    $marc035Context,
+    'MARC field prompts should preserve the requested subfield in a marctab sf predicate.'
+);
+assertContainsText(
+    'm.content AS marc_value',
+    $marc035Context,
+    'MARC field prompts should aggregate row-expanded MARC content values.'
+);
+assertContainsText(
+    'the table already restricts rows to MARC field 035',
+    $marc035Context,
+    'MARC field prompts should explain that exact per-field tables do not need m.field predicates.'
+);
+assertContainsText(
+    "For 'holdings are only Smith College'",
+    $marc035Context,
+    'MARC field prompts should keep holdings-only campus scoping guidance.'
 );
 
 $marc245Context = FolioSchemaService::buildSchemaContext(
@@ -249,9 +284,9 @@ assertContainsText(
     'Non-035 MARC field prompts should use the same generic source-record extraction rule.'
 );
 assertContainsText(
-    "tag.tag = '245'",
+    'JOIN marctab.mt245 m ON m.instance_hrid = ti.hrid',
     $marc245Context,
-    'MARC field prompts should preserve the requested tag rather than relying on 035-specific handling.'
+    'MARC field prompts should choose the per-field table for the requested tag rather than relying on 035-specific handling.'
 );
 
 $marc6xxContext = FolioSchemaService::buildSchemaContext(
@@ -259,19 +294,19 @@ $marc6xxContext = FolioSchemaService::buildSchemaContext(
 );
 
 assertContainsText(
-    "tag.tag ~ '^6[0-9][0-9]$'",
+    "m.field ~ '^6[0-9][0-9]$'",
     $marc6xxContext,
     'MARC field-family prompts should preserve 6xx-style families without relying on a specific tag.'
 );
 
 $mrbcDeweyContext = FolioSchemaService::buildSchemaContext(
-    'Show me every bibliographic record in MRBC with a Dewey classification number.'
+    'Show me every bibliographic record in MRBC Reference with a Dewey classification number.'
 );
 
 assertContainsText(
-    'MRBC means SC Rare Book Collection',
+    "MRBC Reference means inventory.location__t.name = 'SC Rare Book Collection Reference'",
     $mrbcDeweyContext,
-    'MRBC prompts should include the local alias that resolves MRBC to the SC Rare Book Collection location.'
+    'MRBC Reference prompts should resolve to the reference rare book location.'
 );
 assertContainsText(
     'filter inventory.location__t',

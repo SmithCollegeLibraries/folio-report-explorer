@@ -4,6 +4,8 @@ namespace app\services;
 
 use Yii;
 
+require_once __DIR__ . '/ClarificationService.php';
+
 /**
  * FolioSchemaService — loads the scraped JSON schema files and provides
  * table/column lookup, FK relationship queries, and BFS path-finding.
@@ -1579,12 +1581,15 @@ class FolioSchemaService
 
         foreach (self::EXCLUDED_SCHEMAS as $blockedSchema) {
             $blockedSchema = strtolower($blockedSchema);
+            if ($blockedSchema === 'marctab' && preg_match('/\bmarctab\.mt[0-9]{3}\b/i', $normalized) === 1) {
+                continue;
+            }
             if (strpos($normalized, $blockedSchema . '.') !== false) {
                 return true;
             }
         }
 
-        return preg_match('/\bmarctab\b/i', $normalized) === 1;
+        return false;
     }
 
     /**
@@ -1658,6 +1663,13 @@ class FolioSchemaService
             }
 
             if (stripos($line, 'parsed_record__content') !== false) {
+                if (
+                    preg_match('/\b(?:MARC field|field-level MARC|field presence|field exists|field does NOT exist|subfield value)\b/i', $line) === 1
+                    && preg_match('/\b(?:ILIKE|NOT ILIKE|jsonb_|->|->>)\b/i', $line) === 1
+                ) {
+                    continue;
+                }
+
                 if (
                     preg_match('/\bTEXT\b/i', $line) ||
                     stripos($line, 'NOT jsonb') !== false ||
@@ -1797,7 +1809,7 @@ class FolioSchemaService
             if ((string)$tableName === 'folio_source_record.records__t' && self::isJsonLikeColumnType($parsedRecordContentType)) {
                 $columnWarnings['parsed_record__content'] = 'JSONB type. Cast to ::text before using ILIKE/NOT ILIKE pattern matching; direct string operators on jsonb will fail.';
 
-                $jsonbApproach = "For MARC field presence/absence checks on parsed_record__content, cast to text first: parsed_record__content::text ILIKE '%\"300\"%' or parsed_record__content::text NOT ILIKE '%\"300\"%'.";
+                $jsonbApproach = "For exact MARC field presence/absence checks, use the per-field marctab.mtNNN table scoped by instance_hrid, for example EXISTS (SELECT 1 FROM marctab.mt300 m WHERE m.instance_hrid = inst.hrid). Do not scan parsed_record__content for field-level MARC checks.";
                 if (!in_array($jsonbApproach, $preferredApproach, true)) {
                     array_unshift($preferredApproach, $jsonbApproach);
                 }
@@ -2165,10 +2177,23 @@ class FolioSchemaService
             $subfield = strtolower($matches[1]);
         }
 
+        $ind1 = null;
+        $ind2 = null;
+        if ($tag !== null) {
+            $tagPatternQuoted = preg_quote($tag, '/');
+            if (preg_match('/\b(?:marc\s+)?(?:field|tag)\s*' . $tagPatternQuoted . '\s+([0-9])\b/i', $prompt, $matches) === 1) {
+                $ind2 = $matches[1];
+            } elseif (preg_match('/\b' . $tagPatternQuoted . '\s+([0-9])\s+(?:subfield|\$)/i', $prompt, $matches) === 1) {
+                $ind2 = $matches[1];
+            }
+        }
+
         return [
             'tag' => $tag,
             'tagPattern' => $tagPattern,
             'subfield' => $subfield,
+            'ind1' => $ind1,
+            'ind2' => $ind2,
         ];
     }
 
@@ -2190,53 +2215,56 @@ class FolioSchemaService
             return [];
         }
 
-        $joinColumn = $recordsHasInstanceIdColumn && !$recordsHasExternalIdColumn
-            ? 'external_ids_holder__instance_id'
-            : 'external_id';
-        $currentRecordFilter = '';
-        if (!$recordsHasStateColumn && $recordsHasDeletedColumn) {
-            $currentRecordFilter = ' AND COALESCE(sr.deleted, false) = false';
-        } elseif ($recordsHasStateColumn) {
-            $currentRecordFilter = " AND sr.state = 'ACTUAL'";
-        }
-
         $tag = $marcFieldRequest['tag'];
         $tagPattern = $marcFieldRequest['tagPattern'];
         $subfield = $marcFieldRequest['subfield'];
+        $ind1 = $marcFieldRequest['ind1'];
+        $ind2 = $marcFieldRequest['ind2'];
+        $marcTable = $tag !== null ? "marctab.mt{$tag}" : 'folio_source_record.marctab';
         $tagPredicate = $tag !== null
-            ? "tag.tag = '{$tag}'"
-            : "tag.tag ~ '{$tagPattern}'";
-        $subfieldPredicate = $subfield !== null
-            ? "subfield.subfield_obj ? '{$subfield}'"
-            : "subfield.subfield_obj ? '<requested subfield>'";
-        $valueExpression = $subfield !== null
-            ? "subfield.subfield_obj->>'{$subfield}'"
-            : "subfield.subfield_obj->>'<requested subfield>'";
+            ? null
+            : "m.field ~ '{$tagPattern}'";
+
+        $predicates = [];
+        if ($tagPredicate !== null) {
+            $predicates[] = $tagPredicate;
+        }
+        if ($ind1 !== null) {
+            $predicates[] = "m.ind1 = '{$ind1}'";
+        }
+        if ($ind2 !== null) {
+            $predicates[] = "m.ind2 = '{$ind2}'";
+        }
+        if ($subfield !== null) {
+            $predicates[] = "m.sf = '{$subfield}'";
+        }
 
         $lines = [
             "\n--- MARC Field Source Record Rule ---",
             "This is bibliographic/source-record work. Treat 'records' as inventory/source records, not patron or staff user records.",
-            "For any MARC field, tag, indicator, subfield, control-number, or source-record request, scope inventory.instance__t first with holdings/location predicates, then join folio_source_record.records__t; do not expand MARC data before the holdings/location scope.",
+            "For any exact MARC field, tag, indicator, subfield, control-number, or source-record request, scope inventory.instance__t first with holdings/location predicates, then join the matching per-field marctab.mtNNN table; do not touch MARC rows before the holdings/location scope.",
             "For 'holdings are only Smith College', require Smith-scoped holdings and exclude non-Smith holdings with a NOT EXISTS over inventory.holdings_record__t joined through location/library/campus.",
             "For a named location such as 'SC Internet', filter inventory.location__t in the target instance CTE using the resolved location name/code.",
+            "Use per-field marctab.mtNNN tables for MARC field/subfield extraction and aggregation. They have one row per MARC field/subfield with columns instance_hrid, field, ind1, ind2, ord, sf, and content.",
+            "Do not parse folio_source_record.records__t.parsed_record__content with jsonb_array_elements for field/subfield reports. Use records__t.parsed_record__content only when the user asks for the complete raw MARC/source record.",
         ];
 
-        if (!self::isJsonLikeColumnType($parsedRecordContentType)) {
-            $lines[] = "Use folio_source_record.records__t.parsed_record__content for SRS/source-record MARC data; for exact field/subfield aggregation, prefer extracted MARC rows when available, otherwise use source-record text matching only as a fallback.";
-            return $lines;
+        if ($tag !== null) {
+            $lines[] = "For this prompt, use {$marcTable}; the table already restricts rows to MARC field {$tag}, so do not add an m.field = '{$tag}' predicate.";
+        } else {
+            $lines[] = "For MARC field-family prompts such as 6xx, use folio_source_record.marctab only after target_instances is materialized, because a field-family request spans multiple MARC tags.";
         }
 
-        $lines[] = "For MARC field/subfield extraction or aggregation against SRS JSONB, use this shape after target_instances is materialized:";
+        $lines[] = "For MARC field/subfield extraction or aggregation, use this shape after target_instances is materialized:";
         $lines[] = "WITH target_instances AS MATERIALIZED (SELECT DISTINCT inst.id, inst.hrid FROM inventory.instance__t inst WHERE ... holdings/location scope ... )";
-        $lines[] = "SELECT {$valueExpression} AS marc_value, COUNT(DISTINCT ti.id) AS record_count";
+        $lines[] = "SELECT m.content AS marc_value, COUNT(DISTINCT ti.id) AS record_count";
         $lines[] = "FROM target_instances ti";
-        $lines[] = "JOIN folio_source_record.records__t sr ON sr.{$joinColumn} = ti.id{$currentRecordFilter}";
-        $lines[] = "CROSS JOIN LATERAL jsonb_array_elements(sr.parsed_record__content->'fields') AS marc_field(field_obj)";
-        $lines[] = "CROSS JOIN LATERAL jsonb_each(marc_field.field_obj) AS tag(tag, field_data)";
-        $lines[] = "CROSS JOIN LATERAL jsonb_array_elements(tag.field_data->'subfields') AS subfield(subfield_obj)";
-        $lines[] = "WHERE {$tagPredicate} AND {$subfieldPredicate}";
-        $lines[] = "Indicator filters are optional and only when requested: field_data->>'ind1' = '<requested first indicator>' and/or field_data->>'ind2' = '<requested second indicator>'.";
-        $lines[] = "GROUP BY marc_value ORDER BY record_count DESC;";
+        $lines[] = "JOIN {$marcTable} m ON m.instance_hrid = ti.hrid";
+        if (!empty($predicates)) {
+            $lines[] = "WHERE " . implode(' AND ', $predicates);
+        }
+        $lines[] = "When the prompt says a tag followed by one indicator digit, such as '035 9', treat that digit as the second indicator: m.ind2 = '9'.";
+        $lines[] = "GROUP BY m.content ORDER BY record_count DESC;";
 
         return $lines;
     }
@@ -2419,13 +2447,17 @@ class FolioSchemaService
         if (self::isJsonLikeColumnType($parsedRecordContentType)) {
             $lines[] = "\n--- MARC Source Record Rule ---";
             $lines[] = "folio_source_record.records__t.parsed_record__content is {$parsedRecordContentType} in this environment.";
-            $lines[] = "For ILIKE/NOT ILIKE MARC field checks, cast to text first: parsed_record__content::text ILIKE '%\"300\"%' or parsed_record__content::text NOT ILIKE '%\"300\"%'.";
+            $lines[] = "For exact MARC field checks, use the matching marctab.mtNNN per-field table filtered by instance_hrid. Use parsed_record__content only for complete raw MARC/source-record output.";
             if ($recordsHasInstanceIdColumn && !$recordsHasExternalIdColumn) {
                 $lines[] = "Join folio_source_record.records__t to inventory.instance__t via external_ids_holder__instance_id = instance__t.id.";
             }
             if (!$recordsHasStateColumn && $recordsHasDeletedColumn) {
                 $lines[] = "folio_source_record.records__t has no state column in this environment. Use COALESCE(deleted, false) = false when you need current, non-deleted source records.";
             }
+        }
+
+        foreach (ClarificationService::buildPromptGuidance((string)$prompt) as $line) {
+            $lines[] = $line;
         }
 
         $marcFieldSourceRecordLines = self::buildMarcFieldSourceRecordLines(

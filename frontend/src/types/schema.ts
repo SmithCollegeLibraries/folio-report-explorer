@@ -198,12 +198,29 @@ export interface ExecuteResponse {
 }
 
 /** NL→SQL response */
+export interface ClarificationOption {
+  id: string;
+  label: string;
+  recommended?: boolean;
+  clarifiedPromptSuffix?: string;
+  resolvedFilter?: Record<string, unknown>;
+}
+
 export interface NlResponse {
-  sql: string;
-  explanation: string;
+  sql?: string;
+  explanation?: string;
   dataSource?: 'folio' | 'local';
   warnings?: string[];
   suggestions?: string[];
+  needsClarification?: boolean;
+  clarificationType?: string;
+  clarificationKey?: string;
+  question?: string;
+  inputType?: 'single_choice' | 'multi_choice' | string;
+  freeTextAllowed?: boolean;
+  options?: ClarificationOption[];
+  route?: string;
+  routeReason?: string;
 }
 
 /** Saved query */
