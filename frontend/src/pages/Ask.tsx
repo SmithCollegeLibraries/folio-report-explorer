@@ -128,6 +128,39 @@ function buildClientFallbackSuggestions(promptText: string, campus: string): str
   return generic.slice(0, 5);
 }
 
+export async function saveClarificationResolutionBestEffort(
+  saveFn: (input: {
+    originalQuestion: string;
+    clarificationKey: string;
+    detectedTerms?: string[];
+    options?: unknown[];
+    selectedOptionIds?: string[];
+    freeTextResponse?: string | null;
+    resolvedFilter?: Record<string, unknown> | null;
+    generatedSql?: string | null;
+    resultStatus?: string | null;
+  }) => Promise<unknown>,
+  input: {
+    originalQuestion: string;
+    clarificationKey: string;
+    detectedTerms?: string[];
+    options?: unknown[];
+    selectedOptionIds?: string[];
+    freeTextResponse?: string | null;
+    resolvedFilter?: Record<string, unknown> | null;
+    generatedSql?: string | null;
+    resultStatus?: string | null;
+  },
+): Promise<boolean> {
+  try {
+    await saveFn(input);
+    return true;
+  } catch (error) {
+    console.warn('Clarification telemetry save failed; continuing with clarified prompt.', error);
+    return false;
+  }
+}
+
 export default function Ask() {
   const [searchParams] = useSearchParams();
   const { user, authEnabled } = useAuth();
@@ -350,7 +383,7 @@ export default function Ask() {
     const freeText = option ? '' : clarificationFreeText.trim();
     if (!option && !freeText) return;
 
-    await saveClarificationResolution({
+    await saveClarificationResolutionBestEffort(saveClarificationResolution, {
       originalQuestion,
       clarificationKey: nlResult.clarificationKey,
       options: nlResult.options || [],
