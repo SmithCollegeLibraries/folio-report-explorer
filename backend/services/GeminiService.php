@@ -3901,6 +3901,8 @@ PROMPT;
             );
         }
 
+        $sql = self::repairInvalidInventoryTitleReferences($sql);
+
         // Validate the generated SQL
         SqlBuilderService::validateSafety($sql);
         SqlBuilderService::validateTablePolicy($sql);
@@ -3937,6 +3939,79 @@ PROMPT;
         $sql = preg_replace('/::uuid\b/i', '', $sql);
         $sql = preg_replace('/::text\b/i', '', $sql);
         return $sql;
+    }
+
+    /**
+     * Repair a common model hallucination: item__t has no title column. When the
+     * query already joins instance__t, use that alias for bibliographic titles.
+     */
+    private static function repairInvalidInventoryTitleReferences(string $sql): string
+    {
+        preg_match_all(
+            '/\b(?:FROM|JOIN)\s+(inventory\.(?:item|instance)__t)\s+(?:AS\s+)?([a-z_][a-z0-9_]*)\b/i',
+            $sql,
+            $matches,
+            PREG_SET_ORDER
+        );
+
+        $itemAliases = [];
+        $instanceAlias = null;
+        foreach ($matches as $match) {
+            $table = strtolower($match[1]);
+            $alias = $match[2];
+            if ($table === 'inventory.item__t') {
+                $itemAliases[] = $alias;
+            } elseif ($table === 'inventory.instance__t' && $instanceAlias === null) {
+                $instanceAlias = $alias;
+            }
+        }
+
+        if ($instanceAlias === null || empty($itemAliases)) {
+            return $sql;
+        }
+
+        $repaired = $sql;
+        $changed = false;
+        foreach ($itemAliases as $itemAlias) {
+            $pattern = '/\b' . preg_quote($itemAlias, '/') . '\.title\b/i';
+            if (preg_match($pattern, $repaired) === 1) {
+                $repaired = preg_replace($pattern, $instanceAlias . '.title', $repaired);
+                $changed = true;
+            }
+        }
+
+        if (!$changed) {
+            return $sql;
+        }
+
+        return self::ensureGroupedExpression($repaired, $instanceAlias . '.title');
+    }
+
+    private static function ensureGroupedExpression(string $sql, string $expression): string
+    {
+        if (preg_match('/\bGROUP\s+BY\b/i', $sql) !== 1) {
+            return $sql;
+        }
+        if (preg_match('/\bSELECT\b(?<select>.*?)\bFROM\b/sis', $sql, $selectMatch) !== 1) {
+            return $sql;
+        }
+        if (stripos($selectMatch['select'], $expression) === false) {
+            return $sql;
+        }
+
+        $pattern = '/\bGROUP\s+BY\s+(?<group>.*?)(?<tail>\s*)(?=\bHAVING\b|\bORDER\s+BY\b|\bLIMIT\b|\bOFFSET\b|$)/is';
+        if (preg_match($pattern, $sql, $groupMatch) !== 1) {
+            return $sql;
+        }
+
+        $groupClause = trim($groupMatch['group']);
+        if (preg_match('/(^|,)\s*' . preg_quote($expression, '/') . '\s*(,|$)/i', $groupClause) === 1) {
+            return $sql;
+        }
+
+        $tail = $groupMatch['tail'] !== '' ? $groupMatch['tail'] : ' ';
+        $replacement = 'GROUP BY ' . rtrim($groupClause) . ', ' . $expression . $tail;
+        return preg_replace($pattern, $replacement, $sql, 1);
     }
 
     /**
