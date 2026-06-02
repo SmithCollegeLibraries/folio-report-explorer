@@ -146,9 +146,21 @@ export default function HistoryTable({
         return (
           <div className="max-w-[260px] md:max-w-[340px] xl:max-w-[420px]">
             {item.name
-              ? <span className="block font-medium text-gray-800 whitespace-normal break-words leading-snug">{item.name}</span>
+              ? <span className="block font-medium text-gray-800 truncate leading-snug" title={item.name}>{item.name}</span>
               : <span className="italic text-gray-400 text-xs">Unnamed query</span>}
-            <p className="text-[11px] text-gray-400 mt-0.5 truncate">SQL available in actions</p>
+            {item.status === 'completed' ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpen(item);
+                }}
+                className="text-[11px] text-folio-600 hover:text-folio-800 mt-0.5"
+              >
+                View original query
+              </button>
+            ) : (
+              <p className="text-[11px] text-gray-400 mt-0.5 truncate">SQL available in actions</p>
+            )}
           </div>
         );
       },

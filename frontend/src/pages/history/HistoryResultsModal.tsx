@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import {
   X, Download, Bookmark, LayoutDashboard, Clock, User,
   Loader2, Code2, ChevronDown, ChevronUp, Pencil, Lightbulb, Play, Sparkles,
+  Copy as CopyIcon,
 } from 'lucide-react';
 import SourceBadge from '../../components/SourceBadge';
 import { useEscapeKey } from '../../hooks/useEscapeKey';
@@ -53,6 +54,10 @@ export default function HistoryResultsModal({
   const handleCopySql = () => {
     const sql = job?.sql || item.sql;
     if (sql) copy('sql', sql);
+  };
+
+  const handleCopyOriginalQuery = () => {
+    if (item.name) copy('original-query', item.name);
   };
 
   const handleCsvDownload = () => {
@@ -168,6 +173,27 @@ export default function HistoryResultsModal({
             </button>
           </div>
         </div>
+
+        {item.name && (
+          <div className="border-b px-6 py-3 bg-white flex-shrink-0">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                Original query
+              </div>
+              <button
+                onClick={handleCopyOriginalQuery}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-200 text-xs text-gray-500 hover:text-folio-700 hover:bg-folio-50 transition-colors"
+              >
+                {copiedId === 'original-query'
+                  ? <><span className="text-green-600">Copied</span></>
+                  : <><CopyIcon size={12} /> Copy original query</>}
+              </button>
+            </div>
+            <div className="max-h-28 overflow-auto rounded border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-700 whitespace-pre-wrap break-words leading-relaxed">
+              {item.name}
+            </div>
+          </div>
+        )}
 
         {/* ── SQL collapsible ── */}
         <div className="border-b flex-shrink-0">
