@@ -257,6 +257,48 @@ assertSameValue('SJTR,SJTRF', $multiCodePayload['slots']['location_code'] ?? nul
 assertSameValue(false, array_key_exists('library', $multiCodePayload['slots'] ?? []), 'Prompt-scoped recovery should clear code-like library placeholders for multi-code listing prompts.');
 assertSameValue('legacy_fallback', $multiCodeResult['route'] ?? null, 'Recovered multi-code listing prompts should continue through the family compiler helper.');
 
+$mrbcOnlyHoldingPayload = null;
+$mrbcOnlyHoldingResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'SC Rare Book Collection Reference',
+            'requested_outputs' => ['title'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_library_location_listing',
+    ],
+    'Please provide a list of titles, instance ids and call numbers with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'listing-mrbc-only-holding-recovery-test-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload) use (&$mrbcOnlyHoldingPayload): array {
+        $mrbcOnlyHoldingPayload = $normalizedPayload;
+        return [
+            'sql' => 'SELECT listing_mrbc_only_holding_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue('SC Rare Book Collection Reference', $mrbcOnlyHoldingPayload['slots']['location'] ?? null, 'Inventory listing recovery should extract an explicit MRBC location from natural-language-only holding prompts.');
+assertSameValue(false, array_key_exists('library', $mrbcOnlyHoldingPayload['slots'] ?? []), 'Inventory listing recovery should not retain a model-invented library filter when the prompt only names an MRBC location.');
+assertSameValue(false, array_key_exists('campus', $mrbcOnlyHoldingPayload['slots'] ?? []), 'Inventory listing recovery should not retain default home-campus scope when the prompt asks for only-holding location in the Five Colleges.');
+assertSameValue(true, in_array('call_number', $mrbcOnlyHoldingPayload['slots']['requested_outputs'] ?? [], true), 'Inventory listing recovery should include holdings call number output when the prompt asks for call numbers.');
+assertSameValue(true, $mrbcOnlyHoldingPayload['slots']['only_holding_location'] ?? false, 'Only-holding inventory prompts should be set from prompt-only signals even when the model omits that slot.');
+assertSameValue('legacy_fallback', $mrbcOnlyHoldingResult['route'] ?? null, 'Recovered MRBC-only-holding listing prompts should continue through the family helper path.');
+
 $materialTypeClarificationResult = $familyBranch->invoke(
     null,
     [

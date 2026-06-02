@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
@@ -21,6 +21,7 @@ type AskRequest = {
   shouldExecute?: boolean;
   includeSuggestions?: boolean;
   followUpContext?: FollowUpContext | null;
+  allowExploratory?: boolean;
 };
 
 const CAMPUS_OPTIONS = [
@@ -235,6 +236,24 @@ export function buildHistoryFollowUpContext(jobId: string): FollowUpContext {
   };
 }
 
+export function buildQueryFeedbackInput(
+  originalQuestion: string,
+  result: NlResponse,
+  resultAccuracy: 'accurate' | 'inaccurate' | 'unsure',
+  feedbackNote = '',
+) {
+  return {
+    originalQuestion: originalQuestion.trim(),
+    generatedSql: result.sql || null,
+    route: result.route || null,
+    routeReason: result.routeReason || null,
+    mode: result.mode || null,
+    dataSource: result.dataSource || 'folio',
+    resultAccuracy,
+    feedbackNote: feedbackNote.trim() || null,
+  };
+}
+
 export default function Ask() {
   const [searchParams] = useSearchParams();
   const { user, authEnabled } = useAuth();
@@ -258,6 +277,8 @@ export default function Ask() {
   const [saveDesc, setSaveDesc] = useState('');
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [lastSavedId, setLastSavedId] = useState<number | null>(null);
+  const [feedbackNote, setFeedbackNote] = useState('');
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
   // Campus scope state — initialised from localStorage, synced with auth user preference
   const [selectedCampus, setSelectedCampus] = useState<string>(
@@ -374,6 +395,7 @@ export default function Ask() {
         campusForRequest,
         request.includeSuggestions ?? true,
         request.followUpContext ?? null,
+        request.allowExploratory ?? false,
       ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
       setNlResult(data);
@@ -381,6 +403,8 @@ export default function Ask() {
       setActiveJobId(null);
       setSaveSuccess(null);
       setLastSavedId(null);
+      setFeedbackNote('');
+      setFeedbackMessage(null);
       setCorrecting(false);
       setClarificationFreeText('');
       setFollowUpContext(null);
@@ -439,6 +463,23 @@ export default function Ask() {
     },
   });
 
+  const feedbackMut = useMutation({
+    mutationFn: (resultAccuracy: 'accurate' | 'inaccurate' | 'unsure') => {
+      if (!nlResult) throw new Error('No generated query is available for feedback.');
+      return saveQueryFeedback(buildQueryFeedbackInput(
+        history[0]?.prompt || prompt,
+        nlResult,
+        resultAccuracy,
+        feedbackNote,
+      ));
+    },
+    onSuccess: () => {
+      setFeedbackMessage('Feedback saved');
+      setFeedbackNote('');
+      setTimeout(() => setFeedbackMessage(null), 4000);
+    },
+  });
+
   const handleSubmit = () => {
     const q = prompt.trim();
     if (!q) return;
@@ -494,6 +535,9 @@ export default function Ask() {
     const originalQuestion = history[0]?.prompt || prompt.trim();
     const freeText = option ? '' : clarificationFreeText.trim();
     if (!option && !freeText) return;
+    const allowExploratory = option?.resolvedFilter?.allowExploratory === true;
+    const refineExploratory = option?.resolvedFilter?.allowExploratory === false
+      && nlResult.needsExploratoryApproval;
 
     await saveClarificationResolutionBestEffort(saveClarificationResolution, {
       originalQuestion,
@@ -504,6 +548,22 @@ export default function Ask() {
       resolvedFilter: option?.resolvedFilter || null,
       resultStatus: 'resolved',
     });
+
+    if (allowExploratory) {
+      askMut.mutate({
+        question: originalQuestion,
+        includeSuggestions: true,
+        shouldExecute: true,
+        allowExploratory: true,
+      });
+      return;
+    }
+
+    if (refineExploratory) {
+      setNlResult(null);
+      setPrompt(originalQuestion);
+      return;
+    }
 
     const clarifiedPrompt = option?.clarifiedPromptSuffix
       ? `${originalQuestion}\n\nClarification: ${option.clarifiedPromptSuffix}`
@@ -737,7 +797,7 @@ export default function Ask() {
             {isGenerating ? (
               <div className="flex flex-col items-center gap-3 text-gray-500">
                 <Loader2 size={24} className="animate-spin text-folio-600" />
-                <span className="text-sm">Generating query with Gemini…</span>
+                <span className="text-sm">Generating query with AI…</span>
               </div>
             ) : (
               <div className="max-w-md w-full mx-4 bg-blue-50 border border-blue-200 rounded-xl p-5">
@@ -780,19 +840,43 @@ export default function Ask() {
         {/* Main content — only show when not in loading state */}
         {nlResult && !isLoading && nlResult.needsClarification && (
           <div className="max-w-4xl mx-auto p-6">
-            <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
-              <div className="text-sm font-semibold text-amber-900 mb-1">
-                Clarification needed
+            <div className={`border rounded-lg p-4 ${
+              nlResult.needsExploratoryApproval
+                ? 'border-sky-200 bg-sky-50'
+                : 'border-amber-200 bg-amber-50'
+            }`}>
+              <div className={`text-sm font-semibold mb-1 ${
+                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
+              }`}>
+                {nlResult.needsExploratoryApproval ? 'This request needs approval' : 'Clarification needed'}
               </div>
-              <div className="text-sm text-amber-900 mb-3">
+              <div className={`text-sm mb-3 ${
+                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
+              }`}>
                 {nlResult.question || 'Which option did you mean?'}
               </div>
+              {nlResult.message && (
+                <div className={`text-sm mb-3 ${
+                  nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
+                }`}>
+                  {nlResult.message}
+                </div>
+              )}
+              {nlResult.exploratoryPlan?.suggestions && nlResult.exploratoryPlan.suggestions.length > 0 && (
+                <div className="mb-3 text-xs text-sky-800">
+                  {nlResult.exploratoryPlan.suggestions.join(' ')}
+                </div>
+              )}
               <div className="space-y-2">
                 {(nlResult.options || []).map((option) => (
                   <button
                     key={option.id}
                     onClick={() => handleClarificationChoice(option)}
-                    className="w-full flex items-center justify-between gap-3 text-left bg-white border border-amber-200 hover:bg-amber-100 px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors"
+                    className={`w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors ${
+                      nlResult.needsExploratoryApproval
+                        ? 'border-sky-200 hover:bg-sky-100'
+                        : 'border-amber-200 hover:bg-amber-100'
+                    }`}
                   >
                     <span>{option.label}</span>
                     {option.recommended && (
@@ -900,6 +984,9 @@ export default function Ask() {
                         {results.executionTimeMs != null && (
                           <> &middot; {(results.executionTimeMs / 1000).toFixed(2)}s</>
                         )}
+                        {nlResult.mode === 'exploratory' && (
+                          <> &middot; exploratory SQL</>
+                        )}
                       </div>
                       <div className="flex items-center gap-3">
                         {nlResult.sql && (
@@ -923,6 +1010,41 @@ export default function Ask() {
                           >
                             <Maximize2 size={12} /> Expand
                           </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mb-3 border border-gray-200 bg-gray-50 rounded-lg p-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-medium text-gray-600">Were these results accurate?</span>
+                        <button
+                          onClick={() => feedbackMut.mutate('accurate')}
+                          disabled={feedbackMut.isPending}
+                          className="px-2.5 py-1 rounded border border-green-200 bg-white text-xs text-green-700 hover:bg-green-50 disabled:opacity-50"
+                        >
+                          Yes
+                        </button>
+                        <button
+                          onClick={() => feedbackMut.mutate('inaccurate')}
+                          disabled={feedbackMut.isPending}
+                          className="px-2.5 py-1 rounded border border-red-200 bg-white text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          No
+                        </button>
+                        <button
+                          onClick={() => feedbackMut.mutate('unsure')}
+                          disabled={feedbackMut.isPending}
+                          className="px-2.5 py-1 rounded border border-gray-200 bg-white text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-50"
+                        >
+                          Unsure
+                        </button>
+                        <input
+                          value={feedbackNote}
+                          onChange={(e) => setFeedbackNote(e.target.value)}
+                          className="min-w-[220px] flex-1 border border-gray-200 rounded px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-folio-200"
+                          placeholder="Optional note"
+                        />
+                        {feedbackMessage && (
+                          <span className="text-xs text-green-700">{feedbackMessage}</span>
                         )}
                       </div>
                     </div>
@@ -965,6 +1087,12 @@ export default function Ask() {
                 {nlResult.explanation && (
                   <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800">
                     <strong>AI Explanation:</strong> {nlResult.explanation}
+                  </div>
+                )}
+
+                {nlResult.mode === 'exploratory' && (
+                  <div className="bg-sky-50 border border-sky-100 rounded-lg p-4 text-sm text-sky-800">
+                    <strong>Exploratory SQL:</strong> {nlResult.repeatabilityWarning || 'This query was generated outside a canonical compiler path and may vary between runs.'}
                   </div>
                 )}
 

@@ -60,6 +60,7 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $repair = new ReflectionMethod(GeminiService::class, 'repairInvalidInventoryTitleReferences');
+$repairAliasLeak = new ReflectionMethod(GeminiService::class, 'repairOnlyHoldingLocationAliasLeaks');
 
 $badSql = implode("\n", [
     'SELECT ii.title, COUNT(DISTINCT inst.id) AS record_count',
@@ -95,6 +96,77 @@ assertSameValue(
     $instanceAliasSql,
     $repair->invoke(null, $instanceAliasSql),
     'Generated SQL repair should not rewrite aliases that already point to inventory.instance__t.'
+);
+
+$aliasLeakSql = implode("\n", [
+    'WITH target_locations AS (',
+    '    SELECT id, name',
+    '    FROM inventory.location__t',
+    "    WHERE name = 'SC Rare Book Collection Reference'",
+    '),',
+    'target_holdings AS (',
+    '    SELECT DISTINCT ih.instance_id, ih.call_number, ih.effective_location_id',
+    '    FROM inventory.holdings_record__t ih',
+    '    JOIN target_locations tl ON tl.id = ih.effective_location_id',
+    ')',
+    'SELECT DISTINCT',
+    '    inst.title',
+    'FROM target_holdings th',
+    'JOIN inventory.instance__t inst ON inst.id = th.instance_id',
+    'WHERE NOT EXISTS (',
+    '    SELECT 1',
+    '    FROM inventory.holdings_record__t other_hr',
+    '    JOIN inventory.location__t other_loc ON other_loc.id = other_hr.effective_location_id',
+    '    WHERE other_hr.instance_id = th.instance_id',
+    '      AND other_loc.name <> tl.name',
+    ')',
+    'LIMIT 100',
+]);
+
+$repairedAliasLeakSql = $repairAliasLeak->invoke(null, $aliasLeakSql);
+assertSameValue(
+    strpos($repairedAliasLeakSql, 'other_loc.name <> tl.name') === false,
+    true,
+    'Generated SQL repair should replace only-holding anti-join alias references that leak outer scope.'
+);
+assertSameValue(
+    strpos($repairedAliasLeakSql, 'other_hr.effective_location_id NOT IN (SELECT id FROM target_locations)') !== false,
+    true,
+    'Generated SQL repair should preserve only-holding semantics through target location ID exclusion.'
+);
+
+$reverseAliasLeakSql = str_replace(
+    'other_loc.name <> tl.name',
+    'tl.name NOT ILIKE other_loc.name',
+    $aliasLeakSql
+);
+$repairedReverseAliasLeakSql = $repairAliasLeak->invoke(null, $reverseAliasLeakSql);
+assertSameValue(
+    strpos($repairedReverseAliasLeakSql, 'tl.name NOT ILIKE other_loc.name') === false,
+    true,
+    'Generated SQL repair should replace reverse only-holding anti-join alias references that leak outer scope.'
+);
+assertSameValue(
+    strpos($repairedReverseAliasLeakSql, 'other_hr.effective_location_id NOT IN (SELECT id FROM target_locations)') !== false,
+    true,
+    'Generated SQL repair should preserve only-holding semantics for reverse alias-leak predicates.'
+);
+
+$singularCteAliasLeakSql = str_replace(
+    ['target_locations', 'other_loc.name <> tl.name'],
+    ['target_location', 'other_loc.name <> tl.name'],
+    $aliasLeakSql
+);
+$repairedSingularCteAliasLeakSql = $repairAliasLeak->invoke(null, $singularCteAliasLeakSql);
+assertSameValue(
+    strpos($repairedSingularCteAliasLeakSql, 'other_loc.name <> tl.name') === false,
+    true,
+    'Generated SQL repair should replace only-holding alias leaks when the model uses singular target_location CTE naming.'
+);
+assertSameValue(
+    strpos($repairedSingularCteAliasLeakSql, 'other_hr.effective_location_id NOT IN (SELECT id FROM target_location)') !== false,
+    true,
+    'Generated SQL repair should preserve only-holding semantics for singular target_location CTE naming.'
 );
 
 fwrite(STDOUT, "GeminiService inventory title repair test passed\n");

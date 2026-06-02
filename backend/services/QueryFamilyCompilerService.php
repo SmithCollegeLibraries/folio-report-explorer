@@ -57,6 +57,12 @@ class QueryFamilyCompilerService
             return self::buildCollectionAgeSql($queryDef, $normalizedPayload['slots']);
         }
 
+        if ($normalizedPayload['familyKey'] === 'inventory_library_location_listing') {
+            if (!empty($normalizedPayload['slots']['only_holding_location'])) {
+                return self::buildInventoryLibraryLocationListingSql($queryDef, $normalizedPayload['slots']);
+            }
+        }
+
         return SqlBuilderService::build(self::translateQueryDefinitionForSqlBuilder($queryDef));
     }
 
@@ -125,6 +131,9 @@ class QueryFamilyCompilerService
             switch ($outputField) {
                 case 'barcode':
                     $columns[] = ['table' => 'inventory_items', 'column' => 'barcode'];
+                    break;
+                case 'call_number':
+                    $columns[] = ['table' => 'inventory_holdings', 'column' => 'call_number', 'alias' => 'call_number'];
                     break;
                 case 'contributor_name':
                     $columns[] = [
@@ -414,6 +423,191 @@ class QueryFamilyCompilerService
         }
 
         return $joins;
+    }
+
+    private static function buildInventoryLibraryLocationListingSql(array $queryDef, array $slots): array
+    {
+        $filters = self::indexFilters($queryDef['filters'] ?? []);
+        $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : ['title'];
+        $requiresItemOutput = false;
+        $selectColumns = [];
+
+        foreach ($requestedOutputs as $outputField) {
+            switch ($outputField) {
+                case 'barcode':
+                    $requiresItemOutput = true;
+                    $selectColumns[] = 'it.barcode AS barcode';
+                    break;
+                case 'call_number':
+                    $selectColumns[] = 'th.call_number AS call_number';
+                    break;
+                case 'contributor_name':
+                    $requiresItemOutput = true;
+                    $selectColumns[] = 'itc.contributors__name AS contributor_name';
+                    break;
+                case 'author':
+                    $requiresItemOutput = true;
+                    $selectColumns[] = 'itc.contributors__name AS author';
+                    break;
+                case 'instance_hrid':
+                    $selectColumns[] = 'ii.hrid';
+                    break;
+                case 'instance_number':
+                    $selectColumns[] = 'ii.hrid AS instance_number';
+                    break;
+                case 'item_id':
+                    $requiresItemOutput = true;
+                    $selectColumns[] = 'it.id AS item_id';
+                    break;
+                case 'publication_date':
+                    $selectColumns[] = 'ii.dates__date1 AS publication_date';
+                    break;
+                case 'pub_date':
+                    $selectColumns[] = 'ii.dates__date1 AS pub_date';
+                    break;
+                case 'title':
+                    $selectColumns[] = 'ii.title';
+                    break;
+            }
+        }
+
+        if ($selectColumns === []) {
+            throw new 
+                InvalidArgumentException('unsupported_inventory_listing_output: Inventory location listing requires at least one supported output.');
+        }
+
+        $scopeWhere = [];
+        $outerWhere = [];
+        $params = [];
+        $parameterIndex = 0;
+
+        foreach ([
+            ['inventory_locations', 'name', 'tl.name'],
+            ['inventory_locations', 'code', 'tl.code'],
+        ] as $filterSpec) {
+            $key = self::filterKey($filterSpec[0], $filterSpec[1]);
+            if (!isset($filters[$key])) {
+                continue;
+            }
+
+            $filter = $filters[$key];
+            self::appendFilterPredicate($filter['op'] ?? '=', $filterSpec[2], $filter['value'] ?? null, $scopeWhere, $params, $parameterIndex);
+        }
+
+        foreach ([
+            ['inventory_libraries', 'name', 'il.name'],
+            ['inventory_campuses', 'name', 'ic.name'],
+        ] as $filterSpec) {
+            $key = self::filterKey($filterSpec[0], $filterSpec[1]);
+            if (!isset($filters[$key])) {
+                continue;
+            }
+
+            $filter = $filters[$key];
+            self::appendFilterPredicate($filter['op'] ?? '=', $filterSpec[2], $filter['value'] ?? null, $outerWhere, $params, $parameterIndex);
+        }
+
+        if ($scopeWhere === []) {
+            throw new 
+                InvalidArgumentException('missing_only_holding_scope: only_holding_location requires an explicit location scope.');
+        }
+
+        $targetLocationsWhere = implode("\n        AND ", $scopeWhere);
+        $outerWhereSql = implode("\n  AND ", $outerWhere);
+        if ($outerWhereSql !== '') {
+            $outerWhereSql = 'WHERE ' . $outerWhereSql;
+        }
+
+        $ctes = [];
+        $ctes[] = "target_locations AS (\n"
+            . "    SELECT DISTINCT id, name\n"
+            . "    FROM inventory.location__t tl\n"
+            . "    WHERE {$targetLocationsWhere}\n"
+            . ")";
+
+        $ctes[] = "target_holdings AS (\n"
+            . "    SELECT DISTINCT ih.instance_id, ih.id AS holdings_record_id, ih.call_number, ih.effective_location_id\n"
+            . "    FROM inventory.holdings_record__t ih\n"
+            . "    JOIN target_locations tl ON tl.id = ih.effective_location_id\n"
+            . ")";
+
+        $joinCatalog = [
+            'location' => 'JOIN inventory.instance__t ii ON ii.id = th.instance_id',
+            'library' => 'JOIN inventory.location__t tl ON tl.id = th.effective_location_id',
+            'campus' => 'JOIN inventory.loclibrary__t il ON tl.library_id = il.id',
+            'campus2' => 'JOIN inventory.loccampus__t ic ON il.campus_id = ic.id',
+        ];
+
+        $selectSql = implode(",\n    ", $selectColumns);
+        $sql = "WITH " . implode(",\n", $ctes) . "\n"
+            . "SELECT DISTINCT\n"
+            . "    {$selectSql}\n"
+            . "FROM target_holdings th\n"
+            . "JOIN inventory.instance__t ii ON ii.id = th.instance_id\n"
+            . "JOIN inventory.location__t tl ON tl.id = th.effective_location_id\n"
+            . "JOIN inventory.loclibrary__t il ON tl.library_id = il.id\n"
+            . "JOIN inventory.loccampus__t ic ON il.campus_id = ic.id\n"
+            . ($requiresItemOutput ? "JOIN inventory.item__t it ON it.holdings_record_id = th.holdings_record_id\n" : '')
+            . self::inventoryListingContributorJoin($requestedOutputs)
+            . "WHERE NOT EXISTS (\n"
+            . "    SELECT 1\n"
+            . "    FROM inventory.holdings_record__t other_hr\n"
+            . "    WHERE other_hr.instance_id = th.instance_id\n"
+            . "      AND other_hr.effective_location_id NOT IN (SELECT id FROM target_locations)\n"
+            . ")\n"
+            . (trim($outerWhereSql) !== '' ? '  AND ' . str_replace('WHERE ', '', $outerWhereSql) . "\n" : '')
+            . "LIMIT " . self::resolveRequestedLimit($slots);
+
+        if (!$requiresItemOutput) {
+            $sql = str_replace("\n            ", "\n", $sql);
+        }
+
+        return [
+            'sql' => $sql,
+            'params' => $params,
+        ];
+    }
+
+    private static function inventoryListingContributorJoin(array $requestedOutputs): string
+    {
+        if (!array_intersect($requestedOutputs, ['author', 'contributor_name'])) {
+            return '';
+        }
+
+        return "LEFT JOIN inventory.instance__t__contributors itc ON itc.id = ii.id\n";
+    }
+
+    private static function appendFilterPredicate(string $operator, string $column, $value, array &$where, array &$params, int &$parameterIndex): void
+    {
+        $op = strtoupper(trim($operator));
+        if ($op === 'IS NULL' || $op === 'IS NOT NULL') {
+            $where[] = $column . ' ' . $op;
+            return;
+        }
+
+        if ($op === 'IN' || $op === 'NOT IN') {
+            $values = is_array($value) ? $value : explode(',', (string)$value);
+            if ($values === []) {
+                return;
+            }
+
+            $placeholders = [];
+            foreach ($values as $rawValue) {
+                $placeholder = ':p' . $parameterIndex++;
+                $placeholders[] = $placeholder;
+                $params[$placeholder] = trim((string)$rawValue);
+            }
+            $where[] = $column . ' ' . $op . ' (' . implode(', ', $placeholders) . ')';
+            return;
+        }
+
+        if ($value === null) {
+            return;
+        }
+
+        $placeholder = ':p' . $parameterIndex++;
+        $where[] = $column . ' ' . $op . ' ' . $placeholder;
+        $params[$placeholder] = is_scalar($value) ? $value : (string)$value;
     }
 
     private static function buildCirculationTrendMatrixJoins(): array

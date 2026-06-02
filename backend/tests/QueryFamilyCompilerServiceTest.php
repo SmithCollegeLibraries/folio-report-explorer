@@ -331,6 +331,72 @@ assertSameValue(
     'Thesis-like material-type filters should preserve contains matching semantics for stored variants.'
 );
 
+$listingOnlyHoldingBuilt = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Neilson Library',
+        'location' => 'SC Rare Book Collection Reference',
+        'only_holding_location' => true,
+        'requested_outputs' => ['title', 'instance_number', 'call_number'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+$listingOnlyHoldingSql = $listingOnlyHoldingBuilt['sql'] ?? '';
+assertContainsText(
+    'WITH target_locations AS (',
+    $listingOnlyHoldingSql,
+    'Only-holding location listing queries should switch to the anti-join CTE SQL path.'
+);
+assertContainsText(
+    'FROM inventory.location__t tl',
+    $listingOnlyHoldingSql,
+    'Only-holding location listing target-location CTE should alias location__t before filtering on tl.name or tl.code.'
+);
+assertContainsText(
+    'th.call_number AS call_number',
+    $listingOnlyHoldingSql,
+    'Only-holding location listings should include holdings call number when requested.'
+);
+assertContainsText(
+    'WHERE NOT EXISTS (',
+    $listingOnlyHoldingSql,
+    'Only-holding location listing queries should include a NOT EXISTS anti-holdings predicate.'
+);
+assertNotContainsText(
+    'JOIN inventory.item__t',
+    $listingOnlyHoldingSql,
+    'Title-only only-holding listing queries should not require a holdings->items join.'
+);
+
+$listingOnlyHoldingWithoutLibraryBuilt = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'location' => 'SC Rare Book Collection Reference',
+        'only_holding_location' => true,
+        'requested_outputs' => ['title', 'instance_number'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+$listingOnlyHoldingWithoutLibrarySql = $listingOnlyHoldingWithoutLibraryBuilt['sql'] ?? '';
+assertContainsText(
+    'WITH target_locations AS (',
+    $listingOnlyHoldingWithoutLibrarySql,
+    'Only-holding listing prompts should still use the anti-join CTE path without requiring a library input.'
+);
+assertContainsText(
+    'WHERE NOT EXISTS (',
+    $listingOnlyHoldingWithoutLibrarySql,
+    'Only-holding listing queries with no library should still exclude instances with other location holdings.'
+);
+assertNotContainsText(
+    'il.name ILIKE',
+    $listingOnlyHoldingWithoutLibrarySql,
+    'Library-only prompts should still compile without an explicit library filter when only-holding is requested with location scope.'
+);
+
 $built = QueryFamilyCompilerService::compileToSql([
     'familyKey' => 'inventory_contributor_campus_item_barcode',
     'slots' => [

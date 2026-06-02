@@ -145,13 +145,18 @@
                     "campus",
                     "library",
                     "location",
-                    "location_code"
-                ]
+                    "location_code",
+                    "only_holding_location"
+                ],
+                "inferencePolicies": {
+                    "only_holding_location": "explicit_prompt_only"
+                }
             },
             "outputs": {
                 "allowed": [
                     "author",
                     "barcode",
+                    "call_number",
                     "contributor_name",
                     "instance_hrid",
                     "instance_number",

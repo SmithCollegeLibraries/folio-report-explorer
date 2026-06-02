@@ -45,6 +45,7 @@ describe('API client follow-up context', () => {
       prompt: 'include call numbers',
       campus: 'Smith College',
       includeSuggestions: true,
+      allowExploratory: false,
       followUpContext: {
         source: 'ask',
         previousPrompt: 'original',
@@ -58,7 +59,50 @@ describe('API client follow-up context', () => {
     await import('./client');
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      timeout: 180000,
+      timeout: 300000,
     }));
+  });
+
+  it('sends explicit exploratory approval with NL requests', async () => {
+    const { askNl } = await import('./client');
+    post.mockResolvedValueOnce({ data: { sql: 'SELECT 1', dataSource: 'folio' } });
+
+    await askNl('show vendor spend', 'Smith College', false, null, true);
+
+    expect(post).toHaveBeenCalledWith('/nl', {
+      prompt: 'show vendor spend',
+      campus: 'Smith College',
+      includeSuggestions: false,
+      allowExploratory: true,
+    });
+  });
+
+  it('saves query feedback with route and mode context', async () => {
+    const { saveQueryFeedback } = await import('./client');
+    post.mockResolvedValueOnce({
+      data: { id: 1, message: 'saved', promptFingerprint: 'abc123', sqlHash: 'def456' },
+    });
+
+    await saveQueryFeedback({
+      originalQuestion: 'show vendor spend',
+      generatedSql: 'SELECT 1',
+      route: 'exploratory_builder_intent',
+      routeReason: 'user_approved_exploratory_generation',
+      mode: 'exploratory',
+      dataSource: 'folio',
+      resultAccuracy: 'accurate',
+      feedbackNote: 'Looks right',
+    });
+
+    expect(post).toHaveBeenCalledWith('/query-feedback', {
+      originalQuestion: 'show vendor spend',
+      generatedSql: 'SELECT 1',
+      route: 'exploratory_builder_intent',
+      routeReason: 'user_approved_exploratory_generation',
+      mode: 'exploratory',
+      dataSource: 'folio',
+      resultAccuracy: 'accurate',
+      feedbackNote: 'Looks right',
+    });
   });
 });

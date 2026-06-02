@@ -700,9 +700,39 @@ class SqlBuilderService
             );
         }
 
+        $sql = self::normalizeOnlyHoldingLocationAliasLeak($sql);
         $sql = self::normalizeJsonbKeyExistsOperator($sql);
 
         return self::normalizeSourceRecordStateFilter($sql);
+    }
+
+    /**
+     * Repair stale/generated only-holding-location SQL that compares another
+     * holding location name to a target-location alias that is not visible in
+     * the anti-join scope. Use the target location ID set instead.
+     */
+    private static function normalizeOnlyHoldingLocationAliasLeak(string $sql): string
+    {
+        if (
+            stripos($sql, 'NOT EXISTS') === false
+            || stripos($sql, 'other_hr.effective_location_id') === false
+            || (
+                stripos($sql, 'target_locations') === false
+                && stripos($sql, 'target_location') === false
+            )
+        ) {
+            return $sql;
+        }
+
+        $targetLocationCte = stripos($sql, 'target_locations') !== false ? 'target_locations' : 'target_location';
+        $pattern = '/\\b(?:other_loc\\.name\\s*(?:<>|!=|NOT\\s+ILIKE|NOT\\s+LIKE)\\s*[a-z_][a-z0-9_]*\\.name|[a-z_][a-z0-9_]*\\.name\\s*(?:<>|!=|NOT\\s+ILIKE|NOT\\s+LIKE)\\s*other_loc\\.name)\\b/i';
+        $repaired = preg_replace(
+            $pattern,
+            'other_hr.effective_location_id NOT IN (SELECT id FROM ' . $targetLocationCte . ')',
+            $sql
+        );
+
+        return is_string($repaired) ? $repaired : $sql;
     }
 
     /**

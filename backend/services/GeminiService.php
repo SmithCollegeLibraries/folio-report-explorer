@@ -15,7 +15,7 @@ class GeminiService
 {
     const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
     const OPENAI_API_BASE = 'https://api.openai.com/v1';
-    const REQUEST_TIMEOUT_SECONDS = 120;
+    const REQUEST_TIMEOUT_SECONDS = 300;
     const DEFAULT_MAX_RETRIES = 3;
     const DEFAULT_RETRY_BASE_DELAY_MS = 400;
     const MAX_RETRY_BACKOFF_MS = 5000;
@@ -33,7 +33,7 @@ class GeminiService
      */
     private static function getPreferredAiProvider()
     {
-        $provider = strtolower(trim((string)(Yii::$app->params['aiProvider'] ?? 'gemini')));
+        $provider = strtolower(trim((string)(Yii::$app->params['aiProvider'] ?? 'openai')));
         return $provider === 'openai' ? 'openai' : 'gemini';
     }
 
@@ -52,26 +52,18 @@ class GeminiService
         $provider = 'none';
         $apiKey = '';
 
-        if ($preferredProvider === 'openai') {
-            if ($openaiApiKey !== '') {
-                $provider = 'openai';
-                $apiKey = $openaiApiKey;
-            } elseif ($geminiApiKey !== '') {
-                $provider = 'gemini';
-                $apiKey = $geminiApiKey;
-            }
-        } else {
-            if ($geminiApiKey !== '') {
-                $provider = 'gemini';
-                $apiKey = $geminiApiKey;
-            } elseif ($openaiApiKey !== '') {
-                $provider = 'openai';
-                $apiKey = $openaiApiKey;
-            }
+        if ($preferredProvider === 'openai' && $openaiApiKey !== '') {
+            $provider = 'openai';
+            $apiKey = $openaiApiKey;
         }
 
-        $model = $provider === 'openai'
-            ? (string)(Yii::$app->params['openaiModel'] ?? 'gpt-4.1-mini')
+        if ($preferredProvider === 'gemini' && $geminiApiKey !== '') {
+            $provider = 'gemini';
+            $apiKey = $geminiApiKey;
+        }
+
+        $model = $preferredProvider === 'openai'
+            ? (string)(Yii::$app->params['openaiModel'] ?? 'gpt-5.4')
             : (string)(Yii::$app->params['geminiModel'] ?? 'gemini-2.5-flash');
 
         return [
@@ -128,9 +120,10 @@ class GeminiService
      * @param string $prompt
      * @param string|null $campus
      * @param int|null $userId
+     * @param bool $allowExploratory
      * @return array {sql: string, explanation: string, dataSource: string}
      */
-    public static function generateSqlWithShadow($prompt, $campus = null, $userId = null)
+    public static function generateSqlWithShadow($prompt, $campus = null, $userId = null, $allowExploratory = false)
     {
         $clarification = ClarificationService::detectPromptAmbiguity(
             (string)$prompt,
@@ -150,10 +143,34 @@ class GeminiService
             return $clarification;
         }
 
+        $queryFamily = self::resolvePromptQueryFamily($prompt, $campus);
+        if ($queryFamily === null && !$allowExploratory) {
+            return self::buildExploratoryApprovalResponse(
+                (string)$prompt,
+                $campus,
+                self::promptRequiresLegacyFreeform($prompt)
+                    ? 'canonical_path_unavailable_for_marc_source_records'
+                    : 'unsupported_query_family'
+            );
+        }
+
         $primaryMode = self::resolvePrimaryModeForPrompt($prompt, $campus);
         $primary = $primaryMode === 'intent'
             ? self::generateSql($prompt, $campus, false, true)
             : self::generateSql($prompt, $campus, true, false);
+
+        if ($queryFamily === null && $allowExploratory) {
+            $primary['mode'] = 'exploratory';
+            $primary['exploratory'] = true;
+            $primary['repeatabilityWarning'] = self::getExploratoryRepeatabilityWarning();
+            if (($primary['route'] ?? '') === 'builder_intent') {
+                $primary['route'] = 'exploratory_builder_intent';
+                $primary['routeReason'] = 'user_approved_exploratory_generation';
+            } elseif (($primary['route'] ?? '') === 'legacy_freeform') {
+                $primary['route'] = 'exploratory_legacy_freeform';
+                $primary['routeReason'] = 'user_approved_exploratory_generation';
+            }
+        }
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
             $primary['routeReason'] = !empty(Yii::$app->params['nl2sqlForceLegacy'])
@@ -189,6 +206,74 @@ class GeminiService
         }
 
         return $primary;
+    }
+
+    private static function buildExploratoryApprovalResponse(string $prompt, $campus = null, string $reason = 'unsupported_query_family'): array
+    {
+        $trimmedPrompt = trim($prompt);
+        $campusLabel = trim((string)($campus ?: 'All Colleges'));
+        if ($campusLabel === '') {
+            $campusLabel = 'All Colleges';
+        }
+
+        self::logRouteSelection('exploratory_approval_required', $reason, [
+            'query' => [],
+        ]);
+        self::logNlTelemetry('nl2sql.generated', [
+            'route' => 'exploratory_approval_required',
+            'routeReason' => $reason,
+            'promptFingerprint' => self::fingerprintPrompt($prompt),
+            'dataSource' => null,
+            'mode' => 'exploratory',
+        ]);
+
+        return [
+            'needsExploratoryApproval' => true,
+            'needsClarification' => true,
+            'mode' => 'exploratory',
+            'route' => 'exploratory_approval_required',
+            'routeReason' => $reason,
+            'dataSource' => null,
+            'sql' => null,
+            'message' => 'This request is outside the report types I can build reliably right now. I can still try to create a query, but please review the results carefully because similar wording may not always produce the same query.',
+            'question' => 'Do you want me to try anyway?',
+            'clarificationKey' => 'exploratory_sql_approval',
+            'clarificationType' => 'exploratory_approval',
+            'freeTextAllowed' => false,
+            'options' => [
+                [
+                    'id' => 'approve_exploratory',
+                    'label' => 'Try creating the query',
+                    'description' => self::getExploratoryRepeatabilityWarning(),
+                    'resolvedFilter' => [
+                        'allowExploratory' => true,
+                    ],
+                ],
+                [
+                    'id' => 'refine_prompt',
+                    'label' => 'Edit my request',
+                    'description' => 'Add more detail so the query can be built more reliably.',
+                    'resolvedFilter' => [
+                        'allowExploratory' => false,
+                    ],
+                ],
+            ],
+            'exploratoryPlan' => [
+                'prompt' => $trimmedPrompt,
+                'campus' => $campusLabel,
+                'status' => 'canonical_path_missing',
+                'suggestions' => [
+                    'Tell me exactly what place or collection to search.',
+                    'List the columns you want to see in the results.',
+                    'Include any dates, grouping, sorting, or count rules that matter.',
+                ],
+            ],
+        ];
+    }
+
+    private static function getExploratoryRepeatabilityWarning(): string
+    {
+        return 'This path uses model-assisted SQL generation without a checked-in canonical compiler, so it may vary between runs.';
     }
 
     /**
@@ -971,6 +1056,8 @@ PROMPT;
 
         $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
         $sql = self::normalizeIdCasts($sql);
+        $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
+        self::validateNoOnlyHoldingLocationAliasLeaks($sql);
 
         SqlBuilderService::validateSafety($sql);
         SqlBuilderService::validateTablePolicy($sql);
@@ -1132,7 +1219,8 @@ GUIDANCE;
                 $queryFamily,
                 $prompt,
                 $campus,
-                $mismatchTelemetryContext
+                $mismatchTelemetryContext,
+                $intent
             );
             if ($promptRecoveredResponse !== null) {
                 return $promptRecoveredResponse;
@@ -1198,10 +1286,39 @@ GUIDANCE;
         array $queryFamily,
         $prompt,
         $campus,
-        array $telemetryContext
+        array $telemetryContext,
+        array $sourceIntent = []
     ): ?array {
         $expectedFamilyKey = trim((string)($queryFamily['familyKey'] ?? ''));
         if ($expectedFamilyKey !== 'inventory_collection_age') {
+            if ($expectedFamilyKey === 'inventory_library_location_listing' && self::promptExplicitlyRequestsOnlyHoldingLocation((string)$prompt)) {
+                try {
+                    return self::buildQueryFamilyIntentResponse(
+                        self::rebuildInventoryListingIntentForPromptOnlyMode(
+                            $queryFamily,
+                            $sourceIntent,
+                            (string)$prompt
+                        ),
+                        $queryFamily,
+                        $prompt,
+                        $campus,
+                        $telemetryContext
+                    );
+                } catch (\InvalidArgumentException | \RuntimeException $e) {
+                    self::logValidationFailure('family_contract_prompt_recovery', [
+                        'route' => 'intent_json',
+                        'model' => $telemetryContext['model'] ?? null,
+                        'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+                        'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+                        'finishReason' => $telemetryContext['finishReason'] ?? null,
+                        'attempts' => $telemetryContext['attempts'] ?? null,
+                        'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+                        'expectedFamilyKey' => $expectedFamilyKey,
+                        'error' => $e->getMessage(),
+                    ] + $telemetryContext);
+                }
+            }
+
             return null;
         }
 
@@ -1233,6 +1350,75 @@ GUIDANCE;
         }
 
         return null;
+    }
+
+    private static function rebuildInventoryListingIntentForPromptOnlyMode(
+        array $queryFamily,
+        array $sourceIntent,
+        string $prompt
+    ): array {
+        $familyKey = trim((string)($queryFamily['familyKey'] ?? 'inventory_library_location_listing'));
+        $sourceSlots = is_array($sourceIntent['slots'] ?? null) ? $sourceIntent['slots'] : [];
+        $slots = [
+            'match_policy' => QueryFamilySlotService::DEFAULT_MATCH_POLICY,
+            'requested_outputs' => ['title'],
+        ];
+
+        foreach (['campus', 'library', 'location', 'location_code', 'only_holding_location'] as $slotName) {
+            if (!array_key_exists($slotName, $sourceSlots)) {
+                continue;
+            }
+
+            $slots[$slotName] = $sourceSlots[$slotName];
+        }
+
+        if (array_key_exists('match_policy', $sourceSlots) && is_string($sourceSlots['match_policy'])) {
+            $slots['match_policy'] = trim((string)$sourceSlots['match_policy']);
+        }
+
+        $requestedOutputs = is_array($sourceSlots['requested_outputs'] ?? null)
+            ? $sourceSlots['requested_outputs']
+            : [];
+        $filteredOutputs = self::filterInventoryListingOutputsFromSource($requestedOutputs);
+        if ($filteredOutputs !== []) {
+            $slots['requested_outputs'] = $filteredOutputs;
+        }
+
+        return [
+            'familyKey' => $familyKey,
+            'slots' => $slots,
+        ];
+    }
+
+    private static function filterInventoryListingOutputsFromSource(array $requestedOutputs): array
+    {
+        $allowedOutputs = [
+            'author',
+            'barcode',
+            'call_number',
+            'contributor_name',
+            'instance_hrid',
+            'instance_number',
+            'pub_date',
+            'publication_date',
+            'title',
+        ];
+
+        $outputs = [];
+        foreach ($requestedOutputs as $outputField) {
+            $normalized = trim((string)$outputField);
+            if ($normalized === '') {
+                continue;
+            }
+            if (!in_array($normalized, $allowedOutputs, true)) {
+                continue;
+            }
+            if (!in_array($normalized, $outputs, true)) {
+                $outputs[] = $normalized;
+            }
+        }
+
+        return $outputs;
     }
 
     private static function guardCoveredFamilyFallback(
@@ -1716,6 +1902,8 @@ GUIDANCE;
 
         $attempt = 0;
         $startedAt = microtime(true);
+        $openAiPayload = null;
+        $didRetryOpenAiMaxTokenFallback = false;
 
         while (true) {
             $attempt++;
@@ -1730,7 +1918,11 @@ GUIDANCE;
 
                 if ($provider === 'openai') {
                     $requestUrl = self::OPENAI_API_BASE . '/chat/completions';
-                    $requestPayload = self::buildOpenAiPayloadFromGeminiShape($payload);
+                    if ($openAiPayload === null) {
+                        $openAiPayload = self::buildOpenAiPayloadFromGeminiShape($payload);
+                    }
+
+                    $requestPayload = $openAiPayload;
                     $headers['Authorization'] = 'Bearer ' . $apiKey;
                 }
 
@@ -1758,19 +1950,23 @@ GUIDANCE;
 
                 $statusCode = (int)$response->statusCode;
                 $errorMessage = self::extractGeminiErrorMessage($response);
+
+                if (
+                    $provider === 'openai'
+                    && !$didRetryOpenAiMaxTokenFallback
+                    && self::isOpenAiMaxTokenUnsupportedError($errorMessage)
+                    && self::openAiPayloadUsesMaxTokens($requestPayload)
+                ) {
+                    $openAiPayload = self::convertOpenAiPayloadToMaxCompletionTokens($requestPayload);
+                    $didRetryOpenAiMaxTokenFallback = true;
+
+                    self::logRetryAttempt($metricContext, $attempt, $maxRetries, $statusCode, $errorMessage, false);
+                    continue;
+                }
+
                 $retryable = self::isRetryableGeminiResponse($statusCode, $errorMessage);
 
                 if (!$retryable || $attempt >= $maxRetries) {
-                    // For Gemini quota exhaustion, transparently fall back to OpenAI
-                    // when an OpenAI key is configured and the primary provider is Gemini.
-                    if (
-                        $provider === 'gemini' &&
-                        self::isQuotaExhaustedResponse($statusCode, $errorMessage) &&
-                        !empty((string)(Yii::$app->params['openaiApiKey'] ?? ''))
-                    ) {
-                        return self::sendOpenAiFallbackRequest($payload, $metricContext, $startedAt, $statusCode, $errorMessage);
-                    }
-
                     $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
                     self::logRequestOutcome($metricContext, $attempt, $elapsedMs, false, $statusCode, $errorMessage);
                     throw new \RuntimeException('AI API error: ' . $errorMessage);
@@ -1849,22 +2045,62 @@ GUIDANCE;
         }
 
         $generationConfig = $payload['generationConfig'] ?? [];
+        $model = (string)(Yii::$app->params['openaiModel'] ?? 'gpt-5.4');
+        $maxOutputTokens = isset($generationConfig['maxOutputTokens'])
+            ? (int)$generationConfig['maxOutputTokens']
+            : 4096;
         $openAiPayload = [
-            'model' => (string)(Yii::$app->params['openaiModel'] ?? 'gpt-4.1-mini'),
+            'model' => $model,
             'messages' => $messages,
             'temperature' => isset($generationConfig['temperature'])
                 ? (float)$generationConfig['temperature']
                 : 0.1,
-            'max_tokens' => isset($generationConfig['maxOutputTokens'])
-                ? (int)$generationConfig['maxOutputTokens']
-                : 4096,
         ];
+
+        if (self::openAiModelUsesMaxCompletionTokens($model)) {
+            $openAiPayload['max_completion_tokens'] = $maxOutputTokens;
+        } else {
+            $openAiPayload['max_tokens'] = $maxOutputTokens;
+        }
 
         if (($generationConfig['responseMimeType'] ?? '') === 'application/json') {
             $openAiPayload['response_format'] = ['type' => 'json_object'];
         }
 
         return $openAiPayload;
+    }
+
+    private static function openAiPayloadUsesMaxTokens(array $payload): bool
+    {
+        return array_key_exists('max_tokens', $payload);
+    }
+
+    private static function convertOpenAiPayloadToMaxCompletionTokens(array $payload): array
+    {
+        if (array_key_exists('max_completion_tokens', $payload)) {
+            return $payload;
+        }
+
+        if (!array_key_exists('max_tokens', $payload)) {
+            return $payload;
+        }
+
+        $payload['max_completion_tokens'] = $payload['max_tokens'];
+        unset($payload['max_tokens']);
+        return $payload;
+    }
+
+    private static function isOpenAiMaxTokenUnsupportedError(string $errorMessage): bool
+    {
+        return preg_match('/unsupported parameter.*max_tokens/i', $errorMessage) === 1
+            || preg_match('/max_tokens\b.*is not supported/i', $errorMessage) === 1
+            || preg_match('/use .*max_completion_tokens/i', $errorMessage) === 1;
+    }
+
+    private static function openAiModelUsesMaxCompletionTokens(string $model): bool
+    {
+        $normalized = strtolower(trim($model));
+        return preg_match('/^(?:gpt-4|gpt-5|o[0-9])/', $normalized) === 1;
     }
 
     /**
@@ -2034,6 +2270,7 @@ GUIDANCE;
         try {
             $client = new Client();
             $client->transport = 'yii\\httpclient\\CurlTransport';
+            $openAiPayload = self::buildOpenAiPayloadFromGeminiShape($payload);
 
             $response = $client->createRequest()
                 ->setMethod('POST')
@@ -2043,7 +2280,7 @@ GUIDANCE;
                     'Authorization' => 'Bearer ' . $apiKey,
                 ])
                 ->addOptions([CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT_SECONDS])
-                ->setContent(json_encode(self::buildOpenAiPayloadFromGeminiShape($payload)))
+                ->setContent(json_encode($openAiPayload))
                 ->send();
 
             $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
@@ -2060,6 +2297,39 @@ GUIDANCE;
 
             $statusCode   = (int)$response->statusCode;
             $errorMessage = self::extractGeminiErrorMessage($response);
+
+            if (
+                self::isOpenAiMaxTokenUnsupportedError($errorMessage)
+                && self::openAiPayloadUsesMaxTokens($openAiPayload)
+            ) {
+                $openAiPayload = self::convertOpenAiPayloadToMaxCompletionTokens($openAiPayload);
+
+                $response = $client->createRequest()
+                    ->setMethod('POST')
+                    ->setUrl(self::OPENAI_API_BASE . '/chat/completions')
+                    ->setHeaders([
+                        'Content-Type'  => 'application/json',
+                        'Authorization' => 'Bearer ' . $apiKey,
+                    ])
+                    ->addOptions([CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT_SECONDS])
+                    ->setContent(json_encode($openAiPayload))
+                    ->send();
+
+                $elapsedMs = (int)round((microtime(true) - $startedAt) * 1000);
+                if ($response->isOk) {
+                    self::logRequestOutcome($metricContext . '.openai_fallback', 2, $elapsedMs);
+                    return [
+                        'response'       => self::normalizeOpenAiResponseToGeminiShape($response),
+                        'attempts'       => 2,
+                        'elapsedMs'      => $elapsedMs,
+                        'providerFallback' => 'openai',
+                    ];
+                }
+
+                $statusCode   = (int)$response->statusCode;
+                $errorMessage = self::extractGeminiErrorMessage($response);
+            }
+
             self::logRequestOutcome($metricContext . '.openai_fallback', 1, $elapsedMs, false, $statusCode, $errorMessage);
             throw new \RuntimeException('OpenAI fallback failed: ' . $errorMessage);
         } catch (\RuntimeException $e) {
@@ -2497,6 +2767,27 @@ PROMPT;
             $slotProvenance
         );
 
+        if (
+            trim((string)($normalizedPayload['familyKey'] ?? '')) === 'inventory_library_location_listing'
+            && self::promptExplicitlyRequestsOnlyHoldingLocation((string)$prompt)
+            && !self::inventoryListingPayloadHasOnlyHoldingLocationScope($normalizedPayload['slots'] ?? [])
+        ) {
+            $clarification = self::buildFamilySlotClarificationResponse(
+                [
+                    [
+                        'path' => 'slots.location',
+                        'code' => 'required',
+                        'message' => 'An explicit holding-location scope is required for only-holding location prompts.',
+                    ],
+                ],
+                $normalizedPayload,
+                $telemetryContext
+            );
+            if ($clarification !== null) {
+                return $clarification;
+            }
+        }
+
         $routeReason = 'family_contract_supported:'
             . ($normalizedPayload['familyKey'] ?? $queryFamily['familyKey'] ?? '');
 
@@ -2581,10 +2872,13 @@ PROMPT;
         }
 
         if ($familyKey === 'inventory_library_location_listing') {
-            $intent['slots'] = self::recoverInventoryListingFamilySlotsFromPrompt(
+            $inventoryListingRecovery = self::recoverInventoryListingFamilySlotsFromPrompt(
                 $intent['slots'],
-                $prompt
+                $prompt,
+                $slotProvenance
             );
+            $intent['slots'] = $inventoryListingRecovery['slots'];
+            $slotProvenance = $inventoryListingRecovery['slotProvenance'];
         }
 
         return [
@@ -2687,11 +2981,56 @@ PROMPT;
         return $telemetryContext;
     }
 
-    private static function recoverInventoryListingFamilySlotsFromPrompt(array $slots, string $prompt): array
+    private static function recoverInventoryListingFamilySlotsFromPrompt(array $slots, string $prompt, array $slotProvenance = []): array
     {
+        if (self::promptRequestsInventoryListingCallNumber($prompt)) {
+            $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
+            $requestedOutputs[] = 'call_number';
+            $slots['requested_outputs'] = array_values(array_unique($requestedOutputs));
+            sort($slots['requested_outputs'], SORT_STRING);
+            $slotProvenance['requested_outputs'] = 'prompt_repaired';
+        }
+
+        $clarificationLocation = self::extractClarificationInventoryListingLocation($prompt);
+        if ($clarificationLocation !== '') {
+            $existingLocation = trim((string)($slots['location'] ?? ''));
+            $slots['location'] = $clarificationLocation;
+
+            if (array_key_exists('location', $slots) && (strtolower($existingLocation) !== strtolower($clarificationLocation))) {
+                $slotProvenance['location'] = array_key_exists('location', $slotProvenance)
+                    ? 'prompt_repaired'
+                    : 'prompt_repaired';
+            } else {
+                $slotProvenance['location'] = array_key_exists('location', $slotProvenance)
+                    ? 'prompt_repaired'
+                : 'prompt_explicit';
+            }
+        }
+
+        if ($clarificationLocation === '') {
+            $recoveredLocation = self::extractInventoryListingLocationFromPrompt($prompt);
+            if ($recoveredLocation !== '') {
+                $existingLocation = trim((string)($slots['location'] ?? ''));
+                if ($existingLocation === '') {
+                    $slots['location'] = $recoveredLocation;
+                    $slotProvenance['location'] = 'prompt_explicit';
+                } elseif (strcasecmp($existingLocation, $recoveredLocation) !== 0) {
+                    $slots['location'] = $recoveredLocation;
+                    $slotProvenance['location'] = 'prompt_repaired';
+                }
+            }
+        }
+
         $locationCodes = self::extractInventoryListingLocationCodes($prompt);
         if ($locationCodes === []) {
-            return $slots;
+            $slots = self::removeInventoryListingLocationMasqueradingAsLibrary($slots, $prompt, $slotProvenance);
+            $slots = self::removeInventoryListingDefaultCampusForFiveCollegesOnlyHolding($slots, $prompt, $slotProvenance);
+            $slots = self::normalizeInventoryListingOnlyHoldingSlotFromPrompt($slots, $prompt, $slotProvenance);
+            ksort($slotProvenance, SORT_STRING);
+            return [
+                'slots' => $slots,
+                'slotProvenance' => $slotProvenance,
+            ];
         }
 
         $slots['location_code'] = implode(',', $locationCodes);
@@ -2706,7 +3045,255 @@ PROMPT;
             unset($slots['location']);
         }
 
+        $slots = self::normalizeInventoryListingOnlyHoldingSlotFromPrompt($slots, $prompt, $slotProvenance);
+        ksort($slotProvenance, SORT_STRING);
+        return [
+            'slots' => $slots,
+            'slotProvenance' => $slotProvenance,
+        ];
+    }
+
+    private static function removeInventoryListingLocationMasqueradingAsLibrary(array $slots, string $prompt, array &$slotProvenance): array
+    {
+        if (self::promptMentionsExplicitLibraryScope($prompt)) {
+            return $slots;
+        }
+
+        $location = trim((string)($slots['location'] ?? ''));
+        $library = trim((string)($slots['library'] ?? ''));
+        if ($location === '' || $library === '') {
+            return $slots;
+        }
+
+        if (
+            strcasecmp($library, $location) !== 0
+            && preg_match('/\b(?:location|collection|reference|rare book|mrbc)\b/i', $library) !== 1
+        ) {
+            return $slots;
+        }
+
+        unset($slots['library']);
+        $slotProvenance['library'] = 'policy_omitted_location_not_library';
         return $slots;
+    }
+
+    private static function removeInventoryListingDefaultCampusForFiveCollegesOnlyHolding(array $slots, string $prompt, array &$slotProvenance): array
+    {
+        $campus = trim((string)($slots['campus'] ?? ''));
+        $location = trim((string)($slots['location'] ?? ''));
+        if ($campus === '' || $location === '') {
+            return $slots;
+        }
+
+        if (!self::promptExplicitlyRequestsOnlyHoldingLocation($prompt)) {
+            return $slots;
+        }
+
+        if (preg_match('/\b(?:five|5)\s+colleges\b/i', $prompt) !== 1) {
+            return $slots;
+        }
+
+        if (self::promptMentionsSpecificCampusScope($prompt)) {
+            return $slots;
+        }
+
+        unset($slots['campus']);
+        $slotProvenance['campus'] = 'policy_omitted_five_colleges_only_holding';
+        return $slots;
+    }
+
+    private static function promptMentionsSpecificCampusScope(string $prompt): bool
+    {
+        return preg_match(
+            '/\b(?:Smith College|Amherst College|Mount Holyoke College|Mt\.?\s+Holyoke College|Hampshire College|UMass|University of Massachusetts|Yiddish Book Center)\b/i',
+            $prompt
+        ) === 1;
+    }
+
+    private static function promptRequestsInventoryListingCallNumber(string $prompt): bool
+    {
+        return preg_match('/\bcall\s+numbers?\b/i', $prompt) === 1;
+    }
+
+    private static function extractInventoryListingLocationFromPrompt(string $prompt): string
+    {
+        if (trim($prompt) === '') {
+            return '';
+        }
+
+        $prompt = ' ' . strtolower(trim((string)$prompt)) . ' ';
+
+        $stopwords = [
+            'a',
+            'an',
+            'the',
+            'this',
+            'that',
+            'these',
+            'those',
+            'all',
+            'and',
+            'or',
+            'with',
+            'where',
+            'which',
+            'containing',
+            'called',
+            'from',
+            'for',
+            'at',
+            'in',
+            'on',
+            'of',
+            'only',
+            'records',
+            'record',
+            'holding',
+            'holdings',
+            'location',
+            'locations',
+            'library',
+            'libraries',
+        ];
+
+        if (preg_match('/\bmrbc\s+reference\s+collection\b/i', $prompt) === 1) {
+            return 'SC Rare Book Collection Reference';
+        }
+
+        if (preg_match('/\bmrbc\s+reference\b/i', $prompt) === 1) {
+            return 'MRBC Reference';
+        }
+
+        $patterns = [
+            '/\b(?:with|from|for|in|at)\s+(?:the\s+)?location\s+([a-z0-9][a-z0-9 .\'"-]*?)(?=\s+(?:containing|where|and|or|with|for|that|which|only|,|\.|;|:|\?|!|$))/i',
+            '/\blocation\s+([a-z0-9][a-z0-9 .\'"-]*?)(?=\s+(?:containing|where|and|or|with|for|that|which|only|,|\.|;|:|\?|!|$))/i',
+            '/\bin\s+(?:the\s+)?([a-z0-9][a-z0-9 .\'"-]*?)\s+location\b/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $prompt, $matches) !== 1) {
+                continue;
+            }
+
+            $location = trim((string)($matches[1] ?? ''));
+            if ($location === '') {
+                continue;
+            }
+
+            $location = self::normalizeRecoveredPromptScope((string)$location);
+            if ($location === '') {
+                continue;
+            }
+
+            $lower = strtolower($location);
+            if (in_array($lower, $stopwords, true)) {
+                continue;
+            }
+
+            return $location;
+        }
+
+        return '';
+    }
+
+    private static function extractClarificationInventoryListingLocation(string $prompt): string
+    {
+        if (trim($prompt) === '') {
+            return '';
+        }
+
+        $patterns = [
+            '/\\binventory\\.location__t\\.name\\s*=\\s*([\'"])([^\'"]+)\\1/i',
+            '/\\binventory\\.location__t\\.name\\s*=\\s*([^\\.\\n;]+?)(?=\\s+for\\s+mrbc|\\.|$)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $prompt, $matches) !== 1) {
+                continue;
+            }
+
+            $location = trim((string)($matches[2] ?? $matches[1] ?? ''));
+            if ($location === '') {
+                continue;
+            }
+
+            $location = trim($location);
+            $location = trim($location, " \t\n\r\0\x0B'\"");
+            $location = preg_replace('/\\s+for\\s+mrbc(?:\\b|\\s+reference|\\s+collection)?\\b.*$/i', '', (string)$location);
+            $location = trim((string)$location);
+            if ($location === '') {
+                continue;
+            }
+
+            return self::normalizeRecoveredPromptScope($location);
+        }
+
+        return '';
+    }
+
+    private static function normalizeInventoryListingOnlyHoldingSlotFromPrompt(array $slots, string $prompt, array &$slotProvenance): array
+    {
+        if (!QueryFamilySlotService::slotRequiresExplicitPromptEvidence('inventory_library_location_listing', 'only_holding_location')) {
+            return $slots;
+        }
+
+        $promptRequestsOnlyHoldingLocation = self::promptExplicitlyRequestsOnlyHoldingLocation($prompt);
+        $rawOnlyHoldingLocation = $slots['only_holding_location'] ?? null;
+        $onlyHoldingLocation = self::normalizeBooleanPromptValue($rawOnlyHoldingLocation);
+
+        if ($promptRequestsOnlyHoldingLocation) {
+            if ($onlyHoldingLocation !== true) {
+                $slots['only_holding_location'] = true;
+                $slotProvenance['only_holding_location'] = array_key_exists('only_holding_location', $slotProvenance)
+                    ? 'prompt_repaired'
+                    : (array_key_exists('only_holding_location', $slots) ? 'prompt_repaired' : 'prompt_explicit');
+            } else {
+                $slotProvenance['only_holding_location'] = 'prompt_explicit';
+            }
+
+            return $slots;
+        }
+
+        if ($onlyHoldingLocation === true) {
+            unset($slots['only_holding_location']);
+            $slotProvenance['only_holding_location'] = 'policy_omitted_explicit_prompt_only';
+        }
+
+        return $slots;
+    }
+
+    private static function normalizeBooleanPromptValue($value): ?bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value)) {
+            return $value === 1;
+        }
+
+        if (is_numeric($value)) {
+            return (int)$value === 1;
+        }
+
+        if (!is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = strtolower(trim((string)$value));
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (in_array($normalized, ['1', 'true', 'yes', 'y'], true)) {
+            return true;
+        }
+
+        if (in_array($normalized, ['0', 'false', 'no', 'n'], true)) {
+            return false;
+        }
+
+        return null;
     }
 
     private static function recoverCollectionAgeFamilySlotsFromPrompt(array $slots, string $prompt, array $slotProvenance = []): array
@@ -3065,6 +3652,39 @@ PROMPT;
         return [];
     }
 
+    private static function promptExplicitlyRequestsOnlyHoldingLocation(string $prompt): bool
+    {
+        if (trim($prompt) === '') {
+            return false;
+        }
+
+        $normalizedPrompt = strtolower((string)$prompt);
+
+        if (preg_match('/\bonly\s+(?:the\s+)?(?:holding|holdings?)\s+location\b/i', $normalizedPrompt) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\b(?:exclusive|exclusively|solely)\s+(?:holding|holdings?)\s+location\b/i', $normalizedPrompt) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\bno\s+other\s+(?:holding\s+)?locations?\b/i', $normalizedPrompt) === 1) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static function inventoryListingPayloadHasOnlyHoldingLocationScope(array $slots): bool
+    {
+        $location = trim((string)($slots['location'] ?? ''));
+        if ($location !== '') {
+            return true;
+        }
+
+        return trim((string)($slots['location_code'] ?? '')) !== '';
+    }
+
     private static function valueLooksLikeLocationCodeList(string $value): bool
     {
         if (trim($value) === '') {
@@ -3116,6 +3736,15 @@ PROMPT;
                 $normalizedPayload['slots'],
                 $prompt,
                 $campus
+            );
+        }
+
+        if ($familyKey === 'inventory_library_location_listing') {
+            $slotProvenance = [];
+            $normalizedPayload['slots'] = self::removeInventoryListingDefaultCampusForFiveCollegesOnlyHolding(
+                $normalizedPayload['slots'],
+                $prompt,
+                $slotProvenance
             );
         }
 
@@ -3357,6 +3986,8 @@ PROMPT;
 
         $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
         $sql = self::normalizeIdCasts($sql);
+        $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
+        self::validateNoOnlyHoldingLocationAliasLeaks($sql);
 
         SqlBuilderService::validateSafety($sql);
         SqlBuilderService::validateTablePolicy($sql);
@@ -3460,27 +4091,57 @@ PROMPT;
             $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
             $queryTables = is_array($queryDef['tables'] ?? null) ? $queryDef['tables'] : [];
             $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
+            $onlyHoldingLocation = !empty($slots['only_holding_location']);
+
+            $requiresItemOutput = false;
+            foreach ($requestedOutputs as $outputField) {
+                if (in_array($outputField, ['barcode', 'item_id'], true)) {
+                    $requiresItemOutput = true;
+                    break;
+                }
+            }
 
             $hasInventoryListingScopeAnchor = in_array('inventory_instances', $queryTables, true)
                 && in_array('inventory_holdings', $queryTables, true)
-                && in_array('inventory_items', $queryTables, true)
                 && in_array('inventory_locations', $queryTables, true)
                 && in_array('inventory_libraries', $queryTables, true)
                 && in_array('inventory_campuses', $queryTables, true)
                 && self::queryDefinitionHasJoin($queryDef, 'inventory_instances', 'inventory_holdings')
                 && self::queryDefinitionHasJoin($queryDef, 'inventory_holdings', 'inventory_items')
-                && self::queryDefinitionHasJoin($queryDef, 'inventory_items', 'inventory_locations')
                 && self::queryDefinitionHasJoin($queryDef, 'inventory_locations', 'inventory_libraries')
                 && self::queryDefinitionHasJoin($queryDef, 'inventory_libraries', 'inventory_campuses')
-                && stripos($sql, 'JOIN inventory.holdings_record__t') !== false
-                && stripos($sql, 'JOIN inventory.item__t') !== false
+                && (
+                    stripos($sql, 'JOIN inventory.holdings_record__t') !== false
+                    || stripos($sql, 'FROM inventory.holdings_record__t') !== false
+                )
                 && stripos($sql, 'JOIN inventory.location__t') !== false
                 && stripos($sql, 'JOIN inventory.loclibrary__t') !== false
                 && stripos($sql, 'JOIN inventory.loccampus__t') !== false;
 
+            if ($onlyHoldingLocation) {
+                $hasOnlyHoldingAnchor = $hasInventoryListingScopeAnchor
+                    && preg_match('/\\bNOT\\s+EXISTS\\b[\\s\\S]*other_hr[\\s\\S]*NOT\\s+IN\\s*\\(\\s*SELECT\\s+id\\s+FROM\\s+target_locations\\s*\\)/i', $sql) === 1;
+
+                if (!$hasOnlyHoldingAnchor) {
+                    throw new \InvalidArgumentException(
+                        'missing_only_holding_anchor: Listing prompts with only-holding-location intent require anti-join logic that excludes instances with additional non-target holdings locations.'
+                    );
+                }
+            }
+
+            if ($requiresItemOutput) {
+                $hasInventoryListingScopeAnchor = $hasInventoryListingScopeAnchor && stripos($sql, 'JOIN inventory.item__t') !== false;
+            }
+
             if (!$hasInventoryListingScopeAnchor) {
+                if (!$onlyHoldingLocation) {
+                    throw new \InvalidArgumentException(
+                        'missing_inventory_listing_scope_anchor: Library/location listing prompts require the canonical inventory scope path from instances through holdings, items, and library lookups.'
+                    );
+                }
+
                 throw new \InvalidArgumentException(
-                    'missing_inventory_listing_scope_anchor: Library/location listing prompts require the canonical inventory scope path from instances through holdings, items, and library lookups.'
+                    'missing_only_holding_inventory_listing_scope_anchor: Listing prompts with only-holding-location intent require the holdings-to-location inventory scope path and anti-join exclusion logic.'
                 );
             }
 
@@ -3948,6 +4609,8 @@ PROMPT;
         }
 
         $sql = self::repairInvalidInventoryTitleReferences($sql);
+        $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
+        self::validateNoOnlyHoldingLocationAliasLeaks($sql);
 
         // Validate the generated SQL
         SqlBuilderService::validateSafety($sql);
@@ -4031,6 +4694,67 @@ PROMPT;
         }
 
         return self::ensureGroupedExpression($repaired, $instanceAlias . '.title');
+    }
+
+    /**
+     * Repair a common model anti-join bug for "only holding location" prompts:
+     * references an outer alias (such as tl.name) from inside a NOT EXISTS filter.
+     */
+    private static function repairOnlyHoldingLocationAliasLeaks(string $sql): string
+    {
+        if (
+            !self::sqlMentionsTargetLocationCte($sql)
+            || stripos($sql, 'NOT EXISTS') === false
+            || stripos($sql, 'other_hr.effective_location_id') === false
+        ) {
+            return $sql;
+        }
+
+        $targetLocationCte = stripos($sql, 'target_locations') !== false ? 'target_locations' : 'target_location';
+        $pattern = '/\\b(?:other_loc\\.name\\s*(?:<>|!=|NOT\\s+ILIKE|NOT\\s+LIKE)\\s*[a-z_][a-z0-9_]*\\.name|[a-z_][a-z0-9_]*\\.name\\s*(?:<>|!=|NOT\\s+ILIKE|NOT\\s+LIKE)\\s*other_loc\\.name)\\b/i';
+        if (preg_match($pattern, $sql) !== 1) {
+            return $sql;
+        }
+
+        $repaired = preg_replace(
+            $pattern,
+            'other_hr.effective_location_id NOT IN (SELECT id FROM ' . $targetLocationCte . ')',
+            $sql
+        );
+        if (!is_string($repaired)) {
+            return $sql;
+        }
+
+        return $repaired;
+    }
+
+    /**
+     * Fail before database validation when generated only-holding SQL still
+     * references the target-location CTE alias from an outer anti-join scope.
+     */
+    private static function validateNoOnlyHoldingLocationAliasLeaks(string $sql): void
+    {
+        if (
+            !self::sqlMentionsTargetLocationCte($sql)
+            || stripos($sql, 'NOT EXISTS') === false
+            || stripos($sql, 'other_hr') === false
+        ) {
+            return;
+        }
+
+        if (preg_match('/\\bNOT\\s+EXISTS\\s*\\([\\s\\S]*\\btl\\.name\\b[\\s\\S]*\\)/i', $sql) !== 1) {
+            return;
+        }
+
+        throw new \RuntimeException(
+            'Generated only-holding-location SQL leaked target location alias tl outside its query scope.'
+        );
+    }
+
+    private static function sqlMentionsTargetLocationCte(string $sql): bool
+    {
+        return stripos($sql, 'target_locations') !== false
+            || stripos($sql, 'target_location') !== false;
     }
 
     private static function ensureGroupedExpression(string $sql, string $expression): string
@@ -4859,6 +5583,14 @@ PROMPT;
             return false;
         }
 
+        if (self::promptMentionsUnsupportedInventoryListingOutput($prompt)) {
+            return false;
+        }
+
+        if (self::promptMentionsExplicitInstanceHridList($prompt)) {
+            return false;
+        }
+
         if (!self::promptMentionsCoveredInventoryOutputs($prompt)) {
             return false;
         }
@@ -4868,13 +5600,28 @@ PROMPT;
         }
 
         $hasListingLanguage = preg_match('/\b(list|listing|show|create)\b/i', $prompt) === 1;
-        $hasInventoryNoun = preg_match('/\b(material|materials|item|items)\b/i', $prompt) === 1;
+        $hasInventoryNoun = self::promptMentionsCoveredInventoryOutputs($prompt) || preg_match('/\b(record|records|book|books|catalog|catalogue)\b/i', $prompt) === 1;
 
         if (!$hasListingLanguage || !$hasInventoryNoun) {
             return false;
         }
 
         return preg_match('/\b(top|circulating|circulation|average\s+age|avg\s+age|loan|checkout|trend|trends)\b/i', $prompt) !== 1;
+    }
+
+    private static function promptMentionsUnsupportedInventoryListingOutput($prompt): bool
+    {
+        return preg_match('/\b(publisher|publishers|publication\s+place|place\s+of\s+publication)\b/i', (string)$prompt) === 1;
+    }
+
+    private static function promptMentionsExplicitInstanceHridList($prompt): bool
+    {
+        if (preg_match('/\binstance\s+(?:numbers?|ids?)\s+below\b/i', (string)$prompt) === 1) {
+            return true;
+        }
+
+        preg_match_all('/\bin\d{8,}\b/i', (string)$prompt, $matches);
+        return count($matches[0] ?? []) > 1;
     }
 
     private static function promptMentionsCoveredInventoryOutputs($prompt)

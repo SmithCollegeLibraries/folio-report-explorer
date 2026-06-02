@@ -46,7 +46,7 @@ const apiBase = import.meta.env.VITE_API_URL || `${basePath}/api`;
 const api = axios.create({
   baseURL: apiBase,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 180000,
+  timeout: 300000,
 });
 
 // ── Auth interceptors ─────────────────────────────────────────────
@@ -193,13 +193,29 @@ export async function askNl(
   campus?: string | null,
   includeSuggestions = true,
   followUpContext?: FollowUpContext | null,
+  allowExploratory = false,
 ): Promise<NlResponse> {
   const { data } = await api.post('/nl', {
     prompt,
     campus: campus || null,
     includeSuggestions,
+    allowExploratory,
     ...(followUpContext ? { followUpContext } : {}),
   });
+  return data;
+}
+
+export async function saveQueryFeedback(input: {
+  originalQuestion: string;
+  generatedSql?: string | null;
+  route?: string | null;
+  routeReason?: string | null;
+  mode?: string | null;
+  dataSource?: 'folio' | 'local' | null;
+  resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
+  feedbackNote?: string | null;
+}): Promise<{ id: number; message: string; promptFingerprint: string; sqlHash: string | null }> {
+  const { data } = await api.post('/query-feedback', input);
   return data;
 }
 

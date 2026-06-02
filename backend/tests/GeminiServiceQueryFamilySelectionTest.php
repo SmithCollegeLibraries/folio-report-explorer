@@ -103,6 +103,22 @@ assertSameValue(
     'Location-code inventory listing prompts without an explicit library should still resolve onto the deterministic inventory listing family so the request path can clarify for the missing library.'
 );
 
+$titleOnlyLocationListingPrompt = 'Please provide a list of titles in MRBC Reference Collection where this is the only holding location.';
+$resolvedTitleOnlyLocationListing = $familyResolver->invoke(null, $titleOnlyLocationListingPrompt, 'Smith College');
+assertSameValue(
+    'inventory_library_location_listing',
+    $resolvedTitleOnlyLocationListing['familyKey'] ?? null,
+    'Title-only inventory listing prompts with explicit location scope should resolve onto the deterministic inventory listing family.'
+);
+
+$instanceListPublisherPrompt = "Using the instance numbers below, generate a list that includes title, publisher and barcode. filter for Smith College Libraries\n\nin00002452774\nin00004512775";
+$resolvedInstanceListPublisher = $familyResolver->invoke(null, $instanceListPublisherPrompt, 'Smith College');
+assertSameValue(
+    null,
+    $resolvedInstanceListPublisher,
+    'Instance-HRID list prompts with publisher output should not route onto the deterministic library/location listing family.'
+);
+
 $slotPrompt = $promptBuilder->invoke(null, 'inventory_contributor_campus_item_barcode', 'Smith College');
 assertContainsText(
     'Supported match policies: ["case_insensitive_contains","exact_phrase"]',

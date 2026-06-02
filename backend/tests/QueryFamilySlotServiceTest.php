@@ -325,6 +325,32 @@ assertSameValue(
     'Single location-code listing payloads should clarify for a missing library rather than compile directly.'
 );
 
+$listingOnlyHoldingWithoutLibraryValidation = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'location' => 'SC Rare Book Collection Reference',
+        'only_holding_location' => true,
+        'requested_outputs' => ['title'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+assertSameValue(
+    true,
+    $listingOnlyHoldingWithoutLibraryValidation['valid'] ?? null,
+    'Only-holding location listing prompts should validate when location scope is explicit and library is omitted.'
+);
+assertSameValue(
+    false,
+    array_key_exists('library', $listingOnlyHoldingWithoutLibraryValidation['normalizedPayload']['slots'] ?? []),
+    'Library scope should no longer be mandatory for explicit only-holding location prompts.'
+);
+assertSameValue(
+    true,
+    $listingOnlyHoldingWithoutLibraryValidation['normalizedPayload']['slots']['only_holding_location'] ?? null,
+    'Only-holding intent should remain explicit in normalized slot output.'
+);
+
 $listingMultiLocationCodeValidation = QueryFamilySlotService::validateFamilyPayload([
     'familyKey' => 'inventory_library_location_listing',
     'slots' => [

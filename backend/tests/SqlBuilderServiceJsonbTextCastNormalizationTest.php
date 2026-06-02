@@ -163,6 +163,41 @@ assertFalseValue(
     'normalizeForExecution should remove JSONB ? operators that PDO treats as positional placeholders.'
 );
 
+$onlyHoldingAliasLeakSql = <<<'SQL'
+WITH target_location AS MATERIALIZED (
+    SELECT id, name
+    FROM inventory.location__t
+    WHERE name ILIKE 'SC Rare Book Collection Reference'
+),
+target_holdings AS MATERIALIZED (
+    SELECT DISTINCT hr.instance_id, hr.call_number, hr.effective_location_id
+    FROM inventory.holdings_record__t hr
+    JOIN target_location tl ON tl.id = hr.effective_location_id
+)
+SELECT inst.title
+FROM target_holdings
+JOIN inventory.instance__t inst ON inst.id = target_holdings.instance_id
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM inventory.holdings_record__t other_hr
+    JOIN inventory.location__t other_loc ON other_loc.id = other_hr.effective_location_id
+    WHERE other_hr.instance_id = target_holdings.instance_id
+      AND other_loc.name <> tl.name
+)
+SQL;
+
+$onlyHoldingAliasLeakNormalized = SqlBuilderService::normalizeForExecution($onlyHoldingAliasLeakSql);
+
+assertFalseValue(
+    strpos($onlyHoldingAliasLeakNormalized, 'other_loc.name <> tl.name') !== false,
+    'normalizeForExecution should remove stale only-holding location alias comparisons before preflight validation.'
+);
+assertContainsText(
+    'other_hr.effective_location_id NOT IN (SELECT id FROM target_location)',
+    $onlyHoldingAliasLeakNormalized,
+    'normalizeForExecution should replace stale only-holding alias comparisons with target location ID exclusion.'
+);
+
 $marctabSql = <<<'SQL'
 WITH target_instances AS MATERIALIZED (
     SELECT inst.id, inst.hrid
