@@ -510,11 +510,12 @@ class SqlBuilderService
                 $conditions[] = "{$qualifiedCol} {$op}";
             } elseif ($op === 'IN' || $op === 'NOT IN') {
                 $values = is_array($value) ? $value : explode(',', $value);
+                self::validateScalarListValues($values, $op);
                 $placeholders = [];
                 foreach ($values as $v) {
                     $paramName = ':p' . $paramIndex++;
                     $placeholders[] = $paramName;
-                    $params[$paramName] = trim($v);
+                    $params[$paramName] = trim((string)$v);
                 }
                 $conditions[] = "{$qualifiedCol} {$op} (" . implode(', ', $placeholders) . ")";
             } elseif ($op === 'BETWEEN') {
@@ -522,12 +523,16 @@ class SqlBuilderService
                 if (count($values) !== 2) {
                     throw new \InvalidArgumentException("BETWEEN requires exactly 2 values");
                 }
+                self::validateScalarListValues($values, $op);
                 $p1 = ':p' . $paramIndex++;
                 $p2 = ':p' . $paramIndex++;
-                $params[$p1] = trim($values[0]);
-                $params[$p2] = trim($values[1]);
+                $params[$p1] = trim((string)$values[0]);
+                $params[$p2] = trim((string)$values[1]);
                 $conditions[] = "{$qualifiedCol} BETWEEN {$p1} AND {$p2}";
             } else {
+                if (is_array($value) || (!is_scalar($value) && $value !== null)) {
+                    throw new \InvalidArgumentException("Operator {$op} requires a scalar value");
+                }
                 $paramName = ':p' . $paramIndex++;
                 $params[$paramName] = $value;
                 $conditions[] = "{$qualifiedCol} {$op} {$paramName}";
@@ -536,6 +541,15 @@ class SqlBuilderService
 
         $connector = ' AND ';
         return [implode($connector, $conditions), $params];
+    }
+
+    private static function validateScalarListValues(array $values, string $op): void
+    {
+        foreach ($values as $value) {
+            if (!is_scalar($value) && $value !== null) {
+                throw new \InvalidArgumentException("Operator {$op} requires scalar list values");
+            }
+        }
     }
 
     /**

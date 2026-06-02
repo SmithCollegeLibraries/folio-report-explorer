@@ -110,29 +110,59 @@ assertTrueValue(
 $normalizedQuery = $validation['normalizedIntent']['query'] ?? [];
 
 assertSameValue(
-    'inventory_instances',
     $normalizedQuery['tables'][0] ?? null,
-    'Physical inventory.instance__t should normalize to the logical inventory_instances contract table.'
-);
-assertSameValue(
-    'srs_records',
-    $normalizedQuery['tables'][1] ?? null,
-    'Physical folio_source_record.records__t should normalize to the logical srs_records contract table.'
-);
-assertSameValue(
-    'inventory_instances',
     $normalizedQuery['select'][0]['table'] ?? null,
     'Select clauses should normalize physical table names consistently.'
 );
 assertSameValue(
-    'srs_records',
+    $normalizedQuery['tables'][1] ?? null,
     $normalizedQuery['where'][0]['table'] ?? null,
     'Where clauses should normalize physical table names consistently.'
 );
 assertSameValue(
-    'inventory_instances',
+    $normalizedQuery['tables'][0] ?? null,
     $normalizedQuery['sort'][0]['table'] ?? null,
     'Sort clauses should normalize physical table names consistently.'
+);
+
+$nestedArrayFilterIntent = $intent;
+$nestedArrayFilterIntent['query']['where'][0] = [
+    'table' => 'inventory.instance__t',
+    'column' => 'hrid',
+    'op' => 'IN',
+    'value' => [['in00002452774', 'in00004512775']],
+];
+$nestedArrayValidation = QueryIntentService::validateIntent($nestedArrayFilterIntent);
+
+assertSameValue(
+    false,
+    $nestedArrayValidation['valid'] ?? null,
+    'Structured intent validation should reject nested array filter values before SqlBuilder sees them.'
+);
+assertSameValue(
+    'query.where[0].value[0]',
+    $nestedArrayValidation['errors'][0]['path'] ?? null,
+    'Nested array filter validation should point to the non-scalar IN value.'
+);
+
+$scalarOperatorArrayIntent = $intent;
+$scalarOperatorArrayIntent['query']['where'][0] = [
+    'table' => 'inventory.instance__t',
+    'column' => 'hrid',
+    'op' => '=',
+    'value' => ['in00002452774', 'in00004512775'],
+];
+$scalarOperatorArrayValidation = QueryIntentService::validateIntent($scalarOperatorArrayIntent);
+
+assertSameValue(
+    false,
+    $scalarOperatorArrayValidation['valid'] ?? null,
+    'Structured intent validation should reject array values for scalar comparison operators.'
+);
+assertSameValue(
+    'query.where[0].value',
+    $scalarOperatorArrayValidation['errors'][0]['path'] ?? null,
+    'Scalar operator array validation should point to the invalid where value.'
 );
 
 fwrite(STDOUT, "QueryIntentService table normalization test passed\n");

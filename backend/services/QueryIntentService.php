@@ -271,6 +271,9 @@ class QueryIntentService
             if (!array_key_exists('value', $item) && !in_array($op, ['IS NULL', 'IS NOT NULL'], true)) {
                 $errors[] = self::err($itemPath . '.value', 'required', 'value is required for operator ' . $op . '.');
             }
+            if (array_key_exists('value', $item)) {
+                self::validateWhereValueShape($item['value'], $op, $itemPath . '.value', $errors);
+            }
 
             if ($table !== null && $column !== null && $op !== '') {
                 $normalized[] = [
@@ -283,6 +286,49 @@ class QueryIntentService
         }
 
         return $normalized;
+    }
+
+    private static function validateWhereValueShape($value, string $op, string $path, array &$errors): void
+    {
+        if (in_array($op, ['IS NULL', 'IS NOT NULL'], true)) {
+            return;
+        }
+
+        if (in_array($op, ['IN', 'NOT IN'], true)) {
+            if (is_array($value)) {
+                foreach ($value as $index => $entry) {
+                    if (!self::isScalarIntentValue($entry)) {
+                        $errors[] = self::err($path . '[' . $index . ']', 'type', $op . ' values must be scalar literals.');
+                    }
+                }
+            } elseif (!self::isScalarIntentValue($value)) {
+                $errors[] = self::err($path, 'type', $op . ' value must be a scalar literal or an array of scalar literals.');
+            }
+            return;
+        }
+
+        if ($op === 'BETWEEN') {
+            $values = is_array($value) ? $value : explode(',', (string)$value);
+            if (count($values) !== 2) {
+                $errors[] = self::err($path, 'invalid_value', 'BETWEEN requires exactly 2 scalar values.');
+                return;
+            }
+            foreach ($values as $index => $entry) {
+                if (!self::isScalarIntentValue($entry)) {
+                    $errors[] = self::err($path . '[' . $index . ']', 'type', 'BETWEEN values must be scalar literals.');
+                }
+            }
+            return;
+        }
+
+        if (is_array($value) || !self::isScalarIntentValue($value)) {
+            $errors[] = self::err($path, 'type', $op . ' value must be a scalar literal.');
+        }
+    }
+
+    private static function isScalarIntentValue($value): bool
+    {
+        return is_scalar($value) || $value === null;
     }
 
     private static function validateSort($value, $path, &$errors)

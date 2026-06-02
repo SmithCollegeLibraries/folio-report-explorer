@@ -881,6 +881,7 @@ PROMPT;
             $first = $validation['errors'][0] ?? [];
             $path = $first['path'] ?? 'intent';
             $message = $first['message'] ?? 'Unknown validation error.';
+            $reason = 'intent_contract_failed';
             self::logValidationFailure('intent_contract', [
                 'route' => 'intent_json',
                 'model' => $model,
@@ -893,9 +894,22 @@ PROMPT;
                 'firstErrorPath' => $path,
                 'firstErrorMessage' => $message,
             ] + $schemaTelemetry);
-            throw new \RuntimeException(
-                "Model returned invalid intent JSON ({$path}): {$message}"
-            );
+            self::logRouteSelection('legacy_fallback', $reason . ": {$path}: {$message}", $intent);
+            $fallback = self::generateSql($prompt, $campus, true);
+            $fallback['route'] = 'legacy_fallback';
+            $fallback['routeReason'] = $reason;
+            self::logNlTelemetry('nl2sql.generated', [
+                'route' => $fallback['route'],
+                'routeReason' => $fallback['routeReason'],
+                'model' => $model,
+                'promptVersion' => $promptVersion,
+                'promptFingerprint' => $promptFingerprint,
+                'finishReason' => $finishReason,
+                'dataSource' => $fallback['dataSource'] ?? 'folio',
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ] + $schemaTelemetry);
+            return $fallback;
         }
 
         $normalizedIntent = $validation['normalizedIntent'];
