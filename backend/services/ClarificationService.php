@@ -4,7 +4,10 @@ namespace app\services;
 
 class ClarificationService
 {
-    public static function detectPromptAmbiguity(string $prompt): ?array
+    /**
+     * @param array<int, string> $acceptedClarificationKeys
+     */
+    public static function detectPromptAmbiguity(string $prompt, array $acceptedClarificationKeys = []): ?array
     {
         $normalized = self::normalize($prompt);
         if ($normalized === '') {
@@ -17,6 +20,9 @@ class ClarificationService
 
         if (preg_match('/\bmrbc\b/', $normalized) === 1) {
             if (preg_match('/\b(reference|ref)\b/', $normalized) === 1) {
+                if (self::hasAcceptedClarification($acceptedClarificationKeys, 'location_alias.mrbc_reference')) {
+                    return null;
+                }
                 return self::resolvedAliasConfirmation(
                     'location_alias.mrbc_reference',
                     'MRBC Reference Collection',
@@ -25,6 +31,9 @@ class ClarificationService
                 );
             }
             if (preg_match('/\b(collection|rare book collection)\b/', $normalized) === 1) {
+                if (self::hasAcceptedClarification($acceptedClarificationKeys, 'location_alias.mrbc_collection')) {
+                    return null;
+                }
                 return self::resolvedAliasConfirmation(
                     'location_alias.mrbc_collection',
                     'MRBC Collection',
@@ -54,8 +63,10 @@ class ClarificationService
 
         if (preg_match('/\bmrbc\s+(?:reference|ref)\b/', $normalized) === 1) {
             $lines[] = "MRBC Reference means inventory.location__t.name = 'SC Rare Book Collection Reference'.";
+            $lines[] = 'For MRBC Reference prompts, filter inventory.location__t by the resolved location name. Do not filter inventory.instance__t.hrid for MRBC.';
         } elseif (preg_match('/\bmrbc\s+(?:collection|rare book collection)\b/', $normalized) === 1) {
             $lines[] = "MRBC Collection means inventory.location__t.name = 'SC Rare Book Collection'.";
+            $lines[] = 'For MRBC Collection prompts, filter inventory.location__t by the resolved location name. Do not filter inventory.instance__t.hrid for MRBC.';
         }
 
         return $lines;
@@ -143,5 +154,13 @@ class ClarificationService
         $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
         $normalized = preg_replace('/\s+/', ' ', trim((string)$normalized));
         return (string)$normalized;
+    }
+
+    /**
+     * @param array<int, string> $acceptedClarificationKeys
+     */
+    private static function hasAcceptedClarification(array $acceptedClarificationKeys, string $clarificationKey): bool
+    {
+        return in_array($clarificationKey, $acceptedClarificationKeys, true);
     }
 }

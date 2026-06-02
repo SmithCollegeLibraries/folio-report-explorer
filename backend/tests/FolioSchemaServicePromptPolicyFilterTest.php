@@ -318,6 +318,10 @@ assertContainsText(
     $mrbcDeweyContext,
     'MRBC prompts should explicitly reject the mistaken instance HRID-prefix interpretation.'
 );
+assertFalseValue(
+    strpos($mrbcDeweyContext, 'Local alias: MRBC means SC Rare Book Collection;') !== false,
+    'MRBC Reference prompts should not include contradictory base MRBC alias guidance.'
+);
 assertContainsText(
     'Titles live on inventory.instance__t.title; inventory.item__t has no title column.',
     $mrbcDeweyContext,
@@ -337,6 +341,26 @@ assertContainsText(
     'inventory.classification_type__t.name values: UDC, LC, LC (local), NLM, SUDOC, National Agriculture Library, GDC, Canadian Classification, Additional Dewey, Dewey',
     $mrbcDeweyContext,
     'Classification prompts should include the known inventory.classification_type__t naming convention values.'
+);
+
+$mrbcOnlyLocationContext = FolioSchemaService::buildSchemaContext(
+    'Please provide a list of titles and corresponding instance and call numbers with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges'
+);
+
+assertContainsText(
+    "For 'only holding location in the Five Colleges'",
+    $mrbcOnlyLocationContext,
+    'Only-location MRBC prompts should include a concrete NOT EXISTS holdings-location pattern.'
+);
+assertContainsText(
+    'Do not join inventory.item__t unless the user asks for item-level fields such as barcode',
+    $mrbcOnlyLocationContext,
+    'Title, instance number, and holdings call number prompts should avoid item joins that change row cardinality.'
+);
+assertContainsText(
+    'inventory.instance__t.hrid AS instance_number',
+    $mrbcOnlyLocationContext,
+    'Instance-number prompts should steer to instance__t.hrid rather than the UUID id.'
 );
 
 fwrite(STDOUT, "FolioSchemaService prompt policy filter test passed\n");

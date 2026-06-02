@@ -48,6 +48,13 @@ assertSameValue('confirm_resolved_alias', $referenceMrbc['clarificationType'] ??
 assertSameValue('location_alias.mrbc_reference', $referenceMrbc['clarificationKey'] ?? null, 'MRBC Reference confirmations should use a stable learning key.');
 assertSameValue('Continue with SC Rare Book Collection Reference', $referenceMrbc['options'][0]['label'] ?? null, 'MRBC Reference confirmation should expose the resolved location.');
 
+$learnedReferenceMrbc = ClarificationService::detectPromptAmbiguity(
+    'List holdings in the MRBC Reference collection.',
+    ['location_alias.mrbc_reference']
+);
+
+assertSameValue(null, $learnedReferenceMrbc, 'Previously accepted MRBC Reference confirmations should not ask the same user again.');
+
 $collectionMrbc = ClarificationService::detectPromptAmbiguity(
     'List holdings in the MRBC Collection.'
 );

@@ -1961,6 +1961,13 @@ class FolioSchemaService
 
         $matches = [];
         foreach (self::LOCAL_LOCATION_ALIASES as $alias) {
+            if (
+                ($alias['alias'] ?? '') === 'MRBC'
+                && preg_match('/\bmrbc\s+(?:reference|ref)\b/', $normalizedPrompt) === 1
+            ) {
+                continue;
+            }
+
             foreach ($alias['terms'] as $term) {
                 $normalizedTerm = self::normalizeLocationReferenceText((string)$term);
                 if ($normalizedTerm === '') {
@@ -2116,6 +2123,29 @@ class FolioSchemaService
         }
 
         return $lines;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private static function buildHoldingsOnlyLocationPolicyLines(string $prompt): array
+    {
+        $normalized = self::normalizeLocationReferenceText($prompt);
+        if (preg_match('/\bonly\s+(?:holding\s+)?location\b/', $normalized) !== 1) {
+            return [];
+        }
+        if (preg_match('/\b(?:5|five)\s+colleg(?:e|es|se)\b/', $normalized) !== 1) {
+            return [];
+        }
+
+        return [
+            "\n--- Holdings-Only Location Rule ---",
+            "For 'only holding location in the Five Colleges', first scope target holdings by inventory.holdings_record__t joined to inventory.location__t on holdings_record__t.effective_location_id, then exclude any other holdings for the same instance whose effective location name is different.",
+            "Use NOT EXISTS against inventory.holdings_record__t for the same instance_id; do not use HAVING COUNT(holdings.id) = 1 after joining inventory.item__t, because item joins multiply holdings rows and incorrectly remove multi-item holdings.",
+            "Do not join inventory.item__t unless the user asks for item-level fields such as barcode, item status, material type, or item effective call number.",
+            "For title + holdings call number reports, use inventory.instance__t.title and inventory.holdings_record__t.call_number. For instance numbers, use inventory.instance__t.hrid AS instance_number, not inventory.instance__t.id.",
+            "Pattern: WHERE NOT EXISTS (SELECT 1 FROM inventory.holdings_record__t other_hr JOIN inventory.location__t other_loc ON other_loc.id = other_hr.effective_location_id WHERE other_hr.instance_id = target.instance_id AND other_loc.name <> target.location_name).",
+        ];
     }
 
     private static function promptMentionsInstanceClassification(string $prompt): bool
@@ -2459,6 +2489,10 @@ class FolioSchemaService
         }
 
         foreach (ClarificationService::buildPromptGuidance((string)$prompt) as $line) {
+            $lines[] = $line;
+        }
+
+        foreach (self::buildHoldingsOnlyLocationPolicyLines((string)$prompt) as $line) {
             $lines[] = $line;
         }
 

@@ -132,7 +132,10 @@ class GeminiService
      */
     public static function generateSqlWithShadow($prompt, $campus = null, $userId = null)
     {
-        $clarification = ClarificationService::detectPromptAmbiguity((string)$prompt);
+        $clarification = ClarificationService::detectPromptAmbiguity(
+            (string)$prompt,
+            self::loadAcceptedClarificationKeys($userId)
+        );
         if ($clarification !== null) {
             self::logRouteSelection('clarification', (string)$clarification['routeReason'], [
                 'clarificationKey' => $clarification['clarificationKey'] ?? null,
@@ -186,6 +189,35 @@ class GeminiService
         }
 
         return $primary;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private static function loadAcceptedClarificationKeys($userId): array
+    {
+        if ($userId === null || $userId === '') {
+            return [];
+        }
+
+        try {
+            $rows = Yii::$app->db->createCommand(
+                'SELECT DISTINCT clarification_key
+                 FROM ai_clarification_events
+                 WHERE user_id = :user_id
+                   AND resolved_filter_json IS NOT NULL
+                 ORDER BY clarification_key',
+                [':user_id' => (int)$userId]
+            )->queryColumn();
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map('strval', $rows)));
     }
 
     /**
