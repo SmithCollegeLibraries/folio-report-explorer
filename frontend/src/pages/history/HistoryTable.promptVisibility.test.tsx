@@ -66,6 +66,26 @@ function renderHistoryTable(items: HistoryItem[], onOpen = vi.fn()) {
 }
 
 describe('HistoryTable prompt visibility', () => {
+  it('summarizes pasted multi-line prompts in the table preview', () => {
+    const pastedPrompt = [
+      'Using the instance numbers below, generate a list that includes title, publisher and barcode. filter for Smith College Libraries',
+      '',
+      'in00002452774',
+      'in00004512775',
+      'in00000555326',
+    ].join('\n');
+
+    renderHistoryTable([
+      makeHistoryItem({ jobId: 'completed-job', name: pastedPrompt, status: 'completed', completedAt: '2026-05-27T13:00:00Z' }),
+    ]);
+
+    const preview = screen.getByText(/Using the instance numbers below.*\(\+4 lines\)/);
+
+    expect(preview).toHaveClass('truncate');
+    expect(preview).toHaveAttribute('title', pastedPrompt);
+    expect(screen.queryByText('in00004512775')).not.toBeInTheDocument();
+  });
+
   it('clamps long completed and active request names to one line', () => {
     const completedPrompt = 'List the records in the SC Special Collections Browsing collection, with their HRID, Call Number Prefix, Call Number, Author, and Title, along with whether or not there are multiple holdings records and whether the same OCLC number is on a different record.';
     const activePrompt = 'Running request for every SC Rare Book Collection Reference holding with full title, author, call number, related institution, and OCLC comparison details that should remain readable in the active row.';

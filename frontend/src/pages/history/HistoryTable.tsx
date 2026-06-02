@@ -59,6 +59,13 @@ function SortIcon({ sorted }: { sorted: false | 'asc' | 'desc' }) {
   return sorted === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
 }
 
+function queryPreview(name: string): string {
+  const lines = name.split(/\r?\n/);
+  const firstLine = lines[0]?.trim() || 'Original query';
+  if (lines.length <= 1) return firstLine;
+  return `${firstLine} (+${lines.length - 1} lines)`;
+}
+
 export default function HistoryTable({
   items, filteredItems, loading,
   allSelectableChecked, hasSelectableItems, onToggleSelectAll,
@@ -146,7 +153,7 @@ export default function HistoryTable({
         return (
           <div className="max-w-[260px] md:max-w-[340px] xl:max-w-[420px]">
             {item.name
-              ? <span className="block font-medium text-gray-800 truncate leading-snug" title={item.name}>{item.name}</span>
+              ? <span className="block font-medium text-gray-800 truncate leading-snug" title={item.name}>{queryPreview(item.name)}</span>
               : <span className="italic text-gray-400 text-xs">Unnamed query</span>}
             {item.status === 'completed' ? (
               <button
