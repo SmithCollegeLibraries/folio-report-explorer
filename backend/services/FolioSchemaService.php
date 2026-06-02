@@ -2145,6 +2145,7 @@ class FolioSchemaService
             "Do not join inventory.item__t unless the user asks for item-level fields such as barcode, item status, material type, or item effective call number.",
             "For title + holdings call number reports, use inventory.instance__t.title and inventory.holdings_record__t.call_number. For instance numbers, use inventory.instance__t.hrid AS instance_number, not inventory.instance__t.id.",
             "Pattern: WHERE NOT EXISTS (SELECT 1 FROM inventory.holdings_record__t other_hr JOIN inventory.location__t other_loc ON other_loc.id = other_hr.effective_location_id WHERE other_hr.instance_id = target.instance_id AND other_loc.name <> target.location_name).",
+            "Canonical shape: WITH target_location AS MATERIALIZED (SELECT id, name FROM inventory.location__t WHERE name ILIKE '<resolved location>'), target_holdings AS MATERIALIZED (SELECT DISTINCT hr.instance_id, hr.call_number, loc.name AS location_name FROM inventory.holdings_record__t hr JOIN target_location loc ON loc.id = hr.effective_location_id) SELECT inst.title, inst.hrid AS instance_number, target_holdings.call_number FROM target_holdings JOIN inventory.instance__t inst ON inst.id = target_holdings.instance_id WHERE NOT EXISTS (SELECT 1 FROM inventory.holdings_record__t other_hr JOIN inventory.location__t other_loc ON other_loc.id = other_hr.effective_location_id WHERE other_hr.instance_id = target_holdings.instance_id AND other_loc.name NOT ILIKE target_holdings.location_name) LIMIT 100.",
         ];
     }
 

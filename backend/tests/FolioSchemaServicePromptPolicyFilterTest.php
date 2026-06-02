@@ -362,5 +362,15 @@ assertContainsText(
     $mrbcOnlyLocationContext,
     'Instance-number prompts should steer to instance__t.hrid rather than the UUID id.'
 );
+assertContainsText(
+    'WITH target_location AS MATERIALIZED',
+    $mrbcOnlyLocationContext,
+    'Only-location prompts should include a reusable canonical CTE shape for consistent SQL generation.'
+);
+assertContainsText(
+    'NOT EXISTS (',
+    $mrbcOnlyLocationContext,
+    'Only-location prompts should steer exclusion through NOT EXISTS rather than a row-count HAVING clause.'
+);
 
 fwrite(STDOUT, "FolioSchemaService prompt policy filter test passed\n");
