@@ -397,6 +397,54 @@ assertNotContainsText(
     'Library-only prompts should still compile without an explicit library filter when only-holding is requested with location scope.'
 );
 
+$campusItemStatusBuilt = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'campus' => 'Smith College',
+        'material_type' => 'e-book',
+        'item_status' => 'in process',
+        'requested_outputs' => ['title', 'barcode', 'instance_number'],
+        'match_policy' => 'exact_phrase',
+    ],
+]);
+
+$campusItemStatusSql = $campusItemStatusBuilt['sql'] ?? '';
+assertContainsText(
+    'camp.code =',
+    $campusItemStatusSql,
+    'Campus-scoped item listings should filter Smith College by campus code instead of campus name.'
+);
+assertContainsText(
+    'ii.material_type_id = (',
+    $campusItemStatusSql,
+    'Campus-scoped item listings should filter material type through the item material_type_id lookup pattern.'
+);
+assertContainsText(
+    'LOWER(ii.status__name) =',
+    $campusItemStatusSql,
+    'Campus-scoped item listings should filter item status with exact lowercase semantics.'
+);
+assertContainsText(
+    'inst.hrid AS instance_hrid',
+    $campusItemStatusSql,
+    'Campus-scoped item listings should expose instance HRID with the stable instance_hrid alias.'
+);
+assertContainsText(
+    'SELECT instance_title, barcode, instance_hrid',
+    $campusItemStatusSql,
+    'Campus-scoped item listings should return title, barcode, and instance HRID in the known-good order.'
+);
+assertNotContainsText(
+    'lib.name ILIKE',
+    $campusItemStatusSql,
+    'Campus-scoped item filter listings must not compile any library-name predicate.'
+);
+assertNotContainsText(
+    'imt.name ILIKE',
+    $campusItemStatusSql,
+    'Campus-scoped item filter listings should not use a broad material-type name join predicate.'
+);
+
 $built = QueryFamilyCompilerService::compileToSql([
     'familyKey' => 'inventory_contributor_campus_item_barcode',
     'slots' => [

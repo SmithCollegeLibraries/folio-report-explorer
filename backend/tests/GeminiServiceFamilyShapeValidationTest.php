@@ -162,6 +162,106 @@ assertThrowsInvalidArgumentException(
     'Listing-family author outputs should require the contributor join anchor during compiled-shape validation.'
 );
 
+$onlyHoldingPayload = [
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Neilson Library',
+        'location' => 'SC Rare Book Collection Reference',
+        'only_holding_location' => true,
+        'requested_outputs' => ['title'],
+        'match_policy' => QueryFamilySlotService::DEFAULT_MATCH_POLICY,
+    ],
+];
+
+$onlyHoldingQueryDef = [
+    'tables' => [
+        'inventory_instances',
+        'inventory_holdings',
+        'inventory_items',
+        'inventory_locations',
+        'inventory_libraries',
+        'inventory_campuses',
+    ],
+    'joins' => [
+        ['from_table' => 'inventory_instances', 'to_table' => 'inventory_holdings'],
+        ['from_table' => 'inventory_holdings', 'to_table' => 'inventory_items'],
+        ['from_table' => 'inventory_items', 'to_table' => 'inventory_locations'],
+        ['from_table' => 'inventory_locations', 'to_table' => 'inventory_libraries'],
+        ['from_table' => 'inventory_libraries', 'to_table' => 'inventory_campuses'],
+    ],
+    'filters' => [
+        ['table' => 'inventory_campuses', 'column' => 'name', 'value' => 'Smith College'],
+        ['table' => 'inventory_libraries', 'column' => 'name', 'value' => '%Neilson Library%'],
+        ['table' => 'inventory_locations', 'column' => 'name', 'value' => '%SC Rare Book Collection Reference%'],
+    ],
+];
+
+$onlyHoldingSql = implode("\n", [
+    'WITH',
+    'target_locations AS (',
+    '    SELECT DISTINCT id, name',
+    "    FROM inventory.location__t",
+    "    WHERE ilo.name ILIKE '%SC Rare Book Collection Reference%'",
+    '),',
+    'target_holdings AS (',
+    '    SELECT DISTINCT ih.instance_id, ih.id AS holdings_record_id, ih.call_number, ih.effective_location_id',
+    '    FROM inventory.holdings_record__t ih',
+    '    JOIN target_locations tl ON tl.id = ih.effective_location_id',
+    '),',
+    'SELECT DISTINCT',
+    '    ii.title',
+    'FROM target_holdings th',
+    'JOIN inventory.instance__t ii ON ii.id = th.instance_id',
+    'JOIN inventory.location__t tl ON tl.id = th.effective_location_id',
+    'JOIN inventory.loclibrary__t il ON tl.library_id = il.id',
+    'JOIN inventory.loccampus__t ic ON il.campus_id = ic.id',
+    'WHERE NOT EXISTS (',
+    '    SELECT 1',
+    '    FROM inventory.holdings_record__t other_hr',
+    '    WHERE other_hr.instance_id = th.instance_id',
+    "      AND other_hr.effective_location_id NOT IN (SELECT id FROM target_locations)",
+    ');',
+]);
+
+try {
+    $validator->invoke(null, $onlyHoldingPayload, $onlyHoldingQueryDef, $onlyHoldingSql);
+} catch (InvalidArgumentException $e) {
+    failTest('Only-holding listing SQL should pass family shape validation, but it failed with: ' . $e->getMessage());
+}
+
+$onlyHoldingMissingAnchorSql = implode("\n", [
+    'WITH',
+    'target_locations AS (',
+    '    SELECT DISTINCT id, name',
+    "    FROM inventory.location__t",
+    "    WHERE ilo.name ILIKE '%SC Rare Book Collection Reference%'",
+    '),',
+    'target_holdings AS (',
+    '    SELECT DISTINCT ih.instance_id, ih.id AS holdings_record_id, ih.call_number, ih.effective_location_id',
+    '    FROM inventory.holdings_record__t ih',
+    '    JOIN target_locations tl ON tl.id = ih.effective_location_id',
+    '),',
+    'SELECT DISTINCT',
+    '    ii.title',
+    'FROM target_holdings th',
+    'JOIN inventory.instance__t ii ON ii.id = th.instance_id',
+    'JOIN inventory.location__t tl ON tl.id = th.effective_location_id',
+    'JOIN inventory.loclibrary__t il ON tl.library_id = il.id',
+    'JOIN inventory.loccampus__t ic ON il.campus_id = ic.id',
+    "WHERE il.name ILIKE '%Neilson Library%' AND ic.name ILIKE '%Smith College%'",
+    'LIMIT 100',
+]);
+
+assertThrowsInvalidArgumentException(
+    $validator,
+    $onlyHoldingPayload,
+    $onlyHoldingQueryDef,
+    $onlyHoldingMissingAnchorSql,
+    'missing_only_holding_anchor:',
+    'Only-holding listing prompts should fail validation when anti-join exclusion logic is absent.'
+);
+
 $topItemsPayload = [
     'familyKey' => 'circulation_top_items',
     'slots' => [

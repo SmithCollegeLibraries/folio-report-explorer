@@ -43,6 +43,7 @@ namespace app\models {
         public $status;
         public $user_id;
         public $result_columns;
+        public $metadata;
 
         public static function findOne($id)
         {
@@ -167,6 +168,25 @@ namespace {
     assertSameValue('Original MRBC title list', $historyContext['previousPrompt'] ?? null, 'History follow-up context should use the job name as the previous prompt.');
     assertSameValue('SELECT inst.title FROM inventory.instance__t inst', $historyContext['previousSql'] ?? null, 'History follow-up context should use stored job SQL.');
     assertSameValue(['title'], $historyContext['previousColumns'] ?? null, 'History follow-up context should expose stored result columns.');
+
+    $longPrompt = 'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.';
+    $truncated = new \app\models\QueryJob();
+    $truncated->id = 'truncated-job';
+    $truncated->name = 'Please provide a list of titles with the location MRBC Reference Collection...';
+    $truncated->sql_text = 'SELECT inst.title FROM inventory.instance__t inst';
+    $truncated->status = 'completed';
+    $truncated->user_id = 1;
+    $truncated->result_columns = json_encode(['title']);
+    $truncated->metadata = json_encode(['originalPrompt' => $longPrompt]);
+    \app\models\QueryJob::$jobs = ['truncated-job' => $truncated];
+    Yii::$app->response->statusCode = 200;
+
+    $truncatedContext = $normalize->invoke($controller, [
+        'jobId' => 'truncated-job',
+        'source' => 'history',
+    ]);
+
+    assertSameValue($longPrompt, $truncatedContext['previousPrompt'] ?? null, 'History follow-up context should recover long original prompts from metadata.');
 
     Yii::$app->response->statusCode = 200;
     $missingContext = $normalize->invoke($controller, [

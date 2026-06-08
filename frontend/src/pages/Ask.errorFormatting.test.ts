@@ -56,6 +56,131 @@ describe('Ask error formatting', () => {
     expect(result).toBe(false);
   });
 
+  it('builds one clarified prompt from multiple clarification item choices', () => {
+    const prompt = AskPage.buildBatchClarifiedPrompt?.('Compare MRBC and Josten collection holdings', [
+      {
+        term: 'MRBC',
+        clarificationKey: 'location_alias.mrbc',
+        selectedOption: {
+          id: 'rare_ref',
+          label: 'SC Rare Book Collection Reference',
+          clarifiedPromptSuffix: 'Use inventory.location__t.name = SC Rare Book Collection Reference for MRBC.',
+        },
+        freeText: '',
+      },
+      {
+        term: 'Josten collection',
+        clarificationKey: 'collection_alias.josten',
+        selectedOption: null,
+        freeText: 'Search notes for Josten collection.',
+      },
+    ]);
+
+    expect(prompt).toContain('Compare MRBC and Josten collection holdings');
+    expect(prompt).toContain('Use inventory.location__t.name = SC Rare Book Collection Reference for MRBC.');
+    expect(prompt).toContain('Search notes for Josten collection.');
+  });
+
+  it('preserves safe-probe clarified prompt suffixes so the resolver does not ask again', () => {
+    const prompt = AskPage.buildBatchClarifiedPrompt?.('Generate titles for the Riverside collection', [
+      {
+        term: 'Riverside',
+        clarificationKey: 'safe_probe.riverside.collection',
+        selectedOption: {
+          id: 'contributors',
+          label: 'Search contributor/author fields for "Riverside"',
+          clarifiedPromptSuffix: 'Search inventory.instance__t__contributors.contributors__name for Riverside.',
+          resolvedFilter: {
+            table: 'inventory.instance__t__contributors',
+            column: 'contributors__name',
+            operator: 'ILIKE',
+            value: '%Riverside%',
+          },
+        },
+        freeText: '',
+      },
+    ]);
+
+    expect(prompt).toContain('Search inventory.instance__t__contributors.contributors__name for Riverside.');
+  });
+
+  it('builds batched clarification telemetry items', () => {
+    const input = AskPage.buildBatchClarificationResolutionInput?.(
+      'Compare MRBC and Josten collection holdings',
+      'batch-1',
+      [
+        {
+          term: 'MRBC',
+          clarificationKey: 'location_alias.mrbc',
+          confidence: 'ambiguous',
+          options: [{ id: 'rare_ref', label: 'SC Rare Book Collection Reference', resolvedFilter: { table: 'inventory.location__t', value: 'SC Rare Book Collection Reference' } }],
+          selectedOption: { id: 'rare_ref', label: 'SC Rare Book Collection Reference', resolvedFilter: { table: 'inventory.location__t', value: 'SC Rare Book Collection Reference' } },
+          freeText: '',
+        },
+      ],
+    );
+
+    expect(input?.clarificationBatchId).toBe('batch-1');
+    expect(input?.items).toHaveLength(1);
+    expect(input?.items?.[0].term).toBe('MRBC');
+    expect(input?.items?.[0].selectedValue).toBe('SC Rare Book Collection Reference');
+  });
+
+  it('formats resolver trace entries for visible clarification context', () => {
+    const lines = AskPage.formatResolverTrace?.([
+      {
+        label: 'Checked locations, libraries, campuses, funds, material types, and other report filters for "Riverside"',
+        status: 'no_match',
+      },
+      {
+        label: 'Found possible match in contributor/author fields',
+        status: 'found',
+        detail: 'Riverside Press',
+        technicalDetail: 'inventory.contributor__t.name',
+      },
+    ]);
+
+    expect(lines).toEqual([
+      'Checked locations, libraries, campuses, funds, material types, and other report filters for "Riverside": no match',
+      'Found possible match in contributor/author fields: Riverside Press (inventory.contributor__t.name)',
+    ]);
+  });
+
+  it('uses user-facing loading copy for resolver checks before SQL generation', () => {
+    expect(typeof AskPage.ASK_RESOLVER_LOADING_STEPS).toBe('object');
+    expect(AskPage.ASK_RESOLVER_LOADING_STEPS).toContain('Checking known FOLIO report filters and lookup values');
+    expect(AskPage.ASK_RESOLVER_LOADING_STEPS).toContain('Looking for named terms in contributors/authors, titles, identifiers, and notes');
+    expect(AskPage.ASK_RESOLVER_LOADING_STEPS).toContain('Preparing a follow-up question if anything is ambiguous');
+  });
+
+  it('uses different progress copy after a clarification is selected', () => {
+    const initial = AskPage.getAskProgressCopy?.('checking_request');
+    const clarified = AskPage.getAskProgressCopy?.('building_sql_after_clarification');
+
+    expect(initial?.title).toBe('Checking your request before SQL generation');
+    expect(initial?.steps).toContain('Checking known FOLIO report filters and lookup values');
+    expect(clarified?.title).toBe('Using your clarification to build SQL');
+    expect(clarified?.steps.join(' ')).not.toContain('Checking known FOLIO report filters');
+    expect(clarified?.steps.join(' ')).toContain('Starting AI SQL generation');
+  });
+
+  it('clamps the resizable Ask workspace split to usable pane widths', () => {
+    expect(AskPage.clampAskWorkspaceSplit?.(20)).toBe(30);
+    expect(AskPage.clampAskWorkspaceSplit?.(38)).toBe(38);
+    expect(AskPage.clampAskWorkspaceSplit?.(82)).toBe(70);
+  });
+
+  it('clamps the resizable Ask AI panel to usable widths', () => {
+    expect(AskPage.clampAskPanelWidth?.(240)).toBe(300);
+    expect(AskPage.clampAskPanelWidth?.(360)).toBe(360);
+    expect(AskPage.clampAskPanelWidth?.(640)).toBe(520);
+  });
+
+  it('uses separate result workspace tabs for results, follow-ups, and SQL', () => {
+    expect(AskPage.ASK_RESULT_TABS?.map((tab) => tab.id)).toEqual(['results', 'followups', 'sql']);
+    expect(AskPage.ASK_RESULT_TABS?.map((tab) => tab.label)).toEqual(['Results', 'Related follow-ups', 'Output SQL']);
+  });
+
   it('explains grouped title SQL validation failures in user-facing language', () => {
     const message = AskPage.formatQuerySubmitError?.({
       isAxiosError: true,
@@ -82,5 +207,83 @@ describe('Ask error formatting', () => {
     });
 
     expect(message).toBe('Submit error: the server hit an internal error while preparing the query job. You did not do anything wrong. Please try again, and contact support if it repeats.');
+  });
+
+  it('formats exploratory notices in staff-facing language', () => {
+    const notice = AskPage.getExploratoryNoticeCopy?.({
+      exploratoryNotice: {
+        title: 'AI-assisted query',
+        message: 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+        detail: 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
+        reason: 'unsupported_query_family',
+      },
+    });
+
+    expect(notice?.title).toBe('AI-assisted query');
+    expect(notice?.message).toContain('best-effort query');
+    expect(notice?.message).not.toContain('canonical compiler path');
+    expect(notice?.detail).toContain('Similar wording');
+  });
+
+  it('falls back to user-facing exploratory notice copy when metadata is missing', () => {
+    const notice = AskPage.getExploratoryNoticeCopy?.({
+      mode: 'exploratory',
+      repeatabilityWarning: 'This AI-assisted query may vary between runs until this request type is reviewed and promoted to a verified report pattern.',
+    });
+
+    expect(notice?.title).toBe('AI-assisted query');
+    expect(notice?.message).toContain('verified report pattern');
+    expect(notice?.message).not.toContain('canonical compiler');
+  });
+
+  it('does not treat advisory exploratory results as blocking clarifications', () => {
+    expect(AskPage.shouldShowBlockingClarification?.({
+      needsClarification: false,
+      needsExploratoryApproval: false,
+      mode: 'exploratory',
+      exploratoryNotice: {
+        title: 'AI-assisted query',
+        message: 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+      },
+    })).toBe(false);
+
+    expect(AskPage.shouldShowBlockingClarification?.({
+      needsClarification: true,
+      clarificationItems: [
+        {
+          term: 'Duplaix',
+          clarificationKey: 'safe_probe.duplaix.collection',
+          question: 'Where should I search?',
+          options: [],
+        },
+      ],
+    })).toBe(true);
+  });
+
+  it('does not build fallback follow-up suggestions without generated SQL', () => {
+    const result = AskPage.getEffectiveAskSuggestions?.(
+      {
+        suggestions: [],
+      },
+      'Show MRBC Reference Collection titles',
+      'Smith College',
+    );
+
+    expect(result?.suggestions).toEqual([]);
+    expect(result?.usingFallback).toBe(false);
+  });
+
+  it('uses fallback follow-up suggestions only after SQL exists', () => {
+    const result = AskPage.getEffectiveAskSuggestions?.(
+      {
+        sql: 'SELECT * FROM inventory.instance__t LIMIT 10',
+        suggestions: [],
+      },
+      'Show records in Neilson Library',
+      'Smith College',
+    );
+
+    expect(result?.suggestions.length).toBeGreaterThan(0);
+    expect(result?.usingFallback).toBe(true);
   });
 });

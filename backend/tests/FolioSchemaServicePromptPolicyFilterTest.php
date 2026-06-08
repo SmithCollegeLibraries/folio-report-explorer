@@ -363,7 +363,7 @@ assertContainsText(
     'Instance-number prompts should steer to instance__t.hrid rather than the UUID id.'
 );
 assertContainsText(
-    'WITH target_location AS MATERIALIZED',
+    'WITH target_locations AS MATERIALIZED',
     $mrbcOnlyLocationContext,
     'Only-location prompts should include a reusable canonical CTE shape for consistent SQL generation.'
 );

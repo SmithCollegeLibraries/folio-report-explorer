@@ -758,6 +758,11 @@ class FolioSchemaService
             return self::$discoveredMap;
         }
 
+        if (!isset(Yii::$app->folioDb)) {
+            self::$discoveredMap = [];
+            return self::$discoveredMap;
+        }
+
         // Build dynamically from the database
         try {
             $db = Yii::$app->folioDb;
@@ -1153,6 +1158,11 @@ class FolioSchemaService
         $cache = self::loadCacheIfValid($cachePath);
         if ($cache && isset($cache['subtables'])) {
             self::$discoveredSubtables = $cache['subtables'];
+            return self::$discoveredSubtables;
+        }
+
+        if (!isset(Yii::$app->folioDb)) {
+            self::$discoveredSubtables = [];
             return self::$discoveredSubtables;
         }
 

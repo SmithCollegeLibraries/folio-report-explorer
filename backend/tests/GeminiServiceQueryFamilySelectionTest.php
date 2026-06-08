@@ -111,6 +111,13 @@ assertSameValue(
     'Title-only inventory listing prompts with explicit location scope should resolve onto the deterministic inventory listing family.'
 );
 
+$materialStatusCampusListingPrompt = 'List of items with material type "e-book" and item status of "in process". Include title, barcode and instance number at Smith College';
+assertSameValue(
+    'inventory_library_location_listing',
+    $familyResolver->invoke(null, $materialStatusCampusListingPrompt, 'Smith College')['familyKey'] ?? null,
+    'Campus-only item listings with material-type and item-status filters should route onto the deterministic inventory listing family instead of falling through exploratory SQL.'
+);
+
 $instanceListPublisherPrompt = "Using the instance numbers below, generate a list that includes title, publisher and barcode. filter for Smith College Libraries\n\nin00002452774\nin00004512775";
 $resolvedInstanceListPublisher = $familyResolver->invoke(null, $instanceListPublisherPrompt, 'Smith College');
 assertSameValue(

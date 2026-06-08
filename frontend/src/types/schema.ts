@@ -201,9 +201,35 @@ export interface ExecuteResponse {
 export interface ClarificationOption {
   id: string;
   label: string;
+  description?: string;
   recommended?: boolean;
   clarifiedPromptSuffix?: string;
   resolvedFilter?: Record<string, unknown>;
+}
+
+export interface ClarificationItem {
+  term: string;
+  clarificationKey: string;
+  question: string;
+  confidence?: string;
+  reason?: string;
+  inputType?: 'single_choice' | 'multi_choice' | string;
+  freeTextAllowed?: boolean;
+  options?: ClarificationOption[];
+}
+
+export interface ResolverTraceEntry {
+  label: string;
+  status: 'found' | 'no_match' | 'checked' | string;
+  detail?: string;
+  technicalDetail?: string;
+}
+
+export interface ExploratoryNotice {
+  title?: string;
+  message?: string;
+  detail?: string;
+  reason?: string;
 }
 
 export interface NlResponse {
@@ -213,7 +239,23 @@ export interface NlResponse {
   warnings?: string[];
   suggestions?: string[];
   needsClarification?: boolean;
+  needsExploratoryApproval?: boolean;
+  mode?: 'canonical' | 'exploratory' | string;
+  message?: string;
+  repeatabilityWarning?: string;
+  exploratoryNotice?: ExploratoryNotice;
+  exploratoryPlan?: {
+    prompt?: string;
+    campus?: string;
+    status?: string;
+    suggestions?: string[];
+  };
   clarificationType?: string;
+  clarificationBatchId?: string;
+  clarificationItems?: ClarificationItem[];
+  resolverTrace?: ResolverTraceEntry[];
+  clarificationSource?: 'model' | 'deterministic' | string;
+  modelClarificationFallbackReason?: string;
   clarificationKey?: string;
   question?: string;
   inputType?: 'single_choice' | 'multi_choice' | string;
@@ -330,6 +372,67 @@ export interface SettingsTestResponse {
   postgres?: PostgresConnectionTestResult;
   gemini?: GeminiConnectionTestResult;
   openai?: OpenAiConnectionTestResult;
+}
+
+export interface ReferenceCacheTableStatus {
+  sourceTable: string;
+  enabled: boolean;
+  classification: string;
+  rowCount: number | null;
+  lastRefreshedAt: string | null;
+  lastRefreshStatus: string;
+  lastError: string | null;
+}
+
+export interface ReferenceCacheStatus {
+  available: boolean;
+  enabledTables: number;
+  activeRows: number;
+  failedTables: number;
+  manualReviewTables: number;
+  disabledCacheableTables: number;
+  lastRefreshedAt: string | null;
+  tables: ReferenceCacheTableStatus[];
+  error?: string;
+}
+
+export interface ReferenceCacheCandidateSummary {
+  classification: string;
+  sourceSchema: string;
+  tableCount: number;
+}
+
+export interface ReferenceCacheCandidate {
+  sourceTable: string;
+  sourceSchema: string;
+  classification: string;
+  estimatedRows: number | null;
+  totalBytes: number | null;
+}
+
+export interface ReferenceCacheCandidatesResponse {
+  available: boolean;
+  summaryBySchema: ReferenceCacheCandidateSummary[];
+  candidates: ReferenceCacheCandidate[];
+  error?: string;
+}
+
+export type ReferenceCacheCandidateDecision = 'enable' | 'disable' | 'reject';
+
+export interface ReferenceCacheCandidateReviewResponse {
+  sourceTable: string;
+  enabled: boolean;
+  classification: string;
+  estimatedRows: number | null;
+  totalBytes: number | null;
+  error?: string;
+}
+
+export interface ReferenceCacheRefreshTableResponse {
+  sourceTable: string;
+  rowCount: number;
+  lastRefreshStatus: string;
+  error?: string;
 }
 
 // ─── Async Job types ──────────────────────────────────────────────

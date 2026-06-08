@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchSettings, saveSettings, testSettings } from '../api/client';
+import { fetchReferenceCacheCandidates, fetchReferenceCacheStatus, fetchSettings, refreshReferenceCacheTable, reviewReferenceCacheCandidate, saveSettings, testSettings } from '../api/client';
 import type { AppSettings, SettingsTestResponse } from '../types';
 import {
   Settings as SettingsIcon,
@@ -12,6 +12,7 @@ import {
   Eye,
   EyeOff,
   RefreshCw,
+  ListChecks,
 } from 'lucide-react';
 
 type SettingsData = Pick<
@@ -54,11 +55,11 @@ const EMPTY: SettingsData = {
   pg_user: '',
   pg_pass: '',
   pg_sslmode: 'require',
-  ai_provider: 'gemini',
+  ai_provider: 'openai',
   gemini_api_key: '',
   gemini_model: 'gemini-2.5-flash',
   openai_api_key: '',
-  openai_model: 'gpt-4.1-mini',
+  openai_model: 'gpt-5.4',
 };
 
 const SSL_MODES = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'];
@@ -72,12 +73,26 @@ export default function Settings() {
   const [pgTestResult, setPgTestResult] = useState<PgConnectionResult | null>(null);
   const [geminiTestResult, setGeminiTestResult] = useState<GeminiConnectionResult | null>(null);
   const [openAiTestResult, setOpenAiTestResult] = useState<OpenAiConnectionResult | null>(null);
+  const [referenceReviewError, setReferenceReviewError] = useState<string | null>(null);
+  const [referenceReviewMessage, setReferenceReviewMessage] = useState<string | null>(null);
+  const [referenceRefreshError, setReferenceRefreshError] = useState<string | null>(null);
+  const [referenceRefreshMessage, setReferenceRefreshMessage] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   // Load current settings
   const { data: current, isLoading } = useQuery({
     queryKey: ['settings'],
     queryFn: fetchSettings,
+  });
+
+  const { data: referenceCache, isLoading: referenceCacheLoading } = useQuery({
+    queryKey: ['reference-cache-status'],
+    queryFn: fetchReferenceCacheStatus,
+  });
+
+  const { data: referenceCandidates } = useQuery({
+    queryKey: ['reference-cache-candidates'],
+    queryFn: fetchReferenceCacheCandidates,
   });
 
   // Populate form when settings load
@@ -91,11 +106,11 @@ export default function Settings() {
         pg_user: current.pg_user || '',
         pg_pass: '', // don't populate masked passwords
         pg_sslmode: current.pg_sslmode || 'require',
-        ai_provider: current.ai_provider === 'openai' ? 'openai' : 'gemini',
+        ai_provider: current.ai_provider === 'gemini' ? 'gemini' : 'openai',
         gemini_api_key: '', // don't populate masked keys
         gemini_model: current.gemini_model || 'gemini-2.5-flash',
         openai_api_key: '', // don't populate masked keys
-        openai_model: current.openai_model || 'gpt-4.1-mini',
+        openai_model: current.openai_model || 'gpt-5.4',
       }));
     }
   }, [current]);
@@ -142,6 +157,41 @@ export default function Settings() {
         openai_model: form.openai_model,
       }),
     onSuccess: (data: SettingsTestResponse) => setOpenAiTestResult(data.openai ?? null),
+  });
+
+  const reviewReferenceCandidateMut = useMutation({
+    mutationFn: reviewReferenceCacheCandidate,
+    onMutate: () => {
+      setReferenceReviewError(null);
+      setReferenceReviewMessage(null);
+    },
+    onSuccess: (result) => {
+      setReferenceReviewMessage(
+        result.enabled
+          ? `Review saved: ${result.sourceTable}. Refresh from the enabled table list.`
+          : `Review saved: ${result.sourceTable}`,
+      );
+      queryClient.invalidateQueries({ queryKey: ['reference-cache-status'] });
+      queryClient.invalidateQueries({ queryKey: ['reference-cache-candidates'] });
+    },
+    onError: (error) => {
+      setReferenceReviewError(extractApiError(error, 'Review failed'));
+    },
+  });
+
+  const refreshReferenceTableMut = useMutation({
+    mutationFn: refreshReferenceCacheTable,
+    onMutate: () => {
+      setReferenceRefreshError(null);
+      setReferenceRefreshMessage(null);
+    },
+    onSuccess: (result) => {
+      setReferenceRefreshMessage(`Refresh saved: ${result.sourceTable} (${result.rowCount.toLocaleString()} rows)`);
+      queryClient.invalidateQueries({ queryKey: ['reference-cache-status'] });
+    },
+    onError: (error) => {
+      setReferenceRefreshError(extractApiError(error, 'Refresh failed'));
+    },
   });
 
   const handleSave = () => {
@@ -304,6 +354,202 @@ export default function Settings() {
         </div>
       </section>
 
+      {/* ── Local reference cache ─────────────── */}
+      <section className="mb-8">
+        <div className="flex items-center gap-2 mb-4">
+          <ListChecks size={18} className="text-slate-700" />
+          <h3 className="text-lg font-semibold">Local Reference Cache</h3>
+          {referenceCache?.available && referenceCache.failedTables === 0 && (
+            <span className="ml-auto flex items-center gap-1 text-xs text-green-600">
+              <CheckCircle2 size={14} /> Ready
+            </span>
+          )}
+          {referenceCache?.available && referenceCache.failedTables > 0 && (
+            <span className="ml-auto flex items-center gap-1 text-xs text-amber-700">
+              <XCircle size={14} /> Needs review
+            </span>
+          )}
+        </div>
+
+        <div className="bg-white border rounded-lg p-5">
+          {referenceCacheLoading && (
+            <div className="flex items-center gap-2 text-sm text-gray-500">
+              <Loader2 size={14} className="animate-spin" />
+              Loading reference cache status…
+            </div>
+          )}
+
+          {!referenceCacheLoading && !referenceCache?.available && (
+            <div className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              Reference cache tables are not available yet. Run the reference-cache migration and refresh command.
+              {referenceCache?.error && (
+                <div className="mt-1 text-xs text-amber-700">{referenceCache.error}</div>
+              )}
+            </div>
+          )}
+
+          {!referenceCacheLoading && referenceCache?.available && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <Metric label="Enabled tables" value={referenceCache.enabledTables} />
+                <Metric label="Local rows" value={referenceCache.activeRows} />
+                <Metric label="Review queue" value={referenceCache.manualReviewTables} />
+                <Metric label="Failed" value={referenceCache.failedTables} tone={referenceCache.failedTables > 0 ? 'warn' : 'normal'} />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500">
+                <span>Last refresh: {referenceCache.lastRefreshedAt || 'never'}</span>
+                <span>Disabled cacheable candidates: {referenceCache.disabledCacheableTables}</span>
+              </div>
+
+              <div className="border rounded-lg overflow-hidden">
+                {(referenceRefreshError || referenceRefreshMessage) && (
+                  <div className={`border-b px-3 py-2 text-xs ${
+                    referenceRefreshError
+                      ? 'border-red-100 bg-red-50 text-red-700'
+                      : 'border-green-100 bg-green-50 text-green-700'
+                  }`}>
+                    {referenceRefreshError
+                      ? `Refresh failed: ${referenceRefreshError}`
+                      : referenceRefreshMessage}
+                  </div>
+                )}
+                <div className="max-h-56 overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                      <tr>
+                        <th className="text-left font-medium px-3 py-2">Table</th>
+                        <th className="text-right font-medium px-3 py-2">Rows</th>
+                        <th className="text-left font-medium px-3 py-2">Status</th>
+                        <th className="text-right font-medium px-3 py-2">Refresh</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {referenceCache.tables.map((table) => (
+                        <tr key={table.sourceTable}>
+                          <td className="px-3 py-2 text-gray-800">{table.sourceTable}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-gray-700">
+                            {table.rowCount ?? 'n/a'}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`inline-flex rounded px-2 py-0.5 ${
+                              table.lastRefreshStatus === 'success'
+                                ? 'bg-green-50 text-green-700'
+                                : table.lastRefreshStatus === 'failed'
+                                  ? 'bg-red-50 text-red-700'
+                                  : 'bg-gray-100 text-gray-600'
+                            }`}>
+                              {table.lastRefreshStatus}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => refreshReferenceTableMut.mutate({ sourceTable: table.sourceTable })}
+                              disabled={refreshReferenceTableMut.isPending}
+                              className="inline-flex items-center justify-center rounded border border-gray-200 bg-white p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                              title="Refresh table"
+                            >
+                              {refreshReferenceTableMut.isPending ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <RefreshCw size={13} />
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {referenceCandidates?.available && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="bg-gray-50 px-3 py-2 text-xs font-medium text-gray-600">
+                      Candidate Review By Schema
+                    </div>
+                    <div className="max-h-44 overflow-auto">
+                      <table className="w-full text-xs">
+                        <tbody className="divide-y">
+                          {referenceCandidates.summaryBySchema.slice(0, 12).map((row) => (
+                            <tr key={`${row.classification}-${row.sourceSchema}`}>
+                              <td className="px-3 py-2 text-gray-700">{row.sourceSchema}</td>
+                              <td className="px-3 py-2 text-gray-500">{row.classification}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-800">{row.tableCount}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="bg-gray-50 px-3 py-2 text-xs font-medium text-gray-600">
+                      Small Disabled Candidates
+                    </div>
+                    {(referenceReviewError || referenceReviewMessage) && (
+                      <div className={`border-t px-3 py-2 text-xs ${
+                        referenceReviewError
+                          ? 'border-red-100 bg-red-50 text-red-700'
+                          : 'border-green-100 bg-green-50 text-green-700'
+                      }`}>
+                        {referenceReviewError
+                          ? `Review failed: ${referenceReviewError}`
+                          : referenceReviewMessage}
+                      </div>
+                    )}
+                    <div className="max-h-44 overflow-auto">
+                      <table className="w-full text-xs">
+                        <tbody className="divide-y">
+                          {referenceCandidates.candidates.slice(0, 12).map((candidate) => (
+                            <tr key={candidate.sourceTable}>
+                              <td className="px-3 py-2 text-gray-800">{candidate.sourceTable}</td>
+                              <td className="px-3 py-2 text-right tabular-nums text-gray-600">
+                                {candidate.estimatedRows ?? 'n/a'}
+                              </td>
+                              <td className="px-3 py-2">
+                                <div className="flex justify-end gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => reviewReferenceCandidateMut.mutate({
+                                      sourceTable: candidate.sourceTable,
+                                      decision: 'enable',
+                                    })}
+                                    disabled={reviewReferenceCandidateMut.isPending}
+                                    className="inline-flex items-center justify-center rounded border border-green-200 bg-green-50 p-1 text-green-700 hover:bg-green-100 disabled:opacity-50"
+                                    title="Enable table for local reference cache"
+                                  >
+                                    <CheckCircle2 size={13} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => reviewReferenceCandidateMut.mutate({
+                                      sourceTable: candidate.sourceTable,
+                                      decision: 'reject',
+                                    })}
+                                    disabled={reviewReferenceCandidateMut.isPending}
+                                    className="inline-flex items-center justify-center rounded border border-gray-200 bg-white p-1 text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                                    title="Mark table as do not cache"
+                                  >
+                                    <XCircle size={13} />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* ── Gemini AI ──────────────────────────── */}
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
@@ -454,7 +700,7 @@ export default function Settings() {
             <Input
               value={form.openai_model}
               onChange={(v) => update('openai_model', v)}
-              placeholder="gpt-4.1-mini"
+              placeholder="gpt-5.4"
             />
           </div>
 
@@ -542,6 +788,44 @@ function Input({
       className="w-full border rounded px-3 py-2 text-sm focus:ring-2 focus:ring-folio-300 focus:border-folio-500 outline-none"
     />
   );
+}
+
+function Metric({
+  label,
+  value,
+  tone = 'normal',
+}: {
+  label: string;
+  value: number;
+  tone?: 'normal' | 'warn';
+}) {
+  return (
+    <div className={`rounded-lg border px-3 py-2 ${
+      tone === 'warn' ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'
+    }`}>
+      <div className={`text-lg font-semibold tabular-nums ${
+        tone === 'warn' ? 'text-amber-800' : 'text-gray-900'
+      }`}>
+        {value.toLocaleString()}
+      </div>
+      <div className="text-xs text-gray-500">{label}</div>
+    </div>
+  );
+}
+
+function extractApiError(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'response' in error) {
+    const response = (error as { response?: { data?: { error?: unknown } } }).response;
+    if (typeof response?.data?.error === 'string' && response.data.error.trim() !== '') {
+      return response.data.error;
+    }
+  }
+
+  if (error instanceof Error && error.message.trim() !== '') {
+    return error.message;
+  }
+
+  return fallback;
 }
 
 function TestResult({

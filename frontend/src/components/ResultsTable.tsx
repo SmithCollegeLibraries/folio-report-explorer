@@ -86,8 +86,8 @@ export default function ResultsTable({ data, drillThrough }: Props) {
   return (
     <div>
       {/* Summary bar */}
-      <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border rounded-t-lg text-xs text-gray-600">
-        <div className="flex gap-4">
+      <div data-testid="results-summary-bar" className="flex items-center justify-between px-2 py-1 bg-gray-50 border rounded-t-lg text-xs text-gray-600">
+        <div className="flex gap-3">
           <span>
             <strong>{data.rowCount}</strong> row{data.rowCount !== 1 ? 's' : ''}
           </span>
@@ -143,14 +143,14 @@ export default function ResultsTable({ data, drillThrough }: Props) {
         </div>
       ) : (
       <div className="overflow-x-auto border border-t-0 rounded-b-lg">
-        <table className="w-full text-sm">
+        <table data-testid="results-table" className="w-full text-xs">
           <thead>
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id} className="bg-gray-100 border-b">
                 {hg.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="px-3 py-2 text-left font-mono"
+                    className="px-2 py-1.5 text-left font-mono"
                   >
                     {header.isPlaceholder
                       ? null
@@ -164,7 +164,7 @@ export default function ResultsTable({ data, drillThrough }: Props) {
             {table.getRowModel().rows.map((row) => (
               <tr key={row.id} className="border-b hover:bg-gray-50">
                 {row.getVisibleCells().map((cell) => (
-                  <td key={cell.id} className="px-3 py-1.5 font-mono text-xs max-w-xs truncate">
+                  <td key={cell.id} className="px-2 py-1 font-mono text-xs max-w-xs truncate">
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </td>
                 ))}

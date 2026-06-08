@@ -1,0 +1,22 @@
+CREATE TABLE IF NOT EXISTS ai_query_feedback (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NULL,
+    original_question TEXT NOT NULL,
+    prompt_fingerprint CHAR(16) NOT NULL,
+    generated_sql MEDIUMTEXT NULL,
+    sql_hash CHAR(64) NULL,
+    route VARCHAR(128) NULL,
+    route_reason VARCHAR(255) NULL,
+    mode VARCHAR(64) NULL,
+    data_source ENUM('folio', 'local', 'composite') DEFAULT 'folio',
+    result_accuracy ENUM('accurate', 'inaccurate', 'unsure') NOT NULL,
+    feedback_note TEXT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_prompt_fingerprint (prompt_fingerprint),
+    INDEX idx_sql_hash (sql_hash),
+    INDEX idx_route (route),
+    INDEX idx_result_accuracy (result_accuracy),
+    INDEX idx_user_id (user_id),
+    INDEX idx_created_at (created_at),
+    CONSTRAINT fk_query_feedback_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

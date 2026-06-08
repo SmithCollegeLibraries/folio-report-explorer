@@ -12,6 +12,7 @@ use app\services\SettingsService;
 use app\services\DatabaseRetryService;
 use app\services\IndexRecommendationService;
 use app\services\Nl2sqlRuntimePreflightService;
+use app\services\ReferenceCacheRefreshService;
 use app\services\SqlPreflightService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
@@ -43,6 +44,8 @@ use Firebase\JWT\JWT;
  */
 class FolioQueryController extends Controller
 {
+    private const QUERY_JOB_NAME_MAX_LENGTH = 240;
+
     /**
      * @inheritdoc
      */
@@ -88,7 +91,7 @@ class FolioQueryController extends Controller
                     [
                         'allow' => true,
                         'actions' => [
-                            'settings', 'settings-save', 'settings-test', 'nl2sql-preflight',
+                            'settings', 'settings-save', 'settings-test', 'nl2sql-preflight', 'reference-cache-status', 'reference-cache-candidates', 'reference-cache-candidate-review', 'reference-cache-refresh',
                             'training-list', 'training-detail', 'training-create',
                             'training-update', 'training-delete', 'training-correct',
                             'report-create', 'report-update', 'report-delete',
@@ -416,7 +419,7 @@ class FolioQueryController extends Controller
         return [
             'source' => 'history',
             'jobId' => $jobId,
-            'previousPrompt' => trim((string)($job->name ?? '')) ?: 'Previous historical query',
+            'previousPrompt' => $this->getQueryJobOriginalPrompt($job) ?: 'Previous historical query',
             'previousSql' => $previousSql,
             'previousColumns' => is_array($previousColumns) ? array_values(array_filter(array_map('strval', $previousColumns))) : [],
         ];
@@ -786,9 +789,10 @@ class FolioQueryController extends Controller
         }
 
         // Create job
-        $job = QueryJob::createJob($sql, $params, $source, $dataSource);
+        $metadata = $this->buildQueryJobMetadata($body, $source);
+        $job = QueryJob::createJob($sql, $params, $source, $dataSource, $metadata);
         $job->user_id = $this->getCurrentUserId();
-        $job->name = isset($body['name']) ? trim($body['name']) : null;
+        $job->name = $this->normalizeQueryJobName($body['name'] ?? null);
         $job->sql_hash = hash('sha256', $sql . json_encode($params));
         if ($job->hasAttribute('output_mode')) {
             $job->output_mode = $outputMode;
@@ -814,6 +818,109 @@ class FolioQueryController extends Controller
 
         Yii::$app->response->statusCode = 202;
         return $job->toStatusArray();
+    }
+
+    /**
+     * Preserve full NL prompts while keeping query_jobs.name safe for older VARCHAR(255) installs.
+     *
+     * @param array $body
+     * @param string $source
+     * @return array|null
+     */
+    private function buildQueryJobMetadata(array $body, $source)
+    {
+        $rawName = isset($body['name']) ? trim((string)$body['name']) : '';
+        if ($rawName === '') {
+            return null;
+        }
+
+        $metadata = [];
+        if ((string)$source === 'nl') {
+            $metadata['originalPrompt'] = $rawName;
+        }
+
+        $normalizedName = $this->normalizeQueryJobName($rawName);
+        if ($normalizedName !== $rawName) {
+            $metadata['originalName'] = $rawName;
+        }
+
+        return $metadata ?: null;
+    }
+
+    /**
+     * Return a compact display name that fits legacy query_jobs.name schemas.
+     *
+     * @param mixed $name
+     * @return string|null
+     */
+    private function normalizeQueryJobName($name)
+    {
+        $label = preg_replace('/\s+/', ' ', trim((string)($name ?? '')));
+        if ($label === '') {
+            return null;
+        }
+
+        if ($this->textLength($label) <= self::QUERY_JOB_NAME_MAX_LENGTH) {
+            return $label;
+        }
+
+        $prefixLength = self::QUERY_JOB_NAME_MAX_LENGTH - 3;
+        return rtrim($this->textSubstring($label, 0, $prefixLength)) . '...';
+    }
+
+    /**
+     * @param QueryJob $job
+     * @return string
+     */
+    private function getQueryJobOriginalPrompt(QueryJob $job)
+    {
+        $metadata = $this->decodeQueryJobMetadata($job);
+        foreach (['originalPrompt', 'originalName', 'nlPrompt'] as $key) {
+            $value = trim((string)($metadata[$key] ?? ''));
+            if ($value !== '') {
+                return $value;
+            }
+        }
+
+        return trim((string)($job->name ?? ''));
+    }
+
+    /**
+     * @param QueryJob $job
+     * @return array
+     */
+    private function decodeQueryJobMetadata(QueryJob $job)
+    {
+        if (method_exists($job, 'hasAttribute') && !$job->hasAttribute('metadata')) {
+            return [];
+        }
+
+        if (empty($job->metadata)) {
+            return [];
+        }
+
+        $decoded = json_decode((string)$job->metadata, true);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * @param string $value
+     * @return int
+     */
+    private function textLength($value)
+    {
+        return function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value);
+    }
+
+    /**
+     * @param string $value
+     * @param int $start
+     * @param int $length
+     * @return string
+     */
+    private function textSubstring($value, $start, $length)
+    {
+        return function_exists('mb_substr') ? mb_substr($value, $start, $length, 'UTF-8') : substr($value, $start, $length);
     }
 
     /**
@@ -921,6 +1028,11 @@ class FolioQueryController extends Controller
         if ($includeSuggestions === null) {
             $includeSuggestions = true;
         }
+        $allowExploratoryRaw = $body['allowExploratory'] ?? false;
+        $allowExploratory = filter_var($allowExploratoryRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+        if ($allowExploratory === null) {
+            $allowExploratory = false;
+        }
 
         if (empty($prompt)) {
             Yii::$app->response->statusCode = 400;
@@ -989,7 +1101,7 @@ class FolioQueryController extends Controller
                 ? $this->buildFollowUpPrompt($prompt, $followUpContext)
                 : $prompt;
 
-            $result = GeminiService::generateSqlWithShadow($effectivePrompt, $campus ?: null, $userId);
+            $result = GeminiService::generateSqlWithShadow($effectivePrompt, $campus ?: null, $userId, $allowExploratory);
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
             }
@@ -1013,13 +1125,17 @@ class FolioQueryController extends Controller
                             'promptFingerprint' => $this->fingerprintPrompt($effectivePrompt),
                         ]
                     );
-                    Yii::$app->response->statusCode = 422;
-                    return ['error' => $estimate['error']];
+                    return $this->buildAskContinuationFromFailure(
+                        new \RuntimeException((string)$estimate['error']),
+                        $effectivePrompt,
+                        $campus ?: null,
+                        'ask_sql_preflight_recovery'
+                    );
                 }
             }
 
             $result['suggestions'] = [];
-            if ($includeSuggestions && empty($result['needsClarification'])) {
+            if ($includeSuggestions && empty($result['needsClarification']) && !empty($result['sql'])) {
                 try {
                     $result['suggestions'] = GeminiService::suggestFollowUpQueries(
                         $effectivePrompt,
@@ -1037,8 +1153,7 @@ class FolioQueryController extends Controller
 
             return $result;
         } catch (\InvalidArgumentException $e) {
-            Yii::$app->response->statusCode = 403;
-            return ['error' => $e->getMessage()];
+            return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
         } catch (\RuntimeException $e) {
             if (GeminiService::isAiTimeoutMessage($e->getMessage())) {
                 Yii::warning(
@@ -1051,9 +1166,130 @@ class FolioQueryController extends Controller
                     'error' => 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.',
                 ];
             }
-            Yii::$app->response->statusCode = 500;
-            return ['error' => $e->getMessage()];
+            return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
         }
+    }
+
+    private function buildAskContinuationFromFailure(
+        \Throwable $error,
+        string $prompt,
+        $campus = null,
+        string $routeReason = 'ask_generation_recovery'
+    ): array {
+        $message = trim($error->getMessage());
+        if ($this->isAskSecurityPolicyFailure($message)) {
+            Yii::$app->response->statusCode = 403;
+            return [
+                'error' => $this->buildAskPolicyBlockMessage($message),
+                'route' => 'blocked',
+                'routeReason' => 'ask_policy_block',
+            ];
+        }
+
+        if ($this->isAskPostgresConnectivityFailure($message)) {
+            return $this->buildAskPostgresConnectivityRecovery($prompt, $campus, $routeReason);
+        }
+
+        Yii::$app->response->statusCode = 200;
+        Yii::warning(
+            'Ask generation recovered with continuation response: ' . $message,
+            'nl2sql.ask_recovery'
+        );
+
+        return [
+            'needsClarification' => false,
+            'needsExploratoryApproval' => false,
+            'mode' => 'exploratory',
+            'message' => 'I could not produce fully validated SQL for this request. Review the details below, then refine the request or try again.',
+            'exploratoryNotice' => [
+                'title' => 'AI-assisted query',
+                'message' => 'I could not produce fully validated SQL for this request. Review the details below, then refine the request or try again.',
+                'detail' => 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
+                'reason' => $routeReason,
+            ],
+            'warnings' => [
+                'The first attempt could not produce fully validated SQL.',
+            ],
+            'suggestions' => [],
+            'route' => 'exploratory_recovery',
+            'routeReason' => $routeReason,
+            'recoveryContext' => [
+                'campus' => $campus,
+                'promptFingerprint' => $this->fingerprintPrompt($prompt),
+            ],
+        ];
+    }
+
+    private function isAskPostgresConnectivityFailure(string $message): bool
+    {
+        return preg_match(
+            '/\bSQLSTATE\[(?:08006|08001|08004|HY000)\].*(?:timeout expired|could not connect|connection refused|no connection|SSL SYSCALL|server closed the connection)|\b(?:timeout expired|could not connect to server|connection refused|no route to host)\b/i',
+            $message
+        ) === 1;
+    }
+
+    private function buildAskPostgresConnectivityRecovery(string $prompt, $campus, string $routeReason): array
+    {
+        Yii::$app->response->statusCode = 200;
+        $message = 'I could not connect to the FOLIO reporting database to validate this query. If you are off campus, connect to VPN and try again.';
+
+        return [
+            'needsClarification' => false,
+            'needsExploratoryApproval' => false,
+            'mode' => 'exploratory',
+            'errorType' => 'postgres_connectivity',
+            'message' => $message,
+            'exploratoryNotice' => [
+                'title' => 'Database connection issue',
+                'message' => $message,
+                'detail' => 'The AI request may have generated SQL, but the app could not verify it against FOLIO Postgres.',
+                'reason' => $routeReason,
+            ],
+            'warnings' => [
+                'FOLIO Postgres validation was unavailable.',
+            ],
+            'suggestions' => [],
+            'route' => 'postgres_connectivity_recovery',
+            'routeReason' => $routeReason,
+            'recoveryContext' => [
+                'campus' => $campus,
+                'promptFingerprint' => $this->fingerprintPrompt($prompt),
+            ],
+        ];
+    }
+
+    /**
+     * Normalize a client-supplied clarification batch id to a value that fits the
+     * CHAR(36) column. Returns null for empty, over-length, or unsafe input so an
+     * insert can never overflow (MySQL 1406) or silently truncate.
+     */
+    private function normalizeClarificationBatchId($raw): ?string
+    {
+        $value = trim((string)$raw);
+        if ($value === '' || strlen($value) > 36) {
+            return null;
+        }
+
+        return preg_match('/^[A-Za-z0-9_-]{1,36}$/', $value) === 1 ? $value : null;
+    }
+
+    private function isAskSecurityPolicyFailure(string $message): bool
+    {
+        return preg_match(
+            '/\b(?:patron personal|individual patron|pii|forbidden|blocked|not allowed|table policy|users\.|feesfines\.|audit\.)\b/i',
+            $message
+        ) === 1;
+    }
+
+    private function buildAskPolicyBlockMessage(string $message): string
+    {
+        $message = trim($message);
+        if ($message === '') {
+            $message = 'This request is blocked by reporting data policy.';
+        }
+
+        return $message
+            . ' Try an aggregate operational report instead, such as counts, totals, trends, or grouped activity that does not identify individual patrons.';
     }
 
     /**
@@ -1091,15 +1327,75 @@ class FolioQueryController extends Controller
         }
 
         $db = Yii::$app->db;
+        $items = $body['items'] ?? [];
+        if (is_array($items) && !empty($items)) {
+            $ids = [];
+            $batchId = $this->normalizeClarificationBatchId($body['clarificationBatchId'] ?? null);
+            foreach ($items as $item) {
+                if (!is_array($item)) {
+                    continue;
+                }
+                $itemKey = trim((string)($item['clarificationKey'] ?? ''));
+                if ($itemKey === '') {
+                    continue;
+                }
+                $itemOptions = $item['options'] ?? [];
+                $itemSelected = $item['selectedOptionIds'] ?? [];
+                $itemFilter = $item['resolvedFilter'] ?? null;
+                if (!is_array($itemOptions)) {
+                    $itemOptions = [];
+                }
+                if (!is_array($itemSelected)) {
+                    $itemSelected = [];
+                }
+                if ($itemFilter !== null && !is_array($itemFilter)) {
+                    $itemFilter = null;
+                }
+
+                $db->createCommand()->insert('ai_clarification_events', [
+                    'user_id' => $this->getCurrentUserId(),
+                    'clarification_batch_id' => $batchId,
+                    'original_question' => $originalQuestion,
+                    'clarification_key' => $itemKey,
+                    'term' => trim((string)($item['term'] ?? '')) ?: null,
+                    'detected_terms_json' => json_encode(array_values($detectedTerms)),
+                    'options_json' => json_encode(array_values($itemOptions)),
+                    'selected_option_ids_json' => json_encode(array_values($itemSelected)),
+                    'free_text_response' => trim((string)($item['freeTextResponse'] ?? '')) ?: null,
+                    'resolved_filter_json' => $itemFilter !== null ? json_encode($itemFilter) : null,
+                    'selected_source_table' => trim((string)($item['selectedSourceTable'] ?? ($itemFilter['table'] ?? ''))) ?: null,
+                    'selected_source_id' => trim((string)($item['selectedSourceId'] ?? '')) ?: null,
+                    'selected_value' => trim((string)($item['selectedValue'] ?? ($itemFilter['value'] ?? ''))) ?: null,
+                    'confidence' => trim((string)($item['confidence'] ?? '')) ?: null,
+                    'promotion_status' => trim((string)($item['promotionStatus'] ?? 'none')) ?: 'none',
+                    'generated_sql' => trim((string)($body['generatedSql'] ?? '')) ?: null,
+                    'result_status' => trim((string)($body['resultStatus'] ?? '')) ?: null,
+                ])->execute();
+                $ids[] = (int)$db->getLastInsertID();
+            }
+
+            return [
+                'ids' => $ids,
+                'message' => 'Clarifications saved.',
+            ];
+        }
+
         $db->createCommand()->insert('ai_clarification_events', [
             'user_id' => $this->getCurrentUserId(),
+            'clarification_batch_id' => $this->normalizeClarificationBatchId($body['clarificationBatchId'] ?? null),
             'original_question' => $originalQuestion,
             'clarification_key' => $clarificationKey,
+            'term' => trim((string)($body['term'] ?? '')) ?: null,
             'detected_terms_json' => json_encode(array_values($detectedTerms)),
             'options_json' => json_encode(array_values($options)),
             'selected_option_ids_json' => json_encode(array_values($selectedOptionIds)),
             'free_text_response' => trim((string)($body['freeTextResponse'] ?? '')) ?: null,
             'resolved_filter_json' => $resolvedFilter !== null ? json_encode($resolvedFilter) : null,
+            'selected_source_table' => trim((string)($body['selectedSourceTable'] ?? ($resolvedFilter['table'] ?? ''))) ?: null,
+            'selected_source_id' => trim((string)($body['selectedSourceId'] ?? '')) ?: null,
+            'selected_value' => trim((string)($body['selectedValue'] ?? ($resolvedFilter['value'] ?? ''))) ?: null,
+            'confidence' => trim((string)($body['confidence'] ?? '')) ?: null,
+            'promotion_status' => trim((string)($body['promotionStatus'] ?? 'none')) ?: 'none',
             'generated_sql' => trim((string)($body['generatedSql'] ?? '')) ?: null,
             'result_status' => trim((string)($body['resultStatus'] ?? '')) ?: null,
         ])->execute();
@@ -1107,6 +1403,53 @@ class FolioQueryController extends Controller
         return [
             'id' => (int)$db->getLastInsertID(),
             'message' => 'Clarification saved.',
+        ];
+    }
+
+    /**
+     * POST /api/query-feedback — persist a user's temperature-check result.
+     */
+    public function actionQueryFeedback()
+    {
+        $body = Yii::$app->request->getBodyParams();
+
+        $originalQuestion = trim((string)($body['originalQuestion'] ?? ''));
+        $resultAccuracy = strtolower(trim((string)($body['resultAccuracy'] ?? '')));
+        if ($originalQuestion === '') {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'originalQuestion is required.'];
+        }
+        if (!in_array($resultAccuracy, ['accurate', 'inaccurate', 'unsure'], true)) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'resultAccuracy must be accurate, inaccurate, or unsure.'];
+        }
+
+        $generatedSql = trim((string)($body['generatedSql'] ?? ''));
+        $sqlHash = $generatedSql !== ''
+            ? hash('sha256', $this->normalizeSqlForTelemetry($generatedSql))
+            : null;
+        $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
+
+        $db = Yii::$app->db;
+        $db->createCommand()->insert('ai_query_feedback', [
+            'user_id' => $this->getCurrentUserId(),
+            'original_question' => $originalQuestion,
+            'prompt_fingerprint' => $this->fingerprintPrompt($originalQuestion),
+            'generated_sql' => $generatedSql !== '' ? $generatedSql : null,
+            'sql_hash' => $sqlHash,
+            'route' => trim((string)($body['route'] ?? '')) ?: null,
+            'route_reason' => trim((string)($body['routeReason'] ?? '')) ?: null,
+            'mode' => trim((string)($body['mode'] ?? '')) ?: null,
+            'data_source' => $dataSource,
+            'result_accuracy' => $resultAccuracy,
+            'feedback_note' => trim((string)($body['feedbackNote'] ?? '')) ?: null,
+        ])->execute();
+
+        return [
+            'id' => (int)$db->getLastInsertID(),
+            'message' => 'Query feedback saved.',
+            'promptFingerprint' => $this->fingerprintPrompt($originalQuestion),
+            'sqlHash' => $sqlHash,
         ];
     }
 
@@ -1433,7 +1776,7 @@ class FolioQueryController extends Controller
         }
 
         $job = QueryJob::createJob($sq->generated_sql, $jobParams, $sq->source ?: 'builder', 'folio');
-        $job->name    = $sq->name;
+        $job->name    = $this->normalizeQueryJobName($sq->name);
         $job->user_id = $userId;
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
@@ -1669,6 +2012,261 @@ class FolioQueryController extends Controller
     public function actionNl2sqlPreflight()
     {
         return Nl2sqlRuntimePreflightService::buildFromAppContext();
+    }
+
+    /**
+     * GET /api/reference-cache/status — summarize local FOLIO reference cache freshness.
+     */
+    public function actionReferenceCacheStatus()
+    {
+        $empty = [
+            'available' => false,
+            'enabledTables' => 0,
+            'activeRows' => 0,
+            'failedTables' => 0,
+            'manualReviewTables' => 0,
+            'disabledCacheableTables' => 0,
+            'lastRefreshedAt' => null,
+            'tables' => [],
+        ];
+
+        try {
+            $db = Yii::$app->db;
+            $tables = $db->createCommand(
+                'SELECT source_table, enabled, classification, row_count, last_refreshed_at, last_refresh_status, last_error
+                 FROM folio_reference_tables
+                 ORDER BY enabled DESC, source_table'
+            )->queryAll();
+
+            $activeRows = (int)$db->createCommand(
+                'SELECT COUNT(*) FROM folio_reference_values WHERE is_active = 1'
+            )->queryScalar();
+        } catch (\Throwable $e) {
+            $empty['error'] = $e->getMessage();
+            return $empty;
+        }
+
+        $enabledTables = 0;
+        $failedTables = 0;
+        $manualReviewTables = 0;
+        $disabledCacheableTables = 0;
+        $lastRefreshedAt = null;
+        $tableSummaries = [];
+
+        foreach ($tables as $row) {
+            $enabled = !empty($row['enabled']);
+            $classification = (string)($row['classification'] ?? '');
+            $status = (string)($row['last_refresh_status'] ?? 'never');
+            $refreshedAt = $row['last_refreshed_at'] ?? null;
+
+            if ($enabled) {
+                $enabledTables++;
+            }
+            if ($enabled && $status === 'failed') {
+                $failedTables++;
+            }
+            if (!$enabled && $classification === 'manual_review') {
+                $manualReviewTables++;
+            }
+            if (!$enabled && $classification === 'cacheable_reference') {
+                $disabledCacheableTables++;
+            }
+            if ($refreshedAt !== null && ($lastRefreshedAt === null || strcmp((string)$refreshedAt, (string)$lastRefreshedAt) > 0)) {
+                $lastRefreshedAt = (string)$refreshedAt;
+            }
+
+            if ($enabled || $status === 'failed') {
+                $tableSummaries[] = [
+                    'sourceTable' => (string)$row['source_table'],
+                    'enabled' => $enabled,
+                    'classification' => $classification,
+                    'rowCount' => $row['row_count'] !== null ? (int)$row['row_count'] : null,
+                    'lastRefreshedAt' => $refreshedAt !== null ? (string)$refreshedAt : null,
+                    'lastRefreshStatus' => $status,
+                    'lastError' => $row['last_error'] !== null ? (string)$row['last_error'] : null,
+                ];
+            }
+        }
+
+        return [
+            'available' => true,
+            'enabledTables' => $enabledTables,
+            'activeRows' => $activeRows,
+            'failedTables' => $failedTables,
+            'manualReviewTables' => $manualReviewTables,
+            'disabledCacheableTables' => $disabledCacheableTables,
+            'lastRefreshedAt' => $lastRefreshedAt,
+            'tables' => $tableSummaries,
+        ];
+    }
+
+    /**
+     * GET /api/reference-cache/candidates — summarize disabled reference-cache candidates for review.
+     */
+    public function actionReferenceCacheCandidates()
+    {
+        try {
+            $summaryRows = Yii::$app->db->createCommand(
+                'SELECT classification, source_schema, COUNT(*) AS table_count
+                 FROM folio_reference_tables
+                 WHERE enabled = 0
+                 GROUP BY classification, source_schema
+                 ORDER BY classification, table_count DESC, source_schema'
+            )->queryAll();
+
+            $candidateRows = Yii::$app->db->createCommand(
+                'SELECT source_table, source_schema, classification, estimated_rows, total_bytes
+                 FROM folio_reference_tables
+                 WHERE enabled = 0
+                   AND classification IN ("cacheable_reference", "manual_review")
+                 ORDER BY classification, estimated_rows ASC, total_bytes ASC, source_table
+                 LIMIT 80'
+            )->queryAll();
+        } catch (\Throwable $e) {
+            return [
+                'available' => false,
+                'summaryBySchema' => [],
+                'candidates' => [],
+                'error' => $e->getMessage(),
+            ];
+        }
+
+        $summaryBySchema = [];
+        foreach ($summaryRows as $row) {
+            $summaryBySchema[] = [
+                'classification' => (string)$row['classification'],
+                'sourceSchema' => (string)$row['source_schema'],
+                'tableCount' => (int)$row['table_count'],
+            ];
+        }
+
+        $candidates = [];
+        foreach ($candidateRows as $row) {
+            $candidates[] = [
+                'sourceTable' => (string)$row['source_table'],
+                'sourceSchema' => (string)$row['source_schema'],
+                'classification' => (string)$row['classification'],
+                'estimatedRows' => $row['estimated_rows'] !== null ? (int)$row['estimated_rows'] : null,
+                'totalBytes' => $row['total_bytes'] !== null ? (int)$row['total_bytes'] : null,
+            ];
+        }
+
+        return [
+            'available' => true,
+            'summaryBySchema' => $summaryBySchema,
+            'candidates' => $candidates,
+        ];
+    }
+
+    /**
+     * POST /api/reference-cache/candidates/review — enable, disable, or reject one discovered reference table.
+     */
+    public function actionReferenceCacheCandidateReview()
+    {
+        if (!$this->requireAdmin()) {
+            return ['error' => 'Forbidden'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $sourceTable = trim((string)($body['sourceTable'] ?? ''));
+        $decision = trim((string)($body['decision'] ?? ''));
+        $decisions = [
+            'enable' => [true, 'cacheable_reference'],
+            'disable' => [false, 'manual_review'],
+            'reject' => [false, 'do_not_cache'],
+        ];
+
+        if ($sourceTable === '' || !isset($decisions[$decision])) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'sourceTable and decision are required'];
+        }
+
+        [$enabled, $classification] = $decisions[$decision];
+        $db = Yii::$app->db;
+
+        try {
+            $existing = $db->createCommand(
+                'SELECT id FROM folio_reference_tables WHERE source_table = :sourceTable',
+                [':sourceTable' => $sourceTable]
+            )->queryOne();
+
+            if ($existing === false) {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => 'Reference candidate not found'];
+            }
+
+            if ($enabled) {
+                $refreshCheck = $this->assertReferenceCandidateCanRefresh($sourceTable);
+                if ($refreshCheck !== null) {
+                    Yii::$app->response->statusCode = 422;
+                    return ['error' => $refreshCheck];
+                }
+            }
+
+            $db->createCommand()->update(
+                'folio_reference_tables',
+                [
+                    'enabled' => $enabled ? 1 : 0,
+                    'classification' => $classification,
+                    'updated_at' => date('Y-m-d H:i:s'),
+                ],
+                ['source_table' => $sourceTable]
+            )->execute();
+
+            $row = $db->createCommand(
+                'SELECT source_table, enabled, classification, estimated_rows, total_bytes
+                 FROM folio_reference_tables
+                 WHERE source_table = :sourceTable',
+                [':sourceTable' => $sourceTable]
+            )->queryOne();
+        } catch (\Throwable $e) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => $e->getMessage()];
+        }
+
+        return [
+            'sourceTable' => (string)$row['source_table'],
+            'enabled' => !empty($row['enabled']),
+            'classification' => (string)$row['classification'],
+            'estimatedRows' => $row['estimated_rows'] !== null ? (int)$row['estimated_rows'] : null,
+            'totalBytes' => $row['total_bytes'] !== null ? (int)$row['total_bytes'] : null,
+        ];
+    }
+
+    /**
+     * POST /api/reference-cache/refresh — refresh one enabled local reference table immediately.
+     */
+    public function actionReferenceCacheRefresh()
+    {
+        if (!$this->requireAdmin()) {
+            return ['error' => 'Forbidden'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $sourceTable = trim((string)($body['sourceTable'] ?? ''));
+        if ($sourceTable === '') {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'sourceTable is required'];
+        }
+
+        try {
+            return (new ReferenceCacheRefreshService())->refreshTableBySourceTable($sourceTable);
+        } catch (\RuntimeException $e) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => $e->getMessage()];
+        } catch (\Throwable $e) {
+            Yii::$app->response->statusCode = 500;
+            return ['error' => $e->getMessage()];
+        }
+    }
+
+    private function assertReferenceCandidateCanRefresh(string $sourceTable)
+    {
+        try {
+            return (new ReferenceCacheRefreshService())->validateSourceTableCanRefresh($sourceTable);
+        } catch (\Throwable $e) {
+            return 'Cannot enable candidate because FOLIO columns could not be inspected: ' . $e->getMessage();
+        }
     }
 
     /**
@@ -2760,8 +3358,8 @@ class FolioQueryController extends Controller
         }
 
         $body = Yii::$app->request->getBodyParams();
-    $name = isset($body['name']) ? trim($body['name']) : null;
-        $job->name = $name;
+        $name = isset($body['name']) ? trim($body['name']) : null;
+        $job->name = $this->normalizeQueryJobName($name);
         if (!$job->save(false)) {
             Yii::$app->response->statusCode = 500;
             return ['error' => 'Failed to save'];
@@ -2872,7 +3470,7 @@ class FolioQueryController extends Controller
             return ['error' => 'Historical query has no SQL text'];
         }
 
-        $promptSeed = trim((string)($job->name ?? ''));
+        $promptSeed = $this->getQueryJobOriginalPrompt($job);
         if ($promptSeed === '') {
             $promptSeed = 'Suggest related analysis for this historical query';
         }

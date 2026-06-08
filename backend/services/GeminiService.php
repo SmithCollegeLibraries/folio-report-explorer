@@ -24,6 +24,7 @@ class GeminiService
     const FAMILY_SLOT_PROMPT_VERSION = 'family_slot_prompt.v1';
     const INDEX_RECOMMENDER_PROMPT_VERSION = 'index_recommender.v1';
     const FOLLOW_UP_SUGGESTION_PROMPT_VERSION = 'followup_suggestions.v1';
+    const RESOLVER_CLARIFICATION_PROMPT_VERSION = 'resolver_clarification.v1';
     const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
 
     /**
@@ -125,8 +126,29 @@ class GeminiService
      */
     public static function generateSqlWithShadow($prompt, $campus = null, $userId = null, $allowExploratory = false)
     {
+        $referenceResolution = ReferenceResolverService::resolvePrompt((string)$prompt, $userId);
+        if (!empty($referenceResolution['needsClarification'])) {
+            self::logRouteSelection('clarification', (string)($referenceResolution['routeReason'] ?? 'reference_resolver_batch_clarification'), [
+                'clarificationBatchId' => $referenceResolution['clarificationBatchId'] ?? null,
+                'clarificationSource' => $referenceResolution['clarificationSource'] ?? null,
+                'modelClarificationFallbackReason' => $referenceResolution['modelClarificationFallbackReason'] ?? null,
+            ]);
+            self::logNlTelemetry('nl2sql.generated', [
+                'route' => 'clarification',
+                'routeReason' => $referenceResolution['routeReason'] ?? null,
+                'clarificationType' => $referenceResolution['clarificationType'] ?? null,
+                'clarificationBatchId' => $referenceResolution['clarificationBatchId'] ?? null,
+                'clarificationSource' => $referenceResolution['clarificationSource'] ?? null,
+                'modelClarificationFallbackReason' => $referenceResolution['modelClarificationFallbackReason'] ?? null,
+                'dataSource' => null,
+            ]);
+            return $referenceResolution;
+        }
+
+        $effectivePrompt = ReferenceResolverService::appendGuidanceToPrompt((string)$prompt, $referenceResolution);
+
         $clarification = ClarificationService::detectPromptAmbiguity(
-            (string)$prompt,
+            (string)$effectivePrompt,
             self::loadAcceptedClarificationKeys($userId)
         );
         if ($clarification !== null) {
@@ -143,34 +165,44 @@ class GeminiService
             return $clarification;
         }
 
-        $queryFamily = self::resolvePromptQueryFamily($prompt, $campus);
-        if ($queryFamily === null && !$allowExploratory) {
-            return self::buildExploratoryApprovalResponse(
-                (string)$prompt,
-                $campus,
-                self::promptRequiresLegacyFreeform($prompt)
-                    ? 'canonical_path_unavailable_for_marc_source_records'
-                    : 'unsupported_query_family'
-            );
-        }
+        if ($allowExploratory) {
+            $primary = self::generateSql($effectivePrompt, $campus, true, false);
+            $primary = self::decorateExploratoryResponse($primary, 'user_requested_exploratory_generation');
 
-        $primaryMode = self::resolvePrimaryModeForPrompt($prompt, $campus);
-        $primary = $primaryMode === 'intent'
-            ? self::generateSql($prompt, $campus, false, true)
-            : self::generateSql($prompt, $campus, true, false);
-
-        if ($queryFamily === null && $allowExploratory) {
-            $primary['mode'] = 'exploratory';
-            $primary['exploratory'] = true;
-            $primary['repeatabilityWarning'] = self::getExploratoryRepeatabilityWarning();
-            if (($primary['route'] ?? '') === 'builder_intent') {
-                $primary['route'] = 'exploratory_builder_intent';
-                $primary['routeReason'] = 'user_approved_exploratory_generation';
-            } elseif (($primary['route'] ?? '') === 'legacy_freeform') {
-                $primary['route'] = 'exploratory_legacy_freeform';
-                $primary['routeReason'] = 'user_approved_exploratory_generation';
+            if (!empty($referenceResolution['guidanceLines'])) {
+                $primary['referenceResolver'] = [
+                    'resolved' => true,
+                    'guidanceLines' => $referenceResolution['guidanceLines'],
+                ];
             }
+
+            return $primary;
         }
+
+        // Route on the raw user prompt, not the resolver-augmented prompt: the
+        // resolver appends guidance boilerplate ("...library or campus name
+        // columns") whose scope words would otherwise hijack family selection.
+        $queryFamily = self::resolvePromptQueryFamily((string)$prompt, $campus);
+        if ($queryFamily === null) {
+            $exploratoryReason = self::promptRequiresLegacyFreeform($effectivePrompt)
+                ? 'canonical_path_unavailable_for_marc_source_records'
+                : 'unsupported_query_family';
+            $primary = self::generateExploratorySqlResponse((string)$effectivePrompt, $campus, $exploratoryReason);
+
+            if (!empty($referenceResolution['guidanceLines'])) {
+                $primary['referenceResolver'] = [
+                    'resolved' => true,
+                    'guidanceLines' => $referenceResolution['guidanceLines'],
+                ];
+            }
+
+            return $primary;
+        }
+
+        $primaryMode = self::resolvePrimaryModeForPrompt((string)$prompt, $campus);
+        $primary = $primaryMode === 'intent'
+            ? self::generateSql($effectivePrompt, $campus, false, true)
+            : self::generateSql($effectivePrompt, $campus, true, false);
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
             $primary['routeReason'] = !empty(Yii::$app->params['nl2sqlForceLegacy'])
@@ -178,7 +210,14 @@ class GeminiService
                 : 'primary_legacy_mode';
         }
 
-        if (!self::shouldRunShadowForUser($userId, $prompt)) {
+        if (!empty($referenceResolution['guidanceLines'])) {
+            $primary['referenceResolver'] = [
+                'resolved' => true,
+                'guidanceLines' => $referenceResolution['guidanceLines'],
+            ];
+        }
+
+        if (!self::shouldRunShadowForUser($userId, $effectivePrompt)) {
             return $primary;
         }
 
@@ -186,21 +225,21 @@ class GeminiService
 
         try {
             $shadow = $shadowMode === 'intent'
-                ? self::generateSql($prompt, $campus, false, true)
-                : self::generateSql($prompt, $campus, true, false);
+                ? self::generateSql($effectivePrompt, $campus, false, true)
+                : self::generateSql($effectivePrompt, $campus, true, false);
 
             self::logShadowComparison($primary, $shadow, [
                 'primaryMode' => $primaryMode,
                 'shadowMode' => $shadowMode,
                 'userId' => $userId,
-                'promptFingerprint' => self::fingerprintPrompt($prompt),
+                'promptFingerprint' => self::fingerprintPrompt($effectivePrompt),
             ]);
         } catch (\Throwable $e) {
             self::logNlTelemetry('nl2sql.shadow_error', [
                 'primaryMode' => $primaryMode,
                 'shadowMode' => $shadowMode,
                 'userId' => $userId,
-                'promptFingerprint' => self::fingerprintPrompt($prompt),
+                'promptFingerprint' => self::fingerprintPrompt($effectivePrompt),
                 'error' => $e->getMessage(),
             ], true);
         }
@@ -208,72 +247,52 @@ class GeminiService
         return $primary;
     }
 
-    private static function buildExploratoryApprovalResponse(string $prompt, $campus = null, string $reason = 'unsupported_query_family'): array
+    private static function generateExploratorySqlResponse(string $prompt, $campus = null, string $reason = 'unsupported_query_family'): array
     {
-        $trimmedPrompt = trim($prompt);
-        $campusLabel = trim((string)($campus ?: 'All Colleges'));
-        if ($campusLabel === '') {
-            $campusLabel = 'All Colleges';
-        }
+        $primary = self::generateSql($prompt, $campus, true, false);
+        $primary = self::decorateExploratoryResponse($primary, $reason);
 
-        self::logRouteSelection('exploratory_approval_required', $reason, [
+        self::logRouteSelection('exploratory_legacy_freeform', $reason, [
             'query' => [],
         ]);
-        self::logNlTelemetry('nl2sql.generated', [
-            'route' => 'exploratory_approval_required',
+        self::logNlTelemetry('nl2sql.exploratory_notice_attached', [
+            'route' => 'exploratory_legacy_freeform',
             'routeReason' => $reason,
             'promptFingerprint' => self::fingerprintPrompt($prompt),
-            'dataSource' => null,
+            'dataSource' => $primary['dataSource'] ?? 'folio',
             'mode' => 'exploratory',
         ]);
 
+        return $primary;
+    }
+
+    private static function decorateExploratoryResponse(array $primary, string $reason): array
+    {
+        $primary['mode'] = 'exploratory';
+        $primary['exploratory'] = true;
+        $primary['repeatabilityWarning'] = self::getExploratoryRepeatabilityWarning();
+        $primary['route'] = 'exploratory_legacy_freeform';
+        $primary['routeReason'] = $reason;
+        $primary['needsClarification'] = false;
+        $primary['needsExploratoryApproval'] = false;
+        $primary['exploratoryNotice'] = self::buildExploratoryNotice($reason);
+
+        return $primary;
+    }
+
+    private static function buildExploratoryNotice(string $reason): array
+    {
         return [
-            'needsExploratoryApproval' => true,
-            'needsClarification' => true,
-            'mode' => 'exploratory',
-            'route' => 'exploratory_approval_required',
-            'routeReason' => $reason,
-            'dataSource' => null,
-            'sql' => null,
-            'message' => 'This request is outside the report types I can build reliably right now. I can still try to create a query, but please review the results carefully because similar wording may not always produce the same query.',
-            'question' => 'Do you want me to try anyway?',
-            'clarificationKey' => 'exploratory_sql_approval',
-            'clarificationType' => 'exploratory_approval',
-            'freeTextAllowed' => false,
-            'options' => [
-                [
-                    'id' => 'approve_exploratory',
-                    'label' => 'Try creating the query',
-                    'description' => self::getExploratoryRepeatabilityWarning(),
-                    'resolvedFilter' => [
-                        'allowExploratory' => true,
-                    ],
-                ],
-                [
-                    'id' => 'refine_prompt',
-                    'label' => 'Edit my request',
-                    'description' => 'Add more detail so the query can be built more reliably.',
-                    'resolvedFilter' => [
-                        'allowExploratory' => false,
-                    ],
-                ],
-            ],
-            'exploratoryPlan' => [
-                'prompt' => $trimmedPrompt,
-                'campus' => $campusLabel,
-                'status' => 'canonical_path_missing',
-                'suggestions' => [
-                    'Tell me exactly what place or collection to search.',
-                    'List the columns you want to see in the results.',
-                    'Include any dates, grouping, sorting, or count rules that matter.',
-                ],
-            ],
+            'title' => 'AI-assisted query',
+            'message' => 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+            'detail' => 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
+            'reason' => $reason,
         ];
     }
 
     private static function getExploratoryRepeatabilityWarning(): string
     {
-        return 'This path uses model-assisted SQL generation without a checked-in canonical compiler, so it may vary between runs.';
+        return 'This AI-assisted query may vary between runs until this request type is reviewed and promoted to a verified report pattern.';
     }
 
     /**
@@ -520,6 +539,93 @@ class GeminiService
     }
 
     /**
+     * Ask the configured model to phrase a clarification from resolver evidence.
+     * This method must never generate SQL; callers validate the returned JSON
+     * against resolver-provided options before showing it to users.
+     *
+     * @param string $prompt
+     * @param array<string, mixed> $resolverResponse
+     * @return array<string, mixed>
+     */
+    public static function generateResolverClarificationJson(string $prompt, array $resolverResponse): array
+    {
+        $apiKey = self::getAiApiKey();
+        if (empty($apiKey)) {
+            throw new \RuntimeException(self::getMissingAiApiKeyMessage());
+        }
+
+        $model = self::getAiModel();
+        $payload = [
+            'originalPrompt' => trim($prompt),
+            'resolverTrace' => array_values(array_filter($resolverResponse['resolverTrace'] ?? [], 'is_array')),
+            'clarificationItems' => self::sanitizeResolverClarificationItemsForModel(
+                $resolverResponse['clarificationItems'] ?? []
+            ),
+        ];
+
+        $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
+        $requestResult = self::sendGeminiRequestWithRetries(
+            $url,
+            [
+                'system_instruction' => [
+                    'parts' => [['text' => self::buildResolverClarificationPrompt()]],
+                ],
+                'contents' => [
+                    [
+                        'parts' => [[
+                            'text' => "RESOLVER_EVIDENCE_JSON:\n" . json_encode(
+                                $payload,
+                                JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
+                            ),
+                        ]],
+                    ],
+                ],
+                'generationConfig' => [
+                    'temperature' => 0.2,
+                    'maxOutputTokens' => 1024,
+                    'responseMimeType' => 'application/json',
+                ],
+            ],
+            'nl2sql.resolver_clarification'
+        );
+
+        $response = $requestResult['response'];
+        $data = json_decode($response->content, true);
+        $finishReason = $data['candidates'][0]['finishReason'] ?? '';
+        $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+        $parsed = json_decode(trim((string)$text), true);
+        if (!is_array($parsed)) {
+            $fragment = self::extractJsonObject((string)$text);
+            if ($fragment !== null) {
+                $parsed = json_decode($fragment, true);
+            }
+        }
+
+        if (!is_array($parsed)) {
+            self::logNlTelemetry('nl2sql.resolver_clarification_parse_error', [
+                'model' => $model,
+                'promptVersion' => self::RESOLVER_CLARIFICATION_PROMPT_VERSION,
+                'promptFingerprint' => self::fingerprintPrompt($prompt),
+                'finishReason' => $finishReason,
+                'attempts' => $requestResult['attempts'] ?? null,
+                'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+            ], true);
+            throw new \RuntimeException('Resolver clarification model returned invalid JSON.');
+        }
+
+        self::logNlTelemetry('nl2sql.resolver_clarification_generated', [
+            'model' => $model,
+            'promptVersion' => self::RESOLVER_CLARIFICATION_PROMPT_VERSION,
+            'promptFingerprint' => self::fingerprintPrompt($prompt),
+            'finishReason' => $finishReason,
+            'attempts' => $requestResult['attempts'] ?? null,
+            'elapsedMs' => $requestResult['elapsedMs'] ?? null,
+        ]);
+
+        return $parsed;
+    }
+
+    /**
      * Build the system prompt used for workload-driven index recommendations.
      *
      * @return string
@@ -604,6 +710,82 @@ Rules:
 7. Do not include markdown or extra keys.
 PROMPT;
         }
+
+    private static function buildResolverClarificationPrompt(): string
+    {
+        return <<<PROMPT
+You write clarification questions for a library reporting user.
+
+You are given resolver evidence that was produced before SQL generation:
+1. The user's original prompt.
+2. Resolver trace entries showing what local reference data and searchable report fields were checked.
+3. Clarification items and allowed option ids.
+
+Return ONLY JSON with this shape:
+{
+  "question": "one clear follow-up question",
+  "message": "optional short explanation",
+  "clarificationItems": [
+    {
+      "clarificationKey": "exact key from input",
+      "question": "short question for this specific term",
+      "options": [
+        {"id": "exact option id from input"}
+      ]
+    }
+  ]
+}
+
+Rules:
+1. Do not generate SQL.
+2. Do not invent tables, columns, filters, meanings, or option ids.
+3. Use only the clarificationKey and option id values present in the resolver evidence.
+4. If there are no options for an item, still ask what the term should mean and return an empty options array for that item.
+5. Mention that the resolver checked local references/probe fields when useful, but keep the wording concise.
+6. Do not include markdown or extra top-level keys.
+PROMPT;
+    }
+
+    /**
+     * @param mixed $items
+     * @return array<int, array<string, mixed>>
+     */
+    private static function sanitizeResolverClarificationItemsForModel($items): array
+    {
+        if (!is_array($items)) {
+            return [];
+        }
+
+        $sanitized = [];
+        foreach ($items as $item) {
+            if (!is_array($item)) {
+                continue;
+            }
+
+            $options = [];
+            foreach (($item['options'] ?? []) as $option) {
+                if (!is_array($option)) {
+                    continue;
+                }
+                $options[] = [
+                    'id' => (string)($option['id'] ?? ''),
+                    'label' => (string)($option['label'] ?? ''),
+                    'description' => (string)($option['description'] ?? ''),
+                    'resolvedFilter' => is_array($option['resolvedFilter'] ?? null) ? $option['resolvedFilter'] : null,
+                ];
+            }
+
+            $sanitized[] = [
+                'term' => (string)($item['term'] ?? ''),
+                'clarificationKey' => (string)($item['clarificationKey'] ?? ''),
+                'question' => (string)($item['question'] ?? ''),
+                'reason' => (string)($item['reason'] ?? ''),
+                'options' => $options,
+            ];
+        }
+
+        return $sanitized;
+    }
 
     /**
      * Generate SQL from a natural-language prompt.
@@ -1057,7 +1239,9 @@ PROMPT;
         $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
         $sql = self::normalizeIdCasts($sql);
         $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
+        $sql = self::repairResolvedLocationPredicateMisuse($sql);
         self::validateNoOnlyHoldingLocationAliasLeaks($sql);
+        self::validateNoResolvedLocationPredicateMisuse($sql);
 
         SqlBuilderService::validateSafety($sql);
         SqlBuilderService::validateTablePolicy($sql);
@@ -2718,6 +2902,18 @@ PROMPT;
             'campus' => $campus,
         ]);
         if (empty($slotValidation['valid'])) {
+            if (self::shouldRecoverInventoryListingMissingLibraryAsExploratory(
+                $intent,
+                $slotValidation['errors'] ?? [],
+                (string)$prompt
+            )) {
+                return self::generateExploratorySqlResponse(
+                    (string)$prompt,
+                    $campus,
+                    'inventory_listing_unscoped_missing_library'
+                );
+            }
+
             $clarification = self::buildFamilySlotClarificationResponse(
                 $slotValidation['errors'] ?? [],
                 $intent,
@@ -2844,6 +3040,31 @@ PROMPT;
 
         unset($compiledFamily['queryDefinition']);
         return $compiledFamily;
+    }
+
+    private static function shouldRecoverInventoryListingMissingLibraryAsExploratory(
+        array $intent,
+        array $errors,
+        string $prompt
+    ): bool {
+        if (trim((string)($intent['familyKey'] ?? '')) !== 'inventory_library_location_listing') {
+            return false;
+        }
+
+        if (self::promptMentionsLibraryLocationListingScope($prompt)) {
+            return false;
+        }
+
+        foreach ($errors as $error) {
+            if (!is_array($error)) {
+                continue;
+            }
+            if ((string)($error['code'] ?? '') === 'required' && (string)($error['path'] ?? '') === 'slots.library') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function recoverPromptScopedFamilySlotsWithProvenance(array $intent, string $prompt, $campus = null): array
@@ -2991,6 +3212,28 @@ PROMPT;
             $slotProvenance['requested_outputs'] = 'prompt_repaired';
         }
 
+        $materialType = self::extractInventoryListingMaterialTypeFromPrompt($prompt);
+        if ($materialType !== '') {
+            $existingMaterialType = trim((string)($slots['material_type'] ?? ''));
+            if ($existingMaterialType === '' || strcasecmp($existingMaterialType, $materialType) !== 0) {
+                $slots['material_type'] = $materialType;
+                $slotProvenance['material_type'] = $existingMaterialType === ''
+                    ? 'prompt_explicit'
+                    : 'prompt_repaired';
+            }
+        }
+
+        $itemStatus = self::extractInventoryListingItemStatusFromPrompt($prompt);
+        if ($itemStatus !== '') {
+            $existingItemStatus = trim((string)($slots['item_status'] ?? ''));
+            if ($existingItemStatus === '' || strcasecmp($existingItemStatus, $itemStatus) !== 0) {
+                $slots['item_status'] = $itemStatus;
+                $slotProvenance['item_status'] = $existingItemStatus === ''
+                    ? 'prompt_explicit'
+                    : 'prompt_repaired';
+            }
+        }
+
         $clarificationLocation = self::extractClarificationInventoryListingLocation($prompt);
         if ($clarificationLocation !== '') {
             $existingLocation = trim((string)($slots['location'] ?? ''));
@@ -3024,6 +3267,8 @@ PROMPT;
         $locationCodes = self::extractInventoryListingLocationCodes($prompt);
         if ($locationCodes === []) {
             $slots = self::removeInventoryListingLocationMasqueradingAsLibrary($slots, $prompt, $slotProvenance);
+            $slots = self::removeInventoryListingStatusMasqueradingAsLibrary($slots, $prompt, $slotProvenance);
+            $slots = self::removeInventoryListingCampusMasqueradingAsLibrary($slots, $prompt, $slotProvenance);
             $slots = self::removeInventoryListingDefaultCampusForFiveCollegesOnlyHolding($slots, $prompt, $slotProvenance);
             $slots = self::normalizeInventoryListingOnlyHoldingSlotFromPrompt($slots, $prompt, $slotProvenance);
             ksort($slotProvenance, SORT_STRING);
@@ -3077,6 +3322,45 @@ PROMPT;
         return $slots;
     }
 
+    private static function removeInventoryListingStatusMasqueradingAsLibrary(array $slots, string $prompt, array &$slotProvenance): array
+    {
+        if (self::promptMentionsExplicitLibraryScope($prompt)) {
+            return $slots;
+        }
+
+        $library = trim((string)($slots['library'] ?? ''));
+        if ($library === '') {
+            return $slots;
+        }
+
+        if (!self::promptMentionsItemStatusScope($prompt) && !self::valueLooksLikeItemStatus($library)) {
+            return $slots;
+        }
+
+        if (self::valueLooksLikeItemStatus($library)) {
+            unset($slots['library']);
+            $slotProvenance['library'] = 'policy_omitted_item_status_not_library';
+        }
+
+        return $slots;
+    }
+
+    private static function removeInventoryListingCampusMasqueradingAsLibrary(array $slots, string $prompt, array &$slotProvenance): array
+    {
+        if (!self::promptMentionsCampusScopedInventoryItemFilterListing($prompt)) {
+            return $slots;
+        }
+
+        $library = trim((string)($slots['library'] ?? ''));
+        if ($library === '' || !self::valueLooksLikeCampusScope($library)) {
+            return $slots;
+        }
+
+        unset($slots['library']);
+        $slotProvenance['library'] = 'policy_omitted_campus_not_library';
+        return $slots;
+    }
+
     private static function removeInventoryListingDefaultCampusForFiveCollegesOnlyHolding(array $slots, string $prompt, array &$slotProvenance): array
     {
         $campus = trim((string)($slots['campus'] ?? ''));
@@ -3108,6 +3392,50 @@ PROMPT;
             '/\b(?:Smith College|Amherst College|Mount Holyoke College|Mt\.?\s+Holyoke College|Hampshire College|UMass|University of Massachusetts|Yiddish Book Center)\b/i',
             $prompt
         ) === 1;
+    }
+
+    private static function promptMentionsItemStatusScope(string $prompt): bool
+    {
+        return preg_match('/\bitem\s+status\b|\bstatus\s+of\b/i', $prompt) === 1;
+    }
+
+    private static function valueLooksLikeItemStatus(string $value): bool
+    {
+        $normalized = self::normalizeItemStatusValue($value);
+
+        return in_array($normalized, [
+            'available',
+            'checked out',
+            'in process',
+            'in transit',
+            'missing',
+            'lost',
+            'withdrawn',
+            'on order',
+            'paged',
+            'awaiting pickup',
+            'declared lost',
+            'long missing',
+            'restricted',
+        ], true);
+    }
+
+    private static function valueLooksLikeCampusScope(string $value): bool
+    {
+        $normalized = strtolower(trim($value));
+        $normalized = preg_replace('/[^a-z0-9]+/', ' ', (string)$normalized);
+        $normalized = trim((string)preg_replace('/\s+/', ' ', (string)$normalized));
+
+        return in_array($normalized, [
+            'smith college',
+            'amherst college',
+            'hampshire college',
+            'mount holyoke college',
+            'mt holyoke college',
+            'umass',
+            'university of massachusetts',
+            'yiddish book center',
+        ], true);
     }
 
     private static function promptRequestsInventoryListingCallNumber(string $prompt): bool
@@ -3810,6 +4138,59 @@ PROMPT;
         return $slots;
     }
 
+    private static function extractInventoryListingMaterialTypeFromPrompt(string $prompt): string
+    {
+        $patterns = [
+            '/\b(?:material|document|item)\s+type\s+(?:of|is|=|:)?\s*"([^"]+)"/i',
+            "/\b(?:material|document|item)\s+type\s+(?:of|is|=|:)?\s*'([^']+)'/i",
+            '/\b(?:material|document|item)\s+type\s+(?:of|is|=|:)?\s+([a-z0-9][a-z0-9 ._-]*?)(?:\.|,|\band\b|\bat\b|\bin\b|\bfor\b|\bfrom\b|\bwith\b|\binclude\b|$)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $prompt, $matches) === 1) {
+                return trim((string)($matches[1] ?? ''));
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Canonicalize a free-text item-status value to the lowercased, single-spaced
+     * form used by FOLIO status names so hyphen/case variants ("Checked-Out")
+     * compare equal to the stored value ("Checked out").
+     */
+    private static function normalizeItemStatusValue(string $value): string
+    {
+        $normalized = strtolower(trim($value));
+        $normalized = (string)preg_replace('/[^a-z0-9]+/', ' ', $normalized);
+
+        return trim((string)preg_replace('/\s+/', ' ', $normalized));
+    }
+
+    private static function extractInventoryListingItemStatusFromPrompt(string $prompt): string
+    {
+        $patterns = [
+            '/\bitem\s+status\s+(?:of|is|=|:)?\s*"([^"]+)"/i',
+            "/\bitem\s+status\s+(?:of|is|=|:)?\s*'([^']+)'/i",
+            '/\bstatus\s+of\s+"([^"]+)"/i',
+            "/\bstatus\s+of\s+'([^']+)'/i",
+            '/\bitem\s+status\s+(?:of|is|=|:)?\s+([a-z0-9][a-z0-9 ._-]*?)(?:\.|,|\band\b|\bwith\b|\binclude\b|$)/i',
+            '/\bstatus\s+of\s+([a-z0-9][a-z0-9 ._-]*?)(?:\.|,|\band\b|\bwith\b|\binclude\b|$)/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $prompt, $matches) === 1) {
+                $value = trim((string)($matches[1] ?? ''));
+                if (self::valueLooksLikeItemStatus($value)) {
+                    return self::normalizeItemStatusValue($value);
+                }
+            }
+        }
+
+        return '';
+    }
+
     private static function promptMentionsExplicitHistoricalCirculationPolicy(string $normalizedPrompt): bool
     {
         if (self::promptMentionsFormerAlephComparisonPolicy($normalizedPrompt)
@@ -3879,7 +4260,10 @@ PROMPT;
         return [
             'needsClarification' => true,
             'clarificationType' => 'missing_required_slot',
+            'clarificationKey' => 'family_slot:' . implode(',', $missingSlots),
+            'freeTextAllowed' => true,
             'question' => $question,
+            'message' => self::buildFamilySlotClarificationMessage($missingSlots),
             'options' => [],
             'missingSlots' => $missingSlots,
             'warnings' => [],
@@ -3925,6 +4309,29 @@ PROMPT;
         return 'I need one more detail before I can generate SQL for this request.';
     }
 
+    private static function buildFamilySlotClarificationMessage(array $missingSlots): string
+    {
+        sort($missingSlots);
+
+        if ($missingSlots === ['library']) {
+            return 'Type the library name, for example Neilson Library.';
+        }
+
+        if ($missingSlots === ['location']) {
+            return 'Type the location or collection name, for example SC Rare Book Collection Reference.';
+        }
+
+        if ($missingSlots === ['location_code']) {
+            return 'Type the location code, for example SJTR.';
+        }
+
+        if ($missingSlots === ['contributor_name']) {
+            return 'Type the contributor or author name to use in the report.';
+        }
+
+        return 'Type the missing detail and continue.';
+    }
+
     private static function buildCompiledQueryFamilyOrLegacyFallback(
         array $normalizedPayload,
         string $routeReason,
@@ -3950,9 +4357,20 @@ PROMPT;
             return $compiler($normalizedPayload, $routeReason);
         } catch (\InvalidArgumentException | \RuntimeException $e) {
             $reason = 'family_compiler_failed';
+            $familyKey = trim((string)($normalizedPayload['familyKey'] ?? ''));
+
+            if ($familyKey === 'inventory_library_location_listing') {
+                return self::buildInventoryListingCompilerClarificationResponse(
+                    $normalizedPayload,
+                    $telemetryContext,
+                    $e,
+                    (string)$prompt,
+                    $campus
+                );
+            }
 
             self::guardCoveredFamilyFallback(
-                trim((string)($normalizedPayload['familyKey'] ?? '')),
+                $familyKey,
                 $reason,
                 $telemetryContext,
                 $e
@@ -3979,6 +4397,89 @@ PROMPT;
         }
     }
 
+    private static function buildInventoryListingCompilerClarificationResponse(
+        array $normalizedPayload,
+        array $telemetryContext,
+        \Throwable $error,
+        string $prompt = '',
+        $campus = null
+    ): array {
+        $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
+        $library = trim((string)($slots['library'] ?? ''));
+        if (
+            (
+                !self::promptMentionsLibraryLocationListingScope($prompt)
+                && !self::promptMentionsCampusScopedInventoryItemFilterListing($prompt)
+            )
+            || self::valueLooksLikeItemStatus($library)
+        ) {
+            $response = self::generateExploratorySqlResponse(
+                $prompt,
+                $campus,
+                'inventory_listing_unscoped_compiler_failed'
+            );
+            $response['message'] = 'This looks like a campus-scoped inventory request, not a library or location request. I can still try to build and run the query, but the results may be incomplete or inaccurate. Review the SQL and results before using them.';
+            return $response;
+        }
+
+        $routeReason = 'inventory_listing_compiler_failed';
+        $knownScopeParts = [];
+        foreach (['campus', 'library', 'location', 'location_code'] as $slotName) {
+            $value = trim((string)($slots[$slotName] ?? ''));
+            if ($value !== '') {
+                $knownScopeParts[] = str_replace('_', ' ', $slotName) . ': ' . $value;
+            }
+        }
+
+        self::logValidationFailure('family_compiler_failed_clarification', [
+            'route' => 'clarification',
+            'routeReason' => $routeReason,
+            'familyKey' => $normalizedPayload['familyKey'] ?? null,
+            'error' => $error->getMessage(),
+        ] + $telemetryContext);
+        self::logRouteSelection('clarification', $routeReason, [
+            'familyKey' => $normalizedPayload['familyKey'] ?? null,
+            'knownScope' => $knownScopeParts,
+        ]);
+        self::logNlTelemetry('nl2sql.generated', [
+            'route' => 'clarification',
+            'routeReason' => $routeReason,
+            'model' => $telemetryContext['model'] ?? null,
+            'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+            'promptFingerprint' => $telemetryContext['promptFingerprint'] ?? null,
+            'finishReason' => $telemetryContext['finishReason'] ?? null,
+            'dataSource' => null,
+            'attempts' => $telemetryContext['attempts'] ?? null,
+            'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
+        ] + $telemetryContext);
+
+        $scopeSummary = $knownScopeParts === []
+            ? 'I could not confirm the inventory location scope.'
+            : 'I found this scope: ' . implode('; ', $knownScopeParts) . '.';
+        $question = 'Can you confirm the exact library, location, or location code I should use for this inventory listing?';
+        $message = $scopeSummary . ' Type the library name, location name, or location code to use, then continue.';
+
+        if (self::promptMentionsCampusScopedInventoryItemFilterListing($prompt)) {
+            $question = 'I could not produce fully validated SQL for this campus-scoped item listing.';
+            $message = 'This request matches a reviewed item-listing pattern, but the validated SQL compiler failed before a query could be produced. Review the request or try again.';
+        }
+
+        return [
+            'needsClarification' => true,
+            'clarificationType' => 'inventory_listing_scope',
+            'clarificationKey' => 'inventory_listing_scope',
+            'freeTextAllowed' => true,
+            'question' => $question,
+            'message' => $message,
+            'options' => [],
+            'missingSlots' => [],
+            'warnings' => [],
+            'suggestions' => [],
+            'route' => 'clarification',
+            'routeReason' => $routeReason,
+        ];
+    }
+
     private static function buildCompiledQueryFamilyResult(array $normalizedPayload, string $routeReason): array
     {
         $queryDef = QueryFamilyCompilerService::compileToQueryDefinition($normalizedPayload);
@@ -3987,7 +4488,9 @@ PROMPT;
         $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
         $sql = self::normalizeIdCasts($sql);
         $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
+        $sql = self::repairResolvedLocationPredicateMisuse($sql);
         self::validateNoOnlyHoldingLocationAliasLeaks($sql);
+        self::validateNoResolvedLocationPredicateMisuse($sql);
 
         SqlBuilderService::validateSafety($sql);
         SqlBuilderService::validateTablePolicy($sql);
@@ -4610,7 +5113,9 @@ PROMPT;
 
         $sql = self::repairInvalidInventoryTitleReferences($sql);
         $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
+        $sql = self::repairResolvedLocationPredicateMisuse($sql);
         self::validateNoOnlyHoldingLocationAliasLeaks($sql);
+        self::validateNoResolvedLocationPredicateMisuse($sql);
 
         // Validate the generated SQL
         SqlBuilderService::validateSafety($sql);
@@ -4749,6 +5254,237 @@ PROMPT;
         throw new \RuntimeException(
             'Generated only-holding-location SQL leaked target location alias tl outside its query scope.'
         );
+    }
+
+    /**
+     * Repair resolver drift where a location value resolved for inventory.location__t.name
+     * is also applied to inventory.loclibrary__t.name, which can silently zero results.
+     */
+    private static function repairResolvedLocationPredicateMisuse(string $sql): string
+    {
+        $aliases = self::extractSqlTableAliases($sql);
+        $locationAliases = $aliases['inventory.location__t'] ?? [];
+        $libraryAliases = $aliases['inventory.loclibrary__t'] ?? [];
+        if (empty($locationAliases) || empty($libraryAliases)) {
+            return $sql;
+        }
+
+        $repaired = self::repairKnownLocationAliasLibraryLeak($sql, $locationAliases, $libraryAliases);
+
+        $locationValues = self::extractAliasNamePredicateValues($sql, $locationAliases);
+        if (empty($locationValues)) {
+            return self::normalizeSqlBooleanWhitespace($repaired);
+        }
+
+        foreach ($libraryAliases as $libraryAlias) {
+            foreach ($locationValues as $locationValue) {
+                $repaired = self::removeAliasTextPredicate($repaired, $libraryAlias, 'name', $locationValue);
+            }
+        }
+
+        foreach ($locationAliases as $locationAlias) {
+            if (!self::aliasHasNamePredicateValue($sql, $locationAlias, $locationValues)) {
+                continue;
+            }
+            $repaired = self::removeAliasColumnPredicate($repaired, $locationAlias, 'code');
+        }
+
+        return self::normalizeSqlBooleanWhitespace($repaired);
+    }
+
+    /**
+     * Repair known local aliases that are not library names. MRBC is a location
+     * alias; if it appears on loclibrary__t.name, use the resolved location.
+     *
+     * @param array<int, string> $locationAliases
+     * @param array<int, string> $libraryAliases
+     */
+    private static function repairKnownLocationAliasLibraryLeak(string $sql, array $locationAliases, array $libraryAliases): string
+    {
+        $knownLocationAliases = [
+            'mrbc' => 'SC Rare Book Collection Reference',
+        ];
+
+        $repaired = $sql;
+        foreach ($libraryAliases as $libraryAlias) {
+            $libraryValues = self::extractAliasNamePredicateValues($repaired, [$libraryAlias]);
+            foreach ($libraryValues as $libraryValue) {
+                $normalizedLibraryValue = self::normalizeSqlTextValue($libraryValue);
+                $resolvedLocation = $knownLocationAliases[$normalizedLibraryValue] ?? null;
+                if ($resolvedLocation === null) {
+                    continue;
+                }
+
+                $repaired = self::removeAliasTextPredicate($repaired, $libraryAlias, 'name', $libraryValue);
+                foreach ($locationAliases as $locationAlias) {
+                    $repaired = self::replaceAliasNamePredicateValue($repaired, $locationAlias, $resolvedLocation);
+                    $repaired = self::removeAliasColumnPredicate($repaired, $locationAlias, 'code');
+                }
+            }
+        }
+
+        return $repaired;
+    }
+
+    /**
+     * Fail closed if a resolved location name is still filtered on the library table.
+     */
+    private static function validateNoResolvedLocationPredicateMisuse(string $sql): void
+    {
+        $aliases = self::extractSqlTableAliases($sql);
+        $locationAliases = $aliases['inventory.location__t'] ?? [];
+        $libraryAliases = $aliases['inventory.loclibrary__t'] ?? [];
+        if (empty($locationAliases) || empty($libraryAliases)) {
+            return;
+        }
+
+        $locationValues = self::extractAliasNamePredicateValues($sql, $locationAliases);
+        if (empty($locationValues)) {
+            return;
+        }
+
+        foreach ($libraryAliases as $libraryAlias) {
+            $libraryValues = self::extractAliasNamePredicateValues($sql, [$libraryAlias]);
+            foreach ($libraryValues as $libraryValue) {
+                foreach ($locationValues as $locationValue) {
+                    if (self::normalizeSqlTextValue($libraryValue) === self::normalizeSqlTextValue($locationValue)) {
+                        throw new \RuntimeException(
+                            'Generated SQL is invalid: resolved location value was applied to inventory.loclibrary__t.name instead of inventory.location__t.name.'
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @return array<string, array<int, string>>
+     */
+    private static function extractSqlTableAliases(string $sql): array
+    {
+        preg_match_all(
+            '/\b(?:FROM|JOIN)\s+(inventory\.(?:location|loclibrary)__t)\s+(?:AS\s+)?([a-z_][a-z0-9_]*)\b/i',
+            $sql,
+            $matches,
+            PREG_SET_ORDER
+        );
+
+        $aliases = [];
+        foreach ($matches as $match) {
+            $table = strtolower((string)$match[1]);
+            $alias = (string)$match[2];
+            $aliases[$table][] = $alias;
+        }
+
+        return $aliases;
+    }
+
+    /**
+     * @param array<int, string> $aliases
+     * @return array<int, string>
+     */
+    private static function extractAliasNamePredicateValues(string $sql, array $aliases): array
+    {
+        $values = [];
+        foreach ($aliases as $alias) {
+            $pattern = '/\b' . preg_quote($alias, '/') . '\.name\s*(?:ILIKE|LIKE|=)\s*\'((?:\'\'|[^\'])*)\'/i';
+            if (preg_match_all($pattern, $sql, $matches) < 1) {
+                continue;
+            }
+            foreach ($matches[1] as $value) {
+                $values[] = str_replace("''", "'", (string)$value);
+            }
+        }
+
+        return array_values(array_unique($values));
+    }
+
+    /**
+     * @param array<int, string> $values
+     */
+    private static function aliasHasNamePredicateValue(string $sql, string $alias, array $values): bool
+    {
+        $aliasValues = self::extractAliasNamePredicateValues($sql, [$alias]);
+        foreach ($aliasValues as $aliasValue) {
+            foreach ($values as $value) {
+                if (self::normalizeSqlTextValue($aliasValue) === self::normalizeSqlTextValue($value)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static function normalizeSqlTextValue(string $value): string
+    {
+        $value = trim($value);
+        $value = trim($value, '%');
+        $value = strtolower($value);
+        $value = preg_replace('/[^a-z0-9]+/', ' ', $value);
+        return trim((string)preg_replace('/\s+/', ' ', (string)$value));
+    }
+
+    private static function removeAliasTextPredicate(string $sql, string $alias, string $column, string $value): string
+    {
+        $quotedValue = preg_quote(str_replace("'", "''", $value), '/');
+        $patterns = [
+            '/\s+\bAND\s+' . preg_quote($alias, '/') . '\.' . preg_quote($column, '/') . '\s*(?:ILIKE|LIKE|=)\s*\'%?' . $quotedValue . '%?\'/i',
+            '/\s+\bOR\s+' . preg_quote($alias, '/') . '\.' . preg_quote($column, '/') . '\s*(?:ILIKE|LIKE|=)\s*\'%?' . $quotedValue . '%?\'/i',
+            '/\bWHERE\s+' . preg_quote($alias, '/') . '\.' . preg_quote($column, '/') . '\s*(?:ILIKE|LIKE|=)\s*\'%?' . $quotedValue . '%?\'\s+\bAND\s+/i',
+        ];
+
+        $repaired = $sql;
+        foreach ($patterns as $pattern) {
+            $replacement = stripos($pattern, '\\bWHERE') !== false ? 'WHERE ' : '';
+            $next = preg_replace($pattern, $replacement, $repaired);
+            if (is_string($next)) {
+                $repaired = $next;
+            }
+        }
+
+        return $repaired;
+    }
+
+    private static function replaceAliasNamePredicateValue(string $sql, string $alias, string $value): string
+    {
+        $replacementValue = str_replace("'", "''", $value);
+        $pattern = '/\b' . preg_quote($alias, '/') . '\.name\s*(ILIKE|LIKE|=)\s*\'((?:\'\'|[^\'])*)\'/i';
+        $repaired = preg_replace(
+            $pattern,
+            $alias . ".name $1 '%" . $replacementValue . "%'",
+            $sql
+        );
+
+        return is_string($repaired) ? $repaired : $sql;
+    }
+
+    private static function removeAliasColumnPredicate(string $sql, string $alias, string $column): string
+    {
+        $patterns = [
+            '/\s+\bAND\s+' . preg_quote($alias, '/') . '\.' . preg_quote($column, '/') . '\s*(?:ILIKE|LIKE|=)\s*\'(?:\'\'|[^\'])*\'/i',
+            '/\s+\bOR\s+' . preg_quote($alias, '/') . '\.' . preg_quote($column, '/') . '\s*(?:ILIKE|LIKE|=)\s*\'(?:\'\'|[^\'])*\'/i',
+            '/\bWHERE\s+' . preg_quote($alias, '/') . '\.' . preg_quote($column, '/') . '\s*(?:ILIKE|LIKE|=)\s*\'(?:\'\'|[^\'])*\'\s+\bAND\s+/i',
+        ];
+
+        $repaired = $sql;
+        foreach ($patterns as $pattern) {
+            $replacement = stripos($pattern, '\\bWHERE') !== false ? 'WHERE ' : '';
+            $next = preg_replace($pattern, $replacement, $repaired);
+            if (is_string($next)) {
+                $repaired = $next;
+            }
+        }
+
+        return $repaired;
+    }
+
+    private static function normalizeSqlBooleanWhitespace(string $sql): string
+    {
+        $sql = preg_replace('/\bWHERE\s+(?:AND|OR)\s+/i', 'WHERE ', $sql);
+        $sql = preg_replace('/\s+(?:AND|OR)\s+(?=\)|LIMIT\b|ORDER\b|GROUP\b|HAVING\b|$)/i', ' ', (string)$sql);
+        $sql = preg_replace('/[ \t]+\n/', "\n", (string)$sql);
+        return trim((string)$sql);
     }
 
     private static function sqlMentionsTargetLocationCte(string $sql): bool
@@ -5595,7 +6331,10 @@ PROMPT;
             return false;
         }
 
-        if (!self::promptMentionsCoveredInventoryScope($prompt)) {
+        if (
+            !self::promptMentionsLibraryLocationListingScope($prompt)
+            && !self::promptMentionsCampusScopedInventoryItemFilterListing($prompt)
+        ) {
             return false;
         }
 
@@ -5607,6 +6346,41 @@ PROMPT;
         }
 
         return preg_match('/\b(top|circulating|circulation|average\s+age|avg\s+age|loan|checkout|trend|trends)\b/i', $prompt) !== 1;
+    }
+
+    private static function promptMentionsCampusScopedInventoryItemFilterListing($prompt): bool
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        $mentionsCampusScope = self::promptMentionsSpecificCampusScope($prompt)
+            || preg_match('/\b(at|from|for|in)\s+[a-z0-9 .\-]*college\b/i', $prompt) === 1;
+        if (!$mentionsCampusScope) {
+            return false;
+        }
+
+        $mentionsItemFilter = preg_match('/\bmaterial\s+type\b|\bdocument\s+type\b|\bitem\s+type\b/i', $prompt) === 1
+            || self::promptMentionsItemStatusScope($prompt);
+
+        return $mentionsItemFilter;
+    }
+
+    private static function promptMentionsLibraryLocationListingScope($prompt): bool
+    {
+        if (!is_string($prompt) || trim($prompt) === '') {
+            return false;
+        }
+
+        if (preg_match('/\b(location|locations|location\s+code|holdings?|only\s+holding|only\s+holdings)\b/i', $prompt) === 1) {
+            return true;
+        }
+
+        if (preg_match('/\blibrary\b/i', $prompt) === 1) {
+            return true;
+        }
+
+        return preg_match('/\bin\s+[a-z0-9 .\'"-]+\s+(?:collection|reference|stacks|case|room|shelving)\b/i', $prompt) === 1;
     }
 
     private static function promptMentionsUnsupportedInventoryListingOutput($prompt): bool

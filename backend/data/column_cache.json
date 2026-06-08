@@ -1,6 +1,6 @@
 {
     "_note": "Auto-discovered columns keyed by MetaDB table name (schema.table__t)",
-    "_discovered_at": "2026-05-28T18:56:30+00:00",
+    "_discovered_at": "2026-06-08T12:55:45+00:00",
     "_tables_with_columns": 123,
     "columns": {
         "agreements.entitlement__t": [
@@ -2465,15 +2465,6 @@
                 "digits": 0
             },
             {
-                "name": "delivery_address_type_id",
-                "type": "uuid",
-                "size": null,
-                "nullable": true,
-                "auto_updated": false,
-                "default": null,
-                "digits": 0
-            },
-            {
                 "name": "cancelled_date",
                 "type": "timestamptz",
                 "size": null,
@@ -2485,6 +2476,15 @@
             {
                 "name": "request_level",
                 "type": "text",
+                "size": null,
+                "nullable": true,
+                "auto_updated": false,
+                "default": null,
+                "digits": 0
+            },
+            {
+                "name": "delivery_address_type_id",
+                "type": "uuid",
                 "size": null,
                 "nullable": true,
                 "auto_updated": false,

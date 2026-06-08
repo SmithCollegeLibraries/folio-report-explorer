@@ -1,10 +1,25 @@
 <?php
 
 $contractServicePath = __DIR__ . '/../services/QueryFamilyContractService.php';
+$slotServicePath = __DIR__ . '/../services/QueryFamilySlotService.php';
+$compilerServicePath = __DIR__ . '/../services/QueryFamilyCompilerService.php';
+$manifestServicePath = __DIR__ . '/../services/QueryFamilySchemaManifestService.php';
+$queryIntentServicePath = __DIR__ . '/../services/QueryIntentService.php';
+$schemaServicePath = __DIR__ . '/../services/FolioSchemaService.php';
+$sqlBuilderPath = __DIR__ . '/../services/SqlBuilderService.php';
+$graphBuilderPath = __DIR__ . '/../services/CanonicalQueryGraphArtifactBuilder.php';
+$graphServicePath = __DIR__ . '/../services/CanonicalQueryGraphService.php';
 $geminiServicePath = __DIR__ . '/../services/GeminiService.php';
 
 foreach ([
     'QueryFamilyContractService' => $contractServicePath,
+    'QueryFamilySlotService' => $slotServicePath,
+    'QueryFamilyCompilerService' => $compilerServicePath,
+    'QueryFamilySchemaManifestService' => $manifestServicePath,
+    'QueryIntentService' => $queryIntentServicePath,
+    'FolioSchemaService' => $schemaServicePath,
+    'SqlBuilderService' => $sqlBuilderPath,
+    'CanonicalQueryGraphService' => $graphServicePath,
     'GeminiService' => $geminiServicePath,
 ] as $label => $path) {
     if (!file_exists($path)) {
@@ -22,8 +37,23 @@ if (!class_exists('Yii')) {
 
         public static function getAlias($alias)
         {
+            if ($alias === '@app/data/canonical_query_graph.json') {
+                return __DIR__ . '/../data/canonical_query_graph.json';
+            }
             if ($alias === '@app/data/query_family_contracts.json') {
                 return __DIR__ . '/../data/query_family_contracts.json';
+            }
+            if ($alias === '@app/data/table_mapping_cache.json') {
+                return __DIR__ . '/../data/table_mapping_cache.json';
+            }
+            if ($alias === '@app/data/column_cache.json') {
+                return __DIR__ . '/../data/column_cache.json';
+            }
+            if ($alias === '@app/data/subtable_cache.json') {
+                return __DIR__ . '/../data/subtable_cache.json';
+            }
+            if ($alias === '@app/data/semantic_context.json') {
+                return __DIR__ . '/../data/semantic_context.json';
             }
 
             return $alias;
@@ -48,10 +78,24 @@ if (!class_exists('Yii')) {
 }
 
 Yii::$app = (object) [
-    'params' => [],
+    'cache' => null,
+    'params' => [
+        'schemaPath' => __DIR__ . '/../data/folio_schema.json',
+        'derivedPath' => __DIR__ . '/../data/folio_derived_tables.json',
+        'defaultQueryLimit' => 100,
+        'maxQueryRows' => 1000,
+    ],
 ];
 
 require_once $contractServicePath;
+require_once $slotServicePath;
+require_once $manifestServicePath;
+require_once $schemaServicePath;
+require_once $sqlBuilderPath;
+require_once $graphBuilderPath;
+require_once $graphServicePath;
+require_once $queryIntentServicePath;
+require_once $compilerServicePath;
 require_once $geminiServicePath;
 
 use app\services\GeminiService;
@@ -68,6 +112,14 @@ function assertCountValue(int $expected, array $actual, string $message): void
 {
     if (count($actual) !== $expected) {
         fwrite(STDERR, $message . "\nExpected count: {$expected}\nActual count: " . count($actual) . "\n");
+        exit(1);
+    }
+}
+
+function assertContainsValue(string $needle, string $haystack, string $message): void
+{
+    if (strpos($haystack, $needle) === false) {
+        fwrite(STDERR, $message . "\nNeedle: {$needle}\nHaystack: {$haystack}\n");
         exit(1);
     }
 }
@@ -234,5 +286,33 @@ $guardTelemetry = decodeTelemetryRecord((string)($guardWarnings[1]['message'] ??
 assertSameValue('nl2sql.validation_failure', $guardTelemetry['event'] ?? null, 'Guarded mismatches should log validation_failure telemetry.');
 assertSameValue('family_fallback_guard', $guardTelemetry['stage'] ?? null, 'Guarded mismatches should classify the second warning as the fallback guard stage.');
 assertSameValue('model_output', $guardTelemetry['slotProvenance']['library'] ?? null, 'Guarded mismatch warnings should preserve model-output slot provenance.');
+
+$onlyHoldingMismatchResponse = $familyRouteHelper->invoke(
+    null,
+    [
+        'familyKey' => 'circulation_top_items',
+        'slots' => [
+            'campus' => 'Smith College',
+            'requested_outputs' => ['title'],
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_library_location_listing',
+    ],
+    'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
+        'promptFingerprint' => 'family-mismatch-recovery-only-holding-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ]
+);
+
+assertSameValue('builder_intent', $onlyHoldingMismatchResponse['route'] ?? null, 'Explicit only-holding listing prompts should prefer deterministic builder intent recovery when the model returns a mismatched family.');
+assertContainsValue('NOT EXISTS', (string)($onlyHoldingMismatchResponse['sql'] ?? ''), 'Recovered only-holding listing SQL should include anti-join logic to enforce single-location holdings.');
+assertSameValue('family_contract_supported:inventory_library_location_listing', $onlyHoldingMismatchResponse['routeReason'] ?? null, 'Recovered only-holding listing prompts should preserve the family-specific route reason.');
 
 fwrite(STDOUT, "GeminiService family mismatch telemetry test passed\n");

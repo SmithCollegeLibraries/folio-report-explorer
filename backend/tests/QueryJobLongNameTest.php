@@ -36,7 +36,34 @@ assertQueryJobLongName(
 
 assertQueryJobLongName(
     strpos($controllerSource, 'substr(trim($body[\'name\']), 0, 255)') === false,
-    'FolioQueryController should not truncate query job names to 255 characters before saving.'
+    'FolioQueryController should not use an inline 255-character substring for query job names.'
+);
+
+assertQueryJobLongName(
+    strpos($controllerSource, 'buildQueryJobMetadata($body, $source)') !== false
+        && strpos($controllerSource, 'QueryJob::createJob($sql, $params, $source, $dataSource, $metadata)') !== false,
+    'FolioQueryController should preserve long NL prompts in job metadata when submitting jobs.'
+);
+
+assertQueryJobLongName(
+    strpos($controllerSource, 'normalizeQueryJobName(') !== false
+        && strpos($controllerSource, 'QUERY_JOB_NAME_MAX_LENGTH') !== false,
+    'FolioQueryController should normalize job display names to a schema-safe length.'
+);
+
+assertQueryJobLongName(
+    strpos($controllerSource, '$job->name    = $this->normalizeQueryJobName($sq->name);') !== false,
+    'actionDashboardRefresh should normalize saved-query refreshed job names before write.'
+);
+
+assertQueryJobLongName(
+    strpos($controllerSource, '$job->name = $this->normalizeQueryJobName($name);') !== false,
+    'actionRenameHistoryJob should normalize names before persisting history-renamed jobs.'
+);
+
+assertQueryJobLongName(
+    strpos($controllerSource, 'getQueryJobOriginalPrompt(') !== false,
+    'FolioQueryController should recover original NL prompts from job metadata for history follow-ups.'
 );
 
 assertQueryJobLongName(

@@ -168,6 +168,104 @@ assertThrowsRuntimeException(
 assertSameValue(1, $compilerInvocations, 'The covered-family compiler helper should attempt compilation once before blocking the unsafe fallback.');
 assertSameValue(0, $fallbackInvocations, 'The covered-family compiler helper should not invoke the legacy fallback when the family guard is active.');
 
+$inventoryListingValidation = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'location' => 'SC Rare Book Collection Reference',
+        'only_holding_location' => true,
+        'requested_outputs' => ['title'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+if (empty($inventoryListingValidation['valid'])) {
+    fwrite(STDERR, "Test setup produced an invalid inventory listing family payload.\n");
+    exit(1);
+}
+
+$inventoryListingCompilerInvocations = 0;
+$inventoryListingFallbackInvocations = 0;
+$inventoryListingResult = $helper->invoke(
+    null,
+    $inventoryListingValidation['normalizedPayload'],
+    'family_contract_supported:inventory_library_location_listing',
+    'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'inventory-listing-clarification-guard-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function () use (&$inventoryListingCompilerInvocations) {
+        $inventoryListingCompilerInvocations++;
+        throw new InvalidArgumentException('missing_location_scope_anchor: Library/location listing prompts require a location lookup filter when explicit location scope is present.');
+    },
+    function () use (&$inventoryListingFallbackInvocations) {
+        $inventoryListingFallbackInvocations++;
+        return [
+            'sql' => 'SELECT inventory_listing_legacy_fallback_stub',
+            'explanation' => 'Legacy fallback stub.',
+            'dataSource' => 'folio',
+        ];
+    }
+);
+
+assertSameValue(1, $inventoryListingCompilerInvocations, 'Inventory listing compiler failures should still be observed once.');
+assertSameValue(0, $inventoryListingFallbackInvocations, 'Inventory listing compiler failures should not invoke legacy fallback.');
+assertSameValue(true, $inventoryListingResult['needsClarification'] ?? null, 'Inventory listing compiler failures should return a clarification instead of throwing an AI error.');
+assertSameValue('clarification', $inventoryListingResult['route'] ?? null, 'Inventory listing compiler failures should use the clarification route.');
+assertSameValue('inventory_listing_compiler_failed', $inventoryListingResult['routeReason'] ?? null, 'Inventory listing compiler failures should expose a stable clarification route reason.');
+assertSameValue('inventory_listing_scope', $inventoryListingResult['clarificationKey'] ?? null, 'Inventory listing compiler clarifications should expose a key so users can submit free-text responses.');
+assertSameValue(true, $inventoryListingResult['freeTextAllowed'] ?? null, 'Inventory listing compiler clarifications should allow users to type the library, location, or location code.');
+
+$onlineInventoryValidation = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Smith College',
+        'requested_outputs' => ['title', 'barcode', 'instance_number'],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+if (empty($onlineInventoryValidation['valid'])) {
+    fwrite(STDERR, "Test setup produced an invalid online inventory family payload.\n");
+    exit(1);
+}
+
+$onlineInventoryResult = $helper->invoke(
+    null,
+    $onlineInventoryValidation['normalizedPayload'],
+    'family_contract_supported:inventory_library_location_listing',
+    'List of items with material type "e-book" and item status of "in process". Include title, barcode and instance number at Smith College',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'online-inventory-no-library-scope-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function () {
+        throw new InvalidArgumentException('missing_library_scope_anchor: Library/location listing prompts require a library lookup filter.');
+    },
+    function () {
+        return [
+            'sql' => 'SELECT should_not_run',
+            'explanation' => 'Legacy fallback stub.',
+            'dataSource' => 'folio',
+        ];
+    }
+);
+
+assertSameValue(true, $onlineInventoryResult['needsClarification'] ?? null, 'Covered online material/status listing compiler failures should fail safe instead of calling unvalidated AI generation.');
+assertSameValue('inventory_listing_compiler_failed', $onlineInventoryResult['routeReason'] ?? null, 'Covered online material/status listings should expose the stable compiler-failure clarification reason.');
+assertSameValue(false, strpos((string)($onlineInventoryResult['question'] ?? ''), 'exact library') !== false, 'Online material/status listings should not ask for an exact library.');
+
 $runtimeFallbackInvocations = 0;
 $runtimeCompilerInvocations = 0;
 

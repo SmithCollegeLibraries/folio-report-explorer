@@ -179,6 +179,8 @@ $clarificationResult = $familyBranch->invoke(
 assertSameValue(false, $clarificationBuilderCalled, 'The family compiler helper should not run when required family slots are missing.');
 assertSameValue(true, $clarificationResult['needsClarification'] ?? null, 'Missing required family slots should return a structured clarification response.');
 assertSameValue('Which contributor should I use for this report?', $clarificationResult['question'] ?? null, 'Missing contributor-name slots should map to a deterministic clarification question.');
+assertSameValue('family_slot:contributor_name', $clarificationResult['clarificationKey'] ?? null, 'Missing required family slot clarifications should expose a stable clarification key for free-text responses.');
+assertSameValue(true, $clarificationResult['freeTextAllowed'] ?? null, 'Missing required family slot clarifications should allow users to type the missing value.');
 assertSameValue(['contributor_name'], $clarificationResult['missingSlots'] ?? null, 'Clarification responses should expose the missing contributor_name slot.');
 
 $listingBuilderCalled = false;
@@ -298,6 +300,88 @@ assertSameValue(false, array_key_exists('campus', $mrbcOnlyHoldingPayload['slots
 assertSameValue(true, in_array('call_number', $mrbcOnlyHoldingPayload['slots']['requested_outputs'] ?? [], true), 'Inventory listing recovery should include holdings call number output when the prompt asks for call numbers.');
 assertSameValue(true, $mrbcOnlyHoldingPayload['slots']['only_holding_location'] ?? false, 'Only-holding inventory prompts should be set from prompt-only signals even when the model omits that slot.');
 assertSameValue('legacy_fallback', $mrbcOnlyHoldingResult['route'] ?? null, 'Recovered MRBC-only-holding listing prompts should continue through the family helper path.');
+
+$mrbcBadLocationPayload = null;
+$mrbcBadLocationResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'MRBC',
+            'location' => 'HC Reference',
+            'requested_outputs' => ['title'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_library_location_listing',
+    ],
+    'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'listing-mrbc-bad-location-recovery-test-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload) use (&$mrbcBadLocationPayload): array {
+        $mrbcBadLocationPayload = $normalizedPayload;
+        return [
+            'sql' => 'SELECT listing_mrbc_bad_location_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue('SC Rare Book Collection Reference', $mrbcBadLocationPayload['slots']['location'] ?? null, 'Inventory listing recovery should override model-invented HC Reference when prompt says MRBC Reference Collection.');
+assertSameValue(false, array_key_exists('library', $mrbcBadLocationPayload['slots'] ?? []), 'Inventory listing recovery should remove model-invented MRBC library filters for MRBC Reference Collection prompts.');
+assertSameValue(false, array_key_exists('campus', $mrbcBadLocationPayload['slots'] ?? []), 'Inventory listing recovery should remove default home-campus scope for MRBC only-holding prompts across the Five Colleges.');
+assertSameValue(true, $mrbcBadLocationPayload['slots']['only_holding_location'] ?? false, 'Inventory listing recovery should preserve only-holding intent for MRBC Reference Collection prompts.');
+assertSameValue('legacy_fallback', $mrbcBadLocationResult['route'] ?? null, 'Recovered bad-location MRBC listing prompts should continue through the family helper path.');
+
+$onlineStatusPayload = null;
+$onlineStatusResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Smith College',
+            'requested_outputs' => ['title', 'barcode', 'instance_number'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_library_location_listing',
+    ],
+    'List of items with material type "e-book" and item status of "in process". Include title, barcode and instance number at Smith College',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'listing-online-status-library-recovery-test-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload) use (&$onlineStatusPayload): array {
+        $onlineStatusPayload = $normalizedPayload;
+        return [
+            'sql' => 'SELECT online_status_listing_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue(false, array_key_exists('library', $onlineStatusPayload['slots'] ?? []), 'Recovered online material/status listing prompts should remove fake campus-as-library slots.');
+assertSameValue('e-book', $onlineStatusPayload['slots']['material_type'] ?? null, 'Recovered online material/status listing prompts should preserve the prompt material-type filter.');
+assertSameValue('in process', $onlineStatusPayload['slots']['item_status'] ?? null, 'Recovered online material/status listing prompts should preserve the prompt item-status filter.');
+assertSameValue('legacy_fallback', $onlineStatusResult['route'] ?? null, 'Recovered online material/status listing prompts should continue through the family compiler with item filters.');
 
 $materialTypeClarificationResult = $familyBranch->invoke(
     null,

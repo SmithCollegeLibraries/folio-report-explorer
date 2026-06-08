@@ -61,6 +61,7 @@ require_once $slotServicePath;
 require_once $geminiServicePath;
 
 use app\services\GeminiService;
+use app\services\QueryFamilySlotService;
 
 function assertSameValue($expected, $actual, string $message): void
 {
@@ -169,6 +170,130 @@ assertSameValue(
     'policy_omitted_explicit_prompt_only',
     $telemetry['slotProvenance']['location'] ?? null,
     'Library-only collection-age prompts should record when an implicit location slot was stripped by the explicit-only policy.'
+);
+
+$onlyHoldingPayload = null;
+Yii::$infos = [];
+$onlyHoldingResult = $responseBuilder->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'location' => 'MRBC Reference',
+            'library' => 'Neilson Library',
+            'requested_outputs' => ['title'],
+            'match_policy' => QueryFamilySlotService::DEFAULT_MATCH_POLICY,
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_library_location_listing',
+    ],
+        'List titles in MRBC Reference where this is the only holding location, with no other holdings anywhere in the 5 Colleges.',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
+        'promptFingerprint' => 'slot-provenance-only-holding-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload) use (&$onlyHoldingPayload): array {
+        $onlyHoldingPayload = $normalizedPayload;
+        return [
+            'sql' => 'SELECT only_holding_stub',
+            'dataSource' => 'folio',
+            'route' => 'builder_intent',
+            'queryDefinition' => [
+                'tables' => ['inventory_items'],
+                'columns' => [],
+                'filters' => [],
+                'joins' => [],
+            ],
+        ];
+    }
+);
+
+assertSameValue('builder_intent', $onlyHoldingResult['route'] ?? null, 'The slot provenance telemetry test should record a builder_intent response for only-holding listing prompts.');
+assertSameValue(true, $onlyHoldingPayload['slots']['only_holding_location'] ?? false, 'Explicit only-holding phrasing should set only_holding_location to true before compilation.');
+
+$onlyHoldingTelemetryEntries = array_values(array_filter(
+    Yii::$infos,
+    static function (array $entry): bool {
+        return ($entry['category'] ?? null) === 'nl2sql.telemetry';
+    }
+));
+
+assertCountValue(1, $onlyHoldingTelemetryEntries, 'Only-holding listing prompts should emit one structured nl2sql.generated telemetry record.');
+$onlyHoldingTelemetry = decodeTelemetryRecord((string)($onlyHoldingTelemetryEntries[0]['message'] ?? ''));
+assertSameValue(
+    'prompt_repaired',
+    $onlyHoldingTelemetry['slotProvenance']['only_holding_location'] ?? null,
+    'Only-holding listing prompts with explicit intent should record repaired-only holding provenance when the model omitted the slot.'
+);
+
+$onlyHoldingRemovedPayload = null;
+Yii::$infos = [];
+$implicitOnlyHoldingResult = $responseBuilder->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'location' => 'MRBC Reference',
+            'library' => 'Neilson Library',
+            'only_holding_location' => true,
+            'requested_outputs' => ['title'],
+            'match_policy' => QueryFamilySlotService::DEFAULT_MATCH_POLICY,
+        ],
+    ],
+    [
+        'familyKey' => 'inventory_library_location_listing',
+    ],
+    'Show titles in MRBC Reference.',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
+        'promptFingerprint' => 'slot-provenance-only-holding-omitted-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload) use (&$onlyHoldingRemovedPayload): array {
+        $onlyHoldingRemovedPayload = $normalizedPayload;
+        return [
+            'sql' => 'SELECT only_holding_removed_stub',
+            'dataSource' => 'folio',
+            'route' => 'builder_intent',
+            'queryDefinition' => [
+                'tables' => ['inventory_items'],
+                'columns' => [],
+                'filters' => [],
+                'joins' => [],
+            ],
+        ];
+    }
+);
+
+assertSameValue(
+    false,
+    array_key_exists('only_holding_location', $onlyHoldingRemovedPayload['slots'] ?? []),
+    'Non-explicit mention should strip the model-only-holding intent under explicit-only policy.'
+);
+
+$implicitOnlyHoldingTelemetryEntries = array_values(array_filter(
+    Yii::$infos,
+    static function (array $entry): bool {
+        return ($entry['category'] ?? null) === 'nl2sql.telemetry';
+    }
+));
+
+assertCountValue(1, $implicitOnlyHoldingTelemetryEntries, 'Non-explicit-only-holding prompts should emit one structured nl2sql.generated telemetry record.');
+$implicitOnlyHoldingTelemetry = decodeTelemetryRecord((string)($implicitOnlyHoldingTelemetryEntries[0]['message'] ?? ''));
+assertSameValue(
+    'policy_omitted_explicit_prompt_only',
+    $implicitOnlyHoldingTelemetry['slotProvenance']['only_holding_location'] ?? null,
+    'Non-explicit only-holding slots should be marked as policy-omitted in telemetry.'
 );
 
 fwrite(STDOUT, "GeminiService slot provenance telemetry test passed\n");

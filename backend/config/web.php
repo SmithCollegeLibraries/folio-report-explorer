@@ -53,6 +53,7 @@ $config = [
                 'POST execute' => 'folio-query/execute',
                 'POST nl' => 'folio-query/nl',
                 'POST clarifications/resolve' => 'folio-query/clarification-resolve',
+                'POST query-feedback' => 'folio-query/query-feedback',
                 'GET campuses' => 'folio-query/campus-list',
                 'PATCH user/campus' => 'folio-query/campus-save',
 
@@ -128,6 +129,10 @@ $config = [
                 // Settings (dev)
                 'GET settings' => 'folio-query/settings',
                 'GET nl2sql-preflight' => 'folio-query/nl2sql-preflight',
+                'GET reference-cache/status' => 'folio-query/reference-cache-status',
+                'GET reference-cache/candidates' => 'folio-query/reference-cache-candidates',
+                'POST reference-cache/candidates/review' => 'folio-query/reference-cache-candidate-review',
+                'POST reference-cache/refresh' => 'folio-query/reference-cache-refresh',
                 'POST settings' => 'folio-query/settings-save',
                 'POST settings/test' => 'folio-query/settings-test',
 

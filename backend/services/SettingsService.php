@@ -101,19 +101,19 @@ class SettingsService
             'pg_user' => self::get('pg_user', 'FOLIO_PG_USER'),
             'pg_pass' => self::get('pg_pass', 'FOLIO_PG_PASS') ? '••••••••' : '',
             'pg_sslmode' => self::get('pg_sslmode', 'FOLIO_PG_SSLMODE', 'require'),
-            'ai_provider' => strtolower((string) self::get('ai_provider', 'AI_PROVIDER', 'gemini')),
+            'ai_provider' => strtolower((string) self::get('ai_provider', 'AI_PROVIDER', 'openai')),
             'gemini_api_key' => self::get('gemini_api_key', 'GEMINI_API_KEY') ? '••••••••' : '',
             'gemini_model' => self::get('gemini_model', null, 'gemini-2.5-flash'),
             'openai_api_key' => self::get('openai_api_key', 'OPENAI_API_KEY') ? '••••••••' : '',
-            'openai_model' => self::get('openai_model', 'OPENAI_MODEL', 'gpt-4.1-mini'),
+            'openai_model' => self::get('openai_model', 'OPENAI_MODEL', 'gpt-5.4'),
             'nl2sql_intent_mode' => filter_var(
-                self::get('nl2sql_intent_mode', 'NL2SQL_INTENT_MODE', 'false'),
+                self::get('nl2sql_intent_mode', 'NL2SQL_INTENT_MODE', 'true'),
                 FILTER_VALIDATE_BOOLEAN
             ),
             'nl2sql_primary_mode' => strtolower((string) self::get(
                 'nl2sql_primary_mode',
                 'NL2SQL_PRIMARY_MODE',
-                'auto'
+                'intent'
             )),
             'nl2sql_shadow_mode' => filter_var(
                 self::get('nl2sql_shadow_mode', 'NL2SQL_SHADOW_MODE', 'false'),
@@ -220,7 +220,7 @@ class SettingsService
     public static function testOpenAi($apiKey = null, $model = null)
     {
         $apiKey = $apiKey ?: self::get('openai_api_key', 'OPENAI_API_KEY');
-        $model  = $model  ?: self::get('openai_model', 'OPENAI_MODEL', 'gpt-4.1-mini');
+        $model  = $model  ?: self::get('openai_model', 'OPENAI_MODEL', 'gpt-5.4');
 
         if (!$apiKey) {
             return ['connected' => false, 'error' => 'API key is required'];

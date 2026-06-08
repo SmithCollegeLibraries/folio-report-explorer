@@ -12,6 +12,11 @@ import type {
   HealthResponse,
   AppSettings,
   SettingsTestResponse,
+  ReferenceCacheStatus,
+  ReferenceCacheCandidatesResponse,
+  ReferenceCacheCandidateDecision,
+  ReferenceCacheCandidateReviewResponse,
+  ReferenceCacheRefreshTableResponse,
   QueryDefinition,
   JobSubmitResponse,
   JobStatusResponse,
@@ -222,14 +227,34 @@ export async function saveQueryFeedback(input: {
 export async function saveClarificationResolution(input: {
   originalQuestion: string;
   clarificationKey: string;
+  clarificationBatchId?: string | null;
+  term?: string | null;
   detectedTerms?: string[];
   options?: unknown[];
   selectedOptionIds?: string[];
   freeTextResponse?: string | null;
   resolvedFilter?: Record<string, unknown> | null;
+  selectedSourceTable?: string | null;
+  selectedSourceId?: string | null;
+  selectedValue?: string | null;
+  confidence?: string | null;
+  promotionStatus?: string | null;
+  items?: Array<{
+    term?: string | null;
+    clarificationKey: string;
+    confidence?: string | null;
+    options?: unknown[];
+    selectedOptionIds?: string[];
+    freeTextResponse?: string | null;
+    resolvedFilter?: Record<string, unknown> | null;
+    selectedSourceTable?: string | null;
+    selectedSourceId?: string | null;
+    selectedValue?: string | null;
+    promotionStatus?: string | null;
+  }>;
   generatedSql?: string | null;
   resultStatus?: string | null;
-}): Promise<{ id: number; message: string }> {
+}): Promise<{ id?: number; ids?: number[]; message: string }> {
   const { data } = await api.post('/clarifications/resolve', input);
   return data;
 }
@@ -320,6 +345,31 @@ export async function testSettings(
   params: Record<string, unknown>,
 ): Promise<SettingsTestResponse> {
   const { data } = await api.post('/settings/test', params);
+  return data;
+}
+
+export async function fetchReferenceCacheStatus(): Promise<ReferenceCacheStatus> {
+  const { data } = await api.get('/reference-cache/status');
+  return data;
+}
+
+export async function fetchReferenceCacheCandidates(): Promise<ReferenceCacheCandidatesResponse> {
+  const { data } = await api.get('/reference-cache/candidates');
+  return data;
+}
+
+export async function reviewReferenceCacheCandidate(input: {
+  sourceTable: string;
+  decision: ReferenceCacheCandidateDecision;
+}): Promise<ReferenceCacheCandidateReviewResponse> {
+  const { data } = await api.post('/reference-cache/candidates/review', input);
+  return data;
+}
+
+export async function refreshReferenceCacheTable(input: {
+  sourceTable: string;
+}): Promise<ReferenceCacheRefreshTableResponse> {
+  const { data } = await api.post('/reference-cache/refresh', input);
   return data;
 }
 

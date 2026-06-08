@@ -7,19 +7,19 @@ use app\services\SettingsService;
  * Values from data/settings.json override environment variables.
  */
 return [
-    'aiProvider' => strtolower((string) SettingsService::get('ai_provider', 'AI_PROVIDER', 'gemini')),
+    'aiProvider' => strtolower((string) SettingsService::get('ai_provider', 'AI_PROVIDER', 'openai')),
     'geminiApiKey' => SettingsService::get('gemini_api_key', 'GEMINI_API_KEY', ''),
     'geminiModel' => SettingsService::get('gemini_model', null, 'gemini-2.5-flash'),
     'openaiApiKey' => SettingsService::get('openai_api_key', 'OPENAI_API_KEY', ''),
-    'openaiModel' => SettingsService::get('openai_model', 'OPENAI_MODEL', 'gpt-4.1-mini'),
+    'openaiModel' => SettingsService::get('openai_model', 'OPENAI_MODEL', 'gpt-5.4'),
     'nl2sqlIntentMode' => filter_var(
-        SettingsService::get('nl2sql_intent_mode', 'NL2SQL_INTENT_MODE', 'false'),
+        SettingsService::get('nl2sql_intent_mode', 'NL2SQL_INTENT_MODE', 'true'),
         FILTER_VALIDATE_BOOLEAN
     ),
     'nl2sqlPrimaryMode' => strtolower((string) SettingsService::get(
         'nl2sql_primary_mode',
         'NL2SQL_PRIMARY_MODE',
-        'auto'
+        'intent'
     )),
     'nl2sqlShadowMode' => filter_var(
         SettingsService::get('nl2sql_shadow_mode', 'NL2SQL_SHADOW_MODE', 'false'),

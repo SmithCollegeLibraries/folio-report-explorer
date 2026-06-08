@@ -52,3 +52,7 @@ Thumbs.db
 # Local diagnostics
 /shadow_report.txt
 /test_db.php
+
+# Playwright MCP scratch output and ad-hoc screenshots
+.playwright-mcp/
+/ask-*.png

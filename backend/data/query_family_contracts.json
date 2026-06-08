@@ -143,9 +143,11 @@
                 ],
                 "supported": [
                     "campus",
+                    "item_status",
                     "library",
                     "location",
                     "location_code",
+                    "material_type",
                     "only_holding_location"
                 ],
                 "inferencePolicies": {

@@ -201,6 +201,13 @@ else
     echo "  WARNING: Could not refresh NL2SQL location cache; using existing committed cache file."
 fi
 
+echo "→ Refreshing local FOLIO reference cache..."
+if php backend/yii reference-cache/refresh; then
+    echo "  Refreshed: local reference cache"
+else
+    echo "  WARNING: Could not refresh local reference cache; Ask will continue without local reference-store matches."
+fi
+
 # ── 10. Seed database (idempotent — uses REPLACE INTO) ─────────────
 if [ "${SEED_DB:-false}" = "true" ]; then
     echo "→ Seeding database..."

@@ -119,6 +119,34 @@ class QueryFamilySlotService
         }
 
         if (
+            $familyKey === 'inventory_library_location_listing'
+            && self::itemFilterScopeSatisfiesListingRequirement($normalizedSlots)
+        ) {
+            $requiredSlotNames = array_values(array_filter(
+                $requiredSlotNames,
+                static function (string $slotName): bool {
+                    return $slotName !== 'library';
+                }
+            ));
+        }
+
+        if (
+            $familyKey === 'inventory_library_location_listing'
+            && !empty($normalizedSlots['only_holding_location'])
+            && (
+                !empty($normalizedSlots['location'])
+                || self::locationCodeScopeSatisfiesListingRequirement($normalizedSlots['location_code'] ?? null)
+            )
+        ) {
+            $requiredSlotNames = array_values(array_filter(
+                $requiredSlotNames,
+                static function (string $slotName): bool {
+                    return $slotName !== 'library';
+                }
+            ));
+        }
+
+        if (
             $familyKey === 'inventory_collection_age'
             && self::collectionAgeScopeRequirementIsSatisfied($normalizedSlots)
         ) {
@@ -371,6 +399,16 @@ class QueryFamilySlotService
             ];
         }
 
+        if ($slotName === 'item_status') {
+            // Canonicalize hyphen/underscore/case variants ("Checked-Out") to the
+            // spaced form FOLIO stores ("Checked out") so the exact ILIKE matches.
+            $canonicalStatus = trim((string)preg_replace('/\s+/', ' ', (string)preg_replace('/[^a-z0-9]+/', ' ', $lowerValue)));
+            return [
+                'op' => 'ILIKE',
+                'value' => $canonicalStatus,
+            ];
+        }
+
         if ($slotName === 'campus' && self::isCanonicalCampusName($normalizedValue)) {
             return [
                 'op' => 'ILIKE',
@@ -510,10 +548,23 @@ class QueryFamilySlotService
         return count(self::normalizeDelimitedLocationCodes((string)$value)) > 1;
     }
 
+    private static function itemFilterScopeSatisfiesListingRequirement(array $normalizedSlots): bool
+    {
+        return self::slotHasUsableValue($normalizedSlots['campus'] ?? null)
+            && (
+                self::slotHasUsableValue($normalizedSlots['material_type'] ?? null)
+                || self::slotHasUsableValue($normalizedSlots['item_status'] ?? null)
+            );
+    }
+
     private static function normalizeSlotValue(string $slotName, $value)
     {
         if ($slotName === 'year_buckets') {
             return self::normalizeYearBuckets($value);
+        }
+
+        if ($slotName === 'only_holding_location') {
+            return self::normalizeBooleanSlotValue($value);
         }
 
         return self::normalizeScalarSlotValue($value);
@@ -619,6 +670,18 @@ class QueryFamilySlotService
             ], true);
         }
 
+        if ($slotName === 'only_holding_location') {
+            return in_array($normalized, [
+                'only holding location',
+                'only holding',
+                'only location',
+                'only locations',
+                'holding only',
+                'holding locations only',
+                'exclusive holdings',
+            ], true);
+        }
+
         if ($slotName !== 'contributor_name') {
             return false;
         }
@@ -664,6 +727,32 @@ class QueryFamilySlotService
         }
 
         return $normalizedYears === [] ? null : $normalizedYears;
+    }
+
+    private static function normalizeBooleanSlotValue($value): ?bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (!is_scalar($value)) {
+            return null;
+        }
+
+        $normalized = strtolower(trim((string)$value));
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (in_array($normalized, ['true', '1', 'yes', 'y', 'on'], true)) {
+            return true;
+        }
+
+        if (in_array($normalized, ['false', '0', 'no', 'n', 'off'], true)) {
+            return false;
+        }
+
+        return null;
     }
 
     private static function extractQuotedPhrases(string $prompt): array

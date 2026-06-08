@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
@@ -9,7 +9,7 @@ import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
 import type { FollowUpContext, NlResponse } from '../types';
-import type { ClarificationOption } from '../types/schema';
+import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
 import {
   Send, Play, Copy, Sparkles, RotateCcw, Square, Loader2,
   Maximize2, Save, FileBarChart, Check, ThumbsDown, Pencil, X,
@@ -42,6 +42,57 @@ const EXAMPLE_PROMPTS = [
   'Show materials purchased in the last 90 days grouped by material type',
   'Which call number ranges have the highest circulation counts?',
 ];
+
+export const ASK_RESOLVER_LOADING_STEPS = [
+  'Checking known FOLIO report filters and lookup values',
+  'Looking for named terms in contributors/authors, titles, identifiers, and notes',
+  'Preparing a follow-up question if anything is ambiguous',
+];
+
+export const ASK_SQL_GENERATION_LOADING_STEPS = [
+  'Applying your selected clarification to the request',
+  'Checking whether the request now has enough context for SQL generation',
+  'Starting AI SQL generation; review the SQL and results for accuracy',
+];
+
+export type AskProgressPhase = 'checking_request' | 'building_sql_after_clarification';
+
+export function getAskProgressCopy(phase: AskProgressPhase): { title: string; steps: string[] } {
+  if (phase === 'building_sql_after_clarification') {
+    return {
+      title: 'Using your clarification to build SQL',
+      steps: ASK_SQL_GENERATION_LOADING_STEPS,
+    };
+  }
+
+  return {
+    title: 'Checking your request before SQL generation',
+    steps: ASK_RESOLVER_LOADING_STEPS,
+  };
+}
+
+const ASK_WORKSPACE_SPLIT_STORAGE_KEY = 'folio_ask_workspace_split';
+const ASK_WORKSPACE_DEFAULT_SPLIT = 38;
+const ASK_PANEL_WIDTH_STORAGE_KEY = 'folio_ask_panel_width';
+const ASK_PANEL_DEFAULT_WIDTH = 360;
+
+export type AskResultTabId = 'results' | 'followups' | 'sql';
+
+export const ASK_RESULT_TABS: Array<{ id: AskResultTabId; label: string }> = [
+  { id: 'results', label: 'Results' },
+  { id: 'followups', label: 'Related follow-ups' },
+  { id: 'sql', label: 'Output SQL' },
+];
+
+export function clampAskWorkspaceSplit(value: number): number {
+  if (!Number.isFinite(value)) return ASK_WORKSPACE_DEFAULT_SPLIT;
+  return Math.min(70, Math.max(30, Math.round(value)));
+}
+
+export function clampAskPanelWidth(value: number): number {
+  if (!Number.isFinite(value)) return ASK_PANEL_DEFAULT_WIDTH;
+  return Math.min(520, Math.max(300, Math.round(value)));
+}
 
 function getApiErrorMessage(error: unknown): string {
   if (isAxiosError(error)) {
@@ -132,6 +183,65 @@ export function formatQuerySubmitError(error: unknown): string {
   return `Submit error: ${message}`;
 }
 
+type ExploratoryNoticeCopy = {
+  title: string;
+  message: string;
+  detail?: string;
+};
+
+export function getExploratoryNoticeCopy(
+  result: Pick<NlResponse, 'exploratoryNotice' | 'mode' | 'repeatabilityWarning'> | null | undefined,
+): ExploratoryNoticeCopy | null {
+  if (!result?.exploratoryNotice && result?.mode !== 'exploratory' && !result?.repeatabilityWarning) {
+    return null;
+  }
+
+  return {
+    title: result.exploratoryNotice?.title?.trim() || 'AI-assisted query',
+    message: result.exploratoryNotice?.message?.trim()
+      || 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+    detail: result.exploratoryNotice?.detail?.trim()
+      || (result.mode === 'exploratory'
+        ? 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.'
+        : undefined),
+  };
+}
+
+export function shouldShowBlockingClarification(result: NlResponse | null | undefined): boolean {
+  return result?.needsClarification === true;
+}
+
+function ExploratoryNoticePanel({ result }: { result: NlResponse | null }) {
+  const notice = getExploratoryNoticeCopy(result);
+  if (!notice) return null;
+
+  return (
+    <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+      <div className="font-semibold">{notice.title}</div>
+      <div className="mt-1">{notice.message}</div>
+      {notice.detail && <div className="mt-1 text-xs text-sky-800">{notice.detail}</div>}
+    </div>
+  );
+}
+
+export function formatResolverTrace(trace: ResolverTraceEntry[] | undefined): string[] {
+  if (!Array.isArray(trace)) return [];
+  return trace
+    .map((entry) => {
+      const label = typeof entry.label === 'string' ? entry.label.trim() : '';
+      if (!label) return '';
+      const status = typeof entry.status === 'string' ? entry.status.trim() : '';
+      const detail = typeof entry.detail === 'string' ? entry.detail.trim() : '';
+      const technicalDetail = typeof entry.technicalDetail === 'string' ? entry.technicalDetail.trim() : '';
+      const suffix = technicalDetail ? ` (${technicalDetail})` : '';
+      if (detail) return `${label}: ${detail}${suffix}`;
+      if (status === 'no_match') return `${label}: no match`;
+      if (status === 'found') return `${label}${suffix}`;
+      return status ? `${label}: ${status}` : label;
+    })
+    .filter((line): line is string => line.length > 0);
+}
+
 function buildClientFallbackSuggestions(promptText: string, campus: string): string[] {
   const prompt = promptText.toLowerCase();
   const scopeSuffix = campus !== 'All Colleges' ? ` for ${campus}` : '';
@@ -180,26 +290,85 @@ function buildClientFallbackSuggestions(promptText: string, campus: string): str
   return generic.slice(0, 5);
 }
 
+export function getEffectiveAskSuggestions(
+  result: Pick<NlResponse, 'suggestions' | 'sql'> | null | undefined,
+  promptText: string,
+  campus: string,
+): { suggestions: string[]; usingFallback: boolean } {
+  if (!result?.sql?.trim()) {
+    return { suggestions: [], usingFallback: false };
+  }
+
+  if (result.suggestions && result.suggestions.length > 0) {
+    return { suggestions: result.suggestions, usingFallback: false };
+  }
+
+  return {
+    suggestions: buildClientFallbackSuggestions(promptText, campus),
+    usingFallback: true,
+  };
+}
+
 export async function saveClarificationResolutionBestEffort(
   saveFn: (input: {
     originalQuestion: string;
     clarificationKey: string;
+    clarificationBatchId?: string | null;
+    term?: string | null;
     detectedTerms?: string[];
     options?: unknown[];
     selectedOptionIds?: string[];
     freeTextResponse?: string | null;
     resolvedFilter?: Record<string, unknown> | null;
+    selectedSourceTable?: string | null;
+    selectedSourceId?: string | null;
+    selectedValue?: string | null;
+    confidence?: string | null;
+    promotionStatus?: string | null;
+    items?: Array<{
+      term?: string | null;
+      clarificationKey: string;
+      confidence?: string | null;
+      options?: unknown[];
+      selectedOptionIds?: string[];
+      freeTextResponse?: string | null;
+      resolvedFilter?: Record<string, unknown> | null;
+      selectedSourceTable?: string | null;
+      selectedSourceId?: string | null;
+      selectedValue?: string | null;
+      promotionStatus?: string | null;
+    }>;
     generatedSql?: string | null;
     resultStatus?: string | null;
   }) => Promise<unknown>,
   input: {
     originalQuestion: string;
     clarificationKey: string;
+    clarificationBatchId?: string | null;
+    term?: string | null;
     detectedTerms?: string[];
     options?: unknown[];
     selectedOptionIds?: string[];
     freeTextResponse?: string | null;
     resolvedFilter?: Record<string, unknown> | null;
+    selectedSourceTable?: string | null;
+    selectedSourceId?: string | null;
+    selectedValue?: string | null;
+    confidence?: string | null;
+    promotionStatus?: string | null;
+    items?: Array<{
+      term?: string | null;
+      clarificationKey: string;
+      confidence?: string | null;
+      options?: unknown[];
+      selectedOptionIds?: string[];
+      freeTextResponse?: string | null;
+      resolvedFilter?: Record<string, unknown> | null;
+      selectedSourceTable?: string | null;
+      selectedSourceId?: string | null;
+      selectedValue?: string | null;
+      promotionStatus?: string | null;
+    }>;
     generatedSql?: string | null;
     resultStatus?: string | null;
   },
@@ -211,6 +380,71 @@ export async function saveClarificationResolutionBestEffort(
     console.warn('Clarification telemetry save failed; continuing with clarified prompt.', error);
     return false;
   }
+}
+
+export type BatchClarificationChoice = {
+  term: string;
+  clarificationKey: string;
+  confidence?: string;
+  options?: ClarificationOption[];
+  selectedOption: ClarificationOption | null;
+  freeText: string;
+};
+
+function optionResolvedValue(option: ClarificationOption | null, freeText = ''): string | null {
+  if (!option) return freeText.trim() || null;
+  const value = option.resolvedFilter?.value;
+  return typeof value === 'string' && value.trim() ? value : option.label;
+}
+
+export function buildBatchClarifiedPrompt(originalQuestion: string, choices: BatchClarificationChoice[]): string {
+  const lines = choices
+    .map((choice) => {
+      const suffix = choice.selectedOption?.clarifiedPromptSuffix?.trim()
+        || choice.freeText.trim()
+        || (choice.selectedOption ? `Use ${choice.selectedOption.label} for ${choice.term}.` : '');
+      return suffix ? `- ${choice.term}: ${suffix}` : '';
+    })
+    .filter(Boolean);
+
+  if (lines.length === 0) return originalQuestion;
+  return `${originalQuestion.trim()}\n\nClarifications:\n${lines.join('\n')}`;
+}
+
+export function buildBatchClarificationResolutionInput(
+  originalQuestion: string,
+  clarificationBatchId: string | undefined,
+  choices: BatchClarificationChoice[],
+) {
+  return {
+    originalQuestion,
+    clarificationKey: 'batch_local_reference_resolution',
+    clarificationBatchId: clarificationBatchId || null,
+    items: choices.map((choice) => {
+      const selectedValue = optionResolvedValue(choice.selectedOption, choice.freeText);
+      const table = typeof choice.selectedOption?.resolvedFilter?.table === 'string'
+        ? choice.selectedOption.resolvedFilter.table
+        : null;
+      const sourceId = typeof choice.selectedOption?.resolvedFilter?.sourceId === 'string'
+        ? choice.selectedOption.resolvedFilter.sourceId
+        : null;
+
+      return {
+        term: choice.term,
+        clarificationKey: choice.clarificationKey,
+        confidence: choice.confidence || null,
+        options: choice.options || [],
+        selectedOptionIds: choice.selectedOption ? [choice.selectedOption.id] : [],
+        freeTextResponse: choice.selectedOption ? null : (choice.freeText.trim() || null),
+        resolvedFilter: choice.selectedOption?.resolvedFilter || null,
+        selectedSourceTable: table,
+        selectedSourceId: sourceId,
+        selectedValue,
+        promotionStatus: 'candidate',
+      };
+    }),
+    resultStatus: 'resolved',
+  };
 }
 
 export function buildCurrentAskFollowUpContext(
@@ -260,12 +494,22 @@ export default function Ask() {
   const [prompt, setPrompt] = useState('');
   const [nlResult, setNlResult] = useState<NlResponse | null>(null);
   const [clarificationFreeText, setClarificationFreeText] = useState('');
+  const [batchClarificationChoices, setBatchClarificationChoices] = useState<Record<string, { option: ClarificationOption | null; freeText: string }>>({});
   const [followUpContext, setFollowUpContext] = useState<FollowUpContext | null>(null);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [askProgressPhase, setAskProgressPhase] = useState<AskProgressPhase>('checking_request');
   const [history, setHistory] = useState<
     { prompt: string; result: NlResponse }[]
   >([]);
+  const [workspaceSplit, setWorkspaceSplit] = useState<number>(() => {
+    const stored = Number(localStorage.getItem(ASK_WORKSPACE_SPLIT_STORAGE_KEY));
+    return clampAskWorkspaceSplit(Number.isFinite(stored) && stored > 0 ? stored : ASK_WORKSPACE_DEFAULT_SPLIT);
+  });
+  const [askPanelWidth, setAskPanelWidth] = useState<number>(() => {
+    const stored = Number(localStorage.getItem(ASK_PANEL_WIDTH_STORAGE_KEY));
+    return clampAskPanelWidth(Number.isFinite(stored) && stored > 0 ? stored : ASK_PANEL_DEFAULT_WIDTH);
+  });
 
 
   // Modal state
@@ -329,11 +573,12 @@ export default function Ask() {
   const [correctionNotes, setCorrectionNotes] = useState('');
 
   // Tab state: results-first view
-  const [detailTab, setDetailTab] = useState<'results' | 'details'>('results');
+  const [detailTab, setDetailTab] = useState<AskResultTabId>('results');
 
   // History popover state
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
 
   // Close history popover on outside click
   useEffect(() => {
@@ -346,6 +591,64 @@ export default function Ask() {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [historyOpen]);
+
+  useEffect(() => {
+    localStorage.setItem(ASK_WORKSPACE_SPLIT_STORAGE_KEY, String(workspaceSplit));
+  }, [workspaceSplit]);
+
+  useEffect(() => {
+    localStorage.setItem(ASK_PANEL_WIDTH_STORAGE_KEY, String(askPanelWidth));
+  }, [askPanelWidth]);
+
+  const handleAskPanelResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const bounds = workspaceRef.current?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      setAskPanelWidth(clampAskPanelWidth(moveEvent.clientX - bounds.left));
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  };
+
+  const handleWorkspaceResizeStart = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const bounds = workspaceRef.current?.getBoundingClientRect();
+    if (!bounds || bounds.width <= 0) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const next = ((moveEvent.clientX - bounds.left) / bounds.width) * 100;
+      setWorkspaceSplit(clampAskWorkspaceSplit(next));
+    };
+
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  };
+
+  const setWorkspaceSplitPreset = (value: number) => {
+    if (value === 45) {
+      setAskPanelWidth(clampAskPanelWidth(460));
+      return;
+    }
+    if (value === 30) {
+      setAskPanelWidth(clampAskPanelWidth(300));
+      return;
+    }
+    setAskPanelWidth(ASK_PANEL_DEFAULT_WIDTH);
+    setWorkspaceSplit(clampAskWorkspaceSplit(value));
+  };
 
   // --- async job polling ---
   const { job, results, isRunning, error: jobError, cancel: cancelJobFn, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
@@ -407,6 +710,7 @@ export default function Ask() {
       setFeedbackMessage(null);
       setCorrecting(false);
       setClarificationFreeText('');
+      setBatchClarificationChoices({});
       setFollowUpContext(null);
       setFollowUpError(null);
       setDetailTab('results');
@@ -487,6 +791,7 @@ export default function Ask() {
       setFollowUpError('Follow-up context is missing the previous SQL. Start a new query or choose Ask follow-up again.');
       return;
     }
+    setAskProgressPhase('checking_request');
     askMut.mutate({
       question: q,
       includeSuggestions: true,
@@ -507,6 +812,7 @@ export default function Ask() {
 
   const handleRunSuggestion = (suggestedPrompt: string) => {
     setPrompt(suggestedPrompt);
+    setAskProgressPhase('checking_request');
     askMut.mutate({
       question: suggestedPrompt,
       includeSuggestions: true,
@@ -550,6 +856,7 @@ export default function Ask() {
     });
 
     if (allowExploratory) {
+      setAskProgressPhase('building_sql_after_clarification');
       askMut.mutate({
         question: originalQuestion,
         includeSuggestions: true,
@@ -570,6 +877,65 @@ export default function Ask() {
       : `${originalQuestion}\n\nClarification: ${freeText}`;
 
     setPrompt(clarifiedPrompt);
+    setAskProgressPhase('building_sql_after_clarification');
+    askMut.mutate({
+      question: clarifiedPrompt,
+      includeSuggestions: true,
+      shouldExecute: true,
+    });
+  };
+
+  const buildCurrentBatchChoices = (): BatchClarificationChoice[] => {
+    const items = nlResult?.clarificationItems || [];
+    return items.map((item) => {
+      const state = batchClarificationChoices[item.clarificationKey] || { option: null, freeText: '' };
+      return {
+        term: item.term,
+        clarificationKey: item.clarificationKey,
+        confidence: item.confidence,
+        options: item.options || [],
+        selectedOption: state.option,
+        freeText: state.freeText,
+      };
+    });
+  };
+
+  const allBatchItemsResolved = (): boolean => {
+    const items = nlResult?.clarificationItems || [];
+    return items.length > 0 && items.every((item) => {
+      const state = batchClarificationChoices[item.clarificationKey];
+      return !!state?.option || !!state?.freeText.trim();
+    });
+  };
+
+  const handleBatchClarificationOption = (item: ClarificationItem, option: ClarificationOption) => {
+    setBatchClarificationChoices((prev) => ({
+      ...prev,
+      [item.clarificationKey]: { option, freeText: '' },
+    }));
+  };
+
+  const handleBatchClarificationFreeText = (item: ClarificationItem, freeText: string) => {
+    setBatchClarificationChoices((prev) => ({
+      ...prev,
+      [item.clarificationKey]: { option: null, freeText },
+    }));
+  };
+
+  const handleBatchClarificationContinue = async () => {
+    if (!nlResult?.needsClarification || !nlResult.clarificationItems?.length || !allBatchItemsResolved()) return;
+
+    const originalQuestion = history[0]?.prompt || prompt.trim();
+    const choices = buildCurrentBatchChoices();
+
+    await saveClarificationResolutionBestEffort(
+      saveClarificationResolution,
+      buildBatchClarificationResolutionInput(originalQuestion, nlResult.clarificationBatchId, choices),
+    );
+
+    const clarifiedPrompt = buildBatchClarifiedPrompt(originalQuestion, choices);
+    setPrompt(clarifiedPrompt);
+    setAskProgressPhase('building_sql_after_clarification');
     askMut.mutate({
       question: clarifiedPrompt,
       includeSuggestions: true,
@@ -578,188 +944,208 @@ export default function Ask() {
   };
 
   const anchorPrompt = history[0]?.prompt || prompt;
-  const usingFallbackSuggestions = !!nlResult && (!nlResult.suggestions || nlResult.suggestions.length === 0);
-  const effectiveSuggestions = nlResult
-    ? (nlResult.suggestions && nlResult.suggestions.length > 0
-      ? nlResult.suggestions
-      : buildClientFallbackSuggestions(anchorPrompt, selectedCampus))
-    : [];
+  const { suggestions: effectiveSuggestions, usingFallback: usingFallbackSuggestions } = getEffectiveAskSuggestions(
+    nlResult,
+    anchorPrompt,
+    selectedCampus,
+  );
 
   // Are we in any loading phase?
   const isGenerating = askMut.isPending;
   const isExecuting = execMut.isPending || isRunning;
   const isLoading = isGenerating || isExecuting;
   const hasFilePreview = !!(results?.outputMode === 'file' && results.columns.length > 0 && results.rows.length > 0);
+  const showMiddlePanel = isGenerating
+    || askMut.isError
+    || !!followUpError
+    || !!(nlResult && !isLoading && nlResult.needsClarification);
+  const showRightPaneClarifications: boolean = false;
+  const showRightPaneAskErrors: boolean = false;
+  const askProgressCopy = getAskProgressCopy(askProgressPhase);
 
   return (
-    <div className="flex flex-col h-[calc(100vh-56px)]">
-      {/* Input area */}
-      <div className="p-6 bg-white border-b">
-        <div className="max-w-4xl mx-auto">
-          <div className="flex items-center gap-2 mb-3">
-            <Sparkles size={20} className="text-folio-600" />
-            <h2 className="text-lg font-semibold">Ask AI</h2>
-          </div>
-
-          {/* Campus scope selector + output preference */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-medium flex-shrink-0">Scope to:</span>
-              <select
-                value={selectedCampus}
-                onChange={(e) => handleCampusChange(e.target.value)}
-                className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 focus:ring-2 focus:ring-folio-300 focus:border-folio-400 outline-none cursor-pointer"
-              >
-                {CAMPUS_OPTIONS.map((c) => (
-                  <option key={c.code} value={c.name}>{c.name}</option>
-                ))}
-              </select>
-              {selectedCampus !== 'All Colleges' && (
-                <span className="text-xs text-folio-600">
-                  Queries will be filtered to {selectedCampus}
-                </span>
-              )}
+    <div className="h-[calc(100vh-56px)] overflow-y-auto bg-gray-50 lg:overflow-hidden">
+      <div ref={workspaceRef} className="flex h-full flex-col lg:flex-row">
+        <section
+          className="border-b border-gray-200 bg-white lg:h-full lg:w-[var(--ask-panel-width)] lg:shrink-0 lg:overflow-y-auto lg:border-b-0 lg:border-r"
+          style={{ '--ask-panel-width': `${askPanelWidth}px` } as CSSProperties}
+        >
+          <div className="p-4 xl:p-6">
+            <div className="flex items-center gap-2 mb-3">
+              <Sparkles size={20} className="text-folio-600" />
+              <h2 className="text-lg font-semibold">Ask AI</h2>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-medium flex-shrink-0">Results:</span>
-              <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
-                <button
-                  onClick={() => handleOutputPrefChange('preview')}
-                  className={`px-3 py-1.5 transition-colors ${
-                    outputPref === 'preview'
-                      ? 'bg-folio-600 text-white'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                  title="Show up to 100 rows in the browser"
-                >
-                  Preview (100 rows)
-                </button>
-                <button
-                  onClick={() => handleOutputPrefChange('full')}
-                  className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
-                    outputPref === 'full'
-                      ? 'bg-folio-600 text-white'
-                      : 'text-gray-600 hover:bg-gray-50'
-                  }`}
-                  title="Export all rows as a downloadable CSV"
-                >
-                  All results (CSV)
-                </button>
-              </div>
-            </div>
-          </div>
 
-          <p className="text-sm text-gray-500 mb-4">
-            Describe the report you need in plain English. The AI will generate and
-            run a query against the FOLIO LDP schema or local supplementary tables.
-          </p>
-
-          {followUpContext && (
-            <div className="flex items-center justify-between gap-3 mb-3 border border-folio-200 bg-folio-50 rounded-lg px-3 py-2 text-sm text-folio-800">
-              <span>
-                Asking a follow-up for {followUpContext.source === 'history' ? 'a history query' : 'the current result'}
-              </span>
-              <button
-                onClick={() => {
-                  setFollowUpContext(null);
-                  setFollowUpError(null);
-                }}
-                className="text-xs text-folio-700 hover:text-folio-900"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-
-          <div className="flex gap-2">
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSubmit();
-                }
-              }}
-              placeholder="Describe the report you want…"
-              className="flex-1 border rounded-lg px-4 py-3 text-sm resize-none h-20 focus:ring-2 focus:ring-folio-300 focus:border-folio-500 outline-none"
-            />
-            <div className="flex flex-col gap-2 self-end">
-              <button
-                onClick={handleSubmit}
-                disabled={!prompt.trim() || askMut.isPending}
-                className="bg-folio-600 text-white px-4 py-3 rounded-lg hover:bg-folio-700 disabled:opacity-50 transition-colors"
-              >
-                {askMut.isPending ? (
-                  <RotateCcw size={18} className="animate-spin" />
-                ) : (
-                  <Send size={18} />
-                )}
-              </button>
-              {/* History popover trigger */}
-              {history.length > 0 && (
-                <div className="relative" ref={historyRef}>
-                  <button
-                    onClick={() => setHistoryOpen((o) => !o)}
-                    className={`w-full flex items-center justify-center px-4 py-2 rounded-lg border transition-colors ${
-                      historyOpen
-                        ? 'bg-folio-50 text-folio-700 border-folio-300'
-                        : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 border-gray-200'
-                    }`}
-                    title="Recent questions"
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 font-medium flex-shrink-0">Scope to:</span>
+                  <select
+                    value={selectedCampus}
+                    onChange={(e) => handleCampusChange(e.target.value)}
+                    className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 focus:ring-2 focus:ring-folio-300 focus:border-folio-400 outline-none cursor-pointer"
                   >
-                    <Clock size={16} />
+                    {CAMPUS_OPTIONS.map((c) => (
+                      <option key={c.code} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 font-medium flex-shrink-0">Results:</span>
+                  <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                    <button
+                      onClick={() => handleOutputPrefChange('preview')}
+                      className={`px-3 py-1.5 transition-colors ${
+                        outputPref === 'preview'
+                          ? 'bg-folio-600 text-white'
+                          : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      onClick={() => handleOutputPrefChange('full')}
+                      className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
+                        outputPref === 'full'
+                          ? 'bg-folio-600 text-white'
+                          : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      CSV
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-sm text-gray-500">
+                Describe the report you need. The app checks known FOLIO terms first, then generates SQL when the request is clear.
+              </p>
+
+              {followUpContext && (
+                <div className="flex items-center justify-between gap-3 border border-folio-200 bg-folio-50 rounded-lg px-3 py-2 text-sm text-folio-800">
+                  <span>
+                    Asking a follow-up for {followUpContext.source === 'history' ? 'a history query' : 'the current result'}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setFollowUpContext(null);
+                      setFollowUpError(null);
+                    }}
+                    className="text-xs text-folio-700 hover:text-folio-900"
+                  >
+                    Cancel
                   </button>
-                  {historyOpen && (
-                    <div className="absolute right-0 top-full mt-1 w-96 max-h-80 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-40">
-                      <div className="px-3 py-2 border-b text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                        Recent Questions
-                      </div>
-                      {history.map((h, i) => (
-                        <button
-                          key={i}
-                          onClick={() => {
-                            setPrompt(h.prompt);
-                            setNlResult(h.result);
-                            resetJob();
-                            setActiveJobId(null);
-                            setDetailTab('results');
-                            setHistoryOpen(false);
-                          }}
-                          className="block w-full text-left text-sm text-gray-600 hover:text-folio-600 hover:bg-gray-50 px-3 py-2.5 border-b border-gray-50 last:border-0"
-                        >
-                          <span className="line-clamp-2">{h.prompt}</span>
-                        </button>
-                      ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSubmit();
+                    }
+                  }}
+                  placeholder="Describe the report you want..."
+                  className="flex-1 border rounded-lg px-4 py-3 text-sm resize-none h-28 focus:ring-2 focus:ring-folio-300 focus:border-folio-500 outline-none"
+                />
+                <div className="flex flex-col gap-2 self-end">
+                  <button
+                    onClick={handleSubmit}
+                    disabled={!prompt.trim() || askMut.isPending}
+                    className="bg-folio-600 text-white px-4 py-3 rounded-lg hover:bg-folio-700 disabled:opacity-50 transition-colors"
+                  >
+                    {askMut.isPending ? (
+                      <RotateCcw size={18} className="animate-spin" />
+                    ) : (
+                      <Send size={18} />
+                    )}
+                  </button>
+                  {history.length > 0 && (
+                    <div className="relative" ref={historyRef}>
+                      <button
+                        onClick={() => setHistoryOpen((o) => !o)}
+                        className={`w-full flex items-center justify-center px-4 py-2 rounded-lg border transition-colors ${
+                          historyOpen
+                            ? 'bg-folio-50 text-folio-700 border-folio-300'
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 border-gray-200'
+                        }`}
+                        title="Recent questions"
+                      >
+                        <Clock size={16} />
+                      </button>
+                      {historyOpen && (
+                        <div className="absolute left-0 top-full mt-1 w-80 max-h-80 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-40">
+                          <div className="px-3 py-2 border-b text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            Recent Questions
+                          </div>
+                          {history.map((h, i) => (
+                            <button
+                              key={i}
+                              onClick={() => {
+                                setPrompt(h.prompt);
+                                setNlResult(h.result);
+                                resetJob();
+                                setActiveJobId(null);
+                                setDetailTab('results');
+                                setHistoryOpen(false);
+                              }}
+                              className="block w-full text-left text-sm text-gray-600 hover:text-folio-600 hover:bg-gray-50 px-3 py-2.5 border-b border-gray-50 last:border-0"
+                            >
+                              <span className="line-clamp-2">{h.prompt}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {EXAMPLE_PROMPTS.map((ex, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setPrompt(ex);
+                    }}
+                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded-full transition-colors"
+                  >
+                    {ex}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+        </section>
 
-          {/* Example chips */}
-          <div className="flex flex-wrap gap-2 mt-3">
-            {EXAMPLE_PROMPTS.map((ex, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  setPrompt(ex);
-                }}
-                className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded-full transition-colors"
-              >
-                {ex}
-              </button>
-            ))}
-          </div>
+        <button
+          type="button"
+          onPointerDown={handleAskPanelResizeStart}
+          className="group hidden w-3 shrink-0 cursor-col-resize items-center justify-center bg-gray-100 hover:bg-folio-50 lg:flex"
+          aria-label="Resize Ask AI panel"
+          title="Drag to resize Ask AI"
+        >
+          <span className="h-12 w-1 rounded-full bg-gray-300 group-hover:bg-folio-500" />
+        </button>
 
-
+        {showMiddlePanel && (
+        <section
+          className="border-b border-gray-200 bg-white lg:min-h-0 lg:w-[420px] lg:shrink-0 lg:h-full lg:overflow-y-auto lg:border-b-0 lg:border-r"
+          style={{ '--ask-left': `${workspaceSplit}%` } as CSSProperties}
+        >
+      <div className="border-b border-gray-100 px-4 py-3 xl:px-6">
+        <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Question flow</div>
+        <div className="mt-1 text-sm text-gray-600">
+          Follow-up questions and resolver checks appear here when the request needs clarification.
         </div>
       </div>
 
       {/* Success toast */}
       {saveSuccess && (
-        <div className="max-w-4xl mx-auto mt-2 px-6">
+        <div className="mx-auto mt-2 max-w-3xl px-4 xl:px-6">
           <div className="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-4 py-2 text-sm text-green-700">
             <Check size={14} />
             {saveSuccess}
@@ -767,15 +1153,415 @@ export default function Ask() {
         </div>
       )}
 
+      {askMut.isError && (
+        <div className="mx-auto m-4 max-w-3xl p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+          {formatNlError(askMut.error)}
+        </div>
+      )}
+      {followUpError && (
+        <div className="mx-auto m-4 max-w-3xl p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+          {followUpError}
+        </div>
+      )}
+
+      {isGenerating && (
+        <div className="mx-auto max-w-3xl p-4 xl:px-6">
+          <div className="rounded-lg border border-folio-200 bg-white p-4 shadow-sm">
+            <div className="flex items-start gap-3">
+              <Loader2 size={24} className="animate-spin text-folio-600" />
+              <div>
+                <div className="text-sm font-semibold text-gray-900">
+                  {askProgressCopy.title}
+                </div>
+                <div className="mt-2 space-y-1.5">
+                  {askProgressCopy.steps.map((step) => (
+                    <div key={step} className="flex items-start gap-2 text-xs text-gray-600">
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-folio-500" />
+                      <span>{step}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && nlResult.clarificationItems && nlResult.clarificationItems.length > 0 && (
+        <div className="mx-auto max-w-3xl p-4 xl:px-6">
+          <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
+            <div className="text-sm font-semibold mb-1 text-amber-900">
+              Clarification needed
+            </div>
+            <div className="text-sm mb-3 text-amber-900">
+              {nlResult.question || 'Confirm these local terms before I generate SQL.'}
+            </div>
+            {nlResult.message && (
+              <div className="text-sm mb-3 text-amber-900">
+                {nlResult.message}
+              </div>
+            )}
+            {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
+              <div className="mb-3 rounded-md border border-amber-200 bg-white px-3 py-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                  Resolver checks
+                </div>
+                <ul className="mt-1 space-y-1 text-xs text-gray-700">
+                  {formatResolverTrace(nlResult.resolverTrace).map((line) => (
+                    <li key={line} className="flex gap-2">
+                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                      <span>{line}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            <div className="space-y-3">
+              {nlResult.clarificationItems.map((item) => {
+                const state = batchClarificationChoices[item.clarificationKey] || { option: null, freeText: '' };
+                return (
+                  <div key={item.clarificationKey} className="bg-white border border-amber-200 rounded-lg p-3">
+                    <div className="flex items-start justify-between gap-3 mb-2">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">{item.term}</div>
+                        <div className="text-sm text-gray-700">{item.question}</div>
+                      </div>
+                      {item.confidence && (
+                        <span className="shrink-0 text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                          {item.confidence}
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {(item.options || []).map((option) => {
+                        const selected = state.option?.id === option.id;
+                        return (
+                          <button
+                            key={option.id}
+                            onClick={() => handleBatchClarificationOption(item, option)}
+                            className={`w-full flex items-center justify-between gap-3 text-left border px-3 py-2 rounded-lg text-sm transition-colors ${
+                              selected
+                                ? 'bg-amber-100 border-amber-400 text-amber-950'
+                                : 'bg-white border-amber-200 text-gray-800 hover:bg-amber-100'
+                            }`}
+                          >
+                            <span>{option.label}</span>
+                            {option.recommended && (
+                              <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                Recommended
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {item.freeTextAllowed && (
+                      <input
+                        value={state.freeText}
+                        onChange={(e) => handleBatchClarificationFreeText(item, e.target.value)}
+                        className="mt-2 w-full border border-amber-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                        placeholder="Or describe what this term should mean..."
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={handleBatchClarificationContinue}
+                disabled={!allBatchItemsResolved()}
+                className="px-4 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:opacity-50"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
+        <div className="mx-auto max-w-3xl p-4 xl:px-6">
+          <div className={`border rounded-lg p-4 ${
+            nlResult.needsExploratoryApproval
+              ? 'border-sky-200 bg-sky-50'
+              : 'border-amber-200 bg-amber-50'
+          }`}>
+            <div className={`text-sm font-semibold mb-1 ${
+              nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
+            }`}>
+              {nlResult.needsExploratoryApproval ? 'One detail needed' : 'Clarification needed'}
+            </div>
+            <div className={`text-sm mb-3 ${
+              nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
+            }`}>
+              {nlResult.question || 'Which option did you mean?'}
+            </div>
+            {nlResult.message && (
+              <div className={`text-sm mb-3 ${
+                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
+              }`}>
+                {nlResult.message}
+              </div>
+            )}
+            {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
+              <div className={`mb-3 rounded-md border bg-white px-3 py-2 ${
+                nlResult.needsExploratoryApproval ? 'border-sky-200' : 'border-amber-200'
+              }`}>
+                <div className={`text-xs font-semibold uppercase tracking-wide ${
+                  nlResult.needsExploratoryApproval ? 'text-sky-800' : 'text-amber-800'
+                }`}>
+                  Resolver checks
+                </div>
+                <ul className="mt-1 space-y-1 text-xs text-gray-700">
+                  {formatResolverTrace(nlResult.resolverTrace).map((line) => (
+                    <li key={line} className="flex gap-2">
+                      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+                        nlResult.needsExploratoryApproval ? 'bg-sky-500' : 'bg-amber-500'
+                      }`} />
+                      <span>{line}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {nlResult.exploratoryPlan?.suggestions && nlResult.exploratoryPlan.suggestions.length > 0 && (
+              <div className="mb-3 text-xs text-sky-800">
+                {nlResult.exploratoryPlan.suggestions.join(' ')}
+              </div>
+            )}
+            <div className="space-y-2">
+              {(nlResult.options || []).map((option) => (
+                <button
+                  key={option.id}
+                  onClick={() => handleClarificationChoice(option)}
+                  className={`w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors ${
+                    nlResult.needsExploratoryApproval
+                      ? 'border-sky-200 hover:bg-sky-100'
+                      : 'border-amber-200 hover:bg-amber-100'
+                  }`}
+                >
+                  <span>{option.label}</span>
+                  {option.recommended && (
+                    <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                      Recommended
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            {nlResult.freeTextAllowed && (
+              <div className="mt-3 flex gap-2">
+                <input
+                  value={clarificationFreeText}
+                  onChange={(e) => setClarificationFreeText(e.target.value)}
+                  className="flex-1 border border-amber-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                  placeholder="Or describe what you meant..."
+                />
+                <button
+                  onClick={() => handleClarificationChoice(null)}
+                  disabled={!clarificationFreeText.trim()}
+                  className="px-3 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:opacity-50"
+                >
+                  Continue
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+        </section>
+        )}
+
+        <button
+          type="button"
+          onPointerDown={handleWorkspaceResizeStart}
+          className="group hidden w-3 shrink-0 cursor-col-resize items-center justify-center bg-gray-100 hover:bg-folio-50 lg:flex"
+          aria-label="Resize Ask workspace columns"
+          title="Drag to resize"
+        >
+          <span className="h-12 w-1 rounded-full bg-gray-300 group-hover:bg-folio-500" />
+        </button>
+
+        <section
+          className="flex-1 bg-gray-50 lg:min-h-0 lg:basis-[var(--ask-right)] lg:h-full lg:overflow-y-auto"
+          style={{ '--ask-right': `${100 - workspaceSplit}%` } as CSSProperties}
+        >
+          <div className="sticky top-0 z-10 hidden border-b border-gray-200 bg-gray-50/95 px-4 py-2 backdrop-blur lg:flex items-center justify-between">
+            <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Results workspace</div>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setWorkspaceSplitPreset(45)} className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-100">Expand question</button>
+              <button onClick={() => setWorkspaceSplitPreset(30)} className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-100">Expand results</button>
+              <button onClick={() => setWorkspaceSplitPreset(ASK_WORKSPACE_DEFAULT_SPLIT)} className="rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 hover:bg-gray-100">Reset</button>
+            </div>
+          </div>
+
+          <div className="hidden border-b border-gray-200 bg-white p-4 xl:p-6">
+            <div className="mx-auto max-w-5xl">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles size={20} className="text-folio-600" />
+                <h2 className="text-lg font-semibold">Ask AI</h2>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 font-medium flex-shrink-0">Scope to:</span>
+                  <select
+                    value={selectedCampus}
+                    onChange={(e) => handleCampusChange(e.target.value)}
+                    className="text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-700 focus:ring-2 focus:ring-folio-300 focus:border-folio-400 outline-none cursor-pointer"
+                  >
+                    {CAMPUS_OPTIONS.map((c) => (
+                      <option key={c.code} value={c.name}>{c.name}</option>
+                    ))}
+                  </select>
+                  {selectedCampus !== 'All Colleges' && (
+                    <span className="text-xs text-folio-600">
+                      Queries will be filtered to {selectedCampus}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 font-medium flex-shrink-0">Results:</span>
+                  <div className="flex rounded-lg border border-gray-200 overflow-hidden text-xs">
+                    <button
+                      onClick={() => handleOutputPrefChange('preview')}
+                      className={`px-3 py-1.5 transition-colors ${
+                        outputPref === 'preview'
+                          ? 'bg-folio-600 text-white'
+                          : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                      title="Show up to 100 rows in the browser"
+                    >
+                      Preview (100 rows)
+                    </button>
+                    <button
+                      onClick={() => handleOutputPrefChange('full')}
+                      className={`px-3 py-1.5 border-l border-gray-200 transition-colors ${
+                        outputPref === 'full'
+                          ? 'bg-folio-600 text-white'
+                          : 'text-gray-600 hover:bg-gray-50'
+                      }`}
+                      title="Export all rows as a downloadable CSV"
+                    >
+                      All results (CSV)
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <p className="text-sm text-gray-500 mb-4">
+                Describe the report you need in plain English. The app checks known FOLIO terms first, then generates SQL when the request is clear.
+              </p>
+
+              {followUpContext && (
+                <div className="flex items-center justify-between gap-3 mb-3 border border-folio-200 bg-folio-50 rounded-lg px-3 py-2 text-sm text-folio-800">
+                  <span>
+                    Asking a follow-up for {followUpContext.source === 'history' ? 'a history query' : 'the current result'}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setFollowUpContext(null);
+                      setFollowUpError(null);
+                    }}
+                    className="text-xs text-folio-700 hover:text-folio-900"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <textarea
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSubmit();
+                    }
+                  }}
+                  placeholder="Describe the report you want..."
+                  className="flex-1 border rounded-lg px-4 py-3 text-sm resize-none h-20 focus:ring-2 focus:ring-folio-300 focus:border-folio-500 outline-none"
+                />
+                <div className="flex flex-col gap-2 self-end">
+                  <button
+                    onClick={handleSubmit}
+                    disabled={!prompt.trim() || askMut.isPending}
+                    className="bg-folio-600 text-white px-4 py-3 rounded-lg hover:bg-folio-700 disabled:opacity-50 transition-colors"
+                  >
+                    {askMut.isPending ? (
+                      <RotateCcw size={18} className="animate-spin" />
+                    ) : (
+                      <Send size={18} />
+                    )}
+                  </button>
+                  {history.length > 0 && (
+                    <div className="relative" ref={historyRef}>
+                      <button
+                        onClick={() => setHistoryOpen((o) => !o)}
+                        className={`w-full flex items-center justify-center px-4 py-2 rounded-lg border transition-colors ${
+                          historyOpen
+                            ? 'bg-folio-50 text-folio-700 border-folio-300'
+                            : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50 border-gray-200'
+                        }`}
+                        title="Recent questions"
+                      >
+                        <Clock size={16} />
+                      </button>
+                      {historyOpen && (
+                        <div className="absolute right-0 top-full mt-1 w-96 max-h-80 overflow-y-auto bg-white border border-gray-200 rounded-xl shadow-lg z-40">
+                          <div className="px-3 py-2 border-b text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                            Recent Questions
+                          </div>
+                          {history.map((h, i) => (
+                            <button
+                              key={i}
+                              onClick={() => {
+                                setPrompt(h.prompt);
+                                setNlResult(h.result);
+                                resetJob();
+                                setActiveJobId(null);
+                                setDetailTab('results');
+                                setHistoryOpen(false);
+                              }}
+                              className="block w-full text-left text-sm text-gray-600 hover:text-folio-600 hover:bg-gray-50 px-3 py-2.5 border-b border-gray-50 last:border-0"
+                            >
+                              <span className="line-clamp-2">{h.prompt}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2 mt-3">
+                {EXAMPLE_PROMPTS.map((ex, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setPrompt(ex);
+                    }}
+                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded-full transition-colors"
+                  >
+                    {ex}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
       {/* Results area */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1">
         {/* Errors — always visible regardless of tab */}
-        {askMut.isError && (
+        {showRightPaneAskErrors && askMut.isError && (
           <div className="max-w-4xl mx-auto m-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
             {formatNlError(askMut.error)}
           </div>
         )}
-        {followUpError && (
+        {showRightPaneAskErrors && followUpError && (
           <div className="max-w-4xl mx-auto m-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
             {followUpError}
           </div>
@@ -792,12 +1578,26 @@ export default function Ask() {
         )}
 
         {/* Two-phase loading indicator */}
-        {isLoading && (
+        {isExecuting && (
           <div className="flex items-center justify-center py-12">
             {isGenerating ? (
-              <div className="flex flex-col items-center gap-3 text-gray-500">
+              <div className="w-full max-w-lg mx-4 rounded-lg border border-folio-200 bg-white p-4 shadow-sm">
+                <div className="flex items-start gap-3">
                 <Loader2 size={24} className="animate-spin text-folio-600" />
-                <span className="text-sm">Generating query with AI…</span>
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      {askProgressCopy.title}
+                    </div>
+                    <div className="mt-2 space-y-1.5">
+                      {askProgressCopy.steps.map((step) => (
+                        <div key={step} className="flex items-start gap-2 text-xs text-gray-600">
+                          <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-folio-500" />
+                          <span>{step}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="max-w-md w-full mx-4 bg-blue-50 border border-blue-200 rounded-xl p-5">
@@ -838,7 +1638,100 @@ export default function Ask() {
         )}
 
         {/* Main content — only show when not in loading state */}
-        {nlResult && !isLoading && nlResult.needsClarification && (
+        {showRightPaneClarifications && nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && nlResult.clarificationItems && nlResult.clarificationItems.length > 0 && (
+          <div className="max-w-4xl mx-auto p-6">
+            <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
+              <div className="text-sm font-semibold mb-1 text-amber-900">
+                Clarification needed
+              </div>
+              <div className="text-sm mb-3 text-amber-900">
+                {nlResult.question || 'Confirm these local terms before I generate SQL.'}
+              </div>
+              {nlResult.message && (
+                <div className="text-sm mb-3 text-amber-900">
+                  {nlResult.message}
+                </div>
+              )}
+              {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
+                <div className="mb-3 rounded-md border border-amber-200 bg-white px-3 py-2">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                    Resolver checks
+                  </div>
+                  <ul className="mt-1 space-y-1 text-xs text-gray-700">
+                    {formatResolverTrace(nlResult.resolverTrace).map((line) => (
+                      <li key={line} className="flex gap-2">
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <div className="space-y-3">
+                {nlResult.clarificationItems.map((item) => {
+                  const state = batchClarificationChoices[item.clarificationKey] || { option: null, freeText: '' };
+                  return (
+                    <div key={item.clarificationKey} className="bg-white border border-amber-200 rounded-lg p-3">
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div>
+                          <div className="text-sm font-semibold text-gray-900">{item.term}</div>
+                          <div className="text-sm text-gray-700">{item.question}</div>
+                        </div>
+                        {item.confidence && (
+                          <span className="shrink-0 text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            {item.confidence}
+                          </span>
+                        )}
+                      </div>
+                      <div className="space-y-2">
+                        {(item.options || []).map((option) => {
+                          const selected = state.option?.id === option.id;
+                          return (
+                            <button
+                              key={option.id}
+                              onClick={() => handleBatchClarificationOption(item, option)}
+                              className={`w-full flex items-center justify-between gap-3 text-left border px-3 py-2 rounded-lg text-sm transition-colors ${
+                                selected
+                                  ? 'bg-amber-100 border-amber-400 text-amber-950'
+                                  : 'bg-white border-amber-200 text-gray-800 hover:bg-amber-100'
+                              }`}
+                            >
+                              <span>{option.label}</span>
+                              {option.recommended && (
+                                <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                  Recommended
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {item.freeTextAllowed && (
+                        <input
+                          value={state.freeText}
+                          onChange={(e) => handleBatchClarificationFreeText(item, e.target.value)}
+                          className="mt-2 w-full border border-amber-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-amber-300"
+                          placeholder="Or describe what this term should mean..."
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={handleBatchClarificationContinue}
+                  disabled={!allBatchItemsResolved()}
+                  className="px-4 py-2 rounded-lg bg-amber-700 text-white text-sm hover:bg-amber-800 disabled:opacity-50"
+                >
+                  Continue
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showRightPaneClarifications && nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
           <div className="max-w-4xl mx-auto p-6">
             <div className={`border rounded-lg p-4 ${
               nlResult.needsExploratoryApproval
@@ -848,7 +1741,7 @@ export default function Ask() {
               <div className={`text-sm font-semibold mb-1 ${
                 nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
               }`}>
-                {nlResult.needsExploratoryApproval ? 'This request needs approval' : 'Clarification needed'}
+                {nlResult.needsExploratoryApproval ? 'One detail needed' : 'Clarification needed'}
               </div>
               <div className={`text-sm mb-3 ${
                 nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
@@ -860,6 +1753,27 @@ export default function Ask() {
                   nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
                 }`}>
                   {nlResult.message}
+                </div>
+              )}
+              {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
+                <div className={`mb-3 rounded-md border bg-white px-3 py-2 ${
+                  nlResult.needsExploratoryApproval ? 'border-sky-200' : 'border-amber-200'
+                }`}>
+                  <div className={`text-xs font-semibold uppercase tracking-wide ${
+                    nlResult.needsExploratoryApproval ? 'text-sky-800' : 'text-amber-800'
+                  }`}>
+                    Resolver checks
+                  </div>
+                  <ul className="mt-1 space-y-1 text-xs text-gray-700">
+                    {formatResolverTrace(nlResult.resolverTrace).map((line) => (
+                      <li key={line} className="flex gap-2">
+                        <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
+                          nlResult.needsExploratoryApproval ? 'bg-sky-500' : 'bg-amber-500'
+                        }`} />
+                        <span>{line}</span>
+                      </li>
+                    ))}
+                  </ul>
                 </div>
               )}
               {nlResult.exploratoryPlan?.suggestions && nlResult.exploratoryPlan.suggestions.length > 0 && (
@@ -908,70 +1822,37 @@ export default function Ask() {
           </div>
         )}
 
-        {nlResult && !isLoading && !nlResult.needsClarification && (
-          <div className="max-w-4xl mx-auto p-6 space-y-4">
+        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && (
+          <div className="mx-auto w-full max-w-6xl p-3 space-y-3">
+            <ExploratoryNoticePanel result={nlResult} />
+
             {/* Tab toggle bar */}
             <div className="flex items-center gap-1 border-b pb-0">
-              <button
-                onClick={() => setDetailTab('results')}
-                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                  detailTab === 'results'
-                    ? 'border-folio-600 text-folio-700'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <Table2 size={14} />
-                Results
-                {results && (
-                  <span className="ml-1 px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
-                    {results.rowCount.toLocaleString()}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={() => setDetailTab('details')}
-                className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                  detailTab === 'details'
-                    ? 'border-folio-600 text-folio-700'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <Code2 size={14} />
-                SQL &amp; Details
-              </button>
-            </div>
-
-            {effectiveSuggestions.length > 0 && (
-              <div className="bg-folio-50 border border-folio-100 rounded-lg p-4 mt-3">
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <div className="text-sm font-semibold text-folio-800">Suggested Follow-up Queries</div>
-                  {usingFallbackSuggestions && (
-                    <div className="text-xs text-folio-700/80">Fallback suggestions shown</div>
+              {ASK_RESULT_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setDetailTab(tab.id)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                    detailTab === tab.id
+                      ? 'border-folio-600 text-folio-700'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  {tab.id === 'results' ? <Table2 size={14} /> : tab.id === 'sql' ? <Code2 size={14} /> : <Sparkles size={14} />}
+                  {tab.label}
+                  {tab.id === 'results' && results && (
+                    <span className="ml-1 px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                      {results.rowCount.toLocaleString()}
+                    </span>
                   )}
-                </div>
-                <div className="space-y-2">
-                  {effectiveSuggestions.map((suggestion, i) => (
-                    <div key={`${suggestion}-${i}`} className="flex items-center gap-2">
-                      <button
-                        onClick={() => handleUseSuggestion(suggestion)}
-                        className="flex-1 text-left text-xs bg-white border border-folio-200 text-folio-700 hover:bg-folio-100 px-3 py-2 rounded-lg transition-colors"
-                        title="Load this suggestion into Ask AI"
-                      >
-                        {suggestion}
-                      </button>
-                      <button
-                        onClick={() => handleRunSuggestion(suggestion)}
-                        disabled={askMut.isPending || execMut.isPending || isRunning}
-                        className="inline-flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg bg-folio-600 text-white hover:bg-folio-700 disabled:opacity-50"
-                        title="Run this suggestion now"
-                      >
-                        <Play size={12} /> Run
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+                  {tab.id === 'followups' && effectiveSuggestions.length > 0 && (
+                    <span className="ml-1 px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full">
+                      {effectiveSuggestions.length}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
 
             {/* ===== Results tab ===== */}
             {detailTab === 'results' && (
@@ -998,7 +1879,7 @@ export default function Ask() {
                           </button>
                         )}
                         <button
-                          onClick={() => setDetailTab('details')}
+                          onClick={() => setDetailTab('sql')}
                           className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700"
                         >
                           <Code2 size={12} /> View SQL
@@ -1013,7 +1894,7 @@ export default function Ask() {
                         )}
                       </div>
                     </div>
-                    <div className="mb-3 border border-gray-200 bg-gray-50 rounded-lg p-3">
+                    <div className="mb-2 border border-gray-200 bg-gray-50 rounded-lg p-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-gray-600">Were these results accurate?</span>
                         <button
@@ -1080,8 +1961,49 @@ export default function Ask() {
               </>
             )}
 
-            {/* ===== SQL & Details tab ===== */}
-            {detailTab === 'details' && (
+            {/* ===== Related follow-ups tab ===== */}
+            {detailTab === 'followups' && (
+              <div className="space-y-3">
+                {effectiveSuggestions.length > 0 ? (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-folio-800">Suggested follow-up queries</div>
+                      {usingFallbackSuggestions && (
+                        <div className="text-xs text-folio-700/80">Fallback suggestions shown</div>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {effectiveSuggestions.map((suggestion, i) => (
+                        <div key={`${suggestion}-${i}`} className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleUseSuggestion(suggestion)}
+                            className="flex-1 text-left text-xs bg-white border border-folio-200 text-folio-700 hover:bg-folio-50 px-3 py-2 rounded-lg transition-colors"
+                            title="Load this suggestion into Ask AI"
+                          >
+                            {suggestion}
+                          </button>
+                          <button
+                            onClick={() => handleRunSuggestion(suggestion)}
+                            disabled={askMut.isPending || execMut.isPending || isRunning}
+                            className="inline-flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg bg-folio-600 text-white hover:bg-folio-700 disabled:opacity-50"
+                            title="Run this suggestion now"
+                          >
+                            <Play size={12} /> Run
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-center h-32 text-gray-400 text-sm">
+                    No related follow-ups are available for this result.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ===== Output SQL tab ===== */}
+            {detailTab === 'sql' && (
               <div className="space-y-4">
                 {/* Explanation */}
                 {nlResult.explanation && (
@@ -1092,7 +2014,7 @@ export default function Ask() {
 
                 {nlResult.mode === 'exploratory' && (
                   <div className="bg-sky-50 border border-sky-100 rounded-lg p-4 text-sm text-sky-800">
-                    <strong>Exploratory SQL:</strong> {nlResult.repeatabilityWarning || 'This query was generated outside a canonical compiler path and may vary between runs.'}
+                    <strong>Exploratory SQL:</strong> {nlResult.repeatabilityWarning || 'This AI-assisted query may vary between runs until this request type is reviewed and promoted to a verified report pattern.'}
                   </div>
                 )}
 
@@ -1233,6 +2155,8 @@ export default function Ask() {
             Ask a question above and the AI will generate a report for you.
           </div>
         )}
+      </div>
+        </section>
       </div>
 
       {/* Results modal (expanded view) */}

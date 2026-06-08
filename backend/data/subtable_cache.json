@@ -1,6 +1,6 @@
 {
     "_note": "Auto-discovered subtables (flattened array columns) from actual database",
-    "_discovered_at": "2026-05-28T18:56:30+00:00",
+    "_discovered_at": "2026-06-08T12:55:45+00:00",
     "_subtable_count": 216,
     "subtables": {
         "agreements.entitlement__t__coverage": {
@@ -5439,12 +5439,6 @@
                     "nullable": true
                 },
                 {
-                    "name": "delivery_address_type_id",
-                    "type": "uuid",
-                    "size": null,
-                    "nullable": true
-                },
-                {
                     "name": "cancelled_date",
                     "type": "timestamptz",
                     "size": null,
@@ -5453,6 +5447,12 @@
                 {
                     "name": "request_level",
                     "type": "text",
+                    "size": null,
+                    "nullable": true
+                },
+                {
+                    "name": "delivery_address_type_id",
+                    "type": "uuid",
                     "size": null,
                     "nullable": true
                 },
@@ -18615,6 +18615,12 @@
                     "nullable": true
                 },
                 {
+                    "name": "amendments__custom_properties__alumni_access",
+                    "type": "jsonb",
+                    "size": null,
+                    "nullable": true
+                },
+                {
                     "name": "amendments__status__id",
                     "type": "text",
                     "size": null,
@@ -18889,7 +18895,7 @@
                     "nullable": true
                 },
                 {
-                    "name": "amendments__docs__name",
+                    "name": "amendments__docs__url",
                     "type": "text",
                     "size": null,
                     "nullable": true
@@ -18902,6 +18908,12 @@
                 },
                 {
                     "name": "amendments__docs__note",
+                    "type": "text",
+                    "size": null,
+                    "nullable": true
+                },
+                {
+                    "name": "amendments__docs__name",
                     "type": "text",
                     "size": null,
                     "nullable": true

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildCurrentAskFollowUpContext, buildHistoryFollowUpContext } from './Ask';
+import { buildCurrentAskFollowUpContext, buildHistoryFollowUpContext, buildQueryFeedbackInput } from './Ask';
 import type { NlResponse } from '../types';
 
 describe('Ask follow-up context helpers', () => {
@@ -25,6 +25,27 @@ describe('Ask follow-up context helpers', () => {
     expect(buildHistoryFollowUpContext('job-123')).toEqual({
       source: 'history',
       jobId: 'job-123',
+    });
+  });
+
+  it('builds query feedback input with route and exploratory mode metadata', () => {
+    const result: NlResponse = {
+      sql: 'SELECT 1',
+      dataSource: 'folio',
+      route: 'exploratory_builder_intent',
+      routeReason: 'user_approved_exploratory_generation',
+      mode: 'exploratory',
+    };
+
+    expect(buildQueryFeedbackInput('  Show vendor spend  ', result, 'inaccurate', '  Missing fund filter  ')).toEqual({
+      originalQuestion: 'Show vendor spend',
+      generatedSql: 'SELECT 1',
+      route: 'exploratory_builder_intent',
+      routeReason: 'user_approved_exploratory_generation',
+      mode: 'exploratory',
+      dataSource: 'folio',
+      resultAccuracy: 'inaccurate',
+      feedbackNote: 'Missing fund filter',
     });
   });
 });

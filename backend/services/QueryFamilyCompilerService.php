@@ -58,6 +58,10 @@ class QueryFamilyCompilerService
         }
 
         if ($normalizedPayload['familyKey'] === 'inventory_library_location_listing') {
+            if (self::isCampusScopedItemFilterListing($normalizedPayload['slots'])) {
+                return self::buildCampusScopedItemFilterListingSql($normalizedPayload['slots']);
+            }
+
             if (!empty($normalizedPayload['slots']['only_holding_location'])) {
                 return self::buildInventoryLibraryLocationListingSql($queryDef, $normalizedPayload['slots']);
             }
@@ -112,7 +116,7 @@ class QueryFamilyCompilerService
             array_splice($tables, 1, 0, ['inventory_instance__t__contributors']);
         }
 
-        if (in_array($familyKey, ['inventory_contributor_campus_item_barcode', 'circulation_top_items'], true) && !empty($slots['material_type'])) {
+        if (in_array($familyKey, ['inventory_contributor_campus_item_barcode', 'inventory_library_location_listing', 'circulation_top_items'], true) && !empty($slots['material_type'])) {
             $tables[] = 'inventory_material_types';
         }
 
@@ -221,6 +225,26 @@ class QueryFamilyCompilerService
 
             if (!empty($slots['location_code'])) {
                 $filters[] = QueryFamilySlotService::buildSlotFilter('location_code', 'inventory_locations', 'code', $slots['location_code'], $slots['match_policy']);
+            }
+
+            if (!empty($slots['material_type'])) {
+                $filters[] = QueryFamilySlotService::buildSlotFilter(
+                    'material_type',
+                    'inventory_material_types',
+                    'name',
+                    $slots['material_type'],
+                    $slots['match_policy']
+                );
+            }
+
+            if (!empty($slots['item_status'])) {
+                $filters[] = QueryFamilySlotService::buildSlotFilter(
+                    'item_status',
+                    'inventory_items',
+                    'status__name',
+                    $slots['item_status'],
+                    $slots['match_policy']
+                );
             }
 
             return $filters;
@@ -422,6 +446,15 @@ class QueryFamilyCompilerService
             ];
         }
 
+        if (!empty($slots['material_type'])) {
+            $joins[] = [
+                'from_table' => 'inventory_items',
+                'from_column' => 'material_type_id',
+                'to_table' => 'inventory_material_types',
+                'to_column' => 'id',
+            ];
+        }
+
         return $joins;
     }
 
@@ -566,6 +599,174 @@ class QueryFamilyCompilerService
             'sql' => $sql,
             'params' => $params,
         ];
+    }
+
+    private static function isCampusScopedItemFilterListing(array $slots): bool
+    {
+        if (trim((string)($slots['campus'] ?? '')) === '') {
+            return false;
+        }
+
+        if (
+            trim((string)($slots['library'] ?? '')) !== ''
+            || trim((string)($slots['location'] ?? '')) !== ''
+            || trim((string)($slots['location_code'] ?? '')) !== ''
+            || !empty($slots['only_holding_location'])
+        ) {
+            return false;
+        }
+
+        return trim((string)($slots['material_type'] ?? '')) !== ''
+            || trim((string)($slots['item_status'] ?? '')) !== '';
+    }
+
+    private static function buildCampusScopedItemFilterListingSql(array $slots): array
+    {
+        $requestedOutputs = is_array($slots['requested_outputs'] ?? null)
+            ? $slots['requested_outputs']
+            : ['title', 'barcode', 'instance_number'];
+        $requestedOutputs = self::orderCampusScopedItemFilterOutputs($requestedOutputs);
+        $selectColumns = [];
+
+        foreach ($requestedOutputs as $outputField) {
+            switch ($outputField) {
+                case 'barcode':
+                    $selectColumns[] = 'ii.barcode';
+                    break;
+                case 'instance_hrid':
+                case 'instance_number':
+                    $selectColumns[] = 'inst.hrid AS instance_hrid';
+                    break;
+                case 'title':
+                    $selectColumns[] = 'inst.title AS instance_title';
+                    break;
+            }
+        }
+
+        if ($selectColumns === []) {
+            throw new \InvalidArgumentException('unsupported_inventory_item_filter_output: Campus-scoped item filter listings require at least one supported output.');
+        }
+
+        $params = [
+            ':p0' => self::campusCodeForName((string)$slots['campus']),
+        ];
+        $where = ['camp.code = :p0'];
+        $parameterIndex = 1;
+
+        $materialType = trim((string)($slots['material_type'] ?? ''));
+        if ($materialType !== '') {
+            $placeholder = ':p' . $parameterIndex++;
+            $params[$placeholder] = strtolower($materialType);
+            $where[] = "ii.material_type_id = (\n"
+                . "        SELECT id FROM inventory.material_type__t WHERE LOWER(name) = {$placeholder} LIMIT 1\n"
+                . "      )";
+        }
+
+        $itemStatus = trim((string)($slots['item_status'] ?? ''));
+        if ($itemStatus !== '') {
+            $placeholder = ':p' . $parameterIndex++;
+            // Canonicalize hyphen/underscore/case variants ("Checked-Out") to the
+            // stored spaced form ("checked out") so LOWER(status__name) matches.
+            $params[$placeholder] = self::normalizeItemStatusValue($itemStatus);
+            $where[] = "LOWER(ii.status__name) = {$placeholder}";
+        }
+
+        $sql = "WITH filtered_items AS MATERIALIZED (\n"
+            . "    SELECT\n"
+            . "      " . implode(",\n      ", $selectColumns) . "\n"
+            . "    FROM inventory.item__t ii\n"
+            . "    JOIN inventory.holdings_record__t hr ON ii.holdings_record_id = hr.id\n"
+            . "    JOIN inventory.instance__t inst ON hr.instance_id = inst.id\n"
+            . "    JOIN inventory.location__t loc ON ii.effective_location_id = loc.id\n"
+            . "    JOIN inventory.loclibrary__t lib ON loc.library_id = lib.id\n"
+            . "    JOIN inventory.loccampus__t camp ON lib.campus_id = camp.id\n"
+            . "    WHERE " . implode("\n      AND ", $where) . "\n"
+            . "  )\n"
+            . "  SELECT " . implode(', ', self::campusScopedItemFilterOutputAliases($requestedOutputs)) . "\n"
+            . "  FROM filtered_items\n"
+            . "  LIMIT " . self::resolveRequestedLimit($slots);
+
+        return [
+            'sql' => $sql,
+            'params' => $params,
+        ];
+    }
+
+    private static function campusScopedItemFilterOutputAliases(array $requestedOutputs): array
+    {
+        $aliases = [];
+        foreach ($requestedOutputs as $outputField) {
+            switch ($outputField) {
+                case 'barcode':
+                    $aliases[] = 'barcode';
+                    break;
+                case 'instance_hrid':
+                case 'instance_number':
+                    $aliases[] = 'instance_hrid';
+                    break;
+                case 'title':
+                    $aliases[] = 'instance_title';
+                    break;
+            }
+        }
+
+        return $aliases === [] ? ['instance_title'] : $aliases;
+    }
+
+    private static function orderCampusScopedItemFilterOutputs(array $requestedOutputs): array
+    {
+        $requested = array_fill_keys(array_map('strval', $requestedOutputs), true);
+        $ordered = [];
+
+        foreach (['title', 'barcode', 'instance_number', 'instance_hrid'] as $outputField) {
+            if (isset($requested[$outputField])) {
+                $ordered[] = $outputField;
+            }
+        }
+
+        return $ordered === [] ? $requestedOutputs : $ordered;
+    }
+
+    /**
+     * Canonicalize a free-text item-status value to the lowercased, single-spaced
+     * form FOLIO stores ("Checked out"), so hyphen/case variants compare equal.
+     */
+    private static function normalizeItemStatusValue(string $value): string
+    {
+        $normalized = strtolower(trim($value));
+        $normalized = (string)preg_replace('/[^a-z0-9]+/', ' ', $normalized);
+
+        return trim((string)preg_replace('/\s+/', ' ', $normalized));
+    }
+
+    private static function campusCodeForName(string $campus): string
+    {
+        $normalized = strtolower(trim($campus));
+        $codes = [
+            'smith college' => 'SC',
+            'amherst college' => 'AC',
+            'hampshire college' => 'HC',
+            'mount holyoke college' => 'MH',
+            'mt holyoke college' => 'MH',
+            'university of massachusetts' => 'UM',
+            'university of massachusetts amherst' => 'UM',
+            'umass' => 'UM',
+            'umass amherst' => 'UM',
+            'yiddish book center' => 'YB',
+            'five colleges' => 'RP',
+            'five college' => 'RP',
+        ];
+
+        if (!isset($codes[$normalized])) {
+            // Never guess a 2-char code: a phantom camp.code matches no row and
+            // silently returns zero results. Surface it so the caller can route
+            // to recovery/clarification instead.
+            throw new \InvalidArgumentException(
+                'unsupported_campus_scope: Unrecognized campus "' . $campus . '" cannot be mapped to a Five Colleges acquisitions code.'
+            );
+        }
+
+        return $codes[$normalized];
     }
 
     private static function inventoryListingContributorJoin(array $requestedOutputs): string
