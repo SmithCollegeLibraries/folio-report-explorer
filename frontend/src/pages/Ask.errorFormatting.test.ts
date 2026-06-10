@@ -209,6 +209,14 @@ describe('Ask error formatting', () => {
     expect(message).toBe('Submit error: the server hit an internal error while preparing the query job. You did not do anything wrong. Please try again, and contact support if it repeats.');
   });
 
+  it('formats postgres integer overflow execution errors in readable language', () => {
+    const message = AskPage.formatExecutionError?.(
+      'SQLSTATE[22003]: Numeric value out of range: 7 ERROR: value "4253292441626" is out of range for type integer',
+    );
+
+    expect(message).toBe('Execution error: the generated SQL tried to convert a very large value to a 32-bit integer. Regenerate the query or change the cast to BIGINT.');
+  });
+
   it('formats exploratory notices in staff-facing language', () => {
     const notice = AskPage.getExploratoryNoticeCopy?.({
       exploratoryNotice: {

@@ -21,6 +21,7 @@ import LocalDataPage from './pages/LocalData.tsx';
 import AuthCallback from './pages/AuthCallback';
 import AuthPending from './pages/AuthPending';
 import ProtectedRoute from './components/ProtectedRoute';
+import { ToastProvider } from './components/ToastProvider';
 import { useAuth, getShibbolethLoginUrl } from './hooks/useAuth';
 
 // ─── Nav groups ────────────────────────────────────────────────────────────────
@@ -197,7 +198,8 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <ToastProvider>
+      <div className="min-h-screen flex flex-col">
       {/* Top navigation bar */}
       <header className="bg-folio-800 text-white shadow-lg relative z-40">
         <div className="max-w-screen-2xl mx-auto px-4 flex items-center h-14">
@@ -343,6 +345,7 @@ export default function App() {
           <Route path="/setup" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
         </Routes>
       </main>
-    </div>
+      </div>
+    </ToastProvider>
   );
 }

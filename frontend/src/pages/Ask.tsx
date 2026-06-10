@@ -8,6 +8,7 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
+import { useToast } from '../components/ToastProvider';
 import type { FollowUpContext, NlResponse } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
 import {
@@ -181,6 +182,19 @@ export function formatQuerySubmitError(error: unknown): string {
   }
 
   return `Submit error: ${message}`;
+}
+
+function isPostgresIntegerOverflow(message: string): boolean {
+  return /SQLSTATE\[22003\].*out of range for type integer/i.test(message)
+    || /value\s+"?\d+"?\s+is out of range for type integer/i.test(message);
+}
+
+export function formatExecutionError(error: string): string {
+  if (isPostgresIntegerOverflow(error)) {
+    return 'Execution error: the generated SQL tried to convert a very large value to a 32-bit integer. Regenerate the query or change the cast to BIGINT.';
+  }
+
+  return `Execution error: ${error}`;
 }
 
 type ExploratoryNoticeCopy = {
@@ -489,6 +503,7 @@ export function buildQueryFeedbackInput(
 }
 
 export default function Ask() {
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const { user, authEnabled } = useAuth();
   const [prompt, setPrompt] = useState('');
@@ -689,6 +704,9 @@ export default function Ask() {
         setActiveJobId(data.jobId);
       }
     },
+    onError: (error) => {
+      toast.error(formatQuerySubmitError(error));
+    },
   });
 
   const askMut = useMutation({
@@ -780,9 +798,19 @@ export default function Ask() {
     onSuccess: () => {
       setFeedbackMessage('Feedback saved');
       setFeedbackNote('');
+      toast.success('Feedback saved');
       setTimeout(() => setFeedbackMessage(null), 4000);
     },
+    onError: (error) => {
+      toast.error(`Feedback was not saved: ${getApiErrorMessage(error)}`);
+    },
   });
+
+  useEffect(() => {
+    if (jobError) {
+      toast.error(formatExecutionError(jobError));
+    }
+  }, [jobError, toast]);
 
   const handleSubmit = () => {
     const q = prompt.trim();
@@ -1573,7 +1601,7 @@ export default function Ask() {
         )}
         {nlResult && jobError && (
           <div className="max-w-4xl mx-auto px-4 mt-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-            Execution error: {jobError}
+            {formatExecutionError(jobError)}
           </div>
         )}
 
