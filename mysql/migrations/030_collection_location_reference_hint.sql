@@ -1,4 +1,4 @@
--- Migration 028: Add NL2SQL guidance for named collections that are FOLIO locations.
+-- Migration 030: Add NL2SQL guidance for named collections that are FOLIO locations.
 
 UPDATE ai_training_hints
 SET hint_value = 'When a user asks for records, holdings, or items in a named collection, first check Resolved Location References. If the resolved name is inventory.location__t, filter the location alias (loc.name), not loclibrary__t. Many user-facing collection names such as SC Special Collections Browsing and SC Rare Book Collection Reference are inventory.location__t.name values even though users call them collections.',

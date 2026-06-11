@@ -113,6 +113,8 @@ SQL;
 
 $repair = new ReflectionMethod(GeminiService::class, 'repairResolvedLocationPredicateMisuse');
 $validator = new ReflectionMethod(GeminiService::class, 'validateNoResolvedLocationPredicateMisuse');
+$repair->setAccessible(true);
+$validator->setAccessible(true);
 
 $repaired = $repair->invoke(null, $badSql);
 
@@ -183,5 +185,32 @@ assertGuardTrue(
     'MRBC Reference generated SQL should repair the target location to SC Rare Book Collection Reference.'
 );
 $validator->invoke(null, $wrongAliasRepaired);
+
+$partialLibraryLeakSql = <<<'SQL'
+SELECT DISTINCT
+    inst.title
+FROM inventory.item__t ii
+JOIN inventory.holdings_record__t hr ON ii.holdings_record_id = hr.id
+JOIN inventory.instance__t inst ON hr.instance_id = inst.id
+JOIN inventory.location__t loc ON ii.effective_location_id = loc.id
+JOIN inventory.loclibrary__t lib ON loc.library_id = lib.id
+WHERE loc.name ILIKE '%SC Josten Treasure%'
+  AND lib.name ILIKE '%Josten Treasure%'
+LIMIT 100
+SQL;
+
+$partialLibraryLeakRepaired = $repair->invoke(null, $partialLibraryLeakSql);
+assertGuardNotContains(
+    "lib.name ILIKE '%Josten Treasure%'",
+    $partialLibraryLeakRepaired,
+    'Repair should remove partial resolved location values from loclibrary__t.name filters.'
+);
+$validator->invoke(null, $partialLibraryLeakRepaired);
+assertGuardThrows(
+    $validator,
+    $partialLibraryLeakSql,
+    'resolved location value was applied to inventory.loclibrary__t.name',
+    'Validator should fail closed when a partial resolved location value is applied to the library table.'
+);
 
 fwrite(STDOUT, "GeminiService resolved location guard test passed\n");

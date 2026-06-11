@@ -1,4 +1,4 @@
--- Migration 027: Add NL2SQL guidance for efficient same-title holdings overlap reports.
+-- Migration 029: Add NL2SQL guidance for efficient same-title holdings overlap reports.
 
 UPDATE ai_training_hints
 SET hint_value = 'CRITICAL PERFORMANCE RULE for reports that ask for holdings at one Smith location and other Five Colleges institutions with the same title. First build a small target_rare_titles AS MATERIALIZED CTE scoped to the requested location/campus and compute LOWER(inst.title) AS title_key. Then join other institutions only through those target title keys. Do NOT materialize all non-Smith holdings first. Do NOT use OR in the title join. Do NOT use a correlated IN subquery against inventory.instance__t. Use equality on a normalized title key, for example other_inst.title_key = target_rare_titles.title_key, and keep the final join LEFT JOIN when every Smith holding should appear even if no other institution has attached holdings.',

@@ -1,4 +1,4 @@
--- Migration 025: Restore the Invoice Date column in the title-list report.
+-- Migration 027: Restore the Invoice Date column in the title-list report.
 -- The seeded template was missing invoice_date from the invoice aggregation subquery.
 UPDATE report_templates
 SET sql_template = REPLACE(

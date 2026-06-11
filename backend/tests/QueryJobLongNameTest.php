@@ -3,7 +3,7 @@
 $modelPath = __DIR__ . '/../models/QueryJob.php';
 $controllerPath = __DIR__ . '/../controllers/FolioQueryController.php';
 $initSqlPath = __DIR__ . '/../../mysql/init.sql';
-$migrationPath = __DIR__ . '/../../mysql/migrations/029_query_job_name_text.sql';
+$migrationPath = __DIR__ . '/../../mysql/migrations/031_query_job_name_text.sql';
 
 foreach ([$modelPath, $controllerPath, $initSqlPath] as $path) {
     if (!file_exists($path)) {
@@ -73,13 +73,13 @@ assertQueryJobLongName(
 
 assertQueryJobLongName(
     file_exists($migrationPath),
-    'Existing installs need migration 029_query_job_name_text.sql.'
+    'Existing installs need migration 031_query_job_name_text.sql.'
 );
 
 $migrationSql = file_get_contents($migrationPath);
 assertQueryJobLongName(
     $migrationSql !== false && preg_match('/MODIFY\s+COLUMN\s+name\s+TEXT\s+NULL/i', $migrationSql) === 1,
-    'Migration 029 should convert query_jobs.name to TEXT NULL.'
+    'Migration 031 should convert query_jobs.name to TEXT NULL.'
 );
 
 fwrite(STDOUT, "QueryJob long name test passed\n");

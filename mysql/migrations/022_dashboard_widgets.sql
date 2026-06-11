@@ -1,4 +1,4 @@
--- Migration 020: Opt-in dashboard widget catalog
+-- Migration 022: Opt-in dashboard widget catalog
 -- Introduces two tables:
 --   dashboard_widget_templates  — admin-managed catalog of pre-canned widgets
 --   user_dashboard_widgets      — per-user record of which widgets have been added

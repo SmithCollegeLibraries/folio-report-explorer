@@ -5,6 +5,7 @@ namespace app\services;
 use Yii;
 
 require_once __DIR__ . '/ClarificationService.php';
+require_once __DIR__ . '/ReferenceJsonBundleService.php';
 
 /**
  * FolioSchemaService — loads the scraped JSON schema files and provides
@@ -458,18 +459,6 @@ class FolioSchemaService
             'table' => $table,
             'relationships' => $rels,
         ];
-    }
-
-    /**
-     * Get relationships for a table.
-     * @param string $name
-     * @return array
-     */
-    public static function getRelationships($name)
-    {
-        $schema = self::loadSchema();
-        $name = self::fuzzyMatch($name) ?: $name;
-        return $schema['relationships'][$name] ?? ['parents' => [], 'children' => []];
     }
 
     /**
@@ -1866,6 +1855,32 @@ class FolioSchemaService
      */
     public static function loadLocationReferenceCache(): array
     {
+        $jsonReferences = ReferenceJsonBundleService::loadReferences();
+        $jsonLocationReferences = [];
+        foreach ($jsonReferences as $reference) {
+            $tableName = trim((string)($reference['source_table'] ?? ''));
+            $name = trim((string)($reference['name'] ?? ''));
+            if ($tableName === '' || $name === '') {
+                continue;
+            }
+            if (!in_array($tableName, ['inventory.location__t', 'inventory.loclibrary__t', 'inventory.loccampus__t'], true)) {
+                continue;
+            }
+            $metadata = is_array($reference['metadata'] ?? null) ? $reference['metadata'] : [];
+            $jsonLocationReferences[] = [
+                'table' => $tableName,
+                'name' => $name,
+                'code' => trim((string)($reference['code'] ?? '')),
+                'library_name' => trim((string)($metadata['library_name'] ?? '')),
+                'campus_name' => trim((string)($metadata['campus_name'] ?? '')),
+                'campus_code' => trim((string)($metadata['campus_code'] ?? '')),
+            ];
+        }
+
+        if (!empty($jsonLocationReferences)) {
+            return $jsonLocationReferences;
+        }
+
         $paths = [];
         try {
             $paths[] = Yii::getAlias('@runtime/cache/location_reference_cache.json');

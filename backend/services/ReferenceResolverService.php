@@ -3,6 +3,8 @@
 namespace app\services;
 
 require_once __DIR__ . '/ResolverClarificationService.php';
+require_once __DIR__ . '/ReferenceJsonBundleService.php';
+require_once __DIR__ . '/ReferenceTextNormalizerService.php';
 
 /**
  * Resolves stable local FOLIO reference terms before model SQL generation.
@@ -146,6 +148,15 @@ class ReferenceResolverService
             }));
         }
 
+        $resolved = self::filterResolvedReferenceConflicts($resolved);
+
+        if (empty($resolved)) {
+            $ambiguousLocationClarification = self::buildAmbiguousLocationClarification($normalizedPrompt, $references);
+            if ($ambiguousLocationClarification !== null) {
+                return $ambiguousLocationClarification;
+            }
+        }
+
         $seenTargets = [];
         foreach (array_slice($resolved, 0, 8) as $match) {
             $targetKey = $match['source_table'] . '|' . strtolower($match['name']);
@@ -275,6 +286,20 @@ class ReferenceResolverService
      */
     private static function loadEnabledReferenceValues(): array
     {
+        $bundleStatus = ReferenceJsonBundleService::bundleStatus();
+        if (empty($bundleStatus['usable'])) {
+            if (class_exists('\Yii')) {
+                \Yii::warning('JSON reference bundle is unavailable; falling back to MySQL reference cache: ' . json_encode($bundleStatus), __METHOD__);
+            }
+        } elseif (!empty($bundleStatus['stale']) && class_exists('\Yii')) {
+            \Yii::warning('JSON reference bundle is stale; continuing with stale bundle: ' . json_encode($bundleStatus), __METHOD__);
+        }
+
+        $jsonReferences = ReferenceJsonBundleService::loadReferences();
+        if (!empty($jsonReferences)) {
+            return $jsonReferences;
+        }
+
         if (!class_exists('\Yii')) {
             return [];
         }
@@ -746,7 +771,7 @@ class ReferenceResolverService
         }
 
         $normalizedName = self::normalizeText($name);
-        $normalizedNameWithoutPrefix = self::stripCampusPrefix($normalizedName);
+        $normalizedNameWithoutPrefix = (string)($reference['normalized_name_without_prefix'] ?? self::stripCampusPrefix($normalizedName));
         $normalizedCode = self::normalizeText($code);
         $score = 0;
         $matchedBy = '';
@@ -760,6 +785,12 @@ class ReferenceResolverService
         } elseif ($code !== '' && self::promptContainsCaseSensitiveCode($rawPrompt, $code)) {
             $score = 500 + strlen($normalizedCode);
             $matchedBy = 'code';
+        } elseif (self::isLocationHierarchyTable($sourceTable)) {
+            $partialScore = self::scoreLocationHierarchyPartialMatch($normalizedPrompt, $reference, $normalizedNameWithoutPrefix);
+            if ($partialScore > 0) {
+                $score = $partialScore;
+                $matchedBy = 'location_hierarchy_partial';
+            }
         }
 
         if ($score === 0) {
@@ -798,11 +829,7 @@ class ReferenceResolverService
         // code filters" guard contradict the correct behavior (camp.code is the
         // canonical campus filter). Only emit those guards for non-location
         // references (material types, funds, etc.).
-        $isLocationHierarchy = in_array($table, [
-            'inventory.loccampus__t',
-            'inventory.loclibrary__t',
-            'inventory.location__t',
-        ], true);
+        $isLocationHierarchy = self::isLocationHierarchyTable($table);
 
         $line = '- Resolved local reference: use exactly ' . $table . '.name = ' . self::quoteLiteral($name) . '.';
         if (!$isLocationHierarchy) {
@@ -863,16 +890,12 @@ class ReferenceResolverService
 
     private static function normalizeText(string $text): string
     {
-        $normalized = strtolower($text);
-        $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
-        return trim((string)preg_replace('/\s+/', ' ', (string)$normalized));
+        return ReferenceTextNormalizerService::normalize($text);
     }
 
     private static function normalizeKey(string $text): string
     {
-        $normalized = self::normalizeText($text);
-        $normalized = preg_replace('/\s+/', '_', $normalized);
-        return trim((string)$normalized, '_');
+        return ReferenceTextNormalizerService::key($text);
     }
 
     /**
@@ -891,7 +914,230 @@ class ReferenceResolverService
 
     private static function stripCampusPrefix(string $normalizedName): string
     {
-        return trim((string)preg_replace('/^[a-z]{2}\s+/', '', $normalizedName));
+        return ReferenceTextNormalizerService::normalizeWithoutCampusPrefix($normalizedName);
+    }
+
+    private static function isLocationHierarchyTable(string $table): bool
+    {
+        return in_array($table, [
+            'inventory.location__t',
+            'inventory.loclibrary__t',
+            'inventory.loccampus__t',
+            'inventory.locinstitution__t',
+            'inventory.service_point__t',
+        ], true);
+    }
+
+    /**
+     * Location prompts often omit campus/library prefixes while still naming a
+     * real row, e.g. "treasure folio" for "SC Josten Treasure Folio". This
+     * matcher only applies to the approved location hierarchy and requires
+     * distinctive row tokens to be present in the prompt.
+     *
+     * @param array<string, mixed> $reference
+     */
+    private static function scoreLocationHierarchyPartialMatch(
+        string $normalizedPrompt,
+        array $reference,
+        string $normalizedNameWithoutPrefix
+    ): int {
+        $tokens = self::referenceMatchTokens($reference, $normalizedNameWithoutPrefix);
+        if (empty($tokens)) {
+            return 0;
+        }
+
+        $promptTokens = array_fill_keys(explode(' ', $normalizedPrompt), true);
+        $matched = [];
+        foreach ($tokens as $token) {
+            if (isset($promptTokens[$token])) {
+                $matched[] = $token;
+            }
+        }
+
+        if (count($matched) >= 2 && count($matched) === count($tokens)) {
+            return 650 + count($matched) * 10 + strlen($normalizedNameWithoutPrefix);
+        }
+
+        if (count($tokens) === 1 && count($matched) === 1 && strlen($tokens[0]) >= 6) {
+            return 430 + strlen($tokens[0]);
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param array<string, mixed> $reference
+     * @return array<int, string>
+     */
+    private static function referenceMatchTokens(array $reference, string $normalizedNameWithoutPrefix): array
+    {
+        $tokens = is_array($reference['search_tokens'] ?? null)
+            ? array_map('strval', $reference['search_tokens'])
+            : explode(' ', $normalizedNameWithoutPrefix);
+
+        $nameTokens = explode(' ', $normalizedNameWithoutPrefix);
+        if (count($nameTokens) >= 3 && in_array($nameTokens[0], ['josten', 'neilson', 'hillyer', 'young', 'alumnae'], true)) {
+            array_shift($nameTokens);
+        }
+
+        $tokens = count($nameTokens) >= 1 ? $nameTokens : $tokens;
+        $ignored = [
+            'sc' => true,
+            'ac' => true,
+            'hc' => true,
+            'mh' => true,
+            'um' => true,
+            'rp' => true,
+            'yb' => true,
+            'library' => true,
+            'libraries' => true,
+            'location' => true,
+            'locations' => true,
+            'collection' => true,
+            'collections' => true,
+            'josten' => true,
+            'neilson' => true,
+            'hillyer' => true,
+            'young' => true,
+            'alumnae' => true,
+            'the' => true,
+            'and' => true,
+            'or' => true,
+        ];
+
+        $clean = [];
+        foreach ($tokens as $token) {
+            $token = self::normalizeText((string)$token);
+            if ($token === '' || strlen($token) < 3 || isset($ignored[$token])) {
+                continue;
+            }
+            $clean[$token] = true;
+        }
+
+        return array_keys($clean);
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $resolved
+     * @return array<int, array<string, mixed>>
+     */
+    private static function filterResolvedReferenceConflicts(array $resolved): array
+    {
+        $locationMatches = array_values(array_filter($resolved, function ($match) {
+            return (string)($match['source_table'] ?? '') === 'inventory.location__t';
+        }));
+        if (empty($locationMatches)) {
+            return $resolved;
+        }
+
+        $locationNames = array_map(function ($match) {
+            return self::normalizeText((string)($match['name'] ?? ''));
+        }, $locationMatches);
+
+        return array_values(array_filter($resolved, function ($match) use ($locationNames) {
+            $table = (string)($match['source_table'] ?? '');
+            $matchedBy = (string)($match['matched_by'] ?? '');
+            $name = self::normalizeText((string)($match['name'] ?? ''));
+
+            if ($table === 'inventory.location__t') {
+                return true;
+            }
+
+            if (in_array($table, ['inventory.loclibrary__t', 'inventory.loccampus__t', 'inventory.locinstitution__t', 'inventory.service_point__t'], true)) {
+                return $matchedBy !== 'location_hierarchy_partial';
+            }
+
+            if ($matchedBy === 'name' && strpos($name, ' ') === false) {
+                foreach ($locationNames as $locationName) {
+                    if ($name !== '' && preg_match('/\b' . preg_quote($name, '/') . '\b/', $locationName) === 1) {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }));
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $references
+     * @return array<string, mixed>|null
+     */
+    private static function buildAmbiguousLocationClarification(string $normalizedPrompt, array $references)
+    {
+        $promptTokens = array_values(array_filter(explode(' ', $normalizedPrompt), function ($token) {
+            return strlen((string)$token) >= 4;
+        }));
+        if (empty($promptTokens)) {
+            return null;
+        }
+
+        $matchesByToken = [];
+        foreach ($references as $reference) {
+            $table = (string)($reference['source_table'] ?? ($reference['table'] ?? ''));
+            if (!self::isLocationHierarchyTable($table)) {
+                continue;
+            }
+
+            $name = trim((string)($reference['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+
+            $referenceTokens = is_array($reference['search_tokens'] ?? null)
+                ? array_map('strval', $reference['search_tokens'])
+                : explode(' ', self::normalizeText($name));
+            $referenceTokenMap = array_fill_keys($referenceTokens, true);
+
+            foreach ($promptTokens as $token) {
+                if (!isset($referenceTokenMap[$token])) {
+                    continue;
+                }
+
+                $matchesByToken[$token][$table . '|' . strtolower($name)] = [
+                    'id' => (string)($reference['source_id'] ?? ($reference['id'] ?? '')),
+                    'label' => $name,
+                    'sourceTable' => $table,
+                    'sourceId' => (string)($reference['source_id'] ?? ($reference['id'] ?? '')),
+                    'resolvedFilter' => [
+                        'table' => $table,
+                        'column' => 'name',
+                        'operator' => '=',
+                        'value' => $name,
+                    ],
+                ];
+            }
+        }
+
+        foreach ($matchesByToken as $token => $matches) {
+            if (count($matches) < 2) {
+                continue;
+            }
+
+            return [
+                'needsClarification' => true,
+                'clarificationType' => self::CLARIFICATION_TYPE_BATCH,
+                'clarificationBatchId' => self::newBatchId(),
+                'clarificationItems' => [
+                    [
+                        'term' => $token,
+                        'clarificationKey' => 'reference_location_ambiguous.' . self::normalizeKey($token),
+                        'question' => 'Which local location, library, campus, or service point should "' . $token . '" mean?',
+                        'confidence' => 'ambiguous_location_reference',
+                        'reason' => 'multiple_location_hierarchy_matches',
+                        'inputType' => 'single_choice',
+                        'freeTextAllowed' => true,
+                        'options' => array_values(array_slice($matches, 0, 8)),
+                    ],
+                ],
+                'question' => 'I found multiple local location hierarchy matches before generating SQL.',
+                'route' => 'clarification',
+                'routeReason' => 'reference_resolver_ambiguous_reference',
+                'dataSource' => null,
+            ];
+        }
+
+        return null;
     }
 
     private static function isGenericReferenceName(string $name): bool

@@ -94,6 +94,7 @@ require_once $compilerServicePath;
 require_once $geminiServicePath;
 
 use app\services\GeminiService;
+use app\services\QueryFamilyCompilerService;
 use app\services\QueryFamilySlotService;
 
 function assertContainsText(string $needle, string $haystack, string $message): void
@@ -113,6 +114,7 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $builder = new ReflectionMethod(GeminiService::class, 'buildQueryFamilyIntentResponse');
+$builder->setAccessible(true);
 $result = $builder->invoke(
     null,
     [
@@ -143,5 +145,27 @@ $result = $builder->invoke(
 assertSameValue('builder_intent', $result['route'] ?? null, 'MRBC only-holding listing prompts should compile deterministically instead of surfacing the covered-family fallback guard.');
 assertContainsText("tl.name ILIKE '%SC Rare Book Collection Reference%'", $result['sql'] ?? '', 'Compiled MRBC only-holding SQL should scope target_locations to the resolved MRBC reference location.');
 assertContainsText('NOT EXISTS', $result['sql'] ?? '', 'Compiled MRBC only-holding SQL should exclude instances with holdings at non-target locations.');
+
+$jostenResult = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'SC Josten Library',
+        'location' => 'SC Josten Treasure, SC Josten Treasure Folio',
+        'requested_outputs' => ['title', 'call_number'],
+        'match_policy' => QueryFamilySlotService::DEFAULT_MATCH_POLICY,
+    ],
+]);
+
+assertContainsText('JOIN inventory_locations il', $jostenResult['sql'] ?? '', 'Compiled Josten listing SQL should join inventory_locations for item effective locations.');
+assertContainsText('JOIN inventory_libraries il1', $jostenResult['sql'] ?? '', 'Compiled Josten listing SQL should join inventory_libraries for library scope.');
+assertContainsText('il.name ILIKE :p2', $jostenResult['sql'] ?? '', 'Compiled Josten listing SQL should apply Treasure values to the inventory_locations alias.');
+assertContainsText('il1.name ILIKE :p1', $jostenResult['sql'] ?? '', 'Compiled Josten listing SQL should keep the library predicate on the inventory_libraries alias.');
+assertSameValue('%SC Josten Library%', $jostenResult['params'][':p1'] ?? null, 'Compiled Josten listing SQL should bind the library value to the library predicate.');
+assertSameValue('%SC Josten Treasure, SC Josten Treasure Folio%', $jostenResult['params'][':p2'] ?? null, 'Compiled Josten listing SQL should bind the Treasure/Folio value to the location predicate.');
+if (($jostenResult['params'][':p1'] ?? null) === '%SC Josten Treasure, SC Josten Treasure Folio%') {
+    fwrite(STDERR, "Compiled Josten listing SQL must not bind location names to the inventory_libraries predicate.\nSQL: " . ($jostenResult['sql'] ?? '') . "\n");
+    exit(1);
+}
 
 fwrite(STDOUT, "GeminiService inventory listing compiler regression test passed\n");

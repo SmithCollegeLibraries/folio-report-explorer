@@ -1,4 +1,4 @@
--- Migration 024: Fix title-list report payment date cast for PostgreSQL timestamp columns.
+-- Migration 026: Fix title-list report payment date cast for PostgreSQL timestamp columns.
 -- Legacy template used substring(timestamp, 0, 11), which fails with SQLSTATE[42883].
 UPDATE report_templates
 SET sql_template = REPLACE(

@@ -1,4 +1,4 @@
--- Migration 019: Add ROUND(..., 2) to all monetary columns in report 36
+-- Migration 021: Add ROUND(..., 2) to all monetary columns in report 36
 -- (Budget Year Expense Class Report) so results export cleanly to 2 dp.
 -- The client-side ResultsTable.tsx already caps display at 2 dp, but this
 -- fixes the raw stored SQL template for CSV export consistency.

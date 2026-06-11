@@ -1,10 +1,20 @@
--- Migration 017: Add acquisition unit dropdown parameter to Budget Year Expense Class Report.
--- Replaces the hardcoded SC acquisition unit UUID in the po_lines CTE with a
--- :acqUnit parameter so users can select any acquisition unit from the dropdown.
--- Also fixes the composite report to correctly default to Smith College (SC).
+-- Migration 016: Budget Year Expense Class Report
+-- Recreates the BudgetYearPivotReport from the legacy Yii app as a composite
+-- report template.  Primary data comes from FOLIO (encumbrances + payments by
+-- expense-class) and is merged with locally-managed budget allocations stored
+-- in report_expense_allocations.  A computed "Remaining" column is derived
+-- in the worker via the composite_config computed_columns extension.
 
-UPDATE `report_templates` SET
-  `sql_template` = 'WITH fiscal_years AS (
+INSERT IGNORE INTO `report_templates`
+  (`id`, `slug`, `name`, `description`, `category`, `sql_template`, `parameters`,
+   `data_source`, `composite_config`, `default_limit`, `is_active`, `created_by`)
+VALUES (
+  36,
+  'budget-year-expense-class',
+  'Budget Year Expense Class Report',
+  'Tracks Book and E-Book payments, encumbrances, allocations, and remaining budget by expense class for a fiscal year. Combines FOLIO financial data with locally-managed budget allocations. Designed for instruction librarians to monitor spending against their expense-class allocations.',
+  'finance',
+  'WITH fiscal_years AS (
     SELECT id
     FROM finance.fiscal_year__t
     WHERE series = ''SCFY''
@@ -63,28 +73,28 @@ material_types AS (
 SELECT
     ect.name AS "Expense Class Name",
     ect.code AS "Expense Class Code",
-    COALESCE(SUM(CASE
+    ROUND(COALESCE(SUM(CASE
         WHEN COALESCE(mtte.name, mttp.name, '''') = ''Book''
              AND payments.fund_id = ''6330d805-1772-4c14-b25d-5f4599964dd9''
-        THEN payments.payment ELSE 0 END), 0) AS "Book Payments",
-    COALESCE(SUM(CASE
+        THEN payments.payment ELSE 0 END), 0), 2) AS "Book Payments",
+    ROUND(COALESCE(SUM(CASE
         WHEN COALESCE(mtte.name, mttp.name, '''') = ''E-Book''
              AND payments.fund_id = ''83d5d13c-8c9a-4ff2-89dc-e61120f5025f''
-        THEN payments.payment ELSE 0 END), 0) AS "E-Book Payments",
-    COALESCE(SUM(payments.payment), 0) AS "Total Payments",
-    COALESCE(SUM(CASE
+        THEN payments.payment ELSE 0 END), 0), 2) AS "E-Book Payments",
+    ROUND(COALESCE(SUM(payments.payment), 0), 2) AS "Total Payments",
+    ROUND(COALESCE(SUM(CASE
         WHEN COALESCE(mtte.name, mttp.name, '''') = ''Book''
              AND encumbrances.from_fund_id = ''6330d805-1772-4c14-b25d-5f4599964dd9''
-        THEN encumbrances.current_encumbrance ELSE 0 END), 0) AS "Book Encumbrances",
-    COALESCE(SUM(CASE
+        THEN encumbrances.current_encumbrance ELSE 0 END), 0), 2) AS "Book Encumbrances",
+    ROUND(COALESCE(SUM(CASE
         WHEN COALESCE(mtte.name, mttp.name, '''') = ''E-Book''
              AND encumbrances.from_fund_id = ''83d5d13c-8c9a-4ff2-89dc-e61120f5025f''
-        THEN encumbrances.current_encumbrance ELSE 0 END), 0) AS "E-Book Encumbrances",
-    COALESCE(SUM(encumbrances.current_encumbrance), 0) AS "Total Encumbrances",
-    (
+        THEN encumbrances.current_encumbrance ELSE 0 END), 0), 2) AS "E-Book Encumbrances",
+    ROUND(COALESCE(SUM(encumbrances.current_encumbrance), 0), 2) AS "Total Encumbrances",
+    ROUND(
         COALESCE(SUM(payments.payment), 0)
         + COALESCE(SUM(encumbrances.current_encumbrance), 0)
-    ) AS "Total Spent"
+    , 2) AS "Total Spent"
 FROM finance.expense_class__t ect
 LEFT JOIN po_lines plt ON 1=1
 LEFT JOIN payments
@@ -98,5 +108,10 @@ LEFT JOIN material_types mttp ON mttp.id = plt.physical__material_type
 WHERE ect.name LIKE ''SC%''
 GROUP BY ect.name, ect.code
 ORDER BY ect.name ASC',
-  `parameters` = '[{"name":"fiscalYear","type":"number","label":"Fiscal Year","default":"$current_year","required":true,"description":"Fiscal year for allocation lookup (e.g. 2026). July 1 of the prior year through June 30 of this year.","placeholder":"2026"},{"name":"startDate","type":"date","label":"Start Date","default":"$fiscal_year_start","required":true,"description":"Beginning of fiscal period (defaults to July 1 of prior year)","placeholder":"YYYY-MM-DD"},{"name":"endDate","type":"date","label":"End Date","default":"$fiscal_year_end","required":true,"description":"End of fiscal period (defaults to June 30 of this year)","placeholder":"YYYY-MM-DD"},{"name":"acqUnit","type":"select","label":"Acquisition Unit","default":"b17b9e6b-82bb-4f97-b3e7-757e4e5aeb61","required":true,"description":"Filter orders by acquisition unit. Defaults to Smith College (SC).","options_sql":"SELECT id, name FROM orders.acquisitions_unit__t ORDER BY name","options_db":"folio"}]'
-WHERE `id` = 36;
+  '[{"name":"fiscalYear","type":"number","label":"Fiscal Year","default":"$current_year","required":true,"description":"Fiscal year for allocation lookup (e.g. 2026). July 1 of the prior year through June 30 of this year.","placeholder":"2026"},{"name":"startDate","type":"date","label":"Start Date","default":"$fiscal_year_start","required":true,"description":"Beginning of fiscal period (defaults to July 1 of prior year)","placeholder":"YYYY-MM-DD"},{"name":"endDate","type":"date","label":"End Date","default":"$fiscal_year_end","required":true,"description":"End of fiscal period (defaults to June 30 of this year)","placeholder":"YYYY-MM-DD"},{"name":"acqUnit","type":"select","label":"Acquisition Unit","default":"b17b9e6b-82bb-4f97-b3e7-757e4e5aeb61","required":true,"description":"Filter orders by acquisition unit. Defaults to Smith College (SC).","options_sql":"SELECT id, name FROM orders.acquisitions_unit__t ORDER BY name","options_db":"folio"}]',
+  'composite',
+  '{"secondary_sql":"SELECT expense_class_code, allocation_amount FROM report_expense_allocations WHERE fiscal_year = :fiscalYear","secondary_db":"local","merge_key":{"primary":"Expense Class Code","secondary":"expense_class_code"},"append_columns":["allocation_amount AS Allocation"],"computed_columns":[{"name":"Remaining","formula":"Allocation - Total Payments - Total Encumbrances"}]}',
+  1000,
+  1,
+  'manual'
+);

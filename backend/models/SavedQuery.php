@@ -49,21 +49,4 @@ class SavedQuery extends ActiveRecord
         ];
     }
 
-    /**
-     * Get the query definition as an array.
-     * @return array
-     */
-    public function getDefinition()
-    {
-        return json_decode($this->query_definition, true) ?: [];
-    }
-
-    /**
-     * Set the query definition from an array.
-     * @param array $def
-     */
-    public function setDefinition(array $def)
-    {
-        $this->query_definition = json_encode($def);
-    }
 }

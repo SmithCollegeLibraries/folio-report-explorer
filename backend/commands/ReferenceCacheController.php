@@ -7,6 +7,7 @@ use yii\console\Controller;
 use yii\console\ExitCode;
 use app\services\ReferenceResolverService;
 use app\services\ReferenceCacheRefreshService;
+use app\services\ReferenceJsonBundleService;
 
 /**
  * Discover and refresh local FOLIO reference data used before NL2SQL generation.
@@ -16,6 +17,7 @@ use app\services\ReferenceCacheRefreshService;
      *   php yii reference-cache/review-candidates
      *   php yii reference-cache/refresh
  *   php yii reference-cache/refresh --table=inventory.location__t
+ *   php yii reference-cache/write-json
  *   php yii reference-cache/status
  */
 class ReferenceCacheController extends Controller
@@ -311,6 +313,22 @@ class ReferenceCacheController extends Controller
         }
 
         return $ok ? ExitCode::OK : ExitCode::UNSPECIFIED_ERROR;
+    }
+
+    /**
+     * Write the approved JSON-first local reference bundle.
+     */
+    public function actionWriteJson()
+    {
+        try {
+            $count = (new ReferenceJsonBundleService())->writeBundle(Yii::$app->folioDb);
+        } catch (\Throwable $e) {
+            $this->stderr("Failed to write JSON reference bundle: " . $e->getMessage() . "\n");
+            return ExitCode::UNSPECIFIED_ERROR;
+        }
+
+        $this->stdout("Wrote JSON reference bundle with {$count} rows.\n");
+        return ExitCode::OK;
     }
 
     /**

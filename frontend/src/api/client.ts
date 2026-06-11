@@ -5,11 +5,9 @@ import type {
   TableDetail,
   PathResponse,
   BuildResponse,
-  ExecuteResponse,
   NlResponse,
   SchemaAskResponse,
   SavedQuery,
-  HealthResponse,
   AppSettings,
   SettingsTestResponse,
   ReferenceCacheStatus,
@@ -159,37 +157,12 @@ export async function findPath(
   return data;
 }
 
-export async function fetchDerived(): Promise<unknown> {
-  const { data } = await api.get('/derived');
-  return data;
-}
-
 // ─── Query ────────────────────────────────────────────────────────
 
 export async function buildQuery(
   queryDef: QueryDefinition,
 ): Promise<BuildResponse> {
   const { data } = await api.post('/build', queryDef);
-  return data;
-}
-
-export async function executeQuery(
-  sql: string,
-  params: Record<string, string> = {},
-  source = 'manual',
-  dataSource: 'folio' | 'local' = 'folio',
-): Promise<ExecuteResponse> {
-  const { data } = await api.post('/execute', { sql, params, source, dataSource });
-  return data;
-}
-
-export async function executeQueryDefinition(
-  queryDef: QueryDefinition,
-): Promise<ExecuteResponse> {
-  const { data } = await api.post('/execute', {
-    queryDefinition: queryDef,
-    source: 'builder',
-  });
   return data;
 }
 
@@ -259,11 +232,6 @@ export async function saveClarificationResolution(input: {
   return data;
 }
 
-export async function fetchCampuses(): Promise<{ code: string; name: string }[]> {
-  const { data } = await api.get('/campuses');
-  return data;
-}
-
 export async function saveCampusPreference(campus: string): Promise<void> {
   await api.patch('/user/campus', { campus });
 }
@@ -296,16 +264,6 @@ export async function listSaved(): Promise<SavedQuery[]> {
   return data;
 }
 
-export async function listPinned(): Promise<SavedQuery[]> {
-  const { data } = await api.get('/saved/pinned');
-  return data;
-}
-
-export async function getSaved(id: number): Promise<SavedQuery> {
-  const { data } = await api.get(`/saved/${id}`);
-  return data;
-}
-
 export async function deleteSaved(id: number): Promise<void> {
   await api.delete(`/saved/${id}`);
 }
@@ -317,13 +275,6 @@ export async function togglePin(id: number): Promise<SavedQuery> {
 
 export async function promoteToReport(id: number): Promise<{ id: number; slug: string; name: string }> {
   const { data } = await api.post(`/saved/${id}/promote`);
-  return data;
-}
-
-// ─── Health ───────────────────────────────────────────────────────
-
-export async function checkHealth(): Promise<HealthResponse> {
-  const { data } = await api.get('/health');
   return data;
 }
 
@@ -393,10 +344,6 @@ export async function submitQuery(
     ...(name ? { name } : {}),
   });
   return data;
-}
-
-export function getExportDownloadUrl(jobId: string): string {
-  return `${apiBase}/query/export/${jobId}`;
 }
 
 export async function downloadExportCsv(jobId: string): Promise<void> {
@@ -473,16 +420,6 @@ export async function copyAllocationYear(fiscalYear: number): Promise<{ success:
   return data;
 }
 
-export async function submitQueryDefinition(
-  queryDef: QueryDefinition,
-): Promise<JobSubmitResponse> {
-  const { data } = await api.post('/query/submit', {
-    queryDefinition: queryDef,
-    source: 'builder',
-  });
-  return data;
-}
-
 export async function checkJobStatus(
   jobId: string,
 ): Promise<JobStatusResponse> {
@@ -492,11 +429,6 @@ export async function checkJobStatus(
 
 export async function cancelJob(jobId: string): Promise<void> {
   await api.post(`/query/cancel/${jobId}`);
-}
-
-export async function listJobs(): Promise<JobStatusResponse[]> {
-  const { data } = await api.get('/query/jobs');
-  return data;
 }
 
 // ─── Report Templates ─────────────────────────────────────────────────
@@ -534,14 +466,6 @@ export async function createReport(
   return data;
 }
 
-export async function updateReport(
-  id: number,
-  updates: Partial<ReportTemplate>,
-): Promise<ReportTemplate> {
-  const { data } = await api.put(`/reports/${id}`, updates);
-  return data;
-}
-
 export async function deleteReport(id: number): Promise<void> {
   await api.delete(`/reports/${id}`);
 }
@@ -567,11 +491,6 @@ export async function listTrainingHints(
 ): Promise<TrainingHint[]> {
   const params = type ? { type } : {};
   const { data } = await api.get('/training', { params });
-  return data;
-}
-
-export async function getTrainingHint(id: number): Promise<TrainingHint> {
-  const { data } = await api.get(`/training/${id}`);
   return data;
 }
 
@@ -602,22 +521,6 @@ export async function submitCorrection(
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────
-
-export async function fetchCurrentUser(): Promise<AuthUser> {
-  const { data } = await api.get('/auth/me');
-  return data;
-}
-
-export async function refreshAuthToken(
-  refreshToken: string,
-): Promise<RefreshResponse> {
-  const { data } = await api.post('/auth/refresh', { refreshToken });
-  return data;
-}
-
-export async function logoutAuth(): Promise<void> {
-  await api.post('/auth/logout');
-}
 
 // ─── User Management (admin) ─────────────────────────────────────
 
@@ -749,11 +652,6 @@ export async function fetchExpenseMonitors(): Promise<string[]> {
 export async function saveExpenseMonitors(codes: string[]): Promise<string[]> {
   const { data } = await api.post('/expense-monitor', { codes });
   return data.codes ?? [];
-}
-
-/** Remove a single expense class code from the current user's monitor list */
-export async function removeExpenseMonitor(code: string): Promise<void> {
-  await api.delete(`/expense-monitor/${code}`);
 }
 
 /**

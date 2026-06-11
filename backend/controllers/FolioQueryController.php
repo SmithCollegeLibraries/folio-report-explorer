@@ -13,6 +13,7 @@ use app\services\DatabaseRetryService;
 use app\services\IndexRecommendationService;
 use app\services\Nl2sqlRuntimePreflightService;
 use app\services\ReferenceCacheRefreshService;
+use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
@@ -1177,7 +1178,9 @@ class FolioQueryController extends Controller
         string $routeReason = 'ask_generation_recovery'
     ): array {
         $message = trim($error->getMessage());
-        if ($this->isAskSecurityPolicyFailure($message)) {
+        // Prefer the typed policy violation; fall back to message matching for
+        // policy errors that bubble up from elsewhere as plain exceptions.
+        if ($error instanceof \app\exceptions\PolicyViolationException || $this->isAskSecurityPolicyFailure($message)) {
             Yii::$app->response->statusCode = 403;
             return [
                 'error' => $this->buildAskPolicyBlockMessage($message),
@@ -2019,8 +2022,10 @@ class FolioQueryController extends Controller
      */
     public function actionReferenceCacheStatus()
     {
+        $jsonBundle = $this->buildReferenceJsonBundleStatus();
         $empty = [
             'available' => false,
+            'jsonBundle' => $jsonBundle,
             'enabledTables' => 0,
             'activeRows' => 0,
             'failedTables' => 0,
@@ -2090,6 +2095,7 @@ class FolioQueryController extends Controller
 
         return [
             'available' => true,
+            'jsonBundle' => $jsonBundle,
             'enabledTables' => $enabledTables,
             'activeRows' => $activeRows,
             'failedTables' => $failedTables,
@@ -2097,6 +2103,26 @@ class FolioQueryController extends Controller
             'disabledCacheableTables' => $disabledCacheableTables,
             'lastRefreshedAt' => $lastRefreshedAt,
             'tables' => $tableSummaries,
+        ];
+    }
+
+    private function buildReferenceJsonBundleStatus(): array
+    {
+        $status = ReferenceJsonBundleService::bundleStatus();
+        $bundle = ReferenceJsonBundleService::loadBundle();
+        $tables = is_array($bundle['tables'] ?? null) ? $bundle['tables'] : [];
+        $rowCount = 0;
+
+        foreach ($tables as $rows) {
+            if (is_array($rows)) {
+                $rowCount += count($rows);
+            }
+        }
+
+        return $status + [
+            'tableCount' => count($tables),
+            'rowCount' => $rowCount,
+            'approvedTableCount' => count(ReferenceJsonBundleService::approvedTables()),
         ];
     }
 

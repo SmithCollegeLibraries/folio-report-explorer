@@ -4,6 +4,10 @@ namespace app\services;
 
 use Yii;
 
+// Ensure the policy-violation exception type is available even in standalone
+// (non-autoloaded) test harnesses; require_once is a no-op once Yii has loaded it.
+require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
+
 /**
  * SqlBuilderService — translates a structured query definition into
  * parameterized SQL with automatic JOIN clause generation.
@@ -829,18 +833,18 @@ class SqlBuilderService
             }
 
             if (in_array($tableRef, $blockedTables, true)) {
-                throw new \InvalidArgumentException("Query references blocked table: {$tableRef}");
+                throw new \app\exceptions\PolicyViolationException("Query references blocked table: {$tableRef}");
             }
 
             if (strpos($tableRef, '.') !== false) {
                 list($schemaName, $tableName) = explode('.', $tableRef, 2);
 
                 if ($schemaName === 'users' && $tableName !== 'groups__t') {
-                    throw new \InvalidArgumentException("Query references blocked schema table: {$tableRef}");
+                    throw new \app\exceptions\PolicyViolationException("Query references blocked schema table: {$tableRef}");
                 }
 
                 if ($schemaName === 'perms') {
-                    throw new \InvalidArgumentException("Query references blocked schema table: {$tableRef}");
+                    throw new \app\exceptions\PolicyViolationException("Query references blocked schema table: {$tableRef}");
                 }
 
                 if ($schemaName === 'marctab' && preg_match('/^mt[0-9]{3}$/i', $tableName) === 1) {
@@ -848,7 +852,7 @@ class SqlBuilderService
                 }
 
                 if (in_array($schemaName, $blockedSchemas, true)) {
-                    throw new \InvalidArgumentException("Query references blocked schema: {$schemaName}");
+                    throw new \app\exceptions\PolicyViolationException("Query references blocked schema: {$schemaName}");
                 }
             }
         }

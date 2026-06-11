@@ -1,4 +1,4 @@
--- Migration 018: Fix acqUnitId dropdown on report 34 (Expense Class Allocation vs. Actual).
+-- Migration 020: Fix acqUnitId dropdown on report 34 (Expense Class Allocation vs. Actual).
 -- The acqUnitId parameter queries a FOLIO Postgres table (orders.acquisitions_unit__t)
 -- but was missing "options_db":"folio", causing the composite report to erroneously
 -- run the options_sql against local MySQL (where the table doesn't exist) and

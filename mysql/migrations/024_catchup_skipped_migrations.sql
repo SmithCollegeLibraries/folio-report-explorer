@@ -1,4 +1,4 @@
--- Migration 022: Catch-up for migrations 013 and 021 that were skipped
+-- Migration 024: Catch-up for migrations 013 and 023 that were skipped
 -- on existing installations.
 --
 -- Migration 013 added:
@@ -6,7 +6,7 @@
 --   - report_templates.composite_config (JSON)
 --   - query_jobs.metadata           (JSON)
 --
--- Migration 021 added:
+-- Migration 023 added:
 --   - saved_queries.source 'report'  (ENUM extension)
 --
 -- All ALTER TABLE statements below are safe to re-run:

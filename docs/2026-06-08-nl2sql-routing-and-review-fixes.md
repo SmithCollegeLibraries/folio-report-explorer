@@ -60,7 +60,7 @@ Status legend: ✅ fixed & verified · 🔧 in progress · ⏳ deferred (tracked
 | # | Finding | Status |
 |---|---------|--------|
 | 7 | `buildAskContinuationFromFailure` downgrades 403/422/500 → 200 | ❎ **by design** — `FolioQueryControllerAskContinuationPolicyTest` explicitly asserts soft `RuntimeException` failures return 200 "recovery". This is the intended "Ask pause/continuation" UX. Residual: unexpected server errors are not visible as 5xx to monitoring — accepted trade-off; revisit if alerting needs it. |
-| 8 | `isAskSecurityPolicyFailure` substring matching under/over-matches | ⏳ deferred — a policy block leaking as 200 is a real risk, but the robust fix is a **structured error type** (dedicated exception class or a stable `POLICY_BLOCK:` message marker thrown by `GeminiService`/`SqlBuilderService`), not a regex tweak (which would over-match benign errors containing "blocked"/"users."). Recommend as a focused follow-up. |
+| 8 | `isAskSecurityPolicyFailure` substring matching under/over-matches | ✅ added `app\exceptions\PolicyViolationException` (subclass of `InvalidArgumentException`); `SqlBuilderService::validateTablePolicy` throws it for blocked table/schema; controller now returns 403 on `instanceof` (regex kept as fallback). Decision is type-based, not message-based. |
 
 ### 🟠 New-service correctness
 | # | Finding | Status |
@@ -120,12 +120,22 @@ New tests:
 - `ReferenceCacheRefreshAtomicityTest.php` (#9, source-assertion per repo convention)
 - `FolioQueryControllerClarificationBatchIdTest.php` (#11)
 
+### 2026-06-08 — Batch 3 (#8 structured policy error)
+Test-first; full backend suite **61/61** after.
+- New `backend/exceptions/PolicyViolationException.php` (extends `InvalidArgumentException`).
+- `SqlBuilderService::validateTablePolicy` throws it for blocked table/schema
+  references (MARC-redirect guidance left as plain `InvalidArgumentException`).
+  `SqlBuilderService` `require_once`s the exception so standalone test harnesses
+  (no autoloader) can construct it.
+- `FolioQueryController::buildAskContinuationFromFailure` returns 403 when the
+  error `instanceof PolicyViolationException`, with the keyword regex kept as a
+  fallback for policy errors raised elsewhere.
+- New tests: `SqlBuilderServicePolicyViolationTest.php`,
+  `FolioQueryControllerPolicyViolationStatusTest.php`.
+
 ### Still open (focused follow-up tasks)
-- **#13 — RESOLVED (by design):** confirmed 2026-06-08 that removing the
-  exploratory-approval gate is intentional; the continuation/recovery UX replaces
-  the explicit "try anyway?" approval. No change.
-- **#8** — harden security-policy detection via a structured error type rather
-  than message substring matching.
+- **#13 — RESOLVED (by design):** confirmed 2026-06-08; continuation/recovery UX
+  replaces the explicit "try anyway?" approval. No change.
 - **#12** — frontend multi-round clarification stacking; track original question
   in dedicated state.
 - **#4** (non-campus material-type `ILIKE` over-match) — optional tightening to

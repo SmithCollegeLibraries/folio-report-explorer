@@ -181,24 +181,18 @@ if ! grep -q '^JWT_SECRET=' .env 2>/dev/null; then
 fi
 
 # ── 9. Run database migrations ─────────────────────────────────────
+echo "→ Auditing migrations..."
+php backend/yii migration/audit
+
 echo "→ Running migrations..."
-MYSQL_HOST="${MYSQL_HOST:-localhost}"
-MYSQL_CMD="mysql -h $MYSQL_HOST -u ${MYSQL_USER:-folio_app} -p${MYSQL_PASSWORD:-folio_app_pass} ${MYSQL_DATABASE:-folio_report_explorer}"
+php backend/yii migration/run
 
-# Apply each migration SQL file in order
-for migration in mysql/migrations/*.sql; do
-    if [ -f "$migration" ]; then
-        echo "  Applying $(basename "$migration")..."
-        $MYSQL_CMD < "$migration" 2>/dev/null || true
-    fi
-done
-
-# ── 9b. Refresh runtime cache used by NL2SQL location resolution ───
-echo "→ Refreshing NL2SQL location reference cache..."
-if php backend/yii data-patterns/location-references; then
-    echo "  Refreshed: runtime location_reference_cache.json"
+# ── 9b. Refresh JSON-first reference bundle used by NL2SQL resolution ───
+echo "→ Refreshing NL2SQL JSON reference bundle..."
+if php backend/yii reference-cache/write-json; then
+    echo "  Refreshed: backend/data/reference_cache.json"
 else
-    echo "  WARNING: Could not refresh NL2SQL location cache; using existing committed cache file."
+    echo "  WARNING: Could not refresh JSON reference bundle; using existing committed cache file."
 fi
 
 echo "→ Refreshing local FOLIO reference cache..."
@@ -212,7 +206,9 @@ fi
 if [ "${SEED_DB:-false}" = "true" ]; then
     echo "→ Seeding database..."
 
-    $MYSQL_CMD < mysql/init.sql 2>/dev/null || true
+    MYSQL_HOST="${MYSQL_HOST:-localhost}"
+    MYSQL_CMD="mysql -h $MYSQL_HOST -u ${MYSQL_USER:-folio_app} -p${MYSQL_PASSWORD:-folio_app_pass} ${MYSQL_DATABASE:-folio_report_explorer}"
+    $MYSQL_CMD < mysql/init.sql
     $MYSQL_CMD < mysql/seed_reports.sql
     $MYSQL_CMD < mysql/seed_training_hints.sql
     $MYSQL_CMD < mysql/seed_saved_queries.sql

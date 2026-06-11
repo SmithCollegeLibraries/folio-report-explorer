@@ -1,7 +1,7 @@
 <?php
 
 $initPath = __DIR__ . '/../../mysql/init.sql';
-$migrationPath = __DIR__ . '/../../mysql/migrations/032_folio_reference_cache.sql';
+$migrationPath = __DIR__ . '/../../mysql/migrations/034_folio_reference_cache.sql';
 $controllerPath = __DIR__ . '/../commands/ReferenceCacheController.php';
 $resolverPath = __DIR__ . '/../services/ReferenceResolverService.php';
 

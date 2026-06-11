@@ -41,5 +41,20 @@ assertReferenceStatusContains(
     $controller,
     'Reference cache status action should report local reference row count.'
 );
+assertReferenceStatusContains(
+    'ReferenceJsonBundleService::bundleStatus()',
+    $controller,
+    'Reference cache status action should report JSON bundle freshness.'
+);
+assertReferenceStatusContains(
+    "'jsonBundle' =>",
+    $controller,
+    'Reference cache status response should include JSON bundle status.'
+);
+assertReferenceStatusContains(
+    "'approvedTableCount' => count(ReferenceJsonBundleService::approvedTables())",
+    $controller,
+    'Reference cache status response should expose the approved JSON table count.'
+);
 
 fwrite(STDOUT, "Reference cache status endpoint test passed\n");

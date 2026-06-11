@@ -1,4 +1,4 @@
--- Migration 026: Normalize title-list invoice dates to date-only values.
+-- Migration 028: Normalize title-list invoice dates to date-only values.
 -- Existing templates may already include Invoice Date, but as a full timestamp.
 UPDATE report_templates
 SET sql_template = REPLACE(

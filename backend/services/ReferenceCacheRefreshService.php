@@ -5,6 +5,8 @@ namespace app\services;
 use Yii;
 use app\commands\ReferenceCacheController;
 
+require_once __DIR__ . '/ReferenceTextNormalizerService.php';
+
 class ReferenceCacheRefreshService
 {
     public function refreshTableBySourceTable(string $sourceTable): array
@@ -245,8 +247,6 @@ class ReferenceCacheRefreshService
 
     private function normalizeText(string $text): string
     {
-        $normalized = strtolower($text);
-        $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
-        return trim((string)preg_replace('/\s+/', ' ', (string)$normalized));
+        return ReferenceTextNormalizerService::normalize($text);
     }
 }

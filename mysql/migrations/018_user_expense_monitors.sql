@@ -1,4 +1,4 @@
--- Migration 016: Per-user expense class monitoring
+-- Migration 018: Per-user expense class monitoring
 -- Stores each instruction librarian's selected expense-class codes so the
 -- dashboard can display a filtered budget-vs-actual summary card for them.
 

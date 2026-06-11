@@ -1,7 +1,7 @@
 <?php
 
 $initPath = __DIR__ . '/../../mysql/init.sql';
-$migrationPath = __DIR__ . '/../../mysql/migrations/031_ai_query_feedback.sql';
+$migrationPath = __DIR__ . '/../../mysql/migrations/033_ai_query_feedback.sql';
 $webConfigPath = __DIR__ . '/../config/web.php';
 $controllerPath = __DIR__ . '/../controllers/FolioQueryController.php';
 

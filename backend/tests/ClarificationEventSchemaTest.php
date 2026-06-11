@@ -1,8 +1,8 @@
 <?php
 
 $initPath = __DIR__ . '/../../mysql/init.sql';
-$migrationPath = __DIR__ . '/../../mysql/migrations/030_ai_clarification_events.sql';
-$batchMigrationPath = __DIR__ . '/../../mysql/migrations/032_folio_reference_cache.sql';
+$migrationPath = __DIR__ . '/../../mysql/migrations/032_ai_clarification_events.sql';
+$batchMigrationPath = __DIR__ . '/../../mysql/migrations/034_folio_reference_cache.sql';
 $webConfigPath = __DIR__ . '/../config/web.php';
 $controllerPath = __DIR__ . '/../controllers/FolioQueryController.php';
 

@@ -107,6 +107,7 @@ function assertThrowsInvalidArgumentException(ReflectionMethod $validator, array
 }
 
 $validator = new ReflectionMethod(GeminiService::class, 'validateCompiledQueryFamilyShape');
+$validator->setAccessible(true);
 
 $listingPayload = [
     'familyKey' => 'inventory_library_location_listing',

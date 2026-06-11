@@ -127,6 +127,7 @@ class GeminiService
     public static function generateSqlWithShadow($prompt, $campus = null, $userId = null, $allowExploratory = false)
     {
         $referenceResolution = ReferenceResolverService::resolvePrompt((string)$prompt, $userId);
+        self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt((string)$prompt));
         if (!empty($referenceResolution['needsClarification'])) {
             self::logRouteSelection('clarification', (string)($referenceResolution['routeReason'] ?? 'reference_resolver_batch_clarification'), [
                 'clarificationBatchId' => $referenceResolution['clarificationBatchId'] ?? null,
@@ -1752,6 +1753,46 @@ GUIDANCE;
         self::logNlTelemetry('nl2sql.validation_failure', array_merge([
             'stage' => (string)$stage,
         ], $payload), true);
+    }
+
+    private static function logReferenceResolverTelemetry(array $referenceResolution, string $promptFingerprint): void
+    {
+        if (!empty($referenceResolution['needsClarification'])) {
+            self::logNlTelemetry('nl2sql.reference_resolver_clarification', [
+                'promptFingerprint' => $promptFingerprint,
+                'routeReason' => $referenceResolution['routeReason'] ?? null,
+                'clarificationType' => $referenceResolution['clarificationType'] ?? null,
+                'clarificationBatchId' => $referenceResolution['clarificationBatchId'] ?? null,
+                'clarificationItemCount' => count($referenceResolution['clarificationItems'] ?? []),
+            ], true);
+            return;
+        }
+
+        $resolved = array_values(array_filter($referenceResolution['resolvedReferences'] ?? [], 'is_array'));
+        if (empty($resolved)) {
+            return;
+        }
+
+        $sourceTables = [];
+        $matchedBy = [];
+        foreach ($resolved as $match) {
+            $table = trim((string)($match['source_table'] ?? ''));
+            if ($table !== '') {
+                $sourceTables[$table] = true;
+            }
+            $method = trim((string)($match['matched_by'] ?? ''));
+            if ($method !== '') {
+                $matchedBy[$method] = true;
+            }
+        }
+
+        self::logNlTelemetry('nl2sql.reference_resolver_match', [
+            'promptFingerprint' => $promptFingerprint,
+            'routeReason' => $referenceResolution['routeReason'] ?? null,
+            'resolvedCount' => count($resolved),
+            'sourceTables' => array_keys($sourceTables),
+            'matchedBy' => array_keys($matchedBy),
+        ]);
     }
 
     /**
@@ -5277,8 +5318,14 @@ PROMPT;
         }
 
         foreach ($libraryAliases as $libraryAlias) {
-            foreach ($locationValues as $locationValue) {
-                $repaired = self::removeAliasTextPredicate($repaired, $libraryAlias, 'name', $locationValue);
+            $libraryValues = self::extractAliasNamePredicateValues($repaired, [$libraryAlias]);
+            foreach ($libraryValues as $libraryValue) {
+                foreach ($locationValues as $locationValue) {
+                    if (!self::sqlTextValuesShareLocationMeaning($libraryValue, $locationValue)) {
+                        continue;
+                    }
+                    $repaired = self::removeAliasTextPredicate($repaired, $libraryAlias, 'name', $libraryValue);
+                }
             }
         }
 
@@ -5347,7 +5394,13 @@ PROMPT;
             $libraryValues = self::extractAliasNamePredicateValues($sql, [$libraryAlias]);
             foreach ($libraryValues as $libraryValue) {
                 foreach ($locationValues as $locationValue) {
-                    if (self::normalizeSqlTextValue($libraryValue) === self::normalizeSqlTextValue($locationValue)) {
+                    if (self::sqlTextValuesShareLocationMeaning($libraryValue, $locationValue)) {
+                        self::logValidationFailure('resolved_location_wrong_hierarchy', [
+                            'route' => 'sql_validation',
+                            'issueFamily' => 'resolved_location_wrong_hierarchy',
+                            'libraryValue' => $libraryValue,
+                            'locationValue' => $locationValue,
+                        ]);
                         throw new \RuntimeException(
                             'Generated SQL is invalid: resolved location value was applied to inventory.loclibrary__t.name instead of inventory.location__t.name.'
                         );
@@ -5423,6 +5476,26 @@ PROMPT;
         $value = strtolower($value);
         $value = preg_replace('/[^a-z0-9]+/', ' ', $value);
         return trim((string)preg_replace('/\s+/', ' ', (string)$value));
+    }
+
+    private static function sqlTextValuesShareLocationMeaning(string $left, string $right): bool
+    {
+        $left = self::normalizeSqlLocationComparisonValue($left);
+        $right = self::normalizeSqlLocationComparisonValue($right);
+        if ($left === '' || $right === '') {
+            return false;
+        }
+
+        return $left === $right
+            || strpos($left, $right) !== false
+            || strpos($right, $left) !== false;
+    }
+
+    private static function normalizeSqlLocationComparisonValue(string $value): string
+    {
+        $normalized = self::normalizeSqlTextValue($value);
+        $normalized = preg_replace('/^(?:sc|ac|hc|mh|um|rp|yb)\s+/', '', $normalized, 1);
+        return trim((string)$normalized);
     }
 
     private static function removeAliasTextPredicate(string $sql, string $alias, string $column, string $value): string
