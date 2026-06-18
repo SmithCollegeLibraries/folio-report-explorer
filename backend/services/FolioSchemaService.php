@@ -2426,8 +2426,11 @@ class FolioSchemaService
         $lines[] = "IMPORTANT: Table names are schema-qualified (e.g. inventory.item__t).";
         $lines[] = "Always use the full schema.table name in FROM and JOIN clauses.";
         $lines[] = "SUBTABLES: Tables matching pattern schema.parent__t__child are flattened array/object columns.";
-        $lines[] = "  They join to their parent on parent__t.id = parent__t__child.id.";
+        $lines[] = "  They join only to their immediate parent on parent__t.id = parent__t__child.id.";
+        $lines[] = "  Do not join unrelated tables by matching id columns. For example, invoice.invoice_lines__t__fund_distributions.id is the invoice line id, not the PO line id.";
+        $lines[] = "  To connect invoice fund distributions to PO lines, join invoice.invoice_lines__t__fund_distributions.po_line_id to orders.po_line__t.id.";
         $lines[] = "  ALWAYS prefer subtables over JSONB queries — e.g. use invoice.invoice_lines__t__fund_distributions instead of data->'fundDistributions'.\n";
+        $lines[] = "Acquisitions standing-order rule: Standing orders are purchase orders where orders.purchase_order__t.order_type = 'Ongoing'. Do not use orders.po_line__t.order_format or orders.po_line__t.payment_status to identify standing orders. order_format is the material/resource format, e.g. Physical Resource. For subscriptions, use order_type = 'Ongoing' plus ongoing__is_subscription; for non-subscription standing orders, use order_type = 'Ongoing' with ongoing__is_subscription false/null.\n";
         $lines[] = "Inventory title rule: Titles live on inventory.instance__t.title; inventory.item__t has no title column. When joining items to bibliographic titles, use inventory.item__t -> inventory.holdings_record__t -> inventory.instance__t and select the instance alias title, e.g. inst.title.";
         $lines[] = "GROUP BY correctness rule: If a query uses GROUP BY, every selected non-aggregate expression must also appear in GROUP BY. For title lists, prefer SELECT DISTINCT inst.id, inst.hrid, inst.title unless the user explicitly asks for counts or grouped totals.\n";
 

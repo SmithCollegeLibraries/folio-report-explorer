@@ -859,7 +859,8 @@ PROMPT;
 
   a) INVENTORY / CIRCULATION (items, holdings, locations, loans): Join through the location hierarchy — inventory.location__t → inventory.loclibrary__t → inventory.loccampus__t (alias: camp) — then add WHERE LOWER(camp.name) = LOWER('{$safe}').
 
-  b) FINANCE / ACQUISITIONS (invoices, purchase orders, vouchers, expense classes, fund distributions, vendor spending): Campus scope is via the ACQUISITIONS UNIT, NOT location. The join chain is: orders.po_line__t (alias: plt) → orders.purchase_order__t__acq_unit_ids (alias: potaui) ON potaui.id = plt.purchase_order_id → orders.acquisitions_unit__t (alias: au) ON au.id = potaui.acq_unit_ids AND au.name = '{$acqCode}'. For queries starting from invoice tables, the full path is: invoice.invoice_lines__t__fund_distributions → orders.po_line__t → orders.purchase_order__t__acq_unit_ids → orders.acquisitions_unit__t. Aggregate line-level amounts (SUM of iltfd.total * iltfd.fund_distributions__value * 0.01), NOT invoice-header totals (inv.total).
+  b) FINANCE / ACQUISITIONS (invoices, purchase orders, vouchers, expense classes, fund distributions, vendor spending): Campus scope is via the ACQUISITIONS UNIT, NOT location. The join chain is: orders.po_line__t (alias: plt) → orders.purchase_order__t__acq_unit_ids (alias: potaui) ON potaui.id = plt.purchase_order_id → orders.acquisitions_unit__t (alias: au) ON au.id = potaui.acq_unit_ids AND au.name = '{$acqCode}'. For queries starting from invoice tables, the full path is: invoice.invoice_lines__t__fund_distributions → orders.po_line__t ON invoice fund distribution po_line_id = po_line id → orders.purchase_order__t__acq_unit_ids → orders.acquisitions_unit__t. Do not join invoice fund distribution id to po_line id. Aggregate line-level amounts (SUM of iltfd.total * iltfd.fund_distributions__value * 0.01), NOT invoice-header totals (inv.total).
+  Standing orders are purchase orders where orders.purchase_order__t.order_type = 'Ongoing'. Do not filter orders.po_line__t.order_format or orders.po_line__t.payment_status for standing orders; order_format is the material/resource format, e.g. Physical Resource.
   IMPORTANT: acquisitions_unit__t.name stores 2-letter abbreviation codes (SC, AC, MH, UM, HC, RP, YB) — NOT full campus names. Use au.name = '{$acqCode}' (exact string match). Never use LOWER(au.name) = LOWER('Smith College') or any full-name comparison.
 
   NEVER skip campus filtering for finance/acquisitions queries. Do not omit the acquisitions unit join.
@@ -1238,7 +1239,7 @@ PROMPT;
         }
 
         $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
-        $sql = self::normalizeIdCasts($sql);
+        $sql = self::normalizeGeneratedSql($sql);
         $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
         $sql = self::repairResolvedLocationPredicateMisuse($sql);
         self::validateNoOnlyHoldingLocationAliasLeaks($sql);
@@ -4527,7 +4528,7 @@ PROMPT;
         $built = QueryFamilyCompilerService::compileToSql($normalizedPayload);
 
         $sql = self::inlineParams($built['sql'] ?? '', $built['params'] ?? []);
-        $sql = self::normalizeIdCasts($sql);
+        $sql = self::normalizeGeneratedSql($sql);
         $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
         $sql = self::repairResolvedLocationPredicateMisuse($sql);
         self::validateNoOnlyHoldingLocationAliasLeaks($sql);
@@ -5171,7 +5172,7 @@ PROMPT;
         }
 
         // Normalize all ID-column comparisons to use ::text on both sides
-        $sql = self::normalizeIdCasts($sql);
+        $sql = self::normalizeGeneratedSql($sql);
 
         return [
             'sql' => $sql,
@@ -5189,11 +5190,57 @@ PROMPT;
      * AI writing one-sided ::uuid casts, not by genuinely mismatched column types.
      * Solution: remove all ::uuid and ::text casts; write no new ones.
      */
+    public static function normalizeGeneratedSql(string $sql): string
+    {
+        $sql = self::normalizeIdCasts($sql);
+        $sql = self::normalizeStandingOrderFilters($sql);
+        return $sql;
+    }
+
     private static function normalizeIdCasts(string $sql): string
     {
         $sql = preg_replace('/::uuid\b/i', '', $sql);
         $sql = preg_replace('/::text\b/i', '', $sql);
         return $sql;
+    }
+
+    private static function normalizeStandingOrderFilters(string $sql): string
+    {
+        $poAlias = self::findTableAlias($sql, 'orders.purchase_order__t');
+        $poLineAlias = self::findTableAlias($sql, 'orders.po_line__t');
+        if ($poAlias === null || $poLineAlias === null) {
+            return $sql;
+        }
+
+        $poAliasPattern = preg_quote($poAlias, '/');
+        $poLineAliasPattern = preg_quote($poLineAlias, '/');
+        $replacement = "LOWER({$poAlias}.order_type) = LOWER('Ongoing')";
+
+        foreach (['order_format', 'payment_status'] as $column) {
+            $columnPattern = preg_quote($column, '/');
+            $patterns = [
+                "/LOWER\\(\\s*{$poLineAliasPattern}\\.{$columnPattern}\\s*\\)\\s*=\\s*LOWER\\(\\s*'Ongoing'\\s*\\)/i",
+                "/{$poLineAliasPattern}\\.{$columnPattern}\\s*=\\s*'Ongoing'/i",
+                "/{$poLineAliasPattern}\\.{$columnPattern}\\s+ILIKE\\s+'Ongoing'/i",
+                "/LOWER\\(\\s*{$poLineAliasPattern}\\.{$columnPattern}\\s*\\)\\s+ILIKE\\s+'%?ongoing%?'/i",
+            ];
+
+            foreach ($patterns as $pattern) {
+                $sql = preg_replace($pattern, $replacement, $sql);
+            }
+        }
+
+        return $sql;
+    }
+
+    private static function findTableAlias(string $sql, string $tableName): ?string
+    {
+        $tablePattern = preg_quote($tableName, '/');
+        if (preg_match('/\\b(?:FROM|JOIN)\\s+' . $tablePattern . '\\s+(?:AS\\s+)?([a-z_][a-z0-9_]*)\\b/i', $sql, $matches) === 1) {
+            return $matches[1];
+        }
+
+        return null;
     }
 
     /**

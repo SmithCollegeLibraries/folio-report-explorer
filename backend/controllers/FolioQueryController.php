@@ -602,6 +602,10 @@ class FolioQueryController extends Controller
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
         }
 
+        if ((string)$source === 'nl') {
+            $sql = GeminiService::normalizeGeneratedSql((string)$sql);
+        }
+
         $sql = SqlBuilderService::normalizeForExecution($sql);
 
         // Safety validation
@@ -745,6 +749,10 @@ class FolioQueryController extends Controller
         if (!$sql) {
             Yii::$app->response->statusCode = 400;
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
+        }
+
+        if ((string)$source === 'nl') {
+            $sql = GeminiService::normalizeGeneratedSql((string)$sql);
         }
 
         $sql = SqlBuilderService::normalizeForExecution($sql);
