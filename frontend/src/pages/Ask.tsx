@@ -65,7 +65,7 @@ function getApiErrorMessage(error: unknown): string {
 function formatNlError(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (isAxiosError(error) && error.response?.status === 403) {
-    return `Query blocked: ${message}`;
+    return message;
   }
   return `AI error: ${message}`;
 }
@@ -116,6 +116,29 @@ function buildClientFallbackSuggestions(promptText: string, campus: string): str
   }
 
   return generic.slice(0, 5);
+}
+
+function formatMissingSlotLabel(slot: string): string {
+  switch (slot) {
+    case 'contributor_name':
+      return 'contributor name';
+    case 'campus':
+      return 'campus';
+    case 'requested_outputs':
+      return 'requested output fields';
+    default:
+      return slot.replace(/_/g, ' ');
+  }
+}
+
+function buildClarifiedPrompt(basePrompt: string, option: string): string {
+  const trimmedBase = basePrompt.trim().replace(/[\s.?!]+$/, '');
+  const trimmedOption = option.trim();
+  if (!trimmedBase) {
+    return trimmedOption;
+  }
+
+  return `${trimmedBase} ${trimmedOption}`.trim();
 }
 
 export default function Ask() {
@@ -331,9 +354,24 @@ export default function Ask() {
     });
   };
 
+  const handleClarificationOption = (option: string, shouldRun: boolean) => {
+    const clarifiedPrompt = buildClarifiedPrompt(history[0]?.prompt || prompt, option);
+    setPrompt(clarifiedPrompt);
+    if (shouldRun) {
+      askMut.mutate({
+        question: clarifiedPrompt,
+        includeSuggestions: true,
+        shouldExecute: true,
+      });
+    }
+  };
+
   const anchorPrompt = history[0]?.prompt || prompt;
-  const usingFallbackSuggestions = !!nlResult && (!nlResult.suggestions || nlResult.suggestions.length === 0);
-  const effectiveSuggestions = nlResult
+  const isClarificationResponse = !!nlResult?.needsClarification;
+  const usingFallbackSuggestions = !!nlResult
+    && !isClarificationResponse
+    && (!nlResult.suggestions || nlResult.suggestions.length === 0);
+  const effectiveSuggestions = nlResult && !isClarificationResponse
     ? (nlResult.suggestions && nlResult.suggestions.length > 0
       ? nlResult.suggestions
       : buildClientFallbackSuggestions(anchorPrompt, selectedCampus))
@@ -574,6 +612,46 @@ export default function Ask() {
         {/* Main content — only show when not in loading state */}
         {nlResult && !isLoading && (
           <div className="max-w-4xl mx-auto p-6 space-y-4">
+            {isClarificationResponse ? (
+              <div className="space-y-4">
+                <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-amber-900">
+                  <div className="text-sm font-semibold">More detail needed before SQL can be generated</div>
+                  <div className="mt-2 text-sm">
+                    {nlResult.question || 'I need one more detail before I can generate this report.'}
+                  </div>
+                  {nlResult.missingSlots && nlResult.missingSlots.length > 0 && (
+                    <div className="mt-3 text-xs text-amber-800">
+                      Missing: {nlResult.missingSlots.map(formatMissingSlotLabel).join(', ')}
+                    </div>
+                  )}
+                  {nlResult.options && nlResult.options.length > 0 && (
+                    <div className="mt-4 space-y-2">
+                      {nlResult.options.map((option, index) => (
+                        <div key={`${option}-${index}`} className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleClarificationOption(option, false)}
+                            className="flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 text-left text-xs text-amber-900 hover:bg-amber-100"
+                          >
+                            {option}
+                          </button>
+                          <button
+                            onClick={() => handleClarificationOption(option, true)}
+                            disabled={askMut.isPending || execMut.isPending || isRunning}
+                            className="inline-flex items-center gap-1 rounded-lg bg-amber-700 px-2.5 py-2 text-xs text-white hover:bg-amber-800 disabled:opacity-50"
+                          >
+                            <Play size={12} /> Run
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="text-sm text-gray-500">
+                  Update the prompt above with the missing detail and run it again.
+                </div>
+              </div>
+            ) : (
+              <>
             {/* Tab toggle bar */}
             <div className="flex items-center gap-1 border-b pb-0">
               <button
@@ -747,7 +825,7 @@ export default function Ask() {
                         )}
                         {!isRunning ? (
                           <button
-                            onClick={() => execMut.mutate({ sql: nlResult.sql, dataSource: nlResult.dataSource || 'folio' })}
+                            onClick={() => execMut.mutate({ sql: nlResult.sql!, dataSource: nlResult.dataSource || 'folio' })}
                             disabled={execMut.isPending}
                             className="flex items-center gap-1 bg-green-600 text-white text-xs px-3 py-1 rounded hover:bg-green-700 disabled:opacity-50"
                           >
@@ -765,7 +843,7 @@ export default function Ask() {
                         <button
                           onClick={() => {
                             setCorrecting(true);
-                            setCorrectedSql(nlResult.sql);
+                            setCorrectedSql(nlResult.sql!);
                           }}
                           className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-800"
                           title="Correct this SQL — your fix teaches the AI"
@@ -829,6 +907,8 @@ export default function Ask() {
                   </div>
                 )}
               </div>
+            )}
+              </>
             )}
           </div>
         )}

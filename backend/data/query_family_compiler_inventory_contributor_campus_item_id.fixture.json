@@ -1,0 +1,19 @@
+{
+    "payload": {
+        "familyKey": "inventory_contributor_campus_item_barcode",
+        "slots": {
+            "campus": "Smith College",
+            "contributor_name": "Smith College. Department of Biological Sciences.",
+            "contributor_name_type": "Corporate name",
+            "material_type": "Theses",
+            "requested_outputs": [
+                "item_id",
+                "instance_hrid",
+                "publication_date",
+                "title"
+            ],
+            "match_policy": "exact_phrase"
+        }
+    },
+    "expectedSql": "SELECT ii.hrid,\n       ii1.id AS item_id,\n       ii.dates__date1 AS publication_date,\n       ii.title\nFROM inventory.instance__t ii\nJOIN inventory.instance__t__contributors itc\n  ON itc.id = ii.id\nJOIN inventory.contributor_name_type__t icnt\n  ON icnt.id = itc.contributors__contributor_name_type_id\nJOIN inventory.holdings_record__t ih\n  ON ih.instance_id = ii.id\nJOIN inventory.item__t ii1\n  ON ii1.holdings_record_id = ih.id\nJOIN inventory.location__t il\n  ON il.id = ii1.effective_location_id\nJOIN inventory.loclibrary__t il1\n  ON il1.id = il.library_id\nJOIN inventory.loccampus__t ic\n  ON ic.id = il1.campus_id\nJOIN inventory.material_type__t imt\n  ON imt.id = ii1.material_type_id\nWHERE ic.name ILIKE :p0 AND itc.contributors__name ILIKE :p1 AND icnt.name ILIKE :p2 AND imt.name ILIKE :p3\nLIMIT 100"
+}

@@ -1,0 +1,1618 @@
+{
+    "metadata": {
+        "artifactVersion": 2,
+        "generatedAt": "2026-04-22T13:44:21+00:00",
+        "focusSlice": "inventory_contributor_campus_holdings_item_barcode",
+        "sourceCounts": {
+            "schemaTables": 115,
+            "mappedTables": 123,
+            "subtables": 216,
+            "semanticTables": 98,
+            "focusEntities": 9,
+            "focusEdges": 19
+        }
+    },
+    "contractKeyToSqlTable": {
+        "inventory_campuses": "inventory.loccampus__t",
+        "inventory_contributor_name_types": "inventory.contributor_name_type__t",
+        "inventory_holdings": "inventory.holdings_record__t",
+        "inventory_holdings_record__t__holdings_items": "inventory.holdings_record__t__holdings_items",
+        "inventory_instance__t__contributors": "inventory.instance__t__contributors",
+        "inventory_instances": "inventory.instance__t",
+        "inventory_items": "inventory.item__t",
+        "inventory_libraries": "inventory.loclibrary__t",
+        "inventory_locations": "inventory.location__t"
+    },
+    "sqlTableToContractKey": {
+        "inventory.contributor_name_type__t": "inventory_contributor_name_types",
+        "inventory.holdings_record__t": "inventory_holdings",
+        "inventory.holdings_record__t__holdings_items": "inventory_holdings_record__t__holdings_items",
+        "inventory.instance__t": "inventory_instances",
+        "inventory.instance__t__contributors": "inventory_instance__t__contributors",
+        "inventory.item__t": "inventory_items",
+        "inventory.location__t": "inventory_locations",
+        "inventory.loccampus__t": "inventory_campuses",
+        "inventory.loclibrary__t": "inventory_libraries"
+    },
+    "entities": {
+        "inventory_campuses": {
+            "contractKey": "inventory_campuses",
+            "sqlTable": "inventory.loccampus__t",
+            "ldp1Table": "inventory_campuses",
+            "entityKind": "base",
+            "grain": "campus",
+            "canonicalLabel": "Inventory Campuses",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "code",
+                    "type": "varchar"
+                },
+                {
+                    "name": "institution_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "name",
+                    "type": "varchar"
+                },
+                {
+                    "name": "data",
+                    "type": "json"
+                }
+            ],
+            "semanticHints": {
+                "description": "Campus locations in the library consortium (e.g. Smith College, Amherst College, Hampshire College). Represents institutional campuses \u00e2\u20ac\u201d NOT vendors or organizations.",
+                "terms": [
+                    "Smith College campus IDs",
+                    "campus",
+                    "college"
+                ],
+                "preferredApproach": [],
+                "columnSemantics": {
+                    "code": {
+                        "sampleValues": [
+                            "AC",
+                            "HC",
+                            "MH",
+                            "RP",
+                            "SC",
+                            "UM",
+                            "YB"
+                        ],
+                        "valueSemantics": {
+                            "kind": "high_value_lookup",
+                            "promptValueLimit": 20,
+                            "sampleValueCount": 7
+                        }
+                    },
+                    "name": {
+                        "sampleValues": [
+                            "Amherst College",
+                            "Five Colleges Collections",
+                            "Hampshire College",
+                            "Mount Holyoke College",
+                            "National Yiddish Book Center",
+                            "Smith College",
+                            "University Of Massachusetts"
+                        ],
+                        "terms": [
+                            "campus",
+                            "college"
+                        ],
+                        "valueSemantics": {
+                            "kind": "high_value_lookup",
+                            "promptValueLimit": 20,
+                            "sampleValueCount": 7
+                        }
+                    }
+                }
+            }
+        },
+        "inventory_contributor_name_types": {
+            "contractKey": "inventory_contributor_name_types",
+            "sqlTable": "inventory.contributor_name_type__t",
+            "ldp1Table": "inventory_contributor_name_types",
+            "entityKind": "lookup",
+            "grain": "contributor_name_type",
+            "canonicalLabel": "Inventory Contributor Name Types",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "name",
+                    "type": "varchar"
+                },
+                {
+                    "name": "ordering",
+                    "type": "varchar"
+                },
+                {
+                    "name": "data",
+                    "type": "json"
+                }
+            ],
+            "semanticHints": {
+                "description": "Types of contributor names (personal, corporate, meeting).",
+                "terms": [],
+                "preferredApproach": [],
+                "columnSemantics": []
+            }
+        },
+        "inventory_holdings": {
+            "contractKey": "inventory_holdings",
+            "sqlTable": "inventory.holdings_record__t",
+            "ldp1Table": "inventory_holdings",
+            "entityKind": "base",
+            "grain": "holdings",
+            "canonicalLabel": "Inventory Holdings",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "_version",
+                    "type": "int8"
+                },
+                {
+                    "name": "call_number",
+                    "type": "varchar"
+                },
+                {
+                    "name": "call_number_prefix",
+                    "type": "varchar"
+                },
+                {
+                    "name": "call_number_suffix",
+                    "type": "varchar"
+                },
+                {
+                    "name": "call_number_type_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "copy_number",
+                    "type": "varchar"
+                },
+                {
+                    "name": "discovery_suppress",
+                    "type": "bool"
+                },
+                {
+                    "name": "effective_location_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "holdings_type_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "hrid",
+                    "type": "varchar"
+                },
+                {
+                    "name": "instance_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "number_of_items",
+                    "type": "varchar"
+                },
+                {
+                    "name": "permanent_location_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "retention_policy",
+                    "type": "varchar"
+                },
+                {
+                    "name": "shelving_title",
+                    "type": "varchar"
+                },
+                {
+                    "name": "source_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "temporary_location_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "data",
+                    "type": "json"
+                },
+                {
+                    "name": "acquisition_method",
+                    "type": "varchar"
+                },
+                {
+                    "name": "ill_policy_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "receipt_status",
+                    "type": "varchar"
+                }
+            ],
+            "semanticHints": {
+                "description": "Holdings records linking instances to locations. Contains shelving info, call numbers, and location assignments.",
+                "terms": [
+                    "nested EXISTS pattern for instance-level queries with item-level filters"
+                ],
+                "preferredApproach": [
+                    "For item-level current location and circulation reporting, prefer item__t.effective_location_id over holdings permanent location columns.",
+                    "Use holdings_record__t as the bridge between instance and item; do not treat it as final location authority."
+                ],
+                "columnSemantics": {
+                    "acquisition_method": {
+                        "derivedComments": [
+                            "Method of holdings record acquisition"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "call_number": {
+                        "derivedComments": [
+                            "Call Number is an identifier assigned to an item, usually printed on a label attached to the item"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "call_number_prefix": {
+                        "derivedComments": [
+                            "Prefix of the call number on the holding level"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "call_number_suffix": {
+                        "derivedComments": [
+                            "Suffix of the call number on the holding level"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "call_number_type_id": {
+                        "derivedComments": [
+                            "unique ID for the type of call number on a holdings record, a UUID"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "copy_number": {
+                        "derivedComments": [
+                            "Item/Piece ID (usually barcode) for systems that do not use item records. Ability to designate the copy number if institution chooses to use copy numbers."
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "discovery_suppress": {
+                        "derivedComments": [
+                            "Records the fact that the record should not be displayed in a discovery system"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "id": {
+                        "derivedComments": [
+                            "The holdings ID"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "ill_policy_id": {
+                        "derivedComments": [
+                            "Unique ID for an ILL policy, a UUID"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "instance_id": {
+                        "derivedComments": [
+                            "Inventory instances identifier",
+                            "Unique ID for the instance record, a UUID"
+                        ],
+                        "derivedFrom": [
+                            "holdings_administrative_notes",
+                            "holdings_ext"
+                        ]
+                    },
+                    "permanent_location_id": {
+                        "derivedComments": [
+                            "ID of the permanent shelving location in which an item resides"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "receipt_status": {
+                        "derivedComments": [
+                            "Receipt status (e.g. pending, awaiting receipt, partially received, fully received, receipt not required, and cancelled)",
+                            "The recete status of the order"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext",
+                            "po_instance"
+                        ]
+                    },
+                    "retention_policy": {
+                        "derivedComments": [
+                            "Records information regarding how long we have agreed to keep something"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "shelving_title": {
+                        "derivedComments": [
+                            "Indicates the shelving form of title"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    },
+                    "temporary_location_id": {
+                        "derivedComments": [
+                            "ID of the temporary location: Temporary location is the temporary location, shelving location, or holding which is a physical place where items are stored, or an Online location."
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ]
+                    }
+                }
+            }
+        },
+        "inventory_holdings_record__t__holdings_items": {
+            "contractKey": "inventory_holdings_record__t__holdings_items",
+            "sqlTable": "inventory.holdings_record__t__holdings_items",
+            "ldp1Table": null,
+            "entityKind": "subtable",
+            "grain": "holdings_item_snapshot",
+            "canonicalLabel": "Inventory Holdings Items",
+            "columns": [
+                {
+                    "name": "__id",
+                    "type": "int4"
+                },
+                {
+                    "name": "id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "hrid",
+                    "type": "text"
+                },
+                {
+                    "name": "_version",
+                    "type": "int4"
+                },
+                {
+                    "name": "source_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "copy_number",
+                    "type": "text"
+                },
+                {
+                    "name": "call_number",
+                    "type": "text"
+                },
+                {
+                    "name": "instance_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "shelving_title",
+                    "type": "text"
+                },
+                {
+                    "name": "ill_policy_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "receipt_status",
+                    "type": "text"
+                },
+                {
+                    "name": "number_of_items",
+                    "type": "text"
+                },
+                {
+                    "name": "holdings_type_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "retention_policy",
+                    "type": "text"
+                },
+                {
+                    "name": "call_number_suffix",
+                    "type": "text"
+                },
+                {
+                    "name": "call_number_prefix",
+                    "type": "text"
+                },
+                {
+                    "name": "digitization_policy",
+                    "type": "text"
+                },
+                {
+                    "name": "call_number_type_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "acquisition_format",
+                    "type": "text"
+                },
+                {
+                    "name": "acquisition_method",
+                    "type": "text"
+                },
+                {
+                    "name": "discovery_suppress",
+                    "type": "bool"
+                },
+                {
+                    "name": "temporary_location_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "effective_location_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "permanent_location_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "holdings_items__o",
+                    "type": "int2"
+                },
+                {
+                    "name": "holdings_items",
+                    "type": "text"
+                }
+            ],
+            "semanticHints": {
+                "description": "",
+                "terms": [],
+                "preferredApproach": [],
+                "columnSemantics": []
+            },
+            "parentContractKey": "inventory_holdings"
+        },
+        "inventory_instance__t__contributors": {
+            "contractKey": "inventory_instance__t__contributors",
+            "sqlTable": "inventory.instance__t__contributors",
+            "ldp1Table": null,
+            "entityKind": "subtable",
+            "grain": "instance_contributor",
+            "canonicalLabel": "Inventory Instance Contributors",
+            "columns": [
+                {
+                    "name": "__id",
+                    "type": "int4"
+                },
+                {
+                    "name": "id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "hrid",
+                    "type": "text"
+                },
+                {
+                    "name": "title",
+                    "type": "text"
+                },
+                {
+                    "name": "source",
+                    "type": "text"
+                },
+                {
+                    "name": "deleted",
+                    "type": "bool"
+                },
+                {
+                    "name": "_version",
+                    "type": "int4"
+                },
+                {
+                    "name": "status_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "index_title",
+                    "type": "text"
+                },
+                {
+                    "name": "cataloged_date",
+                    "type": "text"
+                },
+                {
+                    "name": "staff_suppress",
+                    "type": "bool"
+                },
+                {
+                    "name": "instance_type_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "previously_held",
+                    "type": "bool"
+                },
+                {
+                    "name": "mode_of_issuance_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "discovery_suppress",
+                    "type": "bool"
+                },
+                {
+                    "name": "status_updated_date",
+                    "type": "text"
+                },
+                {
+                    "name": "contributors__o",
+                    "type": "int2"
+                },
+                {
+                    "name": "contributors__name",
+                    "type": "text"
+                },
+                {
+                    "name": "contributors__primary",
+                    "type": "bool"
+                },
+                {
+                    "name": "contributors__contributor_type_id",
+                    "type": "uuid"
+                },
+                {
+                    "name": "contributors__contributor_type_text",
+                    "type": "text"
+                },
+                {
+                    "name": "contributors__contributor_name_type_id",
+                    "type": "uuid"
+                }
+            ],
+            "semanticHints": {
+                "description": "",
+                "terms": [],
+                "preferredApproach": [],
+                "columnSemantics": []
+            },
+            "parentContractKey": "inventory_instances"
+        },
+        "inventory_instances": {
+            "contractKey": "inventory_instances",
+            "sqlTable": "inventory.instance__t",
+            "ldp1Table": "inventory_instances",
+            "entityKind": "base",
+            "grain": "instance",
+            "canonicalLabel": "Inventory Instances",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "_version",
+                    "type": "int8"
+                },
+                {
+                    "name": "cataloged_date",
+                    "type": "varchar"
+                },
+                {
+                    "name": "discovery_suppress",
+                    "type": "bool"
+                },
+                {
+                    "name": "hrid",
+                    "type": "varchar"
+                },
+                {
+                    "name": "index_title",
+                    "type": "varchar"
+                },
+                {
+                    "name": "instance_type_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "mode_of_issuance_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "previously_held",
+                    "type": "bool"
+                },
+                {
+                    "name": "source",
+                    "type": "varchar"
+                },
+                {
+                    "name": "staff_suppress",
+                    "type": "bool"
+                },
+                {
+                    "name": "status_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "status_updated_date",
+                    "type": "timestamptz"
+                },
+                {
+                    "name": "title",
+                    "type": "varchar"
+                },
+                {
+                    "name": "data",
+                    "type": "json"
+                }
+            ],
+            "semanticHints": {
+                "description": "Bibliographic instance records (title, contributors, identifiers, publication info). The top-level catalog entity.",
+                "terms": [
+                    "CTE MATERIALIZED keyword",
+                    "MARC record",
+                    "marctab",
+                    "marctab per-field table structure",
+                    "marctab_join_safety",
+                    "nested EXISTS pattern for instance-level queries with item-level filters",
+                    "publisher",
+                    "title"
+                ],
+                "preferredApproach": [
+                    "Document type requests usually map to material_type__t, not instance_type__t.",
+                    "For MARC field-level extraction, prefer folio_source_record.marctab instead of parsing source-record JSON text.",
+                    "For full MARC record output, ALWAYS include folio_source_record.records__t.parsed_record__content joined via records__t.external_id = instance__t.id AND records__t.state = 'ACTUAL'.",
+                    "Join to holdings via holdings_record__t.instance_id = instance__t.id, then to items via item__t.holdings_record_id = holdings_record__t.id.",
+                    "PERFORMANCE: Resolve material_type_id via scalar subquery: ii.material_type_id = (SELECT id FROM inventory.material_type__t WHERE LOWER(name) = 'book' LIMIT 1). Do not JOIN material_type__t in the main query.",
+                    "PERFORMANCE: When building instance-level CTEs with item-level filters (material type, item status), ALWAYS use nested EXISTS with AS MATERIALIZED. Never use JOIN + DISTINCT.",
+                    "Use inventory.instance__t as the bibliographic anchor for title-level inventory queries."
+                ],
+                "columnSemantics": {
+                    "cataloged_date": {
+                        "derivedComments": [
+                            "Date or timestamp on an instance for when it was considered cataloged."
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ]
+                    },
+                    "discovery_suppress": {
+                        "derivedComments": [
+                            "Records the fact that the record should not be displayed in a discovery system."
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ]
+                    },
+                    "hrid": {
+                        "terms": [
+                            "marctab",
+                            "marctab per-field table structure",
+                            "marctab_join_safety"
+                        ]
+                    },
+                    "id": {
+                        "terms": [
+                            "MARC record",
+                            "marctab_join_safety"
+                        ]
+                    },
+                    "index_title": {
+                        "derivedComments": [
+                            "Title normalized for browsing and searching; based on the title with articles removed"
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ],
+                        "terms": [
+                            "publisher"
+                        ]
+                    },
+                    "mode_of_issuance_id": {
+                        "derivedComments": [
+                            "UUID of the RDA mode of issuance, a categorization reflecting whether a resource is issued in one or more parts, the way it is updated, and whether its termination is predetermined or not (e.g. monograph,  sequential monograph, serial; integrating Resource, other)."
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ]
+                    },
+                    "previously_held": {
+                        "derivedComments": [
+                            "Records the fact that the resource was previously held by the library for things like Hathi access, etc."
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ]
+                    },
+                    "staff_suppress": {
+                        "derivedComments": [
+                            "Records the fact that the record should not be displayed for others than catalogers."
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ]
+                    },
+                    "status_id": {
+                        "derivedComments": [
+                            "UUID for the Instance status term (e.g. cataloged, uncatalogued, batch loaded, temporary, other, not yet assigned)."
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ]
+                    },
+                    "status_updated_date": {
+                        "derivedComments": [
+                            "Date [or timestamp] for when the instance status was updated."
+                        ],
+                        "derivedFrom": [
+                            "instance_ext"
+                        ]
+                    },
+                    "title": {
+                        "derivedComments": [
+                            "The primary title (or label) associated with the resource.",
+                            "Title of the material"
+                        ],
+                        "derivedFrom": [
+                            "instance_ext",
+                            "po_instance"
+                        ],
+                        "terms": [
+                            "title"
+                        ]
+                    }
+                }
+            }
+        },
+        "inventory_items": {
+            "contractKey": "inventory_items",
+            "sqlTable": "inventory.item__t",
+            "ldp1Table": "inventory_items",
+            "entityKind": "base",
+            "grain": "item",
+            "canonicalLabel": "Inventory Items",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "_version",
+                    "type": "int8"
+                },
+                {
+                    "name": "accession_number",
+                    "type": "varchar"
+                },
+                {
+                    "name": "barcode",
+                    "type": "varchar"
+                },
+                {
+                    "name": "chronology",
+                    "type": "varchar"
+                },
+                {
+                    "name": "copy_number",
+                    "type": "varchar"
+                },
+                {
+                    "name": "description_of_pieces",
+                    "type": "varchar"
+                },
+                {
+                    "name": "discovery_suppress",
+                    "type": "bool"
+                },
+                {
+                    "name": "effective_location_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "effective_shelving_order",
+                    "type": "varchar"
+                },
+                {
+                    "name": "enumeration",
+                    "type": "varchar"
+                },
+                {
+                    "name": "holdings_record_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "hrid",
+                    "type": "varchar"
+                },
+                {
+                    "name": "in_transit_destination_service_point_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "item_damaged_status_date",
+                    "type": "varchar"
+                },
+                {
+                    "name": "item_damaged_status_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "item_level_call_number",
+                    "type": "varchar"
+                },
+                {
+                    "name": "item_level_call_number_prefix",
+                    "type": "varchar"
+                },
+                {
+                    "name": "item_level_call_number_suffix",
+                    "type": "varchar"
+                },
+                {
+                    "name": "item_level_call_number_type_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "material_type_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "missing_pieces",
+                    "type": "varchar"
+                },
+                {
+                    "name": "missing_pieces_date",
+                    "type": "varchar"
+                },
+                {
+                    "name": "number_of_missing_pieces",
+                    "type": "varchar"
+                },
+                {
+                    "name": "number_of_pieces",
+                    "type": "varchar"
+                },
+                {
+                    "name": "permanent_loan_type_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "permanent_location_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "purchase_order_line_identifier",
+                    "type": "varchar"
+                },
+                {
+                    "name": "temporary_loan_type_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "temporary_location_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "volume",
+                    "type": "varchar"
+                },
+                {
+                    "name": "data",
+                    "type": "json"
+                },
+                {
+                    "name": "item_identifier",
+                    "type": "varchar"
+                }
+            ],
+            "semanticHints": {
+                "description": "Individual physical or electronic item records (barcodes, status, call number, material type, loan type). Each item belongs to a holdings_record.",
+                "terms": [
+                    "MARC query with item filter performance",
+                    "barcode",
+                    "call number",
+                    "circulating",
+                    "effective location",
+                    "item location",
+                    "item__t index awareness",
+                    "nested EXISTS pattern for instance-level queries with item-level filters"
+                ],
+                "preferredApproach": [
+                    "ALWAYS access items through holdings_record_id to use the composite index. Never scan item__t first and join back to holdings.",
+                    "CRITICAL TYPE CAST: item__t FK columns (holdings_record_id, effective_location_id, permanent_location_id, material_type_id) are stored as TEXT in LDP. Target table PKs are UUID. ALWAYS cast the UUID side to TEXT: hr.id::text, loc.id::text. Lookup-to-lookup joins on small reference tables (e.g. loc.library_id = lib.id, lib.campus_id = camp.id) are UUID=UUID natively \u2014 no cast needed.",
+                    "For material type filtering, use the composite index: WHERE ii.holdings_record_id = hr.id AND ii.material_type_id = <uuid>.",
+                    "SINGLE-PASS CTE: When the query needs item-level detail columns in output (call_number, barcode, location name) \u2014 not just instance-level (hrid, title) \u2014 use one MATERIALIZED CTE that joins item\u2192holdings\u2192instance\u2192location in a single pass, collecting both filter matches and output columns. Then apply NOT EXISTS and other filters against the small CTE result. This avoids scanning item__t twice (single-pass 474K cost vs nested EXISTS + re-join 971K cost). Pattern: WITH items AS MATERIALIZED (SELECT inst.hrid, inst.title, ii.effective_call_number_components__call_number, loc.name FROM item__t ii JOIN holdings_record__t hr ON ii.holdings_record_id = hr.id::text JOIN instance__t inst ON hr.instance_id = inst.id::text JOIN location__t loc ON ii.effective_location_id = loc.id::text WHERE ...filter...) SELECT ... FROM items WHERE NOT EXISTS (SELECT 1 FROM marctab.mtNNN m WHERE m.instance_hrid = items.instance_hrid);",
+                    "There is NO index on effective_location_id. For location-based queries, scope through holdings permanent_location_id first, then check items.",
+                    "Use inventory.item__t for current item status and availability snapshots; use circulation tables for loan events.",
+                    "Use nested EXISTS from holdings to items: EXISTS (SELECT 1 FROM inventory.item__t ii WHERE ii.holdings_record_id = hr.id AND ii.material_type_id = ...).",
+                    "item__t has 10M+ rows. Available indexes: item__t_id_idx (id), item__t___id_idx (__id), idx_item_holdings_material (holdings_record_id, material_type_id)."
+                ],
+                "columnSemantics": {
+                    "barcode": {
+                        "terms": [
+                            "barcode"
+                        ]
+                    },
+                    "effective_call_number": {
+                        "terms": [
+                            "call number"
+                        ]
+                    },
+                    "effective_location_id": {
+                        "terms": [
+                            "effective location",
+                            "item location"
+                        ],
+                        "warnings": [
+                            "TEXT type \u2014 target location__t.id is UUID. Cast the UUID side: ii.effective_location_id = loc.id::text"
+                        ]
+                    },
+                    "holdings_record_id": {
+                        "warnings": [
+                            "TEXT type \u2014 target holdings_record__t.id is UUID. Cast the UUID side: ii.holdings_record_id = hr.id::text"
+                        ]
+                    },
+                    "material_type_id": {
+                        "warnings": [
+                            "TEXT type \u2014 target material_type__t.id is UUID. Filter with subquery: ii.material_type_id = (SELECT id::text FROM inventory.material_type__t WHERE LOWER(name) = 'book' LIMIT 1)"
+                        ]
+                    },
+                    "permanent_location_id": {
+                        "warnings": [
+                            "TEXT type \u2014 target location__t.id is UUID. Cast the UUID side: ii.permanent_location_id = loc.id::text"
+                        ]
+                    }
+                }
+            }
+        },
+        "inventory_libraries": {
+            "contractKey": "inventory_libraries",
+            "sqlTable": "inventory.loclibrary__t",
+            "ldp1Table": "inventory_libraries",
+            "entityKind": "base",
+            "grain": "library",
+            "canonicalLabel": "Inventory Libraries",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "campus_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "code",
+                    "type": "varchar"
+                },
+                {
+                    "name": "name",
+                    "type": "varchar"
+                },
+                {
+                    "name": "data",
+                    "type": "json"
+                }
+            ],
+            "semanticHints": {
+                "description": "Library locations within a campus (e.g. Young Science Library, Neilson Library). Child of loccampus.",
+                "terms": [
+                    "library"
+                ],
+                "preferredApproach": [],
+                "columnSemantics": {
+                    "code": {
+                        "sampleValues": [
+                            "ACASP",
+                            "ACDEP",
+                            "ACFAY",
+                            "ACFST",
+                            "ACMED",
+                            "ACMUS",
+                            "ACRUS",
+                            "ACSCI",
+                            "FCANN",
+                            "FCDPT",
+                            "FCWWW",
+                            "HCASC",
+                            "HCLIB",
+                            "HCMED",
+                            "MHASC",
+                            "MHLIB",
+                            "MHLRC",
+                            "MHPSL",
+                            "MHSKM",
+                            "REN",
+                            "SCANN",
+                            "SCHIL",
+                            "SCJOS",
+                            "SCNLS",
+                            "SCPC"
+                        ],
+                        "valueSemantics": {
+                            "kind": "high_value_lookup",
+                            "promptValueLimit": 20,
+                            "sampleValueCount": 25
+                        }
+                    },
+                    "name": {
+                        "sampleValues": [
+                            "AC Archives & Special Coll.",
+                            "AC Center for Russian Culture",
+                            "AC Depository",
+                            "AC Fayerweather Equipment",
+                            "AC Frost Library",
+                            "AC Multimedia Services Equipment",
+                            "AC Music Library",
+                            "AC Science Library",
+                            "FC Depository",
+                            "FC Repository Annex",
+                            "Five Colleges eresources",
+                            "HC Archives & Special Collections",
+                            "HC Harold Johnson Library",
+                            "HC Media",
+                            "MH Archives & Special Collections",
+                            "MH Language Resource Center",
+                            "MH Main Library",
+                            "MH Pierce Stevens Lib-Pratt",
+                            "MH Skinner Museum",
+                            "RC Rennisance Center",
+                            "SC Annex",
+                            "SC Hillyer Art Library",
+                            "SC Josten Library",
+                            "SC Neilson Library",
+                            "SC Special Collections"
+                        ],
+                        "terms": [
+                            "library"
+                        ],
+                        "valueSemantics": {
+                            "kind": "high_value_lookup",
+                            "promptValueLimit": 20,
+                            "sampleValueCount": 25
+                        }
+                    }
+                }
+            }
+        },
+        "inventory_locations": {
+            "contractKey": "inventory_locations",
+            "sqlTable": "inventory.location__t",
+            "ldp1Table": "inventory_locations",
+            "entityKind": "base",
+            "grain": "location",
+            "canonicalLabel": "Inventory Locations",
+            "columns": [
+                {
+                    "name": "id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "campus_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "code",
+                    "type": "varchar"
+                },
+                {
+                    "name": "description",
+                    "type": "varchar"
+                },
+                {
+                    "name": "discovery_display_name",
+                    "type": "varchar"
+                },
+                {
+                    "name": "institution_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "is_active",
+                    "type": "bool"
+                },
+                {
+                    "name": "library_id",
+                    "type": "varchar"
+                },
+                {
+                    "name": "name",
+                    "type": "varchar"
+                },
+                {
+                    "name": "primary_service_point",
+                    "type": "varchar"
+                },
+                {
+                    "name": "data",
+                    "type": "json"
+                }
+            ],
+            "semanticHints": {
+                "description": "Specific shelving/storage locations within a library (e.g. Main Stacks, Reserve Desk). Lowest level of location hierarchy.",
+                "terms": [
+                    "consortial circulation",
+                    "item location",
+                    "location"
+                ],
+                "preferredApproach": [],
+                "columnSemantics": {
+                    "campus_id": {
+                        "terms": [
+                            "consortial circulation"
+                        ]
+                    },
+                    "code": {
+                        "sampleValues": [
+                            "AAFRI",
+                            "AASLV",
+                            "ACAMB",
+                            "ACBD",
+                            "ACDEP",
+                            "ACDPM",
+                            "ACFAY",
+                            "ACFPS",
+                            "ACFRR",
+                            "ACMEAD",
+                            "ACMMS",
+                            "ACMSD",
+                            "ACNBS",
+                            "ACRAC",
+                            "ACRCP",
+                            "ACRHC",
+                            "ACRSC",
+                            "AEBEBL",
+                            "AEVANS",
+                            "AFAS",
+                            "AFASD",
+                            "AFASF",
+                            "AFASH",
+                            "AFASL",
+                            "AFASO"
+                        ],
+                        "valueSemantics": {
+                            "kind": "high_value_lookup",
+                            "promptValueLimit": 20,
+                            "sampleValueCount": 25
+                        }
+                    },
+                    "id": {
+                        "derivedComments": [
+                            "The holdings ID"
+                        ],
+                        "derivedFrom": [
+                            "holdings_ext"
+                        ],
+                        "terms": [
+                            "item location"
+                        ]
+                    },
+                    "name": {
+                        "sampleValues": [
+                            "AC African Writers eBooks",
+                            "AC American Slavery Collection",
+                            "AC Archives & Special Collections",
+                            "AC Archives & Special Collections Depository",
+                            "AC Archives & Special Collections Exhibit",
+                            "AC Archives & Special Collections File",
+                            "AC Archives & Special Collections Fitch",
+                            "AC Archives & Special Collections Higgins",
+                            "AC Archives & Special Collections Original Library",
+                            "AC Archives & Special Collections Reference",
+                            "AC Archives & Special Collections Theses",
+                            "AC Archives & Special Collections Vault",
+                            "AC Archives & Special Collections Wordsworth",
+                            "AC Cambridge Companions eBooks",
+                            "AC Center for Russian Culture",
+                            "AC Center for Russian Culture Afferica Collection",
+                            "AC Center for Russian Culture Allen Collection",
+                            "AC Center for Russian Culture Alma Law Theater Collection",
+                            "AC Center for Russian Culture Anti-Racism Library",
+                            "AC Center for Russian Culture Art Collection",
+                            "AC Center for Russian Culture Contemporary Poetry Collection",
+                            "AC Center for Russian Culture Fleishman Collection",
+                            "AC Center for Russian Culture Greenleaf Collection",
+                            "AC Center for Russian Culture Hughes Collection",
+                            "AC Center for Russian Culture Ivas"
+                        ],
+                        "terms": [
+                            "location"
+                        ],
+                        "valueSemantics": {
+                            "kind": "high_value_lookup",
+                            "promptValueLimit": 20,
+                            "sampleValueCount": 25
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "edges": [
+        {
+            "key": "inventory_holdings.effective_location_id->inventory_locations.id",
+            "from": "inventory_holdings",
+            "to": "inventory_locations",
+            "localColumn": "effective_location_id",
+            "targetColumn": "id",
+            "edgeKind": "foreign_key",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "foreign_key_reference",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "folio_schema",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "foreignKey": "inventory_holdings_effective_location_id_fkey"
+        },
+        {
+            "key": "inventory_holdings.id->inventory_items.holdings_record_id",
+            "from": "inventory_holdings",
+            "to": "inventory_items",
+            "localColumn": "id",
+            "targetColumn": "holdings_record_id",
+            "edgeKind": "explicit_override",
+            "joinCardinality": "one_to_many",
+            "semanticRole": "holdings_to_items",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "override_map",
+            "typeCompatibility": "cast_required",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "castRule": {
+                "castSide": "local",
+                "comparisonExample": "hr.id::text = ii.holdings_record_id",
+                "localType": "uuid",
+                "strategy": "cast_local_uuid_to_text",
+                "targetType": "text"
+            }
+        },
+        {
+            "key": "inventory_holdings.instance_id->inventory_instances.id",
+            "from": "inventory_holdings",
+            "to": "inventory_instances",
+            "localColumn": "instance_id",
+            "targetColumn": "id",
+            "edgeKind": "foreign_key",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "foreign_key_reference",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "folio_schema",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "foreignKey": "inventory_holdings_instance_id_fkey"
+        },
+        {
+            "key": "inventory_holdings.permanent_location_id->inventory_locations.id",
+            "from": "inventory_holdings",
+            "to": "inventory_locations",
+            "localColumn": "permanent_location_id",
+            "targetColumn": "id",
+            "edgeKind": "foreign_key",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "foreign_key_reference",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "folio_schema",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "foreignKey": "inventory_holdings_permanent_location_id_fkey"
+        },
+        {
+            "key": "inventory_holdings.temporary_location_id->inventory_locations.id",
+            "from": "inventory_holdings",
+            "to": "inventory_locations",
+            "localColumn": "temporary_location_id",
+            "targetColumn": "id",
+            "edgeKind": "inferred_convention",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "holdings_to_location",
+            "confidence": "medium",
+            "supportsDeterministicCompilation": false,
+            "source": "naming_convention",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "inferenceBasis": {
+                "columnSuffix": "temporary_location_id",
+                "matchedStem": "temporary_location",
+                "targetContractKey": "inventory_locations"
+            }
+        },
+        {
+            "key": "inventory_holdings_record__t__holdings_items.effective_location_id->inventory_locations.id",
+            "from": "inventory_holdings_record__t__holdings_items",
+            "to": "inventory_locations",
+            "localColumn": "effective_location_id",
+            "targetColumn": "id",
+            "edgeKind": "inferred_convention",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "holdings_record__t__holdings_item_to_location",
+            "confidence": "medium",
+            "supportsDeterministicCompilation": false,
+            "source": "naming_convention",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "uuid",
+            "targetType": "varchar",
+            "inferenceBasis": {
+                "columnSuffix": "effective_location_id",
+                "matchedStem": "effective_location",
+                "targetContractKey": "inventory_locations"
+            }
+        },
+        {
+            "key": "inventory_holdings_record__t__holdings_items.id->inventory_holdings.id",
+            "from": "inventory_holdings_record__t__holdings_items",
+            "to": "inventory_holdings",
+            "localColumn": "id",
+            "targetColumn": "id",
+            "edgeKind": "subtable_parent",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "subtable_to_parent",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "subtable_cache",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "uuid",
+            "targetType": "varchar"
+        },
+        {
+            "key": "inventory_holdings_record__t__holdings_items.instance_id->inventory_instances.id",
+            "from": "inventory_holdings_record__t__holdings_items",
+            "to": "inventory_instances",
+            "localColumn": "instance_id",
+            "targetColumn": "id",
+            "edgeKind": "inferred_convention",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "holdings_record__t__holdings_item_to_instance",
+            "confidence": "medium",
+            "supportsDeterministicCompilation": false,
+            "source": "naming_convention",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "uuid",
+            "targetType": "varchar",
+            "inferenceBasis": {
+                "columnSuffix": "instance_id",
+                "matchedStem": "instance",
+                "targetContractKey": "inventory_instances"
+            }
+        },
+        {
+            "key": "inventory_holdings_record__t__holdings_items.permanent_location_id->inventory_locations.id",
+            "from": "inventory_holdings_record__t__holdings_items",
+            "to": "inventory_locations",
+            "localColumn": "permanent_location_id",
+            "targetColumn": "id",
+            "edgeKind": "inferred_convention",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "holdings_record__t__holdings_item_to_location",
+            "confidence": "medium",
+            "supportsDeterministicCompilation": false,
+            "source": "naming_convention",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "uuid",
+            "targetType": "varchar",
+            "inferenceBasis": {
+                "columnSuffix": "permanent_location_id",
+                "matchedStem": "permanent_location",
+                "targetContractKey": "inventory_locations"
+            }
+        },
+        {
+            "key": "inventory_holdings_record__t__holdings_items.temporary_location_id->inventory_locations.id",
+            "from": "inventory_holdings_record__t__holdings_items",
+            "to": "inventory_locations",
+            "localColumn": "temporary_location_id",
+            "targetColumn": "id",
+            "edgeKind": "inferred_convention",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "holdings_record__t__holdings_item_to_location",
+            "confidence": "medium",
+            "supportsDeterministicCompilation": false,
+            "source": "naming_convention",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "uuid",
+            "targetType": "varchar",
+            "inferenceBasis": {
+                "columnSuffix": "temporary_location_id",
+                "matchedStem": "temporary_location",
+                "targetContractKey": "inventory_locations"
+            }
+        },
+        {
+            "key": "inventory_instance__t__contributors.contributors__contributor_name_type_id->inventory_contributor_name_types.id",
+            "from": "inventory_instance__t__contributors",
+            "to": "inventory_contributor_name_types",
+            "localColumn": "contributors__contributor_name_type_id",
+            "targetColumn": "id",
+            "edgeKind": "explicit_override",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "contributor_name_type_lookup",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "override_map",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "uuid",
+            "targetType": "varchar"
+        },
+        {
+            "key": "inventory_instance__t__contributors.id->inventory_instances.id",
+            "from": "inventory_instance__t__contributors",
+            "to": "inventory_instances",
+            "localColumn": "id",
+            "targetColumn": "id",
+            "edgeKind": "subtable_parent",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "subtable_to_parent",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "subtable_cache",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "uuid",
+            "targetType": "varchar"
+        },
+        {
+            "key": "inventory_items.effective_location_id->inventory_locations.id",
+            "from": "inventory_items",
+            "to": "inventory_locations",
+            "localColumn": "effective_location_id",
+            "targetColumn": "id",
+            "edgeKind": "explicit_override",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "item_effective_location",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "override_map",
+            "typeCompatibility": "cast_required",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "castRule": {
+                "castSide": "target",
+                "comparisonExample": "ii.effective_location_id = loc.id::text",
+                "localType": "text",
+                "strategy": "cast_target_uuid_to_text",
+                "targetType": "uuid"
+            }
+        },
+        {
+            "key": "inventory_items.holdings_record_id->inventory_holdings.id",
+            "from": "inventory_items",
+            "to": "inventory_holdings",
+            "localColumn": "holdings_record_id",
+            "targetColumn": "id",
+            "edgeKind": "foreign_key",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "foreign_key_reference",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "folio_schema",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "foreignKey": "inventory_items_holdings_record_id_fkey"
+        },
+        {
+            "key": "inventory_items.permanent_location_id->inventory_locations.id",
+            "from": "inventory_items",
+            "to": "inventory_locations",
+            "localColumn": "permanent_location_id",
+            "targetColumn": "id",
+            "edgeKind": "inferred_convention",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "item_to_location",
+            "confidence": "medium",
+            "supportsDeterministicCompilation": false,
+            "source": "naming_convention",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "inferenceBasis": {
+                "columnSuffix": "permanent_location_id",
+                "matchedStem": "permanent_location",
+                "targetContractKey": "inventory_locations"
+            }
+        },
+        {
+            "key": "inventory_items.temporary_location_id->inventory_locations.id",
+            "from": "inventory_items",
+            "to": "inventory_locations",
+            "localColumn": "temporary_location_id",
+            "targetColumn": "id",
+            "edgeKind": "inferred_convention",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "item_to_location",
+            "confidence": "medium",
+            "supportsDeterministicCompilation": false,
+            "source": "naming_convention",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "inferenceBasis": {
+                "columnSuffix": "temporary_location_id",
+                "matchedStem": "temporary_location",
+                "targetContractKey": "inventory_locations"
+            }
+        },
+        {
+            "key": "inventory_libraries.campus_id->inventory_campuses.id",
+            "from": "inventory_libraries",
+            "to": "inventory_campuses",
+            "localColumn": "campus_id",
+            "targetColumn": "id",
+            "edgeKind": "explicit_override",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "library_to_campus",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "override_map",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "varchar",
+            "targetType": "varchar"
+        },
+        {
+            "key": "inventory_locations.campus_id->inventory_campuses.id",
+            "from": "inventory_locations",
+            "to": "inventory_campuses",
+            "localColumn": "campus_id",
+            "targetColumn": "id",
+            "edgeKind": "foreign_key",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "foreign_key_reference",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "folio_schema",
+            "typeCompatibility": "exact",
+            "localType": "varchar",
+            "targetType": "varchar",
+            "foreignKey": "inventory_locations_campus_id_fkey"
+        },
+        {
+            "key": "inventory_locations.library_id->inventory_libraries.id",
+            "from": "inventory_locations",
+            "to": "inventory_libraries",
+            "localColumn": "library_id",
+            "targetColumn": "id",
+            "edgeKind": "explicit_override",
+            "joinCardinality": "many_to_one",
+            "semanticRole": "location_to_library",
+            "confidence": "high",
+            "supportsDeterministicCompilation": true,
+            "source": "override_map",
+            "typeCompatibility": "assumed_compatible",
+            "localType": "varchar",
+            "targetType": "varchar"
+        }
+    ]
+}

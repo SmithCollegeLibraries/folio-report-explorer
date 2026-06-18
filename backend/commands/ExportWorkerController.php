@@ -248,9 +248,12 @@ class ExportWorkerController extends Controller
     }
 
     /**
-     * Replace/append top-level LIMIT for export mode, and strip any top-level
-     * ORDER BY clause (sorting all rows before streaming is extremely expensive
-     * and unnecessary for a CSV download).
+     * Prepare SQL for export mode.
+     *
+     * If the original query already has an explicit top-level LIMIT, preserve
+     * it exactly so semantic top-N requests like "top 10" do not get expanded
+     * into a full export and lose their ORDER BY semantics. Only unbounded
+     * queries receive the broad export cap and ORDER BY stripping.
      *
      * @param string $sql
      * @param int $maxRows
@@ -259,11 +262,38 @@ class ExportWorkerController extends Controller
     private function applyExportLimit($sql, $maxRows)
     {
         $trimmed = rtrim($sql, "; \n\t");
-        $trimmed = $this->stripTopLevelOrderBy($trimmed);
-        if (preg_match('/\bLIMIT\s+\d+\s*$/i', $trimmed)) {
-            return preg_replace('/\bLIMIT\s+\d+\s*$/i', 'LIMIT ' . (int)$maxRows, $trimmed);
+        if ($this->hasTopLevelLimit($trimmed)) {
+            return $trimmed;
         }
+
+        $trimmed = $this->stripTopLevelOrderBy($trimmed);
         return $trimmed . "\nLIMIT " . (int)$maxRows;
+    }
+
+    private function hasTopLevelLimit(string $sql): bool
+    {
+        $depth = 0;
+        $len = strlen($sql);
+
+        for ($i = 0; $i < $len; $i++) {
+            $c = $sql[$i];
+            if ($c === '(') {
+                $depth++;
+                continue;
+            }
+            if ($c === ')') {
+                $depth--;
+                continue;
+            }
+
+            if ($depth === 0 && strtoupper(substr($sql, $i, 5)) === 'LIMIT') {
+                if (preg_match('/^LIMIT\s+\d+\b/i', substr($sql, $i))) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

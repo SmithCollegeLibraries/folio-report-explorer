@@ -176,6 +176,13 @@ $config = [
                 [
                     'class' => 'yii\log\FileTarget',
                     'levels' => ['error', 'warning'],
+                    'except' => ['nl2sql.telemetry'],
+                ],
+                [
+                    'class' => 'yii\log\FileTarget',
+                    'categories' => ['nl2sql.telemetry'],
+                    'levels' => ['error', 'warning', 'info'],
+                    'logVars' => [],
                 ],
             ],
         ],

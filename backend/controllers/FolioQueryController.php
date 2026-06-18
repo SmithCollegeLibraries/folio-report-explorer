@@ -8,6 +8,7 @@ use yii\web\Response;
 use app\services\FolioSchemaService;
 use app\services\SqlBuilderService;
 use app\services\GeminiService;
+use app\services\Nl2SqlOpsDashboardService;
 use app\services\SettingsService;
 use app\services\DatabaseRetryService;
 use app\services\IndexRecommendationService;
@@ -85,7 +86,7 @@ class FolioQueryController extends Controller
                     [
                         'allow' => true,
                         'actions' => [
-                            'settings', 'settings-save', 'settings-test',
+                            'settings', 'settings-save', 'settings-test', 'settings-nl2sql-dashboard',
                             'training-list', 'training-detail', 'training-create',
                             'training-update', 'training-delete', 'training-correct',
                             'report-create', 'report-update', 'report-delete',
@@ -445,6 +446,10 @@ class FolioQueryController extends Controller
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
         }
 
+        if ($source === 'nl') {
+            $sql = GeminiService::normalizeGeneratedSql((string)$sql);
+        }
+
         // Safety validation
         try {
             SqlBuilderService::validateSafety($sql);
@@ -579,6 +584,10 @@ class FolioQueryController extends Controller
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
         }
 
+        if ($source === 'nl') {
+            $sql = GeminiService::normalizeGeneratedSql((string)$sql);
+        }
+
         // Safety validation
         try {
             SqlBuilderService::validateSafety($sql);
@@ -602,8 +611,12 @@ class FolioQueryController extends Controller
                 $thresholdCost = (float) (Yii::$app->params['exportCostThreshold'] ?? 500000);
                 $estimatedRows = $estimate['rows'] ?? null;
                 $estimatedCost = $estimate['cost'] ?? null;
+                $explicitLimit = $this->extractTopLevelLimit($sql);
                 $isLarge = ($estimatedRows !== null && $estimatedRows > $thresholdRows)
                     || ($estimatedCost !== null && $estimatedCost > $thresholdCost);
+                if ($explicitLimit !== null && $explicitLimit <= $thresholdRows) {
+                    $isLarge = false;
+                }
                 if ($isLarge) {
                     $outputMode = 'file';
                 }
@@ -647,6 +660,32 @@ class FolioQueryController extends Controller
 
         Yii::$app->response->statusCode = 202;
         return $job->toStatusArray();
+    }
+
+    private function extractTopLevelLimit(string $sql): ?int
+    {
+        $depth = 0;
+        $len = strlen($sql);
+
+        for ($i = 0; $i < $len; $i++) {
+            $char = $sql[$i];
+            if ($char === '(') {
+                $depth++;
+                continue;
+            }
+            if ($char === ')') {
+                $depth--;
+                continue;
+            }
+
+            if ($depth === 0 && strtoupper(substr($sql, $i, 5)) === 'LIMIT') {
+                if (preg_match('/^LIMIT\s+(\d+)\b/i', substr($sql, $i), $matches) === 1) {
+                    return (int) $matches[1];
+                }
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -747,7 +786,7 @@ class FolioQueryController extends Controller
     public function actionNl()
     {
         $body = Yii::$app->request->getBodyParams();
-        $prompt = $body['prompt'] ?? '';
+        $prompt = $this->normalizeNlRequestText($body['prompt'] ?? null);
         $userId = $this->getCurrentUserId();
         $includeSuggestionsRaw = $body['includeSuggestions'] ?? true;
         $includeSuggestions = filter_var($includeSuggestionsRaw, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
@@ -755,7 +794,7 @@ class FolioQueryController extends Controller
             $includeSuggestions = true;
         }
 
-        if (empty($prompt)) {
+        if ($prompt === null || $prompt === '') {
             Yii::$app->response->statusCode = 400;
             return ['error' => 'A "prompt" is required'];
         }
@@ -794,7 +833,13 @@ class FolioQueryController extends Controller
         }
 
         // Resolve campus: request body overrides user's saved preference
-        $campus = $body['campus'] ?? null;
+        $campusProvided = array_key_exists('campus', $body);
+        $campus = $this->normalizeNlRequestText($body['campus'] ?? null, true);
+        if ($campusProvided && $campus === null) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'If provided, "campus" must be a string'];
+        }
+
         if ($campus === null) {
             if ($userId) {
                 $user = User::findOne($userId);
@@ -810,8 +855,10 @@ class FolioQueryController extends Controller
                 $result['dataSource'] = 'folio';
             }
 
-            $result['suggestions'] = [];
-            if ($includeSuggestions) {
+            $result['suggestions'] = is_array($result['suggestions'] ?? null)
+                ? $result['suggestions']
+                : [];
+            if ($includeSuggestions && empty($result['needsClarification']) && !empty($result['sql'])) {
                 try {
                     $result['suggestions'] = GeminiService::suggestFollowUpQueries(
                         $prompt,
@@ -830,11 +877,44 @@ class FolioQueryController extends Controller
             return $result;
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
-            return ['error' => $e->getMessage()];
+            return ['error' => $this->formatNlGenerationErrorMessage($e->getMessage())];
         } catch (\RuntimeException $e) {
             Yii::$app->response->statusCode = 500;
             return ['error' => $e->getMessage()];
         }
+    }
+
+    private function normalizeNlRequestText($value, bool $allowNull = false)
+    {
+        if ($value === null) {
+            return $allowNull ? null : '';
+        }
+
+        if (!is_string($value)) {
+            return null;
+        }
+
+        return trim($value);
+    }
+
+    /**
+     * Hide internal blocked-schema/table diagnostics from end users.
+     *
+     * @param string $message
+     * @return string
+     */
+    private function formatNlGenerationErrorMessage($message)
+    {
+        $message = trim((string)$message);
+        if ($message === '') {
+            return 'The request could not be translated into a supported FOLIO query.';
+        }
+
+        if (preg_match('/^Query references blocked (schema|table|schema table):/i', $message)) {
+            return 'The request could not be translated into a supported FOLIO query. Try asking for inventory, circulation, acquisitions, or source-record content using supported FOLIO data.';
+        }
+
+        return $message;
     }
 
     /**
@@ -1472,6 +1552,40 @@ class FolioQueryController extends Controller
         }
 
         return $results;
+    }
+
+    /**
+     * GET /api/settings/nl2sql-dashboard — compact operator dashboard for shadow quality.
+     */
+    public function actionSettingsNl2sqlDashboard()
+    {
+        $historyFailures = [];
+
+        try {
+            $jobs = QueryJob::find()
+                ->select(['id', 'name', 'source', 'completed_at', 'error_message'])
+                ->where(['status' => 'failed'])
+                ->orderBy(['completed_at' => SORT_DESC, 'created_at' => SORT_DESC])
+                ->limit(10)
+                ->asArray()
+                ->all();
+
+            $historyFailures = array_map(function (array $job): array {
+                return [
+                    'jobId' => (string)($job['id'] ?? ''),
+                    'name' => (string)($job['name'] ?? ''),
+                    'source' => (string)($job['source'] ?? ''),
+                    'completedAt' => (string)($job['completed_at'] ?? ''),
+                    'errorMessage' => (string)($job['error_message'] ?? ''),
+                ];
+            }, $jobs);
+        } catch (\Throwable $e) {
+            Yii::warning('Failed to load recent query-history failures for NL2SQL dashboard: ' . $e->getMessage(), 'nl2sql.dashboard');
+        }
+
+        return Nl2SqlOpsDashboardService::buildDashboard(SettingsService::forDisplay(), [
+            'historyFailures' => $historyFailures,
+        ]);
     }
 
     // ─── Report Templates ─────────────────────────────────────────

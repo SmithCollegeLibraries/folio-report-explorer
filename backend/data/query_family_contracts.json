@@ -1,0 +1,301 @@
+{
+    "metadata": {
+        "artifactVersion": 1,
+        "generatedAt": "2026-04-22T16:15:00+00:00",
+        "sourceGraphArtifactVersion": 2,
+        "contractCount": 5
+    },
+    "contracts": {
+        "circulation_trends_matrix": {
+            "familyKey": "circulation_trends_matrix",
+            "description": "Library-scoped yearly circulation trend matrices grouped by primary call number class.",
+            "graph": {
+                "requiredEntities": [
+                    "circulation_loans",
+                    "inventory_items",
+                    "inventory_locations",
+                    "inventory_libraries",
+                    "inventory_campuses"
+                ],
+                "canonicalPath": [
+                    "circulation_loans",
+                    "inventory_items",
+                    "inventory_locations",
+                    "inventory_libraries",
+                    "inventory_campuses"
+                ],
+                "scopeAnchor": "circulation_loans"
+            },
+            "slots": {
+                "required": [
+                    "library",
+                    "grouping_dimension",
+                    "year_buckets"
+                ],
+                "supported": [
+                    "campus",
+                    "library",
+                    "location",
+                    "grouping_dimension",
+                    "year_buckets",
+                    "circulation_source_policy"
+                ]
+            },
+            "outputs": {
+                "allowed": [
+                    "yearly_circulation_matrix"
+                ],
+                "holdingsScoped": []
+            },
+            "scopeRule": "circulation_trends_by_call_number_class",
+            "matchPolicy": {
+                "default": "case_insensitive_contains",
+                "supported": [
+                    "case_insensitive_contains",
+                    "exact_phrase"
+                ]
+            },
+            "operatorPolicy": {
+                "joins": "use_canonical_path_only",
+                "unsupportedBehavior": "fail_contract_selection"
+            }
+        },
+        "circulation_top_items": {
+            "familyKey": "circulation_top_items",
+            "description": "Library-scoped ranked circulation lists for a specific material type.",
+            "graph": {
+                "requiredEntities": [
+                    "inventory_campuses",
+                    "inventory_holdings",
+                    "inventory_instances",
+                    "inventory_items",
+                    "inventory_libraries",
+                    "inventory_locations",
+                    "inventory_material_types"
+                ],
+                "canonicalPath": [
+                    "inventory_instances",
+                    "inventory_holdings",
+                    "inventory_items",
+                    "inventory_locations",
+                    "inventory_libraries",
+                    "inventory_campuses"
+                ],
+                "scopeAnchor": "inventory_holdings"
+            },
+            "slots": {
+                "required": [
+                    "library",
+                    "material_type"
+                ],
+                "supported": [
+                    "campus",
+                    "library",
+                    "location",
+                    "material_type",
+                    "limit"
+                ]
+            },
+            "outputs": {
+                "allowed": [
+                    "ranked_circulation_items"
+                ],
+                "holdingsScoped": []
+            },
+            "scopeRule": "circulation_top_items_by_total_circulation",
+            "matchPolicy": {
+                "default": "case_insensitive_contains",
+                "supported": [
+                    "case_insensitive_contains",
+                    "exact_phrase"
+                ]
+            },
+            "operatorPolicy": {
+                "joins": "use_canonical_path_only",
+                "unsupportedBehavior": "fail_contract_selection"
+            }
+        },
+        "inventory_library_location_listing": {
+            "familyKey": "inventory_library_location_listing",
+            "description": "Library or location-scoped inventory listings that return bibliographic and item identifiers through the canonical holdings path.",
+            "graph": {
+                "requiredEntities": [
+                    "inventory_campuses",
+                    "inventory_holdings",
+                    "inventory_instances",
+                    "inventory_items",
+                    "inventory_libraries",
+                    "inventory_locations"
+                ],
+                "canonicalPath": [
+                    "inventory_instances",
+                    "inventory_holdings",
+                    "inventory_items",
+                    "inventory_locations",
+                    "inventory_libraries",
+                    "inventory_campuses"
+                ],
+                "scopeAnchor": "inventory_holdings"
+            },
+            "slots": {
+                "required": [
+                    "library"
+                ],
+                "supported": [
+                    "campus",
+                    "library",
+                    "location",
+                    "location_code"
+                ]
+            },
+            "outputs": {
+                "allowed": [
+                    "author",
+                    "barcode",
+                    "contributor_name",
+                    "instance_hrid",
+                    "instance_number",
+                    "pub_date",
+                    "publication_date",
+                    "title"
+                ],
+                "holdingsScoped": [
+                    "barcode"
+                ]
+            },
+            "scopeRule": "inventory_listing_via_holdings_scope",
+            "matchPolicy": {
+                "default": "case_insensitive_contains",
+                "supported": [
+                    "case_insensitive_contains",
+                    "exact_phrase"
+                ]
+            },
+            "operatorPolicy": {
+                "joins": "use_canonical_path_only",
+                "unsupportedBehavior": "fail_contract_selection"
+            }
+        },
+        "inventory_contributor_campus_item_barcode": {
+            "familyKey": "inventory_contributor_campus_item_barcode",
+            "description": "Contributor plus campus inventory queries that return item or barcode outputs through a holdings-scoped canonical path.",
+            "graph": {
+                "requiredEntities": [
+                    "inventory_campuses",
+                    "inventory_contributor_name_types",
+                    "inventory_holdings",
+                    "inventory_instance__t__contributors",
+                    "inventory_instances",
+                    "inventory_items",
+                    "inventory_libraries",
+                    "inventory_locations"
+                ],
+                "canonicalPath": [
+                    "inventory_instances",
+                    "inventory_instance__t__contributors",
+                    "inventory_contributor_name_types",
+                    "inventory_holdings",
+                    "inventory_items",
+                    "inventory_locations",
+                    "inventory_libraries",
+                    "inventory_campuses"
+                ],
+                "scopeAnchor": "inventory_holdings"
+            },
+            "slots": {
+                "required": [
+                    "campus",
+                    "contributor_name"
+                ],
+                "supported": [
+                    "campus",
+                    "contributor_name",
+                    "contributor_name_type",
+                    "material_type"
+                ]
+            },
+            "outputs": {
+                "allowed": [
+                    "barcode",
+                    "contributor_name",
+                    "instance_hrid",
+                    "item_id",
+                    "publication_date",
+                    "title"
+                ],
+                "holdingsScoped": [
+                    "barcode",
+                    "item_id"
+                ]
+            },
+            "scopeRule": "outputs_via_qualifying_holdings",
+            "matchPolicy": {
+                "default": "case_insensitive_contains",
+                "supported": [
+                    "case_insensitive_contains",
+                    "exact_phrase"
+                ]
+            },
+            "operatorPolicy": {
+                "joins": "use_canonical_path_only",
+                "unsupportedBehavior": "fail_contract_selection"
+            }
+        },
+        "inventory_collection_age": {
+            "familyKey": "inventory_collection_age",
+            "description": "Library or collection-scoped inventory age queries that compute average item age from bibliographic publication year.",
+            "graph": {
+                "requiredEntities": [
+                    "inventory_campuses",
+                    "inventory_holdings",
+                    "inventory_instance__t__publication",
+                    "inventory_instances",
+                    "inventory_items",
+                    "inventory_libraries",
+                    "inventory_locations"
+                ],
+                "canonicalPath": [
+                    "inventory_items",
+                    "inventory_holdings",
+                    "inventory_instances",
+                    "inventory_instance__t__publication",
+                    "inventory_locations",
+                    "inventory_libraries",
+                    "inventory_campuses"
+                ],
+                "scopeAnchor": "inventory_holdings"
+            },
+            "slots": {
+                "required": [
+                    "library"
+                ],
+                "supported": [
+                    "campus",
+                    "library",
+                    "location",
+                    "age_basis",
+                    "aggregation",
+                    "unit"
+                ]
+            },
+            "outputs": {
+                "allowed": [
+                    "average_age_years"
+                ],
+                "holdingsScoped": []
+            },
+            "scopeRule": "collection_age_via_holdings_publication_year",
+            "matchPolicy": {
+                "default": "case_insensitive_contains",
+                "supported": [
+                    "case_insensitive_contains",
+                    "exact_phrase"
+                ]
+            },
+            "operatorPolicy": {
+                "joins": "use_canonical_path_only",
+                "unsupportedBehavior": "fail_contract_selection"
+            }
+        }
+    }
+}

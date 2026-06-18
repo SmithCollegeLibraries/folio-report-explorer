@@ -437,6 +437,54 @@ class SqlBuilderService
                 }
 
                 if ($bestPath === null) {
+                    $subtables = FolioSchemaService::discoverSubtables();
+                    $targetSubtable = $subtables[$target] ?? null;
+                    $targetParent = $targetSubtable['parent'] ?? null;
+                    if ($targetParent !== null) {
+                        foreach (array_keys($joined) as $source) {
+                            $sourceMetadb = FolioSchemaService::translateToMetadb($source);
+                            if ($source === $targetParent || $sourceMetadb === $targetParent) {
+                                $toAlias = $aliases[$target] ?? $target;
+                                $fromAlias = $aliases[$source] ?? $source;
+                                $toMetadb = FolioSchemaService::translateToMetadb($target);
+                                $sql .= "\nJOIN {$toMetadb} {$toAlias}";
+                                $sql .= "\n  ON {$toAlias}.id = {$fromAlias}.id";
+                                $joined[$target] = true;
+                                continue 2;
+                            }
+                        }
+                    }
+
+                    $targetMetadb = FolioSchemaService::translateToMetadb($target);
+                    $targetTablePart = strpos($targetMetadb, '.') !== false ? explode('.', $targetMetadb, 2)[1] : $targetMetadb;
+                    $targetStem = preg_replace('/__t$/', '', (string)$targetTablePart);
+                    foreach (array_keys($joined) as $source) {
+                        $sourceSubtable = $subtables[$source] ?? null;
+                        if ($sourceSubtable === null) {
+                            continue;
+                        }
+
+                        foreach (($sourceSubtable['columns'] ?? []) as $column) {
+                            $columnName = (string)($column['name'] ?? '');
+                            if ($columnName === '' || preg_match('/_id$/', $columnName) !== 1) {
+                                continue;
+                            }
+
+                            $columnStem = preg_replace('/^.*__/', '', $columnName);
+                            $columnStem = preg_replace('/_id$/', '', $columnStem);
+                            if ($columnStem !== $targetStem) {
+                                continue;
+                            }
+
+                            $toAlias = $aliases[$target] ?? $target;
+                            $fromAlias = $aliases[$source] ?? $source;
+                            $sql .= "\nJOIN {$targetMetadb} {$toAlias}";
+                            $sql .= "\n  ON {$toAlias}.id = {$fromAlias}.{$columnName}";
+                            $joined[$target] = true;
+                            continue 3;
+                        }
+                    }
+
                     throw new \InvalidArgumentException(
                         "Cannot find FK path to join table '{$target}'"
                     );
@@ -459,9 +507,9 @@ class SqlBuilderService
             // Explicit joins — also translate table names
             // Supports optional join_type: 'JOIN' (default) or 'LEFT JOIN'
             foreach ($joins as $j) {
-                $toTbl = $j['to_table'] ?? '';
+                $toTbl = FolioSchemaService::fuzzyMatch($j['to_table'] ?? '') ?: ($j['to_table'] ?? '');
                 $toCol = $j['to_column'] ?? '';
-                $fromTbl = $j['from_table'] ?? '';
+                $fromTbl = FolioSchemaService::fuzzyMatch($j['from_table'] ?? '') ?: ($j['from_table'] ?? '');
                 $fromCol = $j['from_column'] ?? '';
                 $toAlias = $aliases[$toTbl] ?? $toTbl;
                 $fromAlias = $aliases[$fromTbl] ?? $fromTbl;
@@ -512,6 +560,7 @@ class SqlBuilderService
                 $values = is_array($value) ? $value : explode(',', $value);
                 $placeholders = [];
                 foreach ($values as $v) {
+                    self::validateLiteralValue($v, "filters.{$table}.{$column}");
                     $paramName = ':p' . $paramIndex++;
                     $placeholders[] = $paramName;
                     $params[$paramName] = trim($v);
@@ -522,12 +571,20 @@ class SqlBuilderService
                 if (count($values) !== 2) {
                     throw new \InvalidArgumentException("BETWEEN requires exactly 2 values");
                 }
+                self::validateLiteralValue($values[0], "filters.{$table}.{$column}");
+                self::validateLiteralValue($values[1], "filters.{$table}.{$column}");
                 $p1 = ':p' . $paramIndex++;
                 $p2 = ':p' . $paramIndex++;
                 $params[$p1] = trim($values[0]);
                 $params[$p2] = trim($values[1]);
                 $conditions[] = "{$qualifiedCol} BETWEEN {$p1} AND {$p2}";
             } else {
+                if (is_array($value)) {
+                    throw new \InvalidArgumentException(
+                        "Operator {$op} requires a single literal value in filters.{$table}.{$column}."
+                    );
+                }
+                self::validateLiteralValue($value, "filters.{$table}.{$column}");
                 $paramName = ':p' . $paramIndex++;
                 $params[$paramName] = $value;
                 $conditions[] = "{$qualifiedCol} {$op} {$paramName}";
@@ -591,6 +648,7 @@ class SqlBuilderService
             }
 
             $expr = "{$aggregate}({$alias}.{$column})";
+            self::validateLiteralValue($value, "having.{$table}.{$column}");
             $paramName = ':h' . $paramIndex++;
             $params[$paramName] = $value;
             $conditions[] = "{$expr} {$op} {$paramName}";
@@ -618,6 +676,35 @@ class SqlBuilderService
         }
 
         return implode(', ', $parts);
+    }
+
+    /**
+     * Reject model drift where a supposed literal value is actually a stringified SQL subquery.
+     * These values are unsafe and indicate the intent planner left the contract surface.
+     */
+    private static function validateLiteralValue($value, $context)
+    {
+        if (is_array($value)) {
+            foreach ($value as $item) {
+                self::validateLiteralValue($item, $context);
+            }
+            return;
+        }
+
+        if (!is_string($value)) {
+            return;
+        }
+
+        $normalized = trim($value);
+        if ($normalized === '') {
+            return;
+        }
+
+        if (preg_match('/^\(?\s*select\b[\s\S]*\bfrom\b/i', $normalized) === 1) {
+            throw new \InvalidArgumentException(
+                "Detected subquery-like literal in {$context}; intent values must be concrete literals, not SQL fragments."
+            );
+        }
     }
 
     /**

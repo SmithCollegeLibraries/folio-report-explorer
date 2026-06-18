@@ -133,6 +133,29 @@ class DataPatternsController extends Controller
             'Each financial transaction has a transaction_type (Encumbrance, Payment, Credit, Pending payment, Rollover encumbrance) and an amount.',
             'For actual spending, filter transaction_type = \'Payment\' or use invoice tables which are pre-joined.',
         ],
+        'inventory.material_type__t' => [
+            'Use this table for patron-facing resource categories such as Book, Journal, Thesis/Dissertation, E-Thesis/Dissertation, DVD/Blu-ray, Audio CD, Newspaper, and Serial.',
+            'If the user says document type or names a bibliographic category, filter inventory.material_type__t.name, not inventory.instance_type__t.name.',
+            'When a prompt says thesis, theses, or dissertation, match material_type__t.name values like Thesis/Dissertation or E-Thesis/Dissertation with LOWER() or ILIKE.',
+        ],
+        'inventory.instance_type__t' => [
+            'Use ONLY for RDA content types such as text, performed music, spoken word, sounds, or cartographic image.',
+            'Do NOT use instance_type__t for book, thesis/dissertation, journal, serial, newspaper, DVD/Blu-ray, or Audio CD filters - those are material types.',
+            'Only use this table when the user explicitly asks for content/resource type values like text or performed music.',
+        ],
+        'inventory.instance_format__t' => [
+            'Use only for physical or carrier format such as volume, online resource, microfilm, videodisc, or streaming media.',
+            'Do NOT use instance_format__t for book, thesis/dissertation, journal, or other bibliographic category terms unless the user explicitly asks for format.',
+        ],
+        'inventory.instance__t' => [
+            'Use inventory.instance__t as the bibliographic anchor for title-level inventory queries.',
+            'Join to holdings via holdings_record__t.instance_id = instance__t.id, then to items via item__t.holdings_record_id = holdings_record__t.id.',
+            'For MARC field-level extraction, prefer folio_source_record.marctab instead of parsing source-record JSON text.',
+            'For full MARC record output, ALWAYS include folio_source_record.records__t.parsed_record__content joined via records__t.external_id = instance__t.id AND records__t.state = \'ACTUAL\'.',
+            'PERFORMANCE: When building instance-level CTEs with item-level filters (material type, item status), ALWAYS use nested EXISTS with AS MATERIALIZED. Never use JOIN + DISTINCT.',
+            'PERFORMANCE: Resolve material_type_id via scalar subquery: ii.material_type_id = (SELECT id FROM inventory.material_type__t WHERE LOWER(name) = \'book\' LIMIT 1). Do not JOIN material_type__t in the main query.',
+            'Document type requests usually map to material_type__t, not instance_type__t.',
+        ],
     ];
 
     /**

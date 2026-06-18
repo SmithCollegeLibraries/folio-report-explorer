@@ -199,11 +199,18 @@ export interface ExecuteResponse {
 
 /** NL→SQL response */
 export interface NlResponse {
-  sql: string;
-  explanation: string;
+  sql?: string;
+  explanation?: string;
   dataSource?: 'folio' | 'local';
   warnings?: string[];
   suggestions?: string[];
+  needsClarification?: boolean;
+  clarificationType?: string;
+  question?: string;
+  options?: string[];
+  missingSlots?: string[];
+  route?: string;
+  routeReason?: string;
 }
 
 /** Saved query */
@@ -305,6 +312,104 @@ export interface SettingsTestResponse {
   postgres?: PostgresConnectionTestResult;
   gemini?: GeminiConnectionTestResult;
   openai?: OpenAiConnectionTestResult;
+}
+
+export interface Nl2SqlDashboardCohortSummary {
+  primaryMode: string;
+  intentMode: boolean;
+  shadowMode: boolean;
+  shadowUsers: string;
+  shadowSamplePercent: number;
+  forceLegacy: boolean;
+}
+
+export interface Nl2SqlDashboardShadowError {
+  message: string;
+  count: number;
+}
+
+export interface Nl2SqlDashboardMismatch {
+  timestamp: string;
+  promptFingerprint: string;
+  primaryRoute: string;
+  shadowRoute: string;
+  primaryDataSource: string;
+  shadowDataSource: string;
+}
+
+export interface Nl2SqlDashboardShadowSummary {
+  windowDays: number;
+  eventCount: number;
+  compareCount: number;
+  errorCount: number;
+  matchCount: number;
+  mismatchCount: number;
+  unknownCount: number;
+  matchRate: number;
+  mismatchRate: number;
+  dataSourceMismatchCount: number;
+  topErrors: Nl2SqlDashboardShadowError[];
+  recentMismatches: Nl2SqlDashboardMismatch[];
+}
+
+export interface Nl2SqlDashboardFailureFamily {
+  key: string;
+  title: string;
+  severity: string;
+  category: string;
+  action: string;
+  occurrenceCount: number;
+  sourceCounts: Record<string, number>;
+}
+
+export interface Nl2SqlDashboardFailureReviewSummary {
+  available: boolean;
+  generatedAt: string | null;
+  windowDays: number | null;
+  telemetryEventCount: number;
+  replayFailureCount: number;
+  historyFailureCount: number;
+  familyCount: number;
+  topFamilies: Nl2SqlDashboardFailureFamily[];
+}
+
+export interface Nl2SqlDashboardReplaySummary {
+  available: boolean;
+  ticket: string | null;
+  capturedAt: string | null;
+  gateMet: boolean | null;
+  failedGateKeys: string[];
+  totalPrompts: number;
+  passCount: number;
+  failCount: number;
+  passRate: number | null;
+  regressionsOnBaselineSuccess: number;
+  promptQualityFailureCount: number | null;
+  newSemanticFamilyCount: number | null;
+  maxPromptSizeIncreaseBytes: number | null;
+  overBudgetPromptCount: number | null;
+}
+
+export interface Nl2SqlDashboardHistoryFailure {
+  jobId: string;
+  name: string;
+  source: string;
+  completedAt: string;
+  errorMessage: string;
+}
+
+export interface Nl2SqlDashboardHistorySummary {
+  recentFailedCount: number;
+  recentFailedJobs: Nl2SqlDashboardHistoryFailure[];
+}
+
+export interface Nl2SqlDashboardResponse {
+  generatedAt: string;
+  cohort: Nl2SqlDashboardCohortSummary;
+  shadow: Nl2SqlDashboardShadowSummary;
+  failureReview: Nl2SqlDashboardFailureReviewSummary;
+  replay: Nl2SqlDashboardReplaySummary;
+  history: Nl2SqlDashboardHistorySummary;
 }
 
 // ─── Async Job types ──────────────────────────────────────────────

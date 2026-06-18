@@ -31,12 +31,19 @@ class FolioSchemaService
     /** @var array|null Cached domain hints data */
     private static $domainHints = null;
 
+    /** @var array|null Cached semantic context artifact */
+    private static $semanticContext = null;
+
+    /** @var array|null Budget report for the last built schema context */
+    private static $lastSchemaContextBudget = null;
+
     /**
      * Clear cached domain hints so next call reloads from DB.
      */
     public static function clearDomainHintsCache()
     {
         self::$domainHints = null;
+        self::$semanticContext = null;
     }
 
     /** Cache TTL in seconds (24 hours) */
@@ -453,6 +460,11 @@ class FolioSchemaService
      */
     public static function fuzzyMatch($input)
     {
+        $intentAlias = self::resolveIntentAlias($input);
+        if ($intentAlias !== null) {
+            return $intentAlias;
+        }
+
         $schema = self::loadSchema();
         $tables = array_keys($schema['tables'] ?? []);
 
@@ -505,6 +517,64 @@ class FolioSchemaService
         }
         if (count($containsMatches) === 1) {
             return $containsMatches[0];
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve a QueryIntent-safe table alias back to the underlying table name.
+     */
+    private static function resolveIntentAlias($input)
+    {
+        if (!is_string($input) || trim($input) === '') {
+            return null;
+        }
+
+        $normalized = trim($input);
+        $aliasMap = [];
+        $tablePartCandidates = [];
+
+        $map = self::discoverTableMapping();
+        foreach ($map as $ldp1 => $metadb) {
+            if (strpos($ldp1, '.') === false) {
+                $aliasMap[self::toIntentContractIdentifier($metadb)] = $ldp1;
+            }
+
+            if (strpos($metadb, '.') !== false) {
+                $tablePart = explode('.', $metadb, 2)[1];
+                if ($tablePart !== '') {
+                    $tablePartCandidates[$tablePart][] = strpos($ldp1, '.') === false ? $ldp1 : $metadb;
+                }
+            }
+        }
+
+        foreach (array_keys(self::discoverSubtables()) as $subtableName) {
+            $aliasMap[self::toIntentContractIdentifier($subtableName)] = $subtableName;
+            if (strpos($subtableName, '.') !== false) {
+                $tablePart = explode('.', $subtableName, 2)[1];
+                if ($tablePart !== '') {
+                    $tablePartCandidates[$tablePart][] = $subtableName;
+                }
+            }
+        }
+
+        foreach ($tablePartCandidates as $alias => $targets) {
+            $uniqueTargets = array_values(array_unique($targets));
+            if (count($uniqueTargets) === 1 && !isset($aliasMap[$alias])) {
+                $aliasMap[$alias] = $uniqueTargets[0];
+            }
+        }
+
+        if (isset($aliasMap[$normalized])) {
+            return $aliasMap[$normalized];
+        }
+
+        $lower = strtolower($normalized);
+        foreach ($aliasMap as $alias => $target) {
+            if (strtolower($alias) === $lower) {
+                return $target;
+            }
         }
 
         return null;
@@ -1350,7 +1420,70 @@ class FolioSchemaService
             self::$domainHints = $data;
         }
 
+        self::$domainHints = self::applyBuiltInTypeSemantics(self::$domainHints);
+
         return self::$domainHints;
+    }
+
+    /**
+     * Apply hard-coded type semantics so material/resource categories stay
+     * distinguishable from instance content types and carrier formats.
+     */
+    private static function applyBuiltInTypeSemantics(array $domainHints): array
+    {
+        $domainHints['tableDescriptions'] = array_replace(
+            $domainHints['tableDescriptions'] ?? [],
+            [
+                'inventory.material_type__t' => 'Material/resource categories used in patron-facing requests (Book, Journal, Thesis/Dissertation, DVD/Blu-ray, Audio CD, etc.). Use this for document-type style filters.',
+                'inventory.instance_type__t' => 'RDA content type definitions for instances (text, cartographic image, performed music, etc.). Do NOT use this table for book, thesis/dissertation, journal, serial, newspaper, or DVD filters.',
+                'inventory.instance_format__t' => 'Physical or carrier format of instances (volume, microfilm, online resource, etc.). Use only when the user explicitly asks for format/carrier, not bibliographic category.',
+                'inventory.contributor_name_type__t' => 'Contributor name-form classifications (Personal name, Corporate name, Meeting name). Use this to distinguish corporate-body contributors from personal or meeting names.',
+                'inventory.contributor_type__t' => 'Contributor role labels (Author, Editor, Degree granting institution, etc.). Do NOT use this table to distinguish corporate vs personal vs meeting contributor identity.',
+            ]
+        );
+
+        $domainHints['vocabulary'] = array_replace(
+            $domainHints['vocabulary'] ?? [],
+            [
+                'material type' => 'inventory.material_type__t.name - user-facing resource category or document type (Book, Journal, Thesis/Dissertation, DVD/Blu-ray, etc.). Use this for book/journal/thesis filters, not instance_type__t.',
+                'document type' => 'For user-facing resource categories such as book, journal, thesis/dissertation, DVD/Blu-ray, score, or newspaper, use inventory.material_type__t.name. Do NOT use inventory.instance_type__t.name for these terms.',
+                'resource type' => 'If the request names a patron-facing category like book, thesis, dissertation, journal, serial, newspaper, DVD, or score, use inventory.material_type__t.name. Use inventory.instance_type__t only for RDA content types like text or performed music.',
+                'instance type' => 'inventory.instance_type__t.name/code - RDA content types such as text, cartographic image, performed music, sounds, or spoken word. Do NOT map book, thesis/dissertation, journal, serial, newspaper, or DVD/Blu-ray to instance_type__t.',
+                'format' => 'inventory.instance_format__t.name - physical or carrier format of an instance (volume, online resource, microfilm, videodisc, etc.). Do NOT use this for book, thesis/dissertation, journal, or other bibliographic category terms unless the user explicitly asks for format.',
+                'instance format' => 'inventory.instance_format__t.name - carrier/physical format terms such as volume, online resource, microfilm, or videodisc.',
+                'thesis' => 'Treat thesis as inventory.material_type__t.name, typically matching values such as Thesis/Dissertation or E-Thesis/Dissertation with ILIKE or LOWER().',
+                'theses' => 'Treat theses as inventory.material_type__t.name, typically matching values such as Thesis/Dissertation or E-Thesis/Dissertation with ILIKE or LOWER(). Do NOT use inventory.instance_type__t for this term.',
+                'dissertation' => 'Treat dissertation as inventory.material_type__t.name, typically matching values such as Thesis/Dissertation or E-Thesis/Dissertation with ILIKE or LOWER().',
+                'corporate body' => 'For corporate-body contributors, use inventory.contributor_name_type__t.name = "Corporate name" via inventory.instance__t__contributors.contributors__contributor_name_type_id. Do NOT use contributors__contributor_type_text or inventory.contributor_type__t for this distinction.',
+                'corporate-body' => 'For corporate-body contributors, use inventory.contributor_name_type__t.name = "Corporate name" via inventory.instance__t__contributors.contributors__contributor_name_type_id. Do NOT use contributors__contributor_type_text or inventory.contributor_type__t for this distinction.',
+                'corporate author' => 'Corporate authors are modeled as contributor name type "Corporate name", not contributor role text. Join inventory.instance__t__contributors to inventory.contributor_name_type__t and filter cnt.name = "Corporate name".',
+                'MARC source record access' => 'Use folio_source_record.records__t.parsed_record__content only when the user wants the full raw MARC/source record or a tag-range check that is not one specific mtNNN table. Join records__t via sr.external_ids_holder__instance_id = inst.id. Do not add unsupported source-record status filters. For field-level presence or absence checks on a specific tag such as 300 or 650, prefer the matching marctab.mtNNN table and use EXISTS/NOT EXISTS against instance_hrid.',
+            ]
+        );
+
+        $examples = $domainHints['examples'] ?? [];
+        $hasMarcMissingFieldExample = false;
+        foreach ($examples as $example) {
+            if (!is_array($example)) {
+                continue;
+            }
+
+            if (strcasecmp((string)($example['question'] ?? ''), 'Show Smith instances missing MARC field 300') === 0) {
+                $hasMarcMissingFieldExample = true;
+                break;
+            }
+        }
+
+        if (!$hasMarcMissingFieldExample) {
+            $examples[] = [
+                'question' => 'Show Smith instances missing MARC field 300',
+                'sql' => "SELECT inst.hrid, inst.title\nFROM inventory.instance__t inst\nWHERE NOT EXISTS (\n    SELECT 1 FROM marctab.mt300 m\n    WHERE m.instance_hrid = inst.hrid\n)",
+            ];
+        }
+
+        $domainHints['examples'] = $examples;
+
+        return $domainHints;
     }
 
     /**
@@ -1386,6 +1519,24 @@ class FolioSchemaService
             $terms[$part] = true;
         }
 
+        $expansions = [
+            'theses' => ['thesis', 'dissertation'],
+            'thesis' => ['theses', 'dissertation'],
+            'dissertations' => ['dissertation', 'thesis', 'theses'],
+            'dissertation' => ['thesis', 'theses'],
+            'books' => ['book'],
+            'journals' => ['journal'],
+            'serials' => ['serial'],
+            'newspapers' => ['newspaper'],
+            'dvds' => ['dvd'],
+        ];
+
+        foreach (array_keys($terms) as $term) {
+            foreach ($expansions[$term] ?? [] as $expanded) {
+                $terms[$expanded] = true;
+            }
+        }
+
         $result = array_keys($terms);
         sort($result, SORT_STRING);
         return array_slice($result, 0, self::MAX_PROMPT_TERMS);
@@ -1394,21 +1545,32 @@ class FolioSchemaService
     /**
      * Score relevance of a key/value hint pair against prompt terms.
      */
-    private static function scoreHint($key, $value, array $terms): int
+    private static function scoreHint($key, $value, array $terms, string $prompt = ''): int
     {
-        if (empty($terms)) {
+        if (empty($terms) && $prompt === '') {
             return 0;
         }
 
+        $promptText = strtolower($prompt);
         $keyText = strtolower((string)$key);
         $valueText = strtolower((string)$value);
         $score = 0;
 
+        if ($promptText !== '' && $keyText !== '' && strpos($promptText, $keyText) !== false) {
+            $score += 30;
+        }
+
         foreach ($terms as $term) {
-            if (strpos($keyText, $term) !== false) {
+            if ($keyText === $term) {
+                $score += 18;
+            } elseif (preg_match('/\b' . preg_quote($term, '/') . '\b/', $keyText)) {
                 $score += 12;
+            } elseif (strpos($keyText, $term) !== false) {
+                $score += 8;
             }
-            if (strpos($valueText, $term) !== false) {
+            if (preg_match('/\b' . preg_quote($term, '/') . '\b/', $valueText)) {
+                $score += 6;
+            } elseif (strpos($valueText, $term) !== false) {
                 $score += 4;
             }
         }
@@ -1424,7 +1586,7 @@ class FolioSchemaService
      * @param int $limit
      * @return array
      */
-    private static function selectRelevantMapHints(array $map, array $terms, int $limit): array
+    private static function selectRelevantMapHints(array $map, array $terms, int $limit, string $prompt = ''): array
     {
         if (empty($map) || $limit <= 0) {
             return [];
@@ -1435,7 +1597,7 @@ class FolioSchemaService
             $items[] = [
                 'key' => (string)$key,
                 'value' => (string)$value,
-                'score' => self::scoreHint($key, $value, $terms),
+                'score' => self::scoreHint($key, $value, $terms, $prompt),
             ];
         }
 
@@ -1538,6 +1700,32 @@ class FolioSchemaService
     }
 
     /**
+     * Build the canonical semantic context artifact from live semantic sources.
+     */
+    public static function buildSemanticContextArtifact(): array
+    {
+        return SemanticContextArtifactBuilder::build(
+            self::discoverAllColumns(),
+            self::loadDomainHints(),
+            self::loadDataPatterns(),
+            self::loadDerived()
+        );
+    }
+
+    /**
+     * Load and cache the canonical semantic context artifact.
+     */
+    public static function loadSemanticContext(): array
+    {
+        if (self::$semanticContext !== null) {
+            return self::$semanticContext;
+        }
+
+        self::$semanticContext = self::buildSemanticContextArtifact();
+        return self::$semanticContext;
+    }
+
+    /**
      * Get all table names.
      * @return array
      */
@@ -1551,11 +1739,54 @@ class FolioSchemaService
     }
 
     /**
-     * Build a compressed schema context string for LLM prompts.
-     * Uses MetaDB table names so Gemini generates executable SQL.
-     * @return string
+     * Convert a SQL-facing table name into a QueryIntent-safe contract identifier.
+     *
+     * Base tables prefer their LDP1/builder key (for example inventory.item__t -> inventory_items).
+     * Tables without an LDP1 alias fall back to a dotless form that still satisfies the
+     * QueryIntent identifier contract.
      */
-    public static function buildSchemaContext($prompt = '')
+    public static function toIntentContractIdentifier($name)
+    {
+        if (!is_string($name) || trim($name) === '') {
+            return null;
+        }
+
+        $normalized = trim($name);
+        $schema = self::loadSchema();
+        if (isset($schema['tables'][$normalized]) || isset(self::LOCAL_TABLES[$normalized])) {
+            return $normalized;
+        }
+
+        $map = self::discoverTableMapping();
+        $reverseMetadb = [];
+        foreach ($map as $ldp1 => $metadb) {
+            if (strpos($ldp1, '.') !== false) {
+                continue;
+            }
+            if (!isset($reverseMetadb[$metadb])) {
+                $reverseMetadb[$metadb] = $ldp1;
+            }
+        }
+
+        if (isset($reverseMetadb[$normalized])) {
+            return $reverseMetadb[$normalized];
+        }
+
+        if (strpos($normalized, '.') !== false) {
+            return str_replace('.', '_', $normalized);
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * Build a QueryIntent-oriented schema context string that foregrounds contract keys
+     * instead of SQL table names.
+     *
+     * @param string $prompt
+     * @return array{text:string,budget:array}
+     */
+    public static function buildIntentSchemaContextPackage($prompt = '')
     {
         $schema = self::loadSchema();
         $tables = $schema['tables'] ?? [];
@@ -1563,37 +1794,267 @@ class FolioSchemaService
         $metadbMap = self::discoverTableMapping();
         $allCols = self::discoverAllColumns();
         $subtables = self::discoverSubtables();
-        $domainHints = self::loadDomainHints();
-        $tableDescs = $domainHints['tableDescriptions'] ?? [];
-        $vocabulary = $domainHints['vocabulary'] ?? [];
-        $examples = $domainHints['examples'] ?? [];
+        $semanticContext = self::loadSemanticContext();
+        $retrievalPlan = SemanticContextRetrievalService::buildPlan(
+            $semanticContext,
+            (string)$prompt,
+            [
+                'tableDescriptionLimit' => self::MAX_TABLE_DESCRIPTION_HINTS,
+                'vocabularyLimit' => self::MAX_VOCABULARY_HINTS,
+                'exampleLimit' => self::MAX_EXAMPLES,
+            ]
+        );
+        $retrievalPlan = self::sanitizePromptContextRetrievalPlan($retrievalPlan);
+
+        $tableDescs = $retrievalPlan['tableDescriptions'] ?? [];
+        $tableScores = $retrievalPlan['tableScores'] ?? [];
+
+        $promptTerms = self::extractPromptTerms($prompt);
+        $tableDescs = self::selectRelevantMapHints(
+            $tableDescs,
+            $promptTerms,
+            self::MAX_TABLE_DESCRIPTION_HINTS,
+            (string)$prompt
+        );
+
+        $reverseMetadb = [];
+        foreach ($metadbMap as $ldp1 => $metadb) {
+            if (!isset($reverseMetadb[$metadb]) && strpos($ldp1, '.') === false) {
+                $reverseMetadb[$metadb] = $ldp1;
+            }
+        }
+
+        $orderedMetadbs = [];
+        $coveredInLdp1 = [];
+        foreach ($tables as $ldp1 => $tinfo) {
+            $metadb = $metadbMap[$ldp1] ?? null;
+            if ($metadb && !isset($coveredInLdp1[$metadb])) {
+                $coveredInLdp1[$metadb] = true;
+                $orderedMetadbs[] = $metadb;
+            }
+        }
+        foreach ($metadbMap as $key => $metadb) {
+            if ($key === $metadb && !isset($coveredInLdp1[$metadb])) {
+                $orderedMetadbs[] = $metadb;
+            }
+        }
+        $orderedMetadbs = array_values(array_unique($orderedMetadbs));
+        $orderedMetadbs = self::sortTablesByRelevance($orderedMetadbs, $tableScores);
+
+        $orderedSubtables = array_keys($subtables);
+        $orderedSubtables = self::sortTablesByRelevance($orderedSubtables, $tableScores);
+
+        $lines = [];
+        $budgetSections = [];
+
+        $headerSectionStart = count($lines);
+        $lines[] = '=== QueryIntent Contract Schema ===';
+        $lines[] = 'Use the CONTRACT KEY in JSON.table fields.';
+        $lines[] = 'Do NOT use SQL_TABLE values in JSON.table fields.';
+        $lines[] = 'SQL_TABLE is informational only so you can understand the underlying source entity.';
+        $lines[] = '';
+        self::captureBudgetSection($budgetSections, 'header', 'Header', $lines, $headerSectionStart, 1);
+
+        $tablesSectionStart = count($lines);
+        $emittedTableCount = 0;
+        foreach ($orderedMetadbs as $metadbName) {
+            if (in_array($metadbName, self::EXCLUDED_TABLES, true)) {
+                continue;
+            }
+
+            $schemaPrefix = explode('.', $metadbName, 2)[0];
+            if (in_array($schemaPrefix, ['perms', 'users'], true) && !in_array($metadbName, ['users.groups__t'], true)) {
+                continue;
+            }
+
+            $contractKey = self::toIntentContractIdentifier($metadbName);
+            if ($contractKey === null) {
+                continue;
+            }
+
+            $colSource = $allCols[$metadbName] ?? [];
+            if (empty($colSource)) {
+                $ldp1 = $reverseMetadb[$metadbName] ?? null;
+                if ($ldp1 && isset($tables[$ldp1]['columns'])) {
+                    $colSource = $tables[$ldp1]['columns'];
+                }
+            }
+
+            $desc = $tableDescs[$metadbName] ?? '';
+            if ($desc !== '') {
+                $lines[] = "TABLE {$contractKey} (SQL_TABLE {$metadbName}) — {$desc}";
+            } else {
+                $lines[] = "TABLE {$contractKey} (SQL_TABLE {$metadbName})";
+            }
+
+            $columns = [];
+            foreach ($colSource as $col) {
+                if (!empty($col['name']) && !empty($col['type'])) {
+                    $columns[] = $col['name'] . ':' . $col['type'];
+                }
+            }
+            if (!empty($columns)) {
+                $lines[] = '  Columns: ' . implode(', ', $columns);
+            }
+
+            $ldp1ForRel = $reverseMetadb[$metadbName] ?? null;
+            foreach ($rels[$ldp1ForRel]['parents'] ?? [] as $p) {
+                $parentMetadb = $metadbMap[$p['parent_table']] ?? $p['parent_table'];
+                $parentKey = self::toIntentContractIdentifier($parentMetadb) ?? $parentMetadb;
+                $lines[] = "  FK: {$contractKey}.{$p['local_column']} -> {$parentKey}.{$p['parent_column']}";
+            }
+
+            $lines[] = '';
+            $emittedTableCount++;
+        }
+        self::captureBudgetSection($budgetSections, 'tables', 'Tables', $lines, $tablesSectionStart, $emittedTableCount);
+
+        $subtablesSectionStart = count($lines);
+        $subtableLines = [];
+        $emittedSubtableCount = 0;
+        foreach ($orderedSubtables as $fullName) {
+            $info = $subtables[$fullName] ?? null;
+            if ($info === null) {
+                continue;
+            }
+
+            $contractKey = self::toIntentContractIdentifier($fullName);
+            $parentName = $info['parent'] ?? 'unknown';
+            $parentKey = self::toIntentContractIdentifier($parentName) ?? $parentName;
+
+            $subtableBlock = ["TABLE {$contractKey} (SQL_TABLE {$fullName})"];
+
+            $cols = [];
+            foreach (($info['columns'] ?? []) as $col) {
+                if (!empty($col['name']) && !empty($col['type'])) {
+                    $cols[] = $col['name'] . ':' . $col['type'];
+                }
+            }
+            if (!empty($cols)) {
+                $subtableBlock[] = '  Columns: ' . implode(', ', $cols);
+            }
+            $subtableBlock[] = "  Parent: {$parentKey} (JOIN ON {$parentKey}.id = {$contractKey}.id)";
+            $subtableBlock[] = '';
+
+            $projectedLines = array_merge($subtableLines, $subtableBlock);
+            $projectedBudget = PromptBudgetService::buildBudgetReport([
+                'subtables' => [
+                    'text' => implode("\n", $projectedLines),
+                    'label' => 'Subtables',
+                    'itemCount' => $emittedSubtableCount + 1,
+                ],
+            ]);
+            if (in_array('subtables', $projectedBudget['breachedSections'] ?? [], true)) {
+                break;
+            }
+
+            $subtableLines = $projectedLines;
+            $emittedSubtableCount++;
+        }
+        foreach ($subtableLines as $line) {
+            $lines[] = $line;
+        }
+        self::captureBudgetSection($budgetSections, 'subtables', 'Subtables', $lines, $subtablesSectionStart, $emittedSubtableCount);
+
+        $localTablesSectionStart = count($lines);
+        $lines[] = '--- Local Supplementary Tables ---';
+        foreach (self::LOCAL_TABLES as $name => $info) {
+            $lines[] = "TABLE {$name}";
+            $columns = [];
+            foreach (($info['columns'] ?? []) as $col) {
+                if (!empty($col['name']) && !empty($col['type'])) {
+                    $columns[] = $col['name'] . ':' . $col['type'];
+                }
+            }
+            if (!empty($columns)) {
+                $lines[] = '  Columns: ' . implode(', ', $columns);
+            }
+            if (!empty($info['remarks'])) {
+                $lines[] = '  Notes: ' . $info['remarks'];
+            }
+            $lines[] = '';
+        }
+        self::captureBudgetSection($budgetSections, 'local_tables', 'Local Tables', $lines, $localTablesSectionStart, count(self::LOCAL_TABLES));
+
+        $locationSectionStart = count($lines);
+        $lines[] = '--- Five Colleges Location Naming Schema ---';
+        $lines[] = 'This FOLIO instance is shared by the Five Colleges of Western Massachusetts.';
+        $lines[] = 'Campus abbreviation codes prefix library and location names:';
+        $lines[] = '  SC = Smith College';
+        $lines[] = '  AC = Amherst College';
+        $lines[] = '  MH = Mount Holyoke College';
+        $lines[] = '  UM = University Of Massachusetts';
+        $lines[] = '  HC = Hampshire College';
+        $lines[] = '  RP = Five Colleges Collections';
+        $lines[] = '  YB = National Yiddish Book Center';
+        self::captureBudgetSection($budgetSections, 'location_naming', 'Location Naming', $lines, $locationSectionStart, 7);
+
+        $contextText = implode("\n", $lines);
+        $budget = PromptBudgetService::buildBudgetReport($budgetSections);
+        $budget['sectionCount'] = count($budgetSections);
+        $budget['lineCount'] = count($lines);
+        $budget['characterCount'] = strlen($contextText);
+        self::$lastSchemaContextBudget = $budget;
+
+        return [
+            'text' => $contextText,
+            'budget' => $budget,
+        ];
+    }
+
+    /**
+     * Build a compressed schema context string for LLM prompts.
+     * Uses MetaDB table names so Gemini generates executable SQL.
+     * @return string
+     */
+    public static function buildSchemaContext($prompt = '')
+    {
+        $package = self::buildSchemaContextPackage($prompt);
+        return $package['text'];
+    }
+
+    /**
+     * Build schema context plus prompt-budget metadata for telemetry/reporting.
+     *
+     * @param string $prompt
+     * @return array{text:string,budget:array}
+     */
+    public static function buildSchemaContextPackage($prompt = '')
+    {
+        $schema = self::loadSchema();
+        $tables = $schema['tables'] ?? [];
+        $rels = $schema['relationships'] ?? [];
+        $metadbMap = self::discoverTableMapping();
+        $allCols = self::discoverAllColumns();
+        $subtables = self::discoverSubtables();
+        $semanticContext = self::loadSemanticContext();
+        $retrievalPlan = SemanticContextRetrievalService::buildPlan(
+            $semanticContext,
+            (string)$prompt,
+            [
+                'tableDescriptionLimit' => self::MAX_TABLE_DESCRIPTION_HINTS,
+                'vocabularyLimit' => self::MAX_VOCABULARY_HINTS,
+                'exampleLimit' => self::MAX_EXAMPLES,
+            ]
+        );
+        $retrievalPlan = self::sanitizePromptContextRetrievalPlan($retrievalPlan);
+
+        $tableDescs = $retrievalPlan['tableDescriptions'] ?? [];
+        $dataPatterns = $retrievalPlan['dataPatterns'] ?? [];
+        $derivedCommentsByTable = $retrievalPlan['derivedCommentsByTable'] ?? [];
+        $vocabulary = $retrievalPlan['vocabulary'] ?? [];
+        $examples = $retrievalPlan['examples'] ?? [];
+        $patternCards = $retrievalPlan['patternCards'] ?? [];
+        $tableScores = $retrievalPlan['tableScores'] ?? [];
 
         // Keep prompt context size bounded and deterministic.
         $promptTerms = self::extractPromptTerms($prompt);
         $tableDescs = self::selectRelevantMapHints(
             $tableDescs,
             $promptTerms,
-            self::MAX_TABLE_DESCRIPTION_HINTS
+            self::MAX_TABLE_DESCRIPTION_HINTS,
+            (string)$prompt
         );
-        $vocabulary = self::selectRelevantMapHints(
-            $vocabulary,
-            $promptTerms,
-            self::MAX_VOCABULARY_HINTS
-        );
-        $examples = self::selectRelevantExamples(
-            $examples,
-            $promptTerms,
-            self::MAX_EXAMPLES
-        );
-
-        // Load derived table column comments for enriching key columns
-        $derivedData = self::loadDerived();
-        $derivedComments = [];
-        foreach (($derivedData['tables'] ?? []) as $dtName => $dtInfo) {
-            foreach (($dtInfo['column_comments'] ?? []) as $colName => $comment) {
-                $derivedComments[$colName] = $comment;
-            }
-        }
 
         // Build a reverse map from MetaDB name back to LDP1 name for FK lookups.
         // (FK relationships in folio_schema.json are keyed by LDP1 names.)
@@ -1624,18 +2085,41 @@ class FolioSchemaService
 
         // Deduplicate preserving first occurrence
         $orderedMetadbs = array_values(array_unique($orderedMetadbs));
+    $orderedMetadbs = self::sortTablesByRelevance($orderedMetadbs, $tableScores);
 
         $lines = [];
+        $budgetSections = [];
 
         $totalTables = count($orderedMetadbs) + count($subtables);
+        $headerSectionStart = count($lines);
         $lines[] = "=== FOLIO MetaDB/LDLite Database Schema ===";
         $lines[] = "Database: PostgreSQL, {$totalTables} tables (including " . count($subtables) . " subtables)";
         $lines[] = "IMPORTANT: Table names are schema-qualified (e.g. inventory.item__t).";
         $lines[] = "Always use the full schema.table name in FROM and JOIN clauses.";
         $lines[] = "SUBTABLES: Tables matching pattern schema.parent__t__child are flattened array/object columns.";
-        $lines[] = "  They join to their parent on parent__t.id = parent__t__child.id.";
+        $lines[] = "  They join to their immediate parent only on parent__t.id = parent__t__child.id.";
         $lines[] = "  ALWAYS prefer subtables over JSONB queries — e.g. use invoice.invoice_lines__t__fund_distributions instead of data->'fundDistributions'.\n";
+        $lines[] = "ACQUISITIONS / FUND DISTRIBUTION JOINS:";
+        $lines[] = "  To connect invoice fund distributions to purchase order lines, use:";
+        $lines[] = "    JOIN invoice.invoice_lines__t__fund_distributions AS iltfd ON iltfd.po_line_id = plt.id";
+        $lines[] = "  Do NOT join invoice.invoice_lines__t__fund_distributions.id to orders.po_line__t.id.";
+        $lines[] = "  The id column on invoice.invoice_lines__t__fund_distributions identifies the invoice line parent, not the purchase order line.\n";
+        $lines[] = "ACQUISITIONS / ORDER TYPE SEMANTICS:";
+        $lines[] = "  Standing orders are purchase orders where orders.purchase_order__t.order_type = 'Ongoing'.";
+        $lines[] = "  Subscription orders are Ongoing purchase orders where orders.purchase_order__t.ongoing__is_subscription is true.";
+        $lines[] = "  Non-subscription standing orders are Ongoing purchase orders where orders.purchase_order__t.ongoing__is_subscription is false or null.";
+        $lines[] = "  orders.po_line__t.order_format is the POL material/resource format, such as Physical Resource or Electronic Resource.";
+        $lines[] = "  Do NOT filter orders.po_line__t.order_format for standing orders.\n";
+        $lines[] = "TYPE SEMANTICS:";
+        $lines[] = "  inventory.material_type__t.name = patron-facing resource categories such as Book, Journal, Thesis/Dissertation, E-Thesis/Dissertation, DVD/Blu-ray, Audio CD, Newspaper, and Serial.";
+        $lines[] = "  inventory.instance_type__t.name/code = RDA content types such as text, performed music, sounds, spoken word, and cartographic image.";
+        $lines[] = "  inventory.instance_format__t.name = physical/carrier format such as volume, online resource, microfilm, videodisc, or streaming media.";
+        $lines[] = "  If a user says document type and names thesis/theses, book, journal, serial, newspaper, score, or DVD, treat that as material_type__t, not instance_type__t.";
+        $lines[] = "";
+        self::captureBudgetSection($budgetSections, 'header', 'Header', $lines, $headerSectionStart, 1);
 
+        $tablesSectionStart = count($lines);
+        $emittedTableCount = 0;
         foreach ($orderedMetadbs as $metadbName) {
             // Skip privacy-excluded tables from the AI prompt entirely
             if (in_array($metadbName, self::EXCLUDED_TABLES)) {
@@ -1679,8 +2163,8 @@ class FolioSchemaService
                     $cname === 'status' ||
                     $cname === 'barcode'
                 );
-                if ($shouldAnnotate && isset($derivedComments[$cname])) {
-                    $colStr .= ' -- ' . $derivedComments[$cname];
+                if ($shouldAnnotate && !empty($derivedCommentsByTable[$metadbName][$cname])) {
+                    $colStr .= ' -- ' . implode(' | ', $derivedCommentsByTable[$metadbName][$cname]);
                 }
                 $annotatedCols[] = $colStr;
             }
@@ -1692,9 +2176,13 @@ class FolioSchemaService
                 $parentMetadb = $metadbMap[$p['parent_table']] ?? $p['parent_table'];
                 $lines[] = "  FK: {$metadbName}.{$p['local_column']} → {$parentMetadb}.{$p['parent_column']}";
             }
+
+            $emittedTableCount++;
         }
+        self::captureBudgetSection($budgetSections, 'tables', 'Tables', $lines, $tablesSectionStart, $emittedTableCount);
 
         // Append discovered subtables
+        $subtablesSectionStart = count($lines);
         if (!empty($subtables)) {
             $lines[] = "\n--- Subtables (flattened array/object columns) ---";
             foreach ($subtables as $fullName => $info) {
@@ -1706,9 +2194,11 @@ class FolioSchemaService
                 $lines[] = "  PARENT: {$info['parent']} (JOIN ON {$info['parent']}.id = {$fullName}.id)";
             }
         }
+        self::captureBudgetSection($budgetSections, 'subtables', 'Subtables', $lines, $subtablesSectionStart, count($subtables));
 
         // Append data patterns — column type warnings and sample values
-        $dataPatterns = self::loadDataPatterns();
+        $dataPatternSectionStart = count($lines);
+        $emittedPatternCount = 0;
         if (!empty($dataPatterns)) {
             $lines[] = "\n--- COLUMN TYPE WARNINGS & SAMPLE VALUES ---";
             $lines[] = "CRITICAL: Read this section BEFORE writing column expressions for these tables.";
@@ -1720,14 +2210,21 @@ class FolioSchemaService
                     continue;
                 }
                 $lines[] = "{$tblName}:";
+                $emittedPatternCount++;
 
                 foreach ($info['columnWarnings'] ?? [] as $col => $warning) {
                     $lines[] = "  ⚠ {$col} — {$warning}";
                 }
 
                 foreach ($info['sampleValues'] ?? [] as $col => $vals) {
-                    $quoted = array_map(function ($v) { return "'{$v}'"; }, array_slice($vals, 0, 15));
-                    $more = count($vals) > 15 ? " (+ " . (count($vals) - 15) . " more)" : '';
+                    $valueSemantics = $info['valueSemantics'][$col] ?? [];
+                    $visibleVals = ValueSemanticSamplingService::selectPromptValues($tblName, $col, $vals);
+                    if (!empty($valueSemantics['promptValueLimit'])) {
+                        $visibleVals = array_slice($vals, 0, (int)$valueSemantics['promptValueLimit']);
+                    }
+
+                    $quoted = array_map(function ($v) { return "'{$v}'"; }, $visibleVals);
+                    $more = count($vals) > count($visibleVals) ? " (+ " . (count($vals) - count($visibleVals)) . " more)" : '';
                     $lines[] = "  {$col} values: [" . implode(', ', $quoted) . "]{$more}";
                 }
 
@@ -1738,8 +2235,10 @@ class FolioSchemaService
                 $lines[] = '';
             }
         }
+        self::captureBudgetSection($budgetSections, 'data_patterns', 'Data Patterns', $lines, $dataPatternSectionStart, $emittedPatternCount);
 
         // Append Five Colleges location naming schema
+        $locationSectionStart = count($lines);
         $lines[] = "\n--- Five Colleges Location Naming Schema ---";
         $lines[] = "This FOLIO instance is shared by the Five Colleges of Western Massachusetts.";
         $lines[] = "Location hierarchy: loc-institution__t ('Five Colleges') → loc-campus__t (7 campuses) → loc-library__t (33 libraries) → location__t (354 locations).";
@@ -1764,8 +2263,10 @@ class FolioSchemaService
         $lines[] = "  2. Or if the campus is known, use the full prefixed name: WHERE name ILIKE 'SC Neilson%'";
         $lines[] = "When a user asks about a specific campus (e.g. 'Smith College items'), filter by campus code prefix";
         $lines[] = "  or join to loccampus__t on the campus name.";
+        self::captureBudgetSection($budgetSections, 'location_naming', 'Location Naming', $lines, $locationSectionStart, 7);
 
         // Append domain vocabulary
+        $vocabularySectionStart = count($lines);
         if (!empty($vocabulary)) {
             $lines[] = "\n--- Domain Vocabulary ---";
             $lines[] = "Use these mappings to resolve ambiguous business terms to the correct tables:";
@@ -1773,8 +2274,34 @@ class FolioSchemaService
                 $lines[] = "  \"{$term}\" → {$mapping}";
             }
         }
+        self::captureBudgetSection($budgetSections, 'vocabulary', 'Vocabulary', $lines, $vocabularySectionStart, count($vocabulary));
+
+        $patternCardSectionStart = count($lines);
+        if (!empty($patternCards)) {
+            $lines[] = "\n--- Canonical Query Pattern Cards ---";
+            $lines[] = "Prefer these compact workflow cards before relying on one-off example SQL:";
+            foreach ($patternCards as $cardKey => $card) {
+                $lines[] = "CARD {$cardKey} — {$card['title']}";
+                $lines[] = "  Summary: {$card['summary']}";
+                if (!empty($card['promptSignals'])) {
+                    $lines[] = "  Prompt signals: " . implode(', ', $card['promptSignals']);
+                }
+                if (!empty($card['tableRefs'])) {
+                    $lines[] = "  Tables: " . implode(', ', $card['tableRefs']);
+                }
+                foreach (($card['guidance'] ?? []) as $guidance) {
+                    $lines[] = "  PREFER: {$guidance}";
+                }
+                if (!empty($card['exampleQuestions'])) {
+                    $lines[] = "  Example prompts: " . implode(' | ', array_slice($card['exampleQuestions'], 0, 2));
+                }
+                $lines[] = "";
+            }
+        }
+        self::captureBudgetSection($budgetSections, 'pattern_cards', 'Pattern Cards', $lines, $patternCardSectionStart, count($patternCards));
 
         // Append few-shot examples
+        $examplesSectionStart = count($lines);
         if (!empty($examples)) {
             $lines[] = "\n--- Example Queries ---";
             $lines[] = "Use these as reference for correct table/column choices:";
@@ -1784,7 +2311,9 @@ class FolioSchemaService
                 $lines[] = "";
             }
         }
+        self::captureBudgetSection($budgetSections, 'examples', 'Examples', $lines, $examplesSectionStart, count($examples));
 
+        $localTablesSectionStart = count($lines);
         $lines[] = "\n--- Local Supplementary Tables (MySQL) ---";
         $lines[] = "These local tables are in a separate MySQL database and support institutional reporting.";
         $lines[] = "When a user asks about ACRL statistics or local budget allocations, use these tables.";
@@ -1797,7 +2326,195 @@ class FolioSchemaService
         $lines[] = "TABLE report_expense_allocations";
         $lines[] = "  Columns: id:int, fiscal_year:int, expense_class_code:varchar, allocation_amount:decimal, created_at:datetime, updated_at:datetime";
         $lines[] = "  Notes: Allocation amounts by fiscal year and expense class code.";
+        self::captureBudgetSection($budgetSections, 'local_tables', 'Local Tables', $lines, $localTablesSectionStart, count(self::LOCAL_TABLES));
 
-        return implode("\n", $lines);
+        $contextText = implode("\n", $lines);
+        $budget = PromptBudgetService::buildBudgetReport($budgetSections);
+        self::$lastSchemaContextBudget = $budget;
+
+        return [
+            'text' => $contextText,
+            'budget' => $budget,
+        ];
+    }
+
+    /**
+     * Remove blocked internal-schema references from the prompt context that is
+     * sent to the NL model.
+     *
+     * @param array $retrievalPlan
+     * @return array
+     */
+    private static function sanitizePromptContextRetrievalPlan(array $retrievalPlan): array
+    {
+        $tableDescriptions = [];
+        foreach (($retrievalPlan['tableDescriptions'] ?? []) as $tableName => $description) {
+            if (self::containsBlockedPromptSurface($tableName) || self::containsBlockedPromptSurface($description)) {
+                continue;
+            }
+            $tableDescriptions[$tableName] = $description;
+        }
+
+        $vocabulary = [];
+        foreach (($retrievalPlan['vocabulary'] ?? []) as $term => $mapping) {
+            if (self::containsBlockedPromptSurface($term) || self::containsBlockedPromptSurface($mapping)) {
+                continue;
+            }
+            $vocabulary[$term] = $mapping;
+        }
+
+        $examples = [];
+        foreach (($retrievalPlan['examples'] ?? []) as $example) {
+            $question = trim((string)($example['question'] ?? ''));
+            $sql = trim((string)($example['sql'] ?? ''));
+            if ($question === '' || $sql === '') {
+                continue;
+            }
+            if (self::containsBlockedPromptSurface($question) || self::containsBlockedPromptSurface($sql)) {
+                continue;
+            }
+            $examples[] = [
+                'question' => $question,
+                'sql' => $sql,
+            ];
+        }
+
+        $patternCards = [];
+        foreach (($retrievalPlan['patternCards'] ?? []) as $cardKey => $card) {
+            $title = trim((string)($card['title'] ?? ''));
+            $summary = trim((string)($card['summary'] ?? ''));
+            if (
+                self::containsBlockedPromptSurface($cardKey) ||
+                self::containsBlockedPromptSurface($title) ||
+                self::containsBlockedPromptSurface($summary)
+            ) {
+                continue;
+            }
+
+            $patternCards[$cardKey] = [
+                'title' => $title,
+                'summary' => $summary,
+                'promptSignals' => self::sanitizePromptStringList($card['promptSignals'] ?? []),
+                'tableRefs' => self::sanitizePromptStringList($card['tableRefs'] ?? []),
+                'guidance' => self::sanitizePromptStringList($card['guidance'] ?? []),
+                'exampleQuestions' => self::sanitizePromptStringList($card['exampleQuestions'] ?? []),
+            ];
+        }
+
+        $dataPatterns = [];
+        foreach (($retrievalPlan['dataPatterns'] ?? []) as $tableName => $info) {
+            if (self::containsBlockedPromptSurface($tableName)) {
+                continue;
+            }
+
+            $columnWarnings = [];
+            foreach (($info['columnWarnings'] ?? []) as $columnName => $warning) {
+                if (self::containsBlockedPromptSurface($columnName) || self::containsBlockedPromptSurface($warning)) {
+                    continue;
+                }
+                $columnWarnings[$columnName] = $warning;
+            }
+
+            $sampleValues = [];
+            foreach (($info['sampleValues'] ?? []) as $columnName => $values) {
+                if (self::containsBlockedPromptSurface($columnName) || !is_array($values)) {
+                    continue;
+                }
+                $sampleValues[$columnName] = self::sanitizePromptStringList($values);
+            }
+
+            $valueSemantics = [];
+            foreach (($info['valueSemantics'] ?? []) as $columnName => $columnSemantics) {
+                if (isset($sampleValues[$columnName])) {
+                    $valueSemantics[$columnName] = $columnSemantics;
+                }
+            }
+
+            $dataPatterns[$tableName] = [
+                'columnWarnings' => $columnWarnings,
+                'sampleValues' => $sampleValues,
+                'valueSemantics' => $valueSemantics,
+                'preferredApproach' => self::sanitizePromptStringList($info['preferredApproach'] ?? []),
+            ];
+        }
+
+        $retrievalPlan['tableDescriptions'] = $tableDescriptions;
+        $retrievalPlan['vocabulary'] = $vocabulary;
+        $retrievalPlan['examples'] = $examples;
+        $retrievalPlan['patternCards'] = $patternCards;
+        $retrievalPlan['dataPatterns'] = $dataPatterns;
+
+        return $retrievalPlan;
+    }
+
+    /**
+     * @param array $values
+     * @return array
+     */
+    private static function sanitizePromptStringList(array $values): array
+    {
+        $filtered = [];
+        foreach ($values as $value) {
+            $value = trim((string)$value);
+            if ($value === '' || self::containsBlockedPromptSurface($value)) {
+                continue;
+            }
+            $filtered[] = $value;
+        }
+
+        return array_values(array_unique($filtered));
+    }
+
+    /**
+     * @param mixed $value
+     * @return bool
+     */
+    private static function containsBlockedPromptSurface($value): bool
+    {
+        return is_string($value) && preg_match('/\bmarctab\b/i', $value) === 1;
+    }
+
+    /**
+     * Reorder table emission so prompt-relevant tables appear first while
+     * preserving deterministic fallback order for equally scored tables.
+     */
+    public static function getLastSchemaContextBudget(): ?array
+    {
+        return self::$lastSchemaContextBudget;
+    }
+
+    private static function sortTablesByRelevance(array $orderedMetadbs, array $tableScores): array
+    {
+        $basePositions = array_flip($orderedMetadbs);
+        usort($orderedMetadbs, function ($left, $right) use ($tableScores, $basePositions) {
+            $leftScore = (int)($tableScores[$left] ?? 0);
+            $rightScore = (int)($tableScores[$right] ?? 0);
+            if ($leftScore !== $rightScore) {
+                return $rightScore <=> $leftScore;
+            }
+
+            return ($basePositions[$left] ?? PHP_INT_MAX) <=> ($basePositions[$right] ?? PHP_INT_MAX);
+        });
+
+        return $orderedMetadbs;
+    }
+
+    private static function captureBudgetSection(array &$budgetSections, string $key, string $label, array $lines, int $startIndex, int $itemCount): void
+    {
+        $slice = array_slice($lines, $startIndex);
+        if (empty($slice)) {
+            return;
+        }
+
+        $text = trim(implode("\n", $slice));
+        if ($text === '') {
+            return;
+        }
+
+        $budgetSections[$key] = [
+            'label' => $label,
+            'text' => $text,
+            'itemCount' => $itemCount,
+        ];
     }
 }

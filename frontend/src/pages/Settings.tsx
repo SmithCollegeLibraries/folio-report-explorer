@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { fetchSettings, saveSettings, testSettings } from '../api/client';
-import type { AppSettings, SettingsTestResponse } from '../types';
+import { fetchNl2SqlDashboard, fetchSettings, saveSettings, testSettings } from '../api/client';
+import type { AppSettings, Nl2SqlDashboardResponse, SettingsTestResponse } from '../types';
 import {
   Settings as SettingsIcon,
   Database,
   Sparkles,
+  Activity,
+  AlertTriangle,
+  BarChart3,
   CheckCircle2,
   XCircle,
   Loader2,
@@ -78,6 +81,16 @@ export default function Settings() {
   const { data: current, isLoading } = useQuery({
     queryKey: ['settings'],
     queryFn: fetchSettings,
+  });
+  const {
+    data: nl2sqlDashboard,
+    isLoading: dashboardLoading,
+    isFetching: dashboardFetching,
+    error: dashboardError,
+    refetch: refetchDashboard,
+  } = useQuery({
+    queryKey: ['settings', 'nl2sql-dashboard'],
+    queryFn: fetchNl2SqlDashboard,
   });
 
   // Populate form when settings load
@@ -181,7 +194,7 @@ export default function Settings() {
   const hasOpenAiSaved = !!current?.openai_api_key;
 
   return (
-    <div className="max-w-2xl mx-auto p-4 sm:p-6">
+    <div className="max-w-6xl mx-auto p-4 sm:p-6">
       <div className="flex items-center gap-3 mb-6">
         <SettingsIcon size={24} className="text-folio-600" />
         <div>
@@ -192,6 +205,41 @@ export default function Settings() {
           </p>
         </div>
       </div>
+
+      <section className="mb-8">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Activity size={18} className="text-folio-600" />
+            <div>
+              <h3 className="text-lg font-semibold">NL2SQL Shadow Ops</h3>
+              <p className="text-sm text-gray-500">
+                Compact cohort health for shadow comparisons, failure families, and replay deltas.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => refetchDashboard()}
+            disabled={dashboardFetching}
+            type="button"
+            className="inline-flex items-center gap-2 border px-4 py-2 rounded text-sm hover:bg-gray-50 disabled:opacity-50"
+          >
+            {dashboardFetching ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Refresh Dashboard
+          </button>
+        </div>
+
+        {dashboardLoading ? (
+          <div className="bg-white border rounded-lg p-5 text-sm text-gray-500 flex items-center gap-2">
+            <Loader2 size={16} className="animate-spin" /> Loading NL2SQL operator dashboard…
+          </div>
+        ) : dashboardError ? (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700">
+            Failed to load the NL2SQL operator dashboard.
+          </div>
+        ) : nl2sqlDashboard ? (
+          <Nl2SqlDashboardPanel dashboard={nl2sqlDashboard} />
+        ) : null}
+      </section>
 
       {/* ── PostgreSQL ────────────────────────── */}
       <section className="mb-8">
@@ -510,6 +558,285 @@ export default function Settings() {
       </div>
     </div>
   );
+}
+
+function Nl2SqlDashboardPanel({ dashboard }: { dashboard: Nl2SqlDashboardResponse }) {
+  const shadowEnabled = dashboard.cohort.shadowMode;
+  const replayGateMet = dashboard.replay.gateMet;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <MetricCard
+          icon={<Activity size={16} className="text-folio-700" />}
+          label="Shadow compares"
+          value={String(dashboard.shadow.compareCount)}
+          detail={`${dashboard.shadow.mismatchCount} mismatches in the last ${dashboard.shadow.windowDays} days`}
+          tone="folio"
+        />
+        <MetricCard
+          icon={<AlertTriangle size={16} className="text-amber-700" />}
+          label="Shadow errors"
+          value={String(dashboard.shadow.errorCount)}
+          detail={`${dashboard.shadow.dataSourceMismatchCount} data-source divergences`}
+          tone="amber"
+        />
+        <MetricCard
+          icon={<BarChart3 size={16} className="text-sky-700" />}
+          label="Failure families"
+          value={String(dashboard.failureReview.familyCount)}
+          detail={dashboard.failureReview.available
+            ? `${dashboard.failureReview.historyFailureCount} recent history failures classified`
+            : 'No failure-review artifact yet'}
+          tone="sky"
+        />
+        <MetricCard
+          icon={<CheckCircle2 size={16} className={replayGateMet ? 'text-green-700' : 'text-rose-700'} />}
+          label="Replay gate"
+          value={replayGateMet ? 'Passing' : 'Needs review'}
+          detail={dashboard.replay.available
+            ? `${dashboard.replay.failCount} failed prompts, ${dashboard.replay.failedGateKeys.length} failed checks`
+            : 'No replay artifact yet'}
+          tone={replayGateMet ? 'green' : 'rose'}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <section className="bg-white border rounded-lg p-5 space-y-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="font-semibold text-gray-900">Cohort status</h4>
+              <p className="text-sm text-gray-500">Current NL2SQL rollout settings for shadow traffic.</p>
+            </div>
+            <StatusChip tone={shadowEnabled ? 'green' : 'slate'}>
+              {shadowEnabled ? 'Shadow enabled' : 'Shadow disabled'}
+            </StatusChip>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <SummaryCell label="Primary mode" value={dashboard.cohort.primaryMode} />
+            <SummaryCell label="Intent mode" value={dashboard.cohort.intentMode ? 'On' : 'Off'} />
+            <SummaryCell label="Sample percent" value={`${dashboard.cohort.shadowSamplePercent}%`} />
+            <SummaryCell label="Allowlist" value={dashboard.cohort.shadowUsers || 'None'} />
+          </div>
+
+          <div className="pt-1 border-t border-gray-100">
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="text-gray-600">SQL hash match rate</span>
+              <span className="font-medium text-gray-900">{formatPercent(dashboard.shadow.matchRate)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="text-gray-600">SQL hash mismatch rate</span>
+              <span className="font-medium text-gray-900">{formatPercent(dashboard.shadow.mismatchRate)}</span>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-600">Unknown comparisons</span>
+              <span className="font-medium text-gray-900">{dashboard.shadow.unknownCount}</span>
+            </div>
+          </div>
+
+          <div>
+            <h5 className="text-sm font-medium text-gray-700 mb-2">Top shadow errors</h5>
+            {dashboard.shadow.topErrors.length > 0 ? (
+              <div className="space-y-2">
+                {dashboard.shadow.topErrors.map((item) => (
+                  <div key={item.message} className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+                    <div className="text-sm text-gray-900 leading-5">{item.message}</div>
+                    <div className="text-xs text-gray-500 mt-1">Count: {item.count}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No shadow errors in the current window.</p>
+            )}
+          </div>
+        </section>
+
+        <section className="bg-white border rounded-lg p-5 space-y-4">
+          <div>
+            <h4 className="font-semibold text-gray-900">Failure families</h4>
+            <p className="text-sm text-gray-500">Latest offline review of telemetry, replay, shadow, and history evidence.</p>
+          </div>
+
+          {dashboard.failureReview.available ? (
+            <>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <SummaryCell label="Telemetry events" value={String(dashboard.failureReview.telemetryEventCount)} />
+                <SummaryCell label="Replay failures" value={String(dashboard.failureReview.replayFailureCount)} />
+                <SummaryCell label="History failures" value={String(dashboard.failureReview.historyFailureCount)} />
+                <SummaryCell label="Window" value={`${dashboard.failureReview.windowDays ?? 0} days`} />
+              </div>
+
+              <div className="space-y-2">
+                {dashboard.failureReview.topFamilies.map((family) => (
+                  <div key={family.key} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-gray-900 text-sm">{family.title}</div>
+                        <div className="text-xs text-gray-500 mt-1">{family.category} • {family.severity}</div>
+                      </div>
+                      <StatusChip tone={family.severity === 'high' ? 'rose' : family.severity === 'medium' ? 'amber' : 'slate'}>
+                        {family.occurrenceCount}
+                      </StatusChip>
+                    </div>
+                    <p className="text-xs text-gray-600 mt-2 leading-5">{family.action}</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-gray-500">No failure-review artifact is available yet.</p>
+          )}
+        </section>
+
+        <section className="bg-white border rounded-lg p-5 space-y-4">
+          <div>
+            <h4 className="font-semibold text-gray-900">Replay deltas</h4>
+            <p className="text-sm text-gray-500">Latest acceptance gate outcome and prompt-budget pressure.</p>
+          </div>
+
+          {dashboard.replay.available ? (
+            <>
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                <div>
+                  <div className="text-sm font-medium text-gray-900">Latest replay capture</div>
+                  <div className="text-xs text-gray-500">{dashboard.replay.capturedAt || 'Unknown timestamp'}</div>
+                </div>
+                <StatusChip tone={replayGateMet ? 'green' : 'rose'}>
+                  {replayGateMet ? 'Gate met' : 'Gate failed'}
+                </StatusChip>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <SummaryCell label="Pass rate" value={dashboard.replay.passRate == null ? 'n/a' : formatPercent(dashboard.replay.passRate)} />
+                <SummaryCell label="Regressions" value={String(dashboard.replay.regressionsOnBaselineSuccess)} />
+                <SummaryCell label="Prompt quality" value={dashboard.replay.promptQualityFailureCount == null ? 'n/a' : String(dashboard.replay.promptQualityFailureCount)} />
+                <SummaryCell label="Over budget" value={dashboard.replay.overBudgetPromptCount == null ? 'n/a' : String(dashboard.replay.overBudgetPromptCount)} />
+                <SummaryCell label="New semantic families" value={dashboard.replay.newSemanticFamilyCount == null ? 'n/a' : String(dashboard.replay.newSemanticFamilyCount)} />
+                <SummaryCell label="Max prompt delta" value={dashboard.replay.maxPromptSizeIncreaseBytes == null ? 'n/a' : `${dashboard.replay.maxPromptSizeIncreaseBytes.toLocaleString()} bytes`} />
+              </div>
+
+              <div>
+                <h5 className="text-sm font-medium text-gray-700 mb-2">Failed gate keys</h5>
+                {dashboard.replay.failedGateKeys.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {dashboard.replay.failedGateKeys.map((key) => (
+                      <StatusChip key={key} tone="rose">{key}</StatusChip>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">No failed acceptance gates recorded.</p>
+                )}
+              </div>
+
+              <div>
+                <h5 className="text-sm font-medium text-gray-700 mb-2">Recent mismatch evidence</h5>
+                {dashboard.shadow.recentMismatches.length > 0 ? (
+                  <div className="space-y-2">
+                    {dashboard.shadow.recentMismatches.map((item) => (
+                      <div key={`${item.promptFingerprint}-${item.timestamp}`} className="rounded-lg border border-gray-100 bg-gray-50 p-3 text-sm">
+                        <div className="font-medium text-gray-900">{item.promptFingerprint}</div>
+                        <div className="text-xs text-gray-500 mt-1">{item.primaryRoute} → {item.shadowRoute}</div>
+                        <div className="text-xs text-gray-500 mt-1">{item.primaryDataSource} vs {item.shadowDataSource}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">No recent shadow mismatches in the current window.</p>
+                )}
+              </div>
+            </>
+          ) : (
+            <p className="text-sm text-gray-500">No replay artifact is available yet.</p>
+          )}
+        </section>
+      </div>
+
+      <section className="bg-white border rounded-lg p-5">
+        <div className="flex items-center gap-2 mb-3">
+          <AlertTriangle size={16} className="text-amber-600" />
+          <h4 className="font-semibold text-gray-900">Recent failed history jobs</h4>
+        </div>
+
+        {dashboard.history.recentFailedJobs.length > 0 ? (
+          <div className="space-y-2">
+            {dashboard.history.recentFailedJobs.map((job) => (
+              <div key={job.jobId} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="font-medium text-sm text-gray-900">{job.name || job.jobId}</div>
+                  <div className="text-xs text-gray-500">{job.source || 'unknown source'} • {job.completedAt || 'unknown time'}</div>
+                </div>
+                <div className="text-sm text-gray-600 mt-2 leading-5">{job.errorMessage || 'No error message captured.'}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-gray-500">No recent failed history jobs were found.</p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  detail: string;
+  tone: 'folio' | 'amber' | 'sky' | 'green' | 'rose';
+}) {
+  const toneClass = {
+    folio: 'bg-folio-50 border-folio-100',
+    amber: 'bg-amber-50 border-amber-100',
+    sky: 'bg-sky-50 border-sky-100',
+    green: 'bg-green-50 border-green-100',
+    rose: 'bg-rose-50 border-rose-100',
+  }[tone];
+
+  return (
+    <div className={`rounded-lg border p-4 ${toneClass}`}>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <div className="text-sm font-medium text-gray-700">{label}</div>
+        {icon}
+      </div>
+      <div className="text-2xl font-semibold text-gray-900">{value}</div>
+      <div className="text-sm text-gray-600 mt-1 leading-5">{detail}</div>
+    </div>
+  );
+}
+
+function SummaryCell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
+      <div className="text-xs uppercase tracking-wide text-gray-500">{label}</div>
+      <div className="text-sm font-medium text-gray-900 mt-1 break-words">{value}</div>
+    </div>
+  );
+}
+
+function StatusChip({ children, tone }: { children: React.ReactNode; tone: 'green' | 'rose' | 'amber' | 'slate' }) {
+  const toneClass = {
+    green: 'bg-green-100 text-green-800',
+    rose: 'bg-rose-100 text-rose-800',
+    amber: 'bg-amber-100 text-amber-800',
+    slate: 'bg-slate-100 text-slate-700',
+  }[tone];
+
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${toneClass}`}>
+      {children}
+    </span>
+  );
+}
+
+function formatPercent(value: number) {
+  return `${value.toFixed(1)}%`;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────

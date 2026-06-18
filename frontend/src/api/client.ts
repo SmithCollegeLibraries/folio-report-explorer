@@ -11,6 +11,7 @@ import type {
   SavedQuery,
   HealthResponse,
   AppSettings,
+  Nl2SqlDashboardResponse,
   SettingsTestResponse,
   QueryDefinition,
   JobSubmitResponse,
@@ -286,6 +287,11 @@ export async function testSettings(
   params: Record<string, unknown>,
 ): Promise<SettingsTestResponse> {
   const { data } = await api.post('/settings/test', params);
+  return data;
+}
+
+export async function fetchNl2SqlDashboard(): Promise<Nl2SqlDashboardResponse> {
+  const { data } = await api.get('/settings/nl2sql-dashboard');
   return data;
 }
 
