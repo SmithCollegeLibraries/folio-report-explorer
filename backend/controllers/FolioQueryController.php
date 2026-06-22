@@ -12,6 +12,7 @@ use app\services\SettingsService;
 use app\services\DatabaseRetryService;
 use app\services\IndexRecommendationService;
 use app\services\Nl2sqlRuntimePreflightService;
+use app\services\PreviousSuccessfulQueryReuseService;
 use app\services\ReferenceCacheRefreshService;
 use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
@@ -830,6 +831,78 @@ class FolioQueryController extends Controller
     }
 
     /**
+     * POST /api/query/reuse-candidate — find a prior successful NL query for review.
+     * Body: {prompt: string, dataSource?: string, resolvedContext?: object}
+     */
+    public function actionQueryReuseCandidate()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $prompt = trim((string)($body['prompt'] ?? ''));
+        if ($prompt === '') {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'prompt is required'];
+        }
+
+        $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
+        $resolvedContext = $body['resolvedContext'] ?? $body['resolved_context'] ?? [];
+        if (!is_array($resolvedContext)) {
+            $resolvedContext = [];
+        }
+
+        $jobs = QueryJob::find()
+            ->where(['status' => 'completed', 'source' => 'nl'])
+            ->andWhere(['data_source' => $dataSource])
+            ->orderBy(['completed_at' => SORT_DESC, 'created_at' => SORT_DESC])
+            ->limit(100)
+            ->asArray()
+            ->all();
+
+        $match = PreviousSuccessfulQueryReuseService::findStrongMatch($prompt, $dataSource, $resolvedContext, $jobs);
+        if ($match === null) {
+            return ['match' => null];
+        }
+
+        try {
+            SqlBuilderService::validateSafety($match['sql']);
+            SqlBuilderService::validateTablePolicy($match['sql']);
+        } catch (\InvalidArgumentException $e) {
+            return ['match' => null];
+        }
+
+        return ['match' => $match];
+    }
+
+    /**
+     * POST /api/query/reuse-decision — record review-panel decisions.
+     * Body: {decision: accepted|edited|bypassed, candidateJobId?: string, prompt?: string}
+     */
+    public function actionQueryReuseDecision()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $decision = strtolower(trim((string)($body['decision'] ?? '')));
+        if (!in_array($decision, ['accepted', 'edited', 'bypassed'], true)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'decision must be accepted, edited, or bypassed'];
+        }
+
+        $payload = [
+            'event' => 'nl2sql.query_reuse',
+            'timestamp' => gmdate('c'),
+            'decision' => $decision,
+            'candidateJobId' => trim((string)($body['candidateJobId'] ?? $body['candidate_job_id'] ?? '')) ?: null,
+            'prompt' => trim((string)($body['prompt'] ?? '')) ?: null,
+            'edited' => $decision === 'edited',
+        ];
+
+        Yii::info(
+            'NL2SQL telemetry: ' . json_encode($payload),
+            GeminiService::NL2SQL_TELEMETRY_CATEGORY
+        );
+
+        return ['ok' => true];
+    }
+
+    /**
      * Preserve full NL prompts while keeping query_jobs.name safe for older VARCHAR(255) installs.
      *
      * @param array $body
@@ -851,6 +924,16 @@ class FolioQueryController extends Controller
         $normalizedName = $this->normalizeQueryJobName($rawName);
         if ($normalizedName !== $rawName) {
             $metadata['originalName'] = $rawName;
+        }
+
+        $reuseCandidate = $body['queryReuse'] ?? $body['query_reuse'] ?? null;
+        if (is_array($reuseCandidate)) {
+            $metadata['queryReuse'] = [
+                'decision' => 'accepted',
+                'candidateJobId' => trim((string)($reuseCandidate['candidateJobId'] ?? $reuseCandidate['candidate_job_id'] ?? '')) ?: null,
+                'edited' => !empty($reuseCandidate['edited']),
+                'score' => isset($reuseCandidate['score']) ? (int)$reuseCandidate['score'] : null,
+            ];
         }
 
         return $metadata ?: null;

@@ -2,14 +2,14 @@ import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as R
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
 import { useToast } from '../components/ToastProvider';
-import type { FollowUpContext, NlResponse } from '../types';
+import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
 import {
   Send, Play, Copy, Sparkles, RotateCcw, Square, Loader2,
@@ -502,12 +502,36 @@ export function buildQueryFeedbackInput(
   };
 }
 
+export function buildQueryReuseResolvedContext(selectedCampus: string): Record<string, string> {
+  const campus = selectedCampus.trim();
+  if (!campus || campus === 'All Colleges') {
+    return {};
+  }
+
+  return { campus };
+}
+
+export function formatQueryReuseMatchReason(reason: string): string {
+  const labels: Record<string, string> = {
+    completed_successfully: 'Previous run completed successfully',
+    same_data_source: 'Same data source',
+    same_campus: 'Same campus or institution scope',
+    same_domain: 'Same request domain',
+  };
+
+  return labels[reason] || reason.replace(/_/g, ' ');
+}
+
 export default function Ask() {
   const toast = useToast();
   const [searchParams] = useSearchParams();
   const { user, authEnabled } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [nlResult, setNlResult] = useState<NlResponse | null>(null);
+  const [reuseCandidate, setReuseCandidate] = useState<QueryReuseCandidate | null>(null);
+  const [reusePrompt, setReusePrompt] = useState('');
+  const [reuseSql, setReuseSql] = useState('');
+  const [reuseCheckPending, setReuseCheckPending] = useState(false);
   const [clarificationFreeText, setClarificationFreeText] = useState('');
   const [batchClarificationChoices, setBatchClarificationChoices] = useState<Record<string, { option: ClarificationOption | null; freeText: string }>>({});
   const [followUpContext, setFollowUpContext] = useState<FollowUpContext | null>(null);
@@ -697,7 +721,14 @@ export default function Ask() {
       sql: string;
       dataSource?: 'folio' | 'local';
       nlPrompt?: string;
-      options?: { outputMode?: 'table' | 'file' };
+      options?: {
+        outputMode?: 'table' | 'file';
+        queryReuse?: {
+          candidateJobId: string;
+          edited: boolean;
+          score?: number;
+        };
+      };
     }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
     onSuccess: (data) => {
       if (data.jobId) {
@@ -812,20 +843,104 @@ export default function Ask() {
     }
   }, [jobError, toast]);
 
-  const handleSubmit = () => {
+  const generateFreshSql = (question: string, context: FollowUpContext | null = followUpContext) => {
+    setReuseCandidate(null);
+    setReusePrompt('');
+    setReuseSql('');
+    setAskProgressPhase('checking_request');
+    askMut.mutate({
+      question,
+      includeSuggestions: true,
+      shouldExecute: true,
+      followUpContext: context,
+    });
+  };
+
+  const handleSubmit = async () => {
     const q = prompt.trim();
     if (!q) return;
     if (followUpContext?.source === 'ask' && !followUpContext.previousSql) {
       setFollowUpError('Follow-up context is missing the previous SQL. Start a new query or choose Ask follow-up again.');
       return;
     }
+    setReuseCandidate(null);
+    setReusePrompt('');
+    setReuseSql('');
     setAskProgressPhase('checking_request');
-    askMut.mutate({
-      question: q,
-      includeSuggestions: true,
-      shouldExecute: true,
-      followUpContext,
+
+    if (!followUpContext) {
+      setReuseCheckPending(true);
+      try {
+        const reuse = await fetchQueryReuseCandidate({
+          prompt: q,
+          dataSource: 'folio',
+          resolvedContext: buildQueryReuseResolvedContext(selectedCampus),
+        });
+        if (reuse.match) {
+          setReuseCandidate(reuse.match);
+          setReusePrompt(q);
+          setReuseSql(reuse.match.sql);
+          setNlResult(null);
+          resetJob();
+          setActiveJobId(null);
+          setDetailTab('sql');
+          return;
+        }
+      } catch (error) {
+        toast.error(`Could not check previous successful queries: ${getApiErrorMessage(error)}`);
+      } finally {
+        setReuseCheckPending(false);
+      }
+    }
+
+    generateFreshSql(q, followUpContext);
+  };
+
+  const handleRunReuseCandidate = () => {
+    if (!reuseCandidate || !reuseSql.trim()) return;
+    const result: NlResponse = {
+      sql: reuseSql,
+      dataSource: reuseCandidate.dataSource as 'folio' | 'local',
+    };
+    const originalSql = reuseCandidate.sql.trim();
+    const editedSql = reuseSql.trim();
+    const edited = originalSql !== editedSql;
+    setNlResult(result);
+    prependHistory(reusePrompt || reuseCandidate.previousPrompt, result);
+    resetJob();
+    setActiveJobId(null);
+    setDetailTab('sql');
+    execMut.mutate({
+      sql: editedSql,
+      dataSource: result.dataSource || 'folio',
+      nlPrompt: reusePrompt || reuseCandidate.previousPrompt,
+      options: {
+        outputMode: outputPref === 'full' ? 'file' : 'table',
+        queryReuse: {
+          candidateJobId: reuseCandidate.jobId,
+          edited,
+          score: reuseCandidate.score,
+        },
+      },
     });
+    recordQueryReuseDecision({
+      decision: edited ? 'edited' : 'accepted',
+      candidateJobId: reuseCandidate.jobId,
+      prompt: reusePrompt || reuseCandidate.previousPrompt,
+    }).catch(() => {});
+  };
+
+  const handleGenerateFreshFromReuse = () => {
+    const q = reusePrompt || prompt.trim();
+    if (!q) return;
+    if (reuseCandidate) {
+      recordQueryReuseDecision({
+        decision: 'bypassed',
+        candidateJobId: reuseCandidate.jobId,
+        prompt: q,
+      }).catch(() => {});
+    }
+    generateFreshSql(q, null);
   };
 
   const handleCopy = () => {
@@ -979,13 +1094,14 @@ export default function Ask() {
   );
 
   // Are we in any loading phase?
-  const isGenerating = askMut.isPending;
+  const isGenerating = askMut.isPending || reuseCheckPending;
   const isExecuting = execMut.isPending || isRunning;
   const isLoading = isGenerating || isExecuting;
   const hasFilePreview = !!(results?.outputMode === 'file' && results.columns.length > 0 && results.rows.length > 0);
   const showMiddlePanel = isGenerating
     || askMut.isError
     || !!followUpError
+    || !!reuseCandidate
     || !!(nlResult && !isLoading && nlResult.needsClarification);
   const showRightPaneClarifications: boolean = false;
   const showRightPaneAskErrors: boolean = false;
@@ -1082,10 +1198,10 @@ export default function Ask() {
                 <div className="flex flex-col gap-2 self-end">
                   <button
                     onClick={handleSubmit}
-                    disabled={!prompt.trim() || askMut.isPending}
+                    disabled={!prompt.trim() || askMut.isPending || reuseCheckPending}
                     className="bg-folio-600 text-white px-4 py-3 rounded-lg hover:bg-folio-700 disabled:opacity-50 transition-colors"
                   >
-                    {askMut.isPending ? (
+                    {askMut.isPending || reuseCheckPending ? (
                       <RotateCcw size={18} className="animate-spin" />
                     ) : (
                       <Send size={18} />
@@ -1189,6 +1305,91 @@ export default function Ask() {
       {followUpError && (
         <div className="mx-auto m-4 max-w-3xl p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
           {followUpError}
+        </div>
+      )}
+
+      {reuseCandidate && !isLoading && (
+        <div className="mx-auto max-w-3xl p-4 xl:px-6">
+          <div className="rounded-lg border border-folio-200 bg-folio-50 p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-folio-950">
+                  Previous successful query found
+                </div>
+                <p className="mt-1 text-sm text-folio-900">
+                  A similar question has been answered successfully before. Review the SQL below, edit it if needed, or generate new SQL instead.
+                </p>
+              </div>
+              <span className="shrink-0 rounded border border-folio-200 bg-white px-2 py-1 text-xs font-medium text-folio-700">
+                {reuseCandidate.score}% match
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="rounded-md border border-folio-100 bg-white px-3 py-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Previous question</div>
+                <div className="mt-1 text-gray-800">{reuseCandidate.previousPrompt}</div>
+              </div>
+
+              <div className="grid gap-2 text-xs text-gray-600 sm:grid-cols-3">
+                <div className="rounded-md border border-folio-100 bg-white px-3 py-2">
+                  <div className="font-semibold text-gray-500">Last run</div>
+                  <div className="mt-1">{reuseCandidate.completedAt || 'Unknown'}</div>
+                </div>
+                <div className="rounded-md border border-folio-100 bg-white px-3 py-2">
+                  <div className="font-semibold text-gray-500">Rows</div>
+                  <div className="mt-1">{reuseCandidate.rowCount ?? 'Unknown'}</div>
+                </div>
+                <div className="rounded-md border border-folio-100 bg-white px-3 py-2">
+                  <div className="font-semibold text-gray-500">Runtime</div>
+                  <div className="mt-1">
+                    {reuseCandidate.executionTimeMs !== null ? `${reuseCandidate.executionTimeMs} ms` : 'Unknown'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-md border border-folio-100 bg-white px-3 py-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Why this matched</div>
+                <ul className="mt-2 space-y-1">
+                  {reuseCandidate.matchReasons.map((reason) => (
+                    <li key={reason} className="flex gap-2 text-xs text-gray-700">
+                      <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-folio-500" />
+                      <span>{formatQueryReuseMatchReason(reason)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wide text-gray-500" htmlFor="query-reuse-sql">
+                  SQL to rerun
+                </label>
+                <textarea
+                  id="query-reuse-sql"
+                  value={reuseSql}
+                  onChange={(event) => setReuseSql(event.target.value)}
+                  className="mt-1 h-48 w-full rounded-lg border border-folio-200 bg-white px-3 py-2 font-mono text-xs text-gray-800 outline-none focus:border-folio-400 focus:ring-2 focus:ring-folio-200"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                onClick={handleGenerateFreshFromReuse}
+                className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                Generate New SQL
+              </button>
+              <button
+                onClick={handleRunReuseCandidate}
+                disabled={!reuseSql.trim() || execMut.isPending}
+                className="inline-flex items-center gap-2 rounded-lg bg-folio-700 px-3 py-2 text-sm font-medium text-white hover:bg-folio-800 disabled:opacity-50"
+              >
+                <Play size={14} />
+                Run SQL
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

@@ -666,6 +666,34 @@ export interface HistorySuggestionsResponse {
   warnings?: string[];
 }
 
+export interface QueryReuseCandidate {
+  jobId: string;
+  previousPrompt: string;
+  sql: string;
+  dataSource: string;
+  score: number;
+  matchReasons: string[];
+  rowCount: number | null;
+  executionTimeMs: number | null;
+  completedAt: string | null;
+}
+
+export interface QueryReuseCandidateRequest {
+  prompt: string;
+  dataSource?: string;
+  resolvedContext?: Record<string, string>;
+}
+
+export interface QueryReuseCandidateResponse {
+  match: QueryReuseCandidate | null;
+}
+
+export interface QueryReuseDecisionInput {
+  decision: 'accepted' | 'edited' | 'bypassed';
+  candidateJobId?: string;
+  prompt?: string;
+}
+
 export interface IndexRecommendationEvidence {
   patternIds?: string[];
   estimatedImpact?: 'high' | 'medium' | 'low';

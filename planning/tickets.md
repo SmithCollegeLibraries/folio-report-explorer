@@ -388,3 +388,63 @@
   - Added frontend API/types and History-page UI trigger to generate and display recommendations.
   - Latest live endpoint smoke on 2026-05-11 returned `recommendationSource=gemini` on `openai/gpt-4.1-mini` with `eligibleLogs=16`, `uniqueQueryPatterns=14`, `recommendationCount=10`, and no warnings.
 
+### NL2SQL-101 - Previous Successful Query Reuse Backend
+- Status: COMPLETE
+- Source step: Repeated-question quality track
+- Scope:
+  - Search all prior successful NL query jobs before calling AI SQL generation.
+  - Match conservatively using normalized prompt text plus data source and resolved context when available.
+  - Return prior SQL only as a reviewable suggestion; never execute reused SQL automatically.
+- Validation gate:
+  - Completed NL jobs can be selected as strong reuse candidates.
+  - Failed, cancelled, manual, report, wrong-data-source, and weak text matches are excluded.
+  - Suggested SQL still passes current safety/table-policy validation before being shown.
+- Completion update file required: Yes
+- Progress notes:
+  - Product decision: search all successful queries, not just the current user's history.
+  - Product decision: strong matches should interrupt with a review panel before new SQL generation.
+  - Product decision: reuse the previous SQL only; results must be rerun against current data after user approval or edits.
+  - Started backend implementation with `PreviousSuccessfulQueryReuseService`, which filters to completed NL jobs on the same data source, compares normalized prompt text, checks resolved campus/domain context when provided, and returns reviewable SQL plus match reasons.
+  - Added `POST /api/query/reuse-candidate` as the pre-generation backend hook for Ask. The endpoint searches recent completed NL jobs across users, delegates matching to the reuse service, and revalidates suggested SQL with the current safety/table-policy checks before returning it.
+  - Focused validation passed via `php backend/tests/PreviousSuccessfulQueryReuseServiceTest.php`, `php backend/tests/FolioQueryControllerReuseCandidateEndpointTest.php`, and PHP syntax checks for the new service, controller, and web config.
+  - Final verification on 2026-06-22 passed the focused backend tests, PHP syntax checks, frontend focused tests, frontend production build, and `git diff --check`.
+  - Fixed legacy-history matching: prior successful jobs that predate `metadata.resolvedContext` remain eligible when the prior prompt explicitly names the requested context value, such as "Smith College".
+  - Added deterministic ranking for multiple successful matches: exact prompt matches rank first, then human-reviewed reuse outcomes, then prompt similarity score, then most recent completion time.
+
+### NL2SQL-102 - Previous Successful Query Reuse UI
+- Status: COMPLETE
+- Source step: Repeated-question quality track
+- Scope:
+  - Add an Ask-page review panel when the backend finds a strong prior successful query match.
+  - Show prior question, last successful run metadata, match reasons, and editable SQL.
+  - Let the user run previous SQL, edit and run, or generate new SQL instead.
+- Validation gate:
+  - Strong matches show a transparent review panel before AI generation.
+  - Users can inspect and edit SQL before execution.
+  - Weak or absent matches continue the current generation flow.
+- Completion update file required: Yes
+- Progress notes:
+  - Added frontend API/types for `POST /api/query/reuse-candidate`.
+  - Ask now checks for a prior successful query before AI generation for first-pass prompts, skipping reuse checks for follow-up questions.
+  - Strong matches render a review panel with prior question, match score, last-run metadata, match reasons, editable SQL, and actions to run the SQL or generate fresh SQL.
+  - Reused SQL is rerun through the existing async query submission path; prior result rows are not reused.
+  - Focused validation passed via `npm test -- Ask.queryReuse.test.ts client.followUp.test.ts` and `npm run build`.
+  - Final verification on 2026-06-22 passed the focused backend tests, PHP syntax checks, frontend focused tests, frontend production build, and `git diff --check`.
+
+### NL2SQL-103 - Query Reuse Outcome Telemetry
+- Status: COMPLETE
+- Source step: Repeated-question quality track
+- Scope:
+  - Record whether a suggested prior query was reused, edited, or bypassed.
+  - Record whether the rerun succeeded.
+  - Feed failed repeat patterns back into NL2SQL review workflows without offering failed SQL for reuse.
+- Validation gate:
+  - Reuse decisions are reviewable in history/telemetry.
+  - Failed prior queries are visible as review signals but never offered as reusable SQL.
+- Completion update file required: Yes
+- Progress notes:
+  - Added `POST /api/query/reuse-decision` to emit `nl2sql.query_reuse` telemetry for accepted, edited, and bypassed reuse-panel decisions.
+  - Reused SQL submissions now include `queryReuse` metadata on the created `query_jobs` row with prior candidate job id, edited state, and match score.
+  - Ask records accepted/edited decisions when the user runs previous SQL and records bypass decisions when the user chooses to generate new SQL instead.
+  - Focused validation passed via `php backend/tests/QueryReuseOutcomeTelemetryTest.php`, `npm test -- client.followUp.test.ts`, and `npm run build`.
+  - Final verification on 2026-06-22 passed the focused backend tests, PHP syntax checks, frontend focused tests, frontend production build, and `git diff --check`.

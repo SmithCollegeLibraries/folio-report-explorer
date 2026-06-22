@@ -62,6 +62,8 @@ $config = [
                 'GET query/status/<id:[\w-]+>' => 'folio-query/query-status',
                 'POST query/cancel/<id:[\w-]+>' => 'folio-query/query-cancel',
                 'GET query/export/<id:[\w-]+>' => 'folio-query/query-export',
+                'POST query/reuse-candidate' => 'folio-query/query-reuse-candidate',
+                'POST query/reuse-decision' => 'folio-query/query-reuse-decision',
                 'GET query/jobs' => 'folio-query/query-list',
 
                 // Saved queries

@@ -105,4 +105,87 @@ describe('API client follow-up context', () => {
       feedbackNote: 'Looks right',
     });
   });
+
+  it('checks for a previous successful query reuse candidate', async () => {
+    const { fetchQueryReuseCandidate } = await import('./client');
+    post.mockResolvedValueOnce({
+      data: {
+        match: {
+          jobId: 'job-1',
+          previousPrompt: 'How many items are in Smith College collection?',
+          sql: 'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+          dataSource: 'folio',
+          score: 98,
+          matchReasons: ['completed_successfully', 'same_data_source', 'same_campus'],
+          rowCount: 1,
+          executionTimeMs: 42,
+          completedAt: '2026-06-01 12:00:00',
+        },
+      },
+    });
+
+    await fetchQueryReuseCandidate({
+      prompt: 'How many items are in the Smith College collection?',
+      dataSource: 'folio',
+      resolvedContext: { campus: 'Smith College', domain: 'inventory' },
+    });
+
+    expect(post).toHaveBeenCalledWith('/query/reuse-candidate', {
+      prompt: 'How many items are in the Smith College collection?',
+      dataSource: 'folio',
+      resolvedContext: { campus: 'Smith College', domain: 'inventory' },
+    });
+  });
+
+  it('submits accepted reuse metadata with rerun SQL', async () => {
+    const { submitQuery } = await import('./client');
+    post.mockResolvedValueOnce({ data: { jobId: 'new-job', status: 'pending' } });
+
+    await submitQuery(
+      'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+      {},
+      'nl',
+      'How many items are in the Smith College collection?',
+      'folio',
+      {
+        outputMode: 'table',
+        queryReuse: {
+          candidateJobId: 'old-job',
+          edited: true,
+          score: 97,
+        },
+      },
+    );
+
+    expect(post).toHaveBeenCalledWith('/query/submit', {
+      sql: 'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+      params: {},
+      source: 'nl',
+      name: 'How many items are in the Smith College collection?',
+      dataSource: 'folio',
+      outputMode: 'table',
+      queryReuse: {
+        candidateJobId: 'old-job',
+        edited: true,
+        score: 97,
+      },
+    });
+  });
+
+  it('records query reuse review decisions', async () => {
+    const { recordQueryReuseDecision } = await import('./client');
+    post.mockResolvedValueOnce({ data: { ok: true } });
+
+    await recordQueryReuseDecision({
+      decision: 'bypassed',
+      candidateJobId: 'old-job',
+      prompt: 'How many items are in the Smith College collection?',
+    });
+
+    expect(post).toHaveBeenCalledWith('/query/reuse-decision', {
+      decision: 'bypassed',
+      candidateJobId: 'old-job',
+      prompt: 'How many items are in the Smith College collection?',
+    });
+  });
 });

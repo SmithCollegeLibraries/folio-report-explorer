@@ -30,6 +30,9 @@ import type {
   RefreshResponse,
   HistoryResponse,
   HistorySuggestionsResponse,
+  QueryReuseCandidateRequest,
+  QueryReuseCandidateResponse,
+  QueryReuseDecisionInput,
   IndexRecommendationResponse,
   DashboardResponse,
   AcrlStatistic,
@@ -332,7 +335,15 @@ export async function submitQuery(
   source = 'manual',
   name?: string,
   dataSource: 'folio' | 'local' = 'folio',
-  options?: { confirmed?: boolean; outputMode?: 'table' | 'file' },
+  options?: {
+    confirmed?: boolean;
+    outputMode?: 'table' | 'file';
+    queryReuse?: {
+      candidateJobId: string;
+      edited: boolean;
+      score?: number;
+    };
+  },
 ): Promise<JobSubmitResponse> {
   const { data } = await api.post('/query/submit', {
     sql,
@@ -341,8 +352,14 @@ export async function submitQuery(
     dataSource,
     ...(options?.confirmed ? { confirmed: true } : {}),
     ...(options?.outputMode ? { outputMode: options.outputMode } : {}),
+    ...(options?.queryReuse ? { queryReuse: options.queryReuse } : {}),
     ...(name ? { name } : {}),
   });
+  return data;
+}
+
+export async function recordQueryReuseDecision(input: QueryReuseDecisionInput): Promise<{ ok: boolean }> {
+  const { data } = await api.post('/query/reuse-decision', input);
   return data;
 }
 
@@ -574,6 +591,13 @@ export async function fetchQueryHistory(
 
 export async function fetchHistorySuggestions(jobId: string): Promise<HistorySuggestionsResponse> {
   const { data } = await api.post(`/query/history/${jobId}/suggestions`);
+  return data;
+}
+
+export async function fetchQueryReuseCandidate(
+  payload: QueryReuseCandidateRequest,
+): Promise<QueryReuseCandidateResponse> {
+  const { data } = await api.post('/query/reuse-candidate', payload);
   return data;
 }
 
