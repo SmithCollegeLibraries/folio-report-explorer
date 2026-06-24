@@ -53,14 +53,15 @@ class PreviousSuccessfulQueryReuseService
         }
 
         $matchReasons = ['completed_successfully', 'same_data_source'];
-        if (!self::contextMatches($resolvedContext, $metadata, 'campus', $previousPrompt)) {
+        $sql = (string)($job['sql_text'] ?? '');
+        if (!self::contextMatches($resolvedContext, $metadata, 'campus', $previousPrompt, $sql)) {
             return null;
         }
         if (isset($resolvedContext['campus'])) {
             $matchReasons[] = 'same_campus';
         }
 
-        if (!self::contextMatches($resolvedContext, $metadata, 'domain', $previousPrompt)) {
+        if (!self::contextMatches($resolvedContext, $metadata, 'domain', $previousPrompt, $sql)) {
             return null;
         }
         if (isset($resolvedContext['domain'])) {
@@ -75,7 +76,7 @@ class PreviousSuccessfulQueryReuseService
         return [
             'jobId' => (string)($job['id'] ?? ''),
             'previousPrompt' => $previousPrompt,
-            'sql' => (string)($job['sql_text'] ?? ''),
+            'sql' => $sql,
             'dataSource' => (string)($job['data_source'] ?? $job['dataSource'] ?? 'folio'),
             'score' => $score,
             'matchReasons' => $matchReasons,
@@ -199,26 +200,44 @@ class PreviousSuccessfulQueryReuseService
         return $normalized;
     }
 
-    private static function contextMatches(array $resolvedContext, array $metadata, string $key, string $previousPrompt): bool
+    private static function contextMatches(array $resolvedContext, array $metadata, string $key, string $previousPrompt, string $sql): bool
     {
         if (!isset($resolvedContext[$key]) || trim((string)$resolvedContext[$key]) === '') {
             return true;
         }
 
-        $metadataContext = $metadata['resolvedContext'] ?? [];
-        if (!is_array($metadataContext)) {
-            return false;
-        }
-
         $expected = self::normalizeContextValue((string)$resolvedContext[$key]);
-        $actual = self::normalizeContextValue((string)($metadataContext[$key] ?? ''));
         if ($expected === '') {
             return false;
         }
-        if ($actual === '') {
-            return strpos(self::normalizeContextValue($previousPrompt), $expected) !== false;
+
+        $metadataContext = $metadata['resolvedContext'] ?? [];
+        if (is_array($metadataContext)) {
+            $actual = self::normalizeContextValue((string)($metadataContext[$key] ?? ''));
+            if ($actual !== '') {
+                return $expected === $actual;
+            }
         }
-        return $expected === $actual;
+
+        return self::legacyContextAppearsInPromptOrSql($expected, $previousPrompt, $sql);
+    }
+
+    private static function legacyContextAppearsInPromptOrSql(string $expected, string $previousPrompt, string $sql): bool
+    {
+        if (strpos(self::normalizeContextValue($previousPrompt), $expected) !== false) {
+            return true;
+        }
+
+        $normalizedSql = self::normalizeContextValue($sql);
+        if (strpos($normalizedSql, $expected) !== false) {
+            return true;
+        }
+
+        if ($expected === 'smith college' && preg_match('/\bsc\b/u', $normalizedSql) === 1) {
+            return true;
+        }
+
+        return false;
     }
 
     private static function normalizeContextValue(string $value): string

@@ -921,6 +921,21 @@ class FolioQueryController extends Controller
             $metadata['originalPrompt'] = $rawName;
         }
 
+        $resolvedContext = $body['resolvedContext'] ?? $body['resolved_context'] ?? null;
+        if ((string)$source === 'nl' && is_array($resolvedContext)) {
+            $cleanContext = [];
+            foreach ($resolvedContext as $key => $value) {
+                $cleanKey = trim((string)$key);
+                $cleanValue = trim((string)$value);
+                if ($cleanKey !== '' && $cleanValue !== '') {
+                    $cleanContext[$cleanKey] = $cleanValue;
+                }
+            }
+            if ($cleanContext !== []) {
+                $metadata['resolvedContext'] = $cleanContext;
+            }
+        }
+
         $normalizedName = $this->normalizeQueryJobName($rawName);
         if ($normalizedName !== $rawName) {
             $metadata['originalName'] = $rawName;

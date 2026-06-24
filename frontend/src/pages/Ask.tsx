@@ -703,7 +703,10 @@ export default function Ask() {
       sql: result.sql,
       dataSource: result.dataSource || 'folio',
       nlPrompt: questionText,
-      options: { outputMode: outputPref === 'full' ? 'file' : 'table' },
+      options: {
+        outputMode: outputPref === 'full' ? 'file' : 'table',
+        resolvedContext: buildQueryReuseResolvedContext(selectedCampus),
+      },
     });
   };
 
@@ -728,6 +731,7 @@ export default function Ask() {
           edited: boolean;
           score?: number;
         };
+        resolvedContext?: Record<string, string>;
       };
     }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
     onSuccess: (data) => {
@@ -916,6 +920,7 @@ export default function Ask() {
       nlPrompt: reusePrompt || reuseCandidate.previousPrompt,
       options: {
         outputMode: outputPref === 'full' ? 'file' : 'table',
+        resolvedContext: buildQueryReuseResolvedContext(selectedCampus),
         queryReuse: {
           candidateJobId: reuseCandidate.jobId,
           edited,

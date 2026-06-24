@@ -53,4 +53,9 @@ assertReuseTelemetry(
     'Query job metadata should record accepted reuse candidate id and edited state.'
 );
 
+assertReuseTelemetry(
+    strpos($controllerSource, '$metadata[\'resolvedContext\']') !== false,
+    'NL query job metadata should preserve resolved context for future reuse matching.'
+);
+
 echo "QueryReuseOutcomeTelemetryTest passed\n";

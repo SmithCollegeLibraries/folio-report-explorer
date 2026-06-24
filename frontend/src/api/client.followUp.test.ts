@@ -172,6 +172,33 @@ describe('API client follow-up context', () => {
     });
   });
 
+  it('submits resolved context with NL query jobs', async () => {
+    const { submitQuery } = await import('./client');
+    post.mockResolvedValueOnce({ data: { jobId: 'new-job', status: 'pending' } });
+
+    await submitQuery(
+      'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+      {},
+      'nl',
+      'How many items are in the collection?',
+      'folio',
+      {
+        outputMode: 'table',
+        resolvedContext: { campus: 'Smith College' },
+      },
+    );
+
+    expect(post).toHaveBeenCalledWith('/query/submit', {
+      sql: 'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+      params: {},
+      source: 'nl',
+      name: 'How many items are in the collection?',
+      dataSource: 'folio',
+      outputMode: 'table',
+      resolvedContext: { campus: 'Smith College' },
+    });
+  });
+
   it('records query reuse review decisions', async () => {
     const { recordQueryReuseDecision } = await import('./client');
     post.mockResolvedValueOnce({ data: { ok: true } });

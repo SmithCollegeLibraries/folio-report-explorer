@@ -410,6 +410,7 @@
   - Final verification on 2026-06-22 passed the focused backend tests, PHP syntax checks, frontend focused tests, frontend production build, and `git diff --check`.
   - Fixed legacy-history matching: prior successful jobs that predate `metadata.resolvedContext` remain eligible when the prior prompt explicitly names the requested context value, such as "Smith College".
   - Added deterministic ranking for multiple successful matches: exact prompt matches rank first, then human-reviewed reuse outcomes, then prompt similarity score, then most recent completion time.
+  - Fixed exact-repeat prompts that omit the campus name: fresh NL jobs now persist `resolvedContext`, and legacy rows without context can match Smith College only when the prior SQL proves Smith scope, such as `TRIM(au.name) = 'SC'`.
 
 ### NL2SQL-102 - Previous Successful Query Reuse UI
 - Status: COMPLETE

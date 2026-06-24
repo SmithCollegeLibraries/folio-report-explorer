@@ -113,6 +113,45 @@ $legacyMatch = PreviousSuccessfulQueryReuseService::findStrongMatch(
 assertReuseTest($legacyMatch !== null, 'Expected identical legacy successful prompts without resolved context to remain eligible.');
 assertReuseTest($legacyMatch['jobId'] === 'legacy-no-context', 'Expected the legacy successful query to be selected.');
 
+$legacySqlScopedMatch = PreviousSuccessfulQueryReuseService::findStrongMatch(
+    'Show materials purchased in the last 90 days grouped by material type.',
+    'folio',
+    ['campus' => 'Smith College'],
+    [
+        [
+            'id' => 'newer-unscoped-material-type',
+            'name' => 'Show materials purchased in the last 90 days grouped by material type.',
+            'status' => 'completed',
+            'source' => 'nl',
+            'data_source' => 'folio',
+            'sql_text' => "SELECT imt.name FROM orders.po_line__t pol JOIN inventory.material_type__t imt ON pol.physical__material_type = imt.id",
+            'metadata' => json_encode([
+                'originalPrompt' => 'Show materials purchased in the last 90 days grouped by material type.',
+            ]),
+            'completed_at' => '2026-06-08 09:00:00',
+            'row_count' => 10,
+            'execution_time_ms' => 50,
+        ],
+        [
+            'id' => 'older-scoped-material-type',
+            'name' => 'Show materials purchased in the last 90 days grouped by material type.',
+            'status' => 'completed',
+            'source' => 'nl',
+            'data_source' => 'folio',
+            'sql_text' => "SELECT imt.name FROM orders.po_line__t pol JOIN orders.purchase_order__t po ON pol.purchase_order_id = po.id JOIN orders.purchase_order__t__acq_unit_ids potaui ON potaui.id = po.id JOIN orders.acquisitions_unit__t au ON au.id = potaui.acq_unit_ids JOIN inventory.material_type__t imt ON pol.physical__material_type = imt.id WHERE TRIM(au.name) = 'SC'",
+            'metadata' => json_encode([
+                'originalPrompt' => 'Show materials purchased in the last 90 days grouped by material type.',
+            ]),
+            'completed_at' => '2026-06-07 09:00:00',
+            'row_count' => 10,
+            'execution_time_ms' => 50,
+        ],
+    ]
+);
+
+assertReuseTest($legacySqlScopedMatch !== null, 'Expected exact legacy prompt with SQL-proven Smith scope to be reusable.');
+assertReuseTest($legacySqlScopedMatch['jobId'] === 'older-scoped-material-type', 'Expected SQL-proven Smith scope to outrank an unscoped newer exact match.');
+
 $reviewedReuseMatch = PreviousSuccessfulQueryReuseService::findStrongMatch(
     'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.',
     'folio',

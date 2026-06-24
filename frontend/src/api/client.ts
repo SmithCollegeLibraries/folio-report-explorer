@@ -343,6 +343,7 @@ export async function submitQuery(
       edited: boolean;
       score?: number;
     };
+    resolvedContext?: Record<string, string>;
   },
 ): Promise<JobSubmitResponse> {
   const { data } = await api.post('/query/submit', {
@@ -353,6 +354,7 @@ export async function submitQuery(
     ...(options?.confirmed ? { confirmed: true } : {}),
     ...(options?.outputMode ? { outputMode: options.outputMode } : {}),
     ...(options?.queryReuse ? { queryReuse: options.queryReuse } : {}),
+    ...(options?.resolvedContext ? { resolvedContext: options.resolvedContext } : {}),
     ...(name ? { name } : {}),
   });
   return data;
