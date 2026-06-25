@@ -13,6 +13,8 @@ export interface SchemaMetadata {
 /** Summary info for a table in the table list */
 export interface TableSummary {
   name: string;
+  sql_name?: string;
+  alias_name?: string | null;
   type: string;
   primary_key: string | null;
   remarks: string | null;
@@ -67,6 +69,8 @@ export interface Relationship {
 /** Full table detail */
 export interface TableDetail {
   name: string;
+  sql_name?: string;
+  alias_name?: string | null;
   table: {
     type: string;
     schema: string;

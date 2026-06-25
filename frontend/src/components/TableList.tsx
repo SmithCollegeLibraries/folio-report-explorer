@@ -27,6 +27,15 @@ function shortName(fullName: string): string {
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
 }
 
+function sqlName(name: string, info?: TableSummary): string {
+  return info?.sql_name || name;
+}
+
+function aliasName(name: string, info?: TableSummary): string | null {
+  const alias = info?.alias_name || name;
+  return alias !== sqlName(name, info) ? alias : null;
+}
+
 /** Extract schema prefix from a table name, preferring the backend-supplied domain */
 function extractSchema(name: string, info?: TableSummary): string {
   if (info?.domain) return info.domain;
@@ -135,8 +144,15 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
     const lower = search.toLowerCase();
     const result: Record<string, TableSummary> = {};
     for (const [name, info] of Object.entries(source)) {
-      const sName = shortName(name).toLowerCase();
-      if (name.toLowerCase().includes(lower) || sName.includes(lower)) {
+      const physicalName = sqlName(name, info);
+      const alias = aliasName(name, info);
+      const sName = shortName(physicalName).toLowerCase();
+      if (
+        name.toLowerCase().includes(lower) ||
+        physicalName.toLowerCase().includes(lower) ||
+        sName.includes(lower) ||
+        (alias && alias.toLowerCase().includes(lower))
+      ) {
         result[name] = info;
       }
     }
@@ -207,7 +223,9 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
                 const hasSubtables = bt.subtables.length > 0;
                 const isParentExpanded = isSearching || expandedParents.has(bt.name);
                 const isSelected = selectedTable === bt.name;
-                const displayName = shortName(bt.name);
+                const physicalName = sqlName(bt.name, bt.info);
+                const displayName = shortName(physicalName);
+                const alias = aliasName(bt.name, bt.info);
 
                 return (
                   <div key={bt.name}>
@@ -234,15 +252,20 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
                       >
                         <div className="flex items-center gap-1.5">
                           <Table2 size={12} className="text-gray-400 flex-shrink-0" />
-                          <span className={`font-mono text-xs truncate ${
+                          <span className={`font-mono text-xs break-all ${
                             isSelected ? 'font-medium text-folio-700' : 'text-gray-700'
-                          }`} title={bt.name}>
+                          }`} title={physicalName}>
                             {displayName}
                           </span>
                         </div>
-                        {displayName !== bt.name && (
-                          <div className="pl-[18px] text-[10px] text-gray-400 truncate" title={bt.name}>
-                            {bt.name}
+                        {displayName !== physicalName && (
+                          <div className="pl-[18px] text-[10px] text-gray-400 break-all" title={physicalName}>
+                            {physicalName}
+                          </div>
+                        )}
+                        {alias && (
+                          <div className="pl-[18px] text-[10px] text-gray-400 break-all" title={alias}>
+                            alias: {alias}
                           </div>
                         )}
                         <div className="flex gap-2 mt-0.5 text-xs text-gray-400 pl-[18px]">
@@ -261,6 +284,9 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
                       <div className="bg-gray-50/50">
                         {bt.subtables.map((st) => {
                           const isSubSelected = selectedTable === st.name;
+                          const physicalName = sqlName(st.name, st.info);
+                          const alias = aliasName(st.name, st.info);
+                          const leafName = shortName(physicalName);
                           return (
                             <button
                               key={st.name}
@@ -274,11 +300,16 @@ export default function TableList({ tables, selectedTable, onSelectTable }: Prop
                             >
                               <div className="flex items-center gap-1.5">
                                 <Layers size={10} className="text-gray-400 flex-shrink-0" />
-                                <span className="font-mono truncate text-gray-600">{st.leafName}</span>
+                                <span className="font-mono break-all text-gray-600">{leafName}</span>
                               </div>
-                              {st.leafName !== st.name && (
-                                <div className="text-[10px] text-gray-400 truncate pl-[16px]" title={st.name}>
-                                  {st.name}
+                              {leafName !== physicalName && (
+                                <div className="text-[10px] text-gray-400 break-all pl-[16px]" title={physicalName}>
+                                  {physicalName}
+                                </div>
+                              )}
+                              {alias && (
+                                <div className="text-[10px] text-gray-400 break-all pl-[16px]" title={alias}>
+                                  alias: {alias}
                                 </div>
                               )}
                               <div className="text-xs text-gray-400 pl-[16px]">

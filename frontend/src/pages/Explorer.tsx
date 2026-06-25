@@ -109,12 +109,19 @@ function TableDetailView({
 }) {
   const { name, table, relationships } = detail;
   const [tab, setTab] = useState<'columns' | 'relationships' | 'graph'>('columns');
+  const sqlName = detail.sql_name || name;
+  const aliasName = detail.alias_name || (detail.name !== sqlName ? detail.name : null);
 
   return (
     <div className="p-6 max-w-4xl">
       {/* Header */}
       <div className="mb-6">
-        <h2 className="text-2xl font-bold font-mono">{name}</h2>
+        <h2 className="text-2xl font-bold font-mono break-all">{sqlName}</h2>
+        {aliasName && (
+          <div className="mt-1 text-sm text-gray-500 font-mono break-all">
+            alias: {aliasName}
+          </div>
+        )}
         {table.remarks && (
           <a
             href={table.remarks}

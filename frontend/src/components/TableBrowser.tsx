@@ -22,6 +22,15 @@ function shortName(fullName: string): string {
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
 }
 
+function sqlName(name: string, info?: TableSummary): string {
+  return info?.sql_name || name;
+}
+
+function aliasName(name: string, info?: TableSummary): string | null {
+  const alias = info?.alias_name || name;
+  return alias !== sqlName(name, info) ? alias : null;
+}
+
 /** Extract domain group from table name, preferring the backend-supplied domain */
 function domainOf(name: string, info?: TableSummary): string {
   if (info?.domain) return info.domain;
@@ -138,9 +147,16 @@ export default function TableBrowser({
       if (domain.toLowerCase().includes(lower)) return true;
       const list = groups.get(domain) || [];
       return list.some(
-        (t) =>
-          t.name.toLowerCase().includes(lower) ||
-          shortName(t.name).toLowerCase().includes(lower),
+        (t) => {
+          const physicalName = sqlName(t.name, t.info);
+          const alias = aliasName(t.name, t.info);
+          return (
+            t.name.toLowerCase().includes(lower) ||
+            physicalName.toLowerCase().includes(lower) ||
+            shortName(physicalName).toLowerCase().includes(lower) ||
+            Boolean(alias && alias.toLowerCase().includes(lower))
+          );
+        },
       );
     });
   }, [domainOrder, groups, search]);
@@ -161,9 +177,16 @@ export default function TableBrowser({
     // If the domain name matches, show all tables
     if (domain.toLowerCase().includes(lower)) return list;
     return list.filter(
-      (t) =>
-        t.name.toLowerCase().includes(lower) ||
-        shortName(t.name).toLowerCase().includes(lower),
+      (t) => {
+        const physicalName = sqlName(t.name, t.info);
+        const alias = aliasName(t.name, t.info);
+        return (
+          t.name.toLowerCase().includes(lower) ||
+          physicalName.toLowerCase().includes(lower) ||
+          shortName(physicalName).toLowerCase().includes(lower) ||
+          Boolean(alias && alias.toLowerCase().includes(lower))
+        );
+      },
     );
   };
 
@@ -203,7 +226,12 @@ export default function TableBrowser({
               <Link2 size={10} />
               Connected Tables ({connectedTables.length})
             </div>
-            {connectedTables.slice(0, 12).map((ct) => (
+            {connectedTables.slice(0, 12).map((ct) => {
+              const info = tables[ct.name];
+              const physicalName = sqlName(ct.name, info);
+              const alias = aliasName(ct.name, info);
+
+              return (
               <button
                 key={ct.name}
                 onClick={() => onAddTable(ct.name)}
@@ -211,16 +239,20 @@ export default function TableBrowser({
               >
                 <Plus size={12} className="text-emerald-500 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="font-mono truncate">{shortName(ct.name)}</div>
-                  {shortName(ct.name) !== ct.name && (
-                    <div className="text-[10px] text-gray-400 truncate">{ct.name}</div>
+                  <div className="font-mono break-all">{shortName(physicalName)}</div>
+                  {shortName(physicalName) !== physicalName && (
+                    <div className="text-[10px] text-gray-400 break-all">{physicalName}</div>
+                  )}
+                  {alias && (
+                    <div className="text-[10px] text-gray-400 break-all">alias: {alias}</div>
                   )}
                 </div>
                 <span className="text-[10px] text-gray-400 shrink-0">
                   {ct.links.length} link{ct.links.length > 1 ? 's' : ''}
                 </span>
               </button>
-            ))}
+              );
+            })}
             {connectedTables.length > 12 && (
               <div className="px-3 py-1 text-[10px] text-gray-400 text-center">
                 +{connectedTables.length - 12} more
@@ -275,6 +307,8 @@ export default function TableBrowser({
                   {domainTables.map(({ name, info }) => {
                     const isSel = selectedSet.has(name);
                     const isConn = connectedSet.has(name);
+                    const physicalName = sqlName(name, info);
+                    const alias = aliasName(name, info);
 
                     return (
                       <button
@@ -296,9 +330,12 @@ export default function TableBrowser({
                           <Plus size={12} className="text-gray-300 shrink-0" />
                         )}
                         <div className="min-w-0 flex-1">
-                          <div className="font-mono truncate">{shortName(name)}</div>
-                          {shortName(name) !== name && (
-                            <div className="text-[10px] text-gray-400 truncate">{name}</div>
+                          <div className="font-mono break-all">{shortName(physicalName)}</div>
+                          {shortName(physicalName) !== physicalName && (
+                            <div className="text-[10px] text-gray-400 break-all">{physicalName}</div>
+                          )}
+                          {alias && (
+                            <div className="text-[10px] text-gray-400 break-all">alias: {alias}</div>
                           )}
                         </div>
                         <span className="text-[10px] text-gray-400 shrink-0">

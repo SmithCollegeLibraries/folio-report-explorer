@@ -260,6 +260,8 @@ class FolioSchemaService
                 : count($info['columns'] ?? []);
             $result[$name] = [
                 'name' => $name,
+                'sql_name' => $metadbName ?: $name,
+                'alias_name' => $metadbName && $metadbName !== $name ? $name : null,
                 'type' => $info['type'] ?? 'TABLE',
                 'primary_key' => $info['primary_key'] ?? null,
                 'remarks' => $info['remarks'] ?? null,
@@ -294,6 +296,8 @@ class FolioSchemaService
             $metadbRels = $relationships[$metadb] ?? ['parents' => [], 'children' => []];
             $result[$metadb] = [
                 'name' => $metadb,
+                'sql_name' => $metadb,
+                'alias_name' => null,
                 'type' => 'TABLE',
                 'primary_key' => 'id',
                 'remarks' => null,
@@ -333,6 +337,8 @@ class FolioSchemaService
 
             $result[$fullName] = [
                 'name' => $fullName,
+                'sql_name' => $fullName,
+                'alias_name' => null,
                 'type' => 'SUBTABLE',
                 'primary_key' => 'id',
                 'remarks' => 'Flattened array/object column from ' . ($parentKey ?? 'unknown'),
@@ -351,6 +357,8 @@ class FolioSchemaService
             }
             $result[$name] = [
                 'name' => $name,
+                'sql_name' => $name,
+                'alias_name' => null,
                 'type' => 'LOCAL_TABLE',
                 'primary_key' => 'id',
                 'remarks' => $info['remarks'] ?? null,
@@ -387,8 +395,12 @@ class FolioSchemaService
                 $table['columns'] = $realCols;
             }
             $rels = $schema['relationships'][$name] ?? ['parents' => [], 'children' => []];
+            $metadbMap = self::discoverTableMapping();
+            $sqlName = $metadbMap[$name] ?? $name;
             return [
                 'name' => $name,
+                'sql_name' => $sqlName,
+                'alias_name' => $sqlName !== $name ? $name : null,
                 'table' => $table,
                 'relationships' => $rels,
             ];
@@ -407,6 +419,8 @@ class FolioSchemaService
             ];
             return [
                 'name' => $name,
+                'sql_name' => $name,
+                'alias_name' => null,
                 'table' => $table,
                 'relationships' => $schema['relationships'][$name] ?? ['parents' => [], 'children' => []],
             ];
@@ -417,6 +431,8 @@ class FolioSchemaService
             $local = self::LOCAL_TABLES[$name];
             return [
                 'name' => $name,
+                'sql_name' => $name,
+                'alias_name' => null,
                 'table' => [
                     'type' => 'LOCAL_TABLE',
                     'primary_key' => 'id',
@@ -456,6 +472,8 @@ class FolioSchemaService
 
         return [
             'name' => $name,
+            'sql_name' => $name,
+            'alias_name' => null,
             'table' => $table,
             'relationships' => $rels,
         ];
