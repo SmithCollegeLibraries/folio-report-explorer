@@ -39,9 +39,10 @@ assertRevisionContains(':acqUnitId', $sql, 'The selected acquisition unit must r
 assertRevisionContains('COALESCE(b.allocated, 0) <> 0', $sql, 'Only allocated funds must be returned.');
 assertRevisionContains('inv.payment_date::date BETWEEN fy.period_start AND fy.period_end', $sql, 'Payment dates must use FOLIO fiscal-year dates.');
 assertRevisionContains("t.encumbrance__status IN (''Unreleased'', ''Active'')", $sql, 'Current encumbrances must use active and unreleased transactions.');
-assertRevisionTrue(strpos($sql, 'SCFY') === false, 'Migration 036 must not hardcode a campus series.');
-assertRevisionTrue(preg_match('/FY20[0-9]{2}/', $sql) !== 1, 'Migration 036 must not hardcode a fiscal-year label.');
-assertRevisionTrue(preg_match("/DATE '[0-9]{4}-[0-9]{2}-[0-9]{2}'/", $sql) !== 1, 'Migration 036 must not hardcode report dates.');
+assertRevisionTrue(preg_match("/''[A-Z]{2}FY''/i", $sql) !== 1, 'Migration 036 must not hardcode a two-letter campus series.');
+assertRevisionTrue(preg_match('/FY[0-9]{4}/', $sql) !== 1, 'Migration 036 must not hardcode a fiscal-year label.');
+assertRevisionTrue(preg_match("/''[0-9]{4}-[0-9]{2}-[0-9]{2}''/", $sql) !== 1, 'Migration 036 must not hardcode an ISO date literal.');
+assertRevisionTrue(preg_match('/\b(?:19|20)[0-9]{2}\b/', $sql) !== 1, 'Migration 036 must not hardcode a four-digit fiscal year or date component.');
 
 $parameterNames = [];
 if (preg_match_all('/"name":"([^"]+)"/', $sql, $matches)) {
@@ -64,17 +65,33 @@ $columns = [
     'FOLIO Encumbered',
     'FOLIO Available',
 ];
-$lastPosition = -1;
-foreach ($columns as $column) {
-    $position = strpos($sql, 'AS "' . $column . '"');
-    assertRevisionTrue($position !== false, "Missing output column {$column}.");
-    assertRevisionTrue($position > $lastPosition, "Output column {$column} is out of order.");
-    $lastPosition = $position;
+$finalSelectMatched = preg_match(
+    '/SELECT sf\.code AS "Fund Code".*?\nFROM budgets b/s',
+    $sql,
+    $finalSelectMatches
+);
+assertRevisionTrue($finalSelectMatched === 1, 'Migration 036 must contain the expected final SELECT block.');
+$finalSelectBlock = $finalSelectMatches[0] ?? '';
+$finalAliases = [];
+if (preg_match_all('/\bAS "([^"]+)"/', $finalSelectBlock, $aliasMatches)) {
+    $finalAliases = $aliasMatches[1];
 }
-assertRevisionTrue(substr_count($sql, 'ROUND(') === 8, 'Exactly eight monetary outputs must use ROUND.');
-assertRevisionTrue(stripos($sql, 'TO_CHAR') === false, 'Monetary outputs must remain numeric.');
+assertRevisionTrue($finalAliases === $columns, 'The final SELECT must expose exactly the 11 approved columns in order.');
+assertRevisionTrue(substr_count($finalSelectBlock, 'ROUND(') === 8, 'Exactly eight final monetary outputs must use ROUND.');
+assertRevisionTrue(stripos($finalSelectBlock, 'TO_CHAR') === false, 'Final monetary outputs must remain numeric.');
 assertRevisionTrue(strpos($sql, 'Remaining Difference') === false, 'The concise report must omit difference columns.');
-assertRevisionContains('Calculated Remaining: Allocated minus Payments minus Calculated Current Encumbrances.', $sql, 'Help text must explain calculated remaining.');
-assertRevisionContains('FOLIO Available: the operational available balance stored on the FOLIO budget.', $sql, 'Help text must explain FOLIO available.');
+$helpDefinitions = [
+    'Allocated: the allocation total stored on the FOLIO budget.',
+    'Payments: paid invoice-line fund distributions whose invoice payment date falls inside the resolved FOLIO fiscal year.',
+    'Calculated Current Encumbrances: active or unreleased encumbrance transactions, calculated as initial amount minus expended amount minus awaiting-payment amount.',
+    'Total Committed: Payments plus Calculated Current Encumbrances.',
+    'Calculated Remaining: Allocated minus Payments minus Calculated Current Encumbrances.',
+    'FOLIO Expenditures: the expenditure total currently stored on the FOLIO budget.',
+    'FOLIO Encumbered: the encumbrance total currently stored on the FOLIO budget.',
+    'FOLIO Available: the operational available balance stored on the FOLIO budget.',
+];
+foreach ($helpDefinitions as $definition) {
+    assertRevisionContains($definition, $sql, "Missing help definition: {$definition}");
+}
 
 fwrite(STDOUT, "BudgetYearFundReportFiscalYearOptionsMigration test passed\n");
