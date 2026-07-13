@@ -394,9 +394,10 @@ class MigrationService
                     . ' AND sql_template LIKE :remaining_marker'
                     . ' AND sql_template NOT LIKE :difference_marker'
                     . ' AND help_text LIKE :help_marker'
-                    . ' AND CAST(parameters AS CHAR) LIKE :fiscal_year_parameter'
-                    . ' AND CAST(parameters AS CHAR) LIKE :acq_unit_parameter'
-                    . ' AND CAST(parameters AS CHAR) NOT LIKE :legacy_fiscal_year_parameter',
+                    . ' AND help_text NOT LIKE :difference_marker'
+                    . ' AND JSON_LENGTH(parameters) = 2'
+                    . " AND BINARY JSON_UNQUOTE(JSON_EXTRACT(parameters, '$[0].name')) = BINARY :fiscal_year_parameter"
+                    . " AND BINARY JSON_UNQUOTE(JSON_EXTRACT(parameters, '$[1].name')) = BINARY :acq_unit_parameter",
                 [
                     ':slug' => 'budget-year-fund-report',
                     ':name' => 'Budget Year Fund Report',
@@ -409,9 +410,8 @@ class MigrationService
                     ':remaining_marker' => '%AS "Calculated Remaining"%',
                     ':difference_marker' => '%Remaining Difference%',
                     ':help_marker' => '%Calculated Remaining: Allocated minus Payments minus Calculated Current Encumbrances.%',
-                    ':fiscal_year_parameter' => '%"fiscalYearEndYear"%',
-                    ':acq_unit_parameter' => '%"acqUnitId"%',
-                    ':legacy_fiscal_year_parameter' => '%"fiscalYearId"%',
+                    ':fiscal_year_parameter' => 'fiscalYearEndYear',
+                    ':acq_unit_parameter' => 'acqUnitId',
                 ]
             );
     }
