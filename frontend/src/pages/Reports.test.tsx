@@ -120,6 +120,9 @@ describe('Reports', () => {
     );
 
     expect(await screen.findByPlaceholderText('Choose campus')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /how to read this report/i }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /collapse parameters/i }));
 
@@ -129,5 +132,47 @@ describe('Reports', () => {
     fireEvent.click(screen.getByRole('button', { name: /show parameters/i }));
 
     expect(screen.getByPlaceholderText('Choose campus')).toBeInTheDocument();
+  });
+
+  it('shows report help when the detail includes help text', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    const { getReport } = await import('../api/client');
+    vi.mocked(getReport).mockResolvedValue({
+      id: 4,
+      slug: 'budget-year-fund-report',
+      name: 'Budget Year Fund Report',
+      description: 'Shows fund balances for a selected budget year.',
+      helpText: 'Available Budget includes calculated current encumbrances.',
+      category: 'finance',
+      sqlTemplate: 'select 1',
+      parameters: [],
+      defaultLimit: 10000,
+      isActive: true,
+      createdBy: 'manual',
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T00:00:00Z',
+      selectOptions: {},
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/reports/4']}>
+          <Routes>
+            <Route path="/reports/:id" element={<ReportDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByRole('button', { name: /how to read this report/i }),
+    ).toBeInTheDocument();
   });
 });

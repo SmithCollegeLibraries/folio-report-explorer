@@ -5,6 +5,7 @@ import { getReport, runReport } from '../api/client';
 import ResultsTable from '../components/ResultsTable';
 import SqlPreview from '../components/SqlPreview';
 import ParamInput from '../components/ParamInput';
+import ReportHelp from '../components/ReportHelp';
 import { useJobPolling } from '../hooks/useJobPolling';
 import {
   ArrowLeft,
@@ -237,6 +238,11 @@ export default function ReportDetail() {
                   </div>
                   {report.description && (
                     <p className="mt-2 max-w-3xl text-sm text-gray-600">{report.description}</p>
+                  )}
+                  {report.helpText?.trim() && (
+                    <div className="mt-3">
+                      <ReportHelp reportName={report.name} helpText={report.helpText} />
+                    </div>
                   )}
                   {sourceReportName && sourceMaterialType && (
                     <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
