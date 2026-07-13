@@ -133,7 +133,7 @@ export default function Builder() {
       const jobName = selectedTables.length > 0
         ? `Builder: ${selectedTables.slice(0, 3).join(', ')}${selectedTables.length > 3 ? ` +${selectedTables.length - 3} more` : ''}`
         : undefined;
-      return submitQuery(sql, {}, 'builder', jobName, 'folio', options);
+      return submitQuery(sql, built?.params ?? {}, 'builder', jobName, 'folio', options);
     },
     onSuccess: (data, vars) => {
       if (data.requiresConfirmation) {
