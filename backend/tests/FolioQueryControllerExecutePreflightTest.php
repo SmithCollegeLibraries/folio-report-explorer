@@ -69,6 +69,17 @@ namespace app\services {
 
     class SqlBuilderService
     {
+        public static $buildCalls = [];
+
+        public static function build($queryDefinition)
+        {
+            self::$buildCalls[] = $queryDefinition;
+            return [
+                'sql' => 'SELECT * FROM inventory.items WHERE holdings_record_id = :holdings_id',
+                'params' => [':holdings_id' => 'not-a-uuid'],
+            ];
+        }
+
         public static function normalizeForExecution($sql)
         {
             return trim((string) $sql);
@@ -306,15 +317,43 @@ namespace {
     assertTrueValue(!empty($telemetryRecord['sqlHash'] ?? null), 'Generated execute requests should include a stable SQL hash in telemetry.');
 
     \app\services\SqlPreflightService::$calls = [];
-    \app\services\SqlPreflightService::$nextResult = ['error' => 'invalid input syntax for type uuid'];
+    \app\services\SqlPreflightService::$nextResult = ['error' => 'syntax error at end of input'];
     Yii::$warnings = [];
 
     Yii::$app = (object) [
         'request' => new FakeExecuteRequest([
-            'sql' => 'SELECT * FROM inventory.items WHERE holdings_record_id = :holdings_id',
-            'params' => [':holdings_id' => 'not-a-uuid'],
-            'source' => 'builder',
+            'sql' => 'SELECT * FROM inventory.items',
+            'source' => 'nl',
             'dataSource' => 'folio',
+        ]),
+        'response' => new FakeExecuteResponse(),
+        'folioDb' => $folioDb,
+        'user' => (object) ['isGuest' => true, 'id' => null],
+        'params' => [
+            'maxQueryRows' => 100,
+            'queryTimeoutMs' => 1800000,
+        ],
+    ];
+
+    $defaultParamsController = new \app\controllers\FolioQueryController('folio-query', null);
+    $defaultParamsController->actionExecute();
+
+    assertCountValue(1, \app\services\SqlPreflightService::$calls, 'Generated execute requests without params should invoke PostgreSQL preflight exactly once.');
+    assertSameValue([], \app\services\SqlPreflightService::$calls[0]['params'] ?? null, 'Generated execute requests without params should use the default empty preflight map.');
+
+    \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$nextResult = ['error' => 'invalid input syntax for type uuid'];
+    \app\services\SqlBuilderService::$buildCalls = [];
+    Yii::$warnings = [];
+
+    Yii::$app = (object) [
+        'request' => new FakeExecuteRequest([
+            'queryDefinition' => [
+                'tables' => ['inventory.items'],
+                'filters' => [
+                    ['column' => 'holdings_record_id', 'operator' => '=', 'value' => 'not-a-uuid'],
+                ],
+            ],
         ]),
         'response' => new FakeExecuteResponse(),
         'folioDb' => $folioDb,
@@ -330,7 +369,9 @@ namespace {
 
     assertSameValue(422, Yii::$app->response->statusCode, 'Query submit requests should fail fast when PostgreSQL preflight rejects parameterized SQL.');
     assertSameValue('invalid input syntax for type uuid', $submitResult['error'] ?? null, 'Query submit requests should surface the PostgreSQL preflight error directly.');
+    assertCountValue(1, \app\services\SqlBuilderService::$buildCalls, 'Query submit requests should build queryDefinition input exactly once.');
     assertCountValue(1, \app\services\SqlPreflightService::$calls, 'Query submit requests should invoke PostgreSQL preflight exactly once.');
+    assertSameValue('SELECT * FROM inventory.items WHERE holdings_record_id = :holdings_id', \app\services\SqlPreflightService::$calls[0]['sql'] ?? null, 'Query submit requests should preflight the SQL returned by the builder.');
     assertSameValue([':holdings_id' => 'not-a-uuid'], \app\services\SqlPreflightService::$calls[0]['params'] ?? null, 'Query submit requests should pass queued query parameters to PostgreSQL preflight.');
 
     $manualDb = new FakeExecuteDb();
