@@ -35,11 +35,13 @@ function assertNullValue($actual, string $message): void
 final class FakeSqlPreflightCommand
 {
     private $sql;
+    private $params;
     private $db;
 
-    public function __construct(string $sql, FakeSqlPreflightDb $db)
+    public function __construct(string $sql, array $params, FakeSqlPreflightDb $db)
     {
         $this->sql = $sql;
+        $this->params = $params;
         $this->db = $db;
     }
 
@@ -51,6 +53,7 @@ final class FakeSqlPreflightCommand
     public function queryOne()
     {
         $this->db->queriedCommands[] = $this->sql;
+        $this->db->queriedParams[] = $this->params;
         if ($this->db->queryException instanceof Throwable) {
             throw $this->db->queryException;
         }
@@ -62,6 +65,7 @@ final class FakeSqlPreflightDb
 {
     public $executedCommands = [];
     public $queriedCommands = [];
+    public $queriedParams = [];
     public $queryResult;
     public $queryException;
 
@@ -71,9 +75,9 @@ final class FakeSqlPreflightDb
         $this->queryException = $queryException;
     }
 
-    public function createCommand(string $sql): FakeSqlPreflightCommand
+    public function createCommand(string $sql, array $params = []): FakeSqlPreflightCommand
     {
-        return new FakeSqlPreflightCommand($sql, $this);
+        return new FakeSqlPreflightCommand($sql, $params, $this);
     }
 }
 
@@ -93,21 +97,28 @@ $successDb = new FakeSqlPreflightDb([
 
 $successEstimate = $serviceClass::estimateQueryComplexity(
     $successDb,
-    'SELECT 1',
-    1800000
+    'SELECT :campus_id',
+    1800000,
+    2500,
+    [':campus_id' => 'ku']
 );
 
 assertSameValue(42, $successEstimate['rows'] ?? null, 'Preflight should capture the top-level planned row estimate.');
 assertSameValue(99.25, $successEstimate['cost'] ?? null, 'Preflight should capture the maximum cost across the full plan tree.');
 assertSameValue(
-    ['SET statement_timeout = 10000', 'SET statement_timeout = 1800000'],
+    ['SET statement_timeout = 2500', 'SET statement_timeout = 1800000'],
     $successDb->executedCommands,
     'Preflight should lower the statement timeout for EXPLAIN and restore the configured query timeout afterwards.'
 );
 assertSameValue(
-    ['EXPLAIN (FORMAT JSON) SELECT 1'],
+    ['EXPLAIN (FORMAT JSON) SELECT :campus_id'],
     $successDb->queriedCommands,
     'Preflight should run EXPLAIN FORMAT JSON against the generated SQL.'
+);
+assertSameValue(
+    [[':campus_id' => 'ku']],
+    $successDb->queriedParams,
+    'Preflight should bind the query parameters when running EXPLAIN.'
 );
 
 $errorDb = new FakeSqlPreflightDb(

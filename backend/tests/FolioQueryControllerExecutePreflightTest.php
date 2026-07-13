@@ -60,6 +60,11 @@ namespace app\services {
     class GeminiService
     {
         public const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
+
+        public static function normalizeGeneratedSql($sql)
+        {
+            return trim((string) $sql);
+        }
     }
 
     class SqlBuilderService
@@ -91,12 +96,13 @@ namespace app\services {
         public static $calls = [];
         public static $nextResult = null;
 
-        public static function estimateQueryComplexity($db, string $sql, int $queryTimeoutMs, int $preflightTimeoutMs = 10000)
+        public static function estimateQueryComplexity($db, string $sql, int $queryTimeoutMs, int $preflightTimeoutMs = 10000, array $params = [])
         {
             self::$calls[] = [
                 'sql' => $sql,
                 'queryTimeoutMs' => $queryTimeoutMs,
                 'preflightTimeoutMs' => $preflightTimeoutMs,
+                'params' => $params,
             ];
             return self::$nextResult;
         }
@@ -264,7 +270,8 @@ namespace {
 
     Yii::$app = (object) [
         'request' => new FakeExecuteRequest([
-            'sql' => 'SELECT * FROM folio_source_record.records__t',
+            'sql' => 'SELECT * FROM folio_source_record.records__t WHERE campus_id = :campus_id',
+            'params' => [':campus_id' => 'ku'],
             'source' => 'nl',
             'dataSource' => 'folio',
         ]),
@@ -283,6 +290,7 @@ namespace {
     assertSameValue(422, Yii::$app->response->statusCode, 'Generated execute requests should fail fast when PostgreSQL preflight rejects the SQL.');
     assertSameValue('operator does not exist: jsonb !~~* unknown', $generatedResult['error'] ?? null, 'Generated execute requests should surface the PostgreSQL preflight error directly.');
     assertCountValue(1, \app\services\SqlPreflightService::$calls, 'Generated execute requests should invoke PostgreSQL preflight exactly once.');
+    assertSameValue([':campus_id' => 'ku'], \app\services\SqlPreflightService::$calls[0]['params'] ?? null, 'Generated execute requests should pass execution parameters to PostgreSQL preflight.');
     assertCountValue(0, $folioDb->queriedSql, 'Generated execute requests should not reach query execution when preflight fails.');
     assertCountValue(1, Yii::$warnings, 'Generated execute requests should emit one telemetry warning when PostgreSQL preflight fails.');
 
@@ -296,6 +304,34 @@ namespace {
     assertSameValue('operator_error', $telemetryRecord['errorFamily'] ?? null, 'Generated execute requests should classify operator errors for telemetry.');
     assertSameValue('operator does not exist: jsonb !~~* unknown', $telemetryRecord['error'] ?? null, 'Generated execute requests should include the PostgreSQL error text in telemetry.');
     assertTrueValue(!empty($telemetryRecord['sqlHash'] ?? null), 'Generated execute requests should include a stable SQL hash in telemetry.');
+
+    \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$nextResult = ['error' => 'invalid input syntax for type uuid'];
+    Yii::$warnings = [];
+
+    Yii::$app = (object) [
+        'request' => new FakeExecuteRequest([
+            'sql' => 'SELECT * FROM inventory.items WHERE holdings_record_id = :holdings_id',
+            'params' => [':holdings_id' => 'not-a-uuid'],
+            'source' => 'builder',
+            'dataSource' => 'folio',
+        ]),
+        'response' => new FakeExecuteResponse(),
+        'folioDb' => $folioDb,
+        'user' => (object) ['isGuest' => true, 'id' => null],
+        'params' => [
+            'maxQueryRows' => 100,
+            'queryTimeoutMs' => 1800000,
+        ],
+    ];
+
+    $submitController = new \app\controllers\FolioQueryController('folio-query', null);
+    $submitResult = $submitController->actionQuerySubmit();
+
+    assertSameValue(422, Yii::$app->response->statusCode, 'Query submit requests should fail fast when PostgreSQL preflight rejects parameterized SQL.');
+    assertSameValue('invalid input syntax for type uuid', $submitResult['error'] ?? null, 'Query submit requests should surface the PostgreSQL preflight error directly.');
+    assertCountValue(1, \app\services\SqlPreflightService::$calls, 'Query submit requests should invoke PostgreSQL preflight exactly once.');
+    assertSameValue([':holdings_id' => 'not-a-uuid'], \app\services\SqlPreflightService::$calls[0]['params'] ?? null, 'Query submit requests should pass queued query parameters to PostgreSQL preflight.');
 
     $manualDb = new FakeExecuteDb();
     $manualDb->queryAllResult = [['total' => 1]];

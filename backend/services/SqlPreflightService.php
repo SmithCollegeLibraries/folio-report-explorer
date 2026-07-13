@@ -12,14 +12,15 @@ class SqlPreflightService
      * @param string $sql
      * @param int $queryTimeoutMs
      * @param int $preflightTimeoutMs
+     * @param array $params
      * @return array|null ['rows' => int|null, 'cost' => float|null] or ['error' => string]
      */
-    public static function estimateQueryComplexity($db, string $sql, int $queryTimeoutMs, int $preflightTimeoutMs = 10000)
+    public static function estimateQueryComplexity($db, string $sql, int $queryTimeoutMs, int $preflightTimeoutMs = 10000, array $params = [])
     {
         try {
             $db->createCommand('SET statement_timeout = ' . (int) $preflightTimeoutMs)->execute();
             try {
-                $row = $db->createCommand('EXPLAIN (FORMAT JSON) ' . $sql)->queryOne();
+                $row = $db->createCommand('EXPLAIN (FORMAT JSON) ' . $sql, $params)->queryOne();
             } finally {
                 $db->createCommand('SET statement_timeout = ' . (int) $queryTimeoutMs)->execute();
             }

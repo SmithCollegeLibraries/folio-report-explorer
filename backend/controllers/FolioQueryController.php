@@ -329,9 +329,10 @@ class FolioQueryController extends Controller
      *
      * @param string $sql
      * @param string $dataSource
+     * @param array $params
      * @return array|null ['rows' => int|null, 'cost' => float|null]
      */
-    private function estimateQueryComplexity($sql, $dataSource)
+    private function estimateQueryComplexity($sql, $dataSource, array $params = [])
     {
         if ($this->normalizeDataSource($dataSource) !== 'folio') {
             return null;
@@ -340,7 +341,9 @@ class FolioQueryController extends Controller
         return SqlPreflightService::estimateQueryComplexity(
             Yii::$app->folioDb,
             (string) $sql,
-            (int) Yii::$app->params['queryTimeoutMs']
+            (int) Yii::$app->params['queryTimeoutMs'],
+            10000,
+            $params
         );
     }
 
@@ -619,7 +622,7 @@ class FolioQueryController extends Controller
         }
 
         if ($this->shouldPreflightExecuteSql($dataSource, $source)) {
-            $estimate = $this->estimateQueryComplexity($sql, $dataSource);
+            $estimate = $this->estimateQueryComplexity($sql, $dataSource, $params);
             if (isset($estimate['error'])) {
                 $this->logPreflightValidationFailure('api.execute', (string) $estimate['error'], $dataSource, $source, $sql);
                 Yii::$app->response->statusCode = 422;
@@ -769,7 +772,7 @@ class FolioQueryController extends Controller
 
         $estimate = null;
         if ($dataSource === 'folio') {
-            $estimate = $this->estimateQueryComplexity($sql, $dataSource);
+            $estimate = $this->estimateQueryComplexity($sql, $dataSource, $params);
             // Surface PostgreSQL validation errors immediately instead of queuing a doomed 30-minute job.
             if (isset($estimate['error'])) {
                 $this->logPreflightValidationFailure('api.query_submit', (string) $estimate['error'], $dataSource, $source, $sql);
