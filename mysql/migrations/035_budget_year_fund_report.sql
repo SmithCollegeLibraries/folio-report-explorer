@@ -1,7 +1,20 @@
-ALTER TABLE `report_templates`
-  ADD COLUMN IF NOT EXISTS `help_text` LONGTEXT NULL
-  COMMENT 'Optional explanatory content shown in the report help modal'
-  AFTER `description`;
+SET @budget_year_fund_report_has_help_text := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'report_templates'
+    AND COLUMN_NAME = 'help_text'
+);
+
+SET @budget_year_fund_report_help_text_ddl := IF(
+  @budget_year_fund_report_has_help_text > 0,
+  'SELECT 1',
+  'ALTER TABLE `report_templates` ADD COLUMN `help_text` LONGTEXT NULL COMMENT ''Optional explanatory content shown in the report help modal'' AFTER `description`'
+);
+
+PREPARE budget_year_fund_report_help_text_stmt FROM @budget_year_fund_report_help_text_ddl;
+EXECUTE budget_year_fund_report_help_text_stmt;
+DEALLOCATE PREPARE budget_year_fund_report_help_text_stmt;
 
 START TRANSACTION;
 

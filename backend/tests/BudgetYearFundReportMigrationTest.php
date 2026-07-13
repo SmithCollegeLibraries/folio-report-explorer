@@ -184,7 +184,9 @@ class BudgetYearFundReportTestDatabase
 }
 
 $sql = file_exists($migrationPath) ? (string)file_get_contents($migrationPath) : '';
-assertContainsText('ADD COLUMN IF NOT EXISTS `help_text` LONGTEXT NULL', $sql, 'Migration must add reusable report help metadata.');
+assertContainsText("FROM information_schema.COLUMNS\n  WHERE TABLE_SCHEMA = DATABASE()\n    AND TABLE_NAME = 'report_templates'\n    AND COLUMN_NAME = 'help_text'", $sql, 'Migration must guard the help_text column using MySQL 8 information_schema.');
+assertContainsText('PREPARE budget_year_fund_report_help_text_stmt FROM @budget_year_fund_report_help_text_ddl', $sql, 'Migration must execute the guarded help_text DDL through a prepared statement.');
+assertTrueValue(stripos($sql, 'ADD COLUMN IF NOT EXISTS') === false, 'Migration must not use MariaDB-only ADD COLUMN IF NOT EXISTS syntax on MySQL 8.');
 assertContainsText("'budget-year-fund-report'", $sql, 'Migration must seed the fixed report slug.');
 assertContainsText(':fiscalYearId', $sql, 'Report must bind one fiscal year.');
 assertContainsText(':acqUnitId', $sql, 'Report must bind one acquisition unit.');

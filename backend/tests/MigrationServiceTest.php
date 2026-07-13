@@ -229,7 +229,8 @@ class MigrationServiceRetryTestCommand
         }
 
         $this->database->executed[] = $this->sql;
-        if (strpos($this->sql, 'ALTER TABLE `report_templates`') === 0) {
+        if (strpos($this->sql, 'ALTER TABLE `report_templates`') === 0
+            || $this->sql === 'EXECUTE budget_year_fund_report_help_text_stmt') {
             $this->database->hasHelpText = true;
             return;
         }
