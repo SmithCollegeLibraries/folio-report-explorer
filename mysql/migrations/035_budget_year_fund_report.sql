@@ -8,15 +8,39 @@ SET @budget_year_fund_report_displaced_id = (
   FROM report_templates
 );
 
+SET @budget_year_fund_report_has_displaced_row = EXISTS (
+  SELECT 1
+  FROM report_templates
+  WHERE id = 37
+    AND slug <> 'budget-year-fund-report'
+);
+
+SET @budget_year_fund_report_existing_id = (
+  SELECT id
+  FROM report_templates
+  WHERE slug = 'budget-year-fund-report'
+  LIMIT 1
+);
+
 UPDATE report_templates
 SET id = @budget_year_fund_report_displaced_id
 WHERE id = 37
   AND slug <> 'budget-year-fund-report';
 
+UPDATE dashboard_widget_templates
+SET report_template_id = @budget_year_fund_report_displaced_id
+WHERE report_template_id = 37
+  AND @budget_year_fund_report_has_displaced_row = 1;
+
 UPDATE report_templates
 SET id = 37
 WHERE slug = 'budget-year-fund-report'
   AND id <> 37;
+
+UPDATE dashboard_widget_templates
+SET report_template_id = 37
+WHERE report_template_id = @budget_year_fund_report_existing_id
+  AND @budget_year_fund_report_existing_id <> 37;
 
 INSERT INTO `report_templates`
   (`id`, `slug`, `name`, `description`, `help_text`, `category`, `sql_template`,

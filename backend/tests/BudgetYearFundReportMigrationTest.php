@@ -128,15 +128,29 @@ assertTrueValue(substr_count($sql, 'ROUND(') >= 13, 'All monetary outputs must b
 assertTrueValue(stripos($sql, 'TO_CHAR') === false, 'Monetary outputs must remain numeric.');
 
 $reservePosition = strpos($sql, 'SET @budget_year_fund_report_displaced_id = (');
+$captureDisplacedPosition = strpos($sql, "SET @budget_year_fund_report_has_displaced_row = EXISTS (\n  SELECT 1\n  FROM report_templates\n  WHERE id = 37\n    AND slug <> 'budget-year-fund-report'\n)");
+$captureExistingPosition = strpos($sql, "SET @budget_year_fund_report_existing_id = (\n  SELECT id\n  FROM report_templates\n  WHERE slug = 'budget-year-fund-report'\n  LIMIT 1\n)");
 $displacePosition = strpos($sql, "UPDATE report_templates\nSET id = @budget_year_fund_report_displaced_id\nWHERE id = 37\n  AND slug <> 'budget-year-fund-report'");
+$repointDisplacedPosition = strpos($sql, "UPDATE dashboard_widget_templates\nSET report_template_id = @budget_year_fund_report_displaced_id\nWHERE report_template_id = 37\n  AND @budget_year_fund_report_has_displaced_row = 1");
 $claimPosition = strpos($sql, "UPDATE report_templates\nSET id = 37\nWHERE slug = 'budget-year-fund-report'\n  AND id <> 37");
+$repointExistingPosition = strpos($sql, "UPDATE dashboard_widget_templates\nSET report_template_id = 37\nWHERE report_template_id = @budget_year_fund_report_existing_id\n  AND @budget_year_fund_report_existing_id <> 37");
 $seedPosition = strpos($sql, 'INSERT INTO `report_templates`');
 assertTrueValue($reservePosition !== false, 'Migration must reserve a new ID before displacing an unrelated report at ID 37.');
+assertTrueValue($captureDisplacedPosition !== false, 'Migration must remember whether ID 37 belongs to an unrelated report.');
+assertTrueValue($captureExistingPosition !== false, 'Migration must capture the fixed slug old ID before changing report identities.');
 assertTrueValue($displacePosition !== false, 'Migration must preserve an unrelated ID 37 report at the reserved ID.');
+assertTrueValue($repointDisplacedPosition !== false, 'Migration must keep widgets attached to an unrelated report displaced from ID 37.');
 assertTrueValue($claimPosition !== false, 'Migration must move an existing fixed slug to ID 37 before seeding.');
+assertTrueValue($repointExistingPosition !== false, 'Migration must keep widgets attached to the fixed slug when it moves to ID 37.');
 assertTrueValue(
-    $reservePosition < $displacePosition && $displacePosition < $claimPosition && $claimPosition < $seedPosition,
-    'Migration must safely reconcile both unique keys before seeding the fixed report.'
+    $reservePosition < $captureDisplacedPosition
+        && $captureDisplacedPosition < $captureExistingPosition
+        && $captureExistingPosition < $displacePosition
+        && $displacePosition < $repointDisplacedPosition
+        && $repointDisplacedPosition < $claimPosition
+        && $claimPosition < $repointExistingPosition
+        && $repointExistingPosition < $seedPosition,
+    'Migration must preserve each logical report-widget association while reconciling both unique keys.'
 );
 
 $initSql = (string)file_get_contents($initPath);
