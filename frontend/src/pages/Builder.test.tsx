@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Builder from './Builder';
@@ -75,9 +75,12 @@ describe('Builder', () => {
     const generatedSql = 'SELECT name FROM users WHERE name LIKE :p0';
     const editedSql = `${generatedSql} ORDER BY name`;
     const params = { ':p0': '%general%' };
+    let resolveInitialSubmit!: (response: { requiresConfirmation: boolean; estimatedRows: number }) => void;
     apiMocks.buildQuery.mockResolvedValue({ sql: generatedSql, params });
     apiMocks.submitQuery
-      .mockResolvedValueOnce({ requiresConfirmation: true, estimatedRows: 50_000 })
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveInitialSubmit = resolve;
+      }))
       .mockResolvedValueOnce({ jobId: 'job-1' });
 
     const queryClient = new QueryClient({
@@ -100,6 +103,12 @@ describe('Builder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit SQL' }));
     fireEvent.change(screen.getByLabelText('SQL Preview'), { target: { value: editedSql } });
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    await waitFor(() => expect(apiMocks.submitQuery).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'DISTINCT' }));
+    await act(() => {
+      resolveInitialSubmit({ requiresConfirmation: true, estimatedRows: 50_000 });
+    });
 
     await waitFor(() => expect(apiMocks.submitQuery).toHaveBeenCalledTimes(2));
     expect(apiMocks.submitQuery).toHaveBeenNthCalledWith(

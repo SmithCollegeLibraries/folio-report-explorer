@@ -129,11 +129,11 @@ export default function Builder() {
   });
 
   const execMut = useMutation({
-    mutationFn: ({ sql, options }: { sql: string; options?: { confirmed?: boolean; outputMode?: 'table' | 'file' } }) => {
+    mutationFn: ({ sql, params, options }: { sql: string; params: Record<string, string>; options?: { confirmed?: boolean; outputMode?: 'table' | 'file' } }) => {
       const jobName = selectedTables.length > 0
         ? `Builder: ${selectedTables.slice(0, 3).join(', ')}${selectedTables.length > 3 ? ` +${selectedTables.length - 3} more` : ''}`
         : undefined;
-      return submitQuery(sql, built?.params ?? {}, 'builder', jobName, 'folio', options);
+      return submitQuery(sql, params, 'builder', jobName, 'folio', options);
     },
     onSuccess: (data, vars) => {
       if (data.requiresConfirmation) {
@@ -144,6 +144,7 @@ export default function Builder() {
         );
         execMut.mutate({
           sql: vars.sql,
+          params: vars.params,
           options: shouldExport ? { outputMode: 'file' } : { confirmed: true, outputMode: 'table' },
         });
         return;
@@ -320,7 +321,7 @@ export default function Builder() {
           </button>
           {canRun && (
             <button
-              onClick={() => execMut.mutate({ sql: effectiveSql })}
+              onClick={() => execMut.mutate({ sql: effectiveSql, params: built?.params ?? {} })}
               disabled={execMut.isPending}
               className="flex items-center gap-1 bg-green-600 text-white px-3 py-1.5 rounded text-sm hover:bg-green-700 disabled:opacity-50"
             >
