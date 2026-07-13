@@ -234,7 +234,13 @@ class MigrationService
             }
         }
 
-        return true;
+        return self::hasColumn($db, 'report_templates', 'help_text')
+            && self::rowExists(
+                $db,
+                'report_templates',
+                'id = 37 OR slug = :slug',
+                [':slug' => 'budget-year-fund-report']
+            );
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -313,6 +319,14 @@ class MigrationService
                 return self::hasTable($db, 'ai_query_feedback');
             case '034_folio_reference_cache.sql':
                 return self::hasTable($db, 'folio_reference_tables') && self::hasTable($db, 'folio_reference_values');
+            case '035_budget_year_fund_report.sql':
+                return self::hasColumn($db, 'report_templates', 'help_text')
+                    && self::rowExists(
+                        $db,
+                        'report_templates',
+                        'id = 37 OR slug = :slug',
+                        [':slug' => 'budget-year-fund-report']
+                    );
         }
 
         return false;

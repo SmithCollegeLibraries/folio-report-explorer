@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS report_templates (
     slug VARCHAR(100) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
+    help_text LONGTEXT NULL COMMENT 'Optional explanatory content shown in the report help modal',
     category ENUM('acquisitions', 'circulation', 'inventory', 'finance', 'users', 'other') DEFAULT 'other',
     sql_template LONGTEXT NOT NULL COMMENT 'SQL with :param placeholders',
     parameters JSON NOT NULL COMMENT 'Array of parameter definitions',
