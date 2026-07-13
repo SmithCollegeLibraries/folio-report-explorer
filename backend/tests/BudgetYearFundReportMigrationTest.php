@@ -71,9 +71,9 @@ class BudgetYearFundReportTestCommand
 class BudgetYearFundReportTestDatabase
 {
     public $schema;
-    private $hasReportRow;
+    private $reportRows;
 
-    public function __construct(bool $hasHelpText, bool $hasReportRow)
+    public function __construct(bool $hasHelpText, array $reportRows)
     {
         $tableNames = [
             'users',
@@ -89,15 +89,29 @@ class BudgetYearFundReportTestDatabase
             $tables[$tableName] = new BudgetYearFundReportTestTableSchema($columns);
         }
         $this->schema = new BudgetYearFundReportTestSchema($tables);
-        $this->hasReportRow = $hasReportRow;
+        $this->reportRows = $reportRows;
     }
 
     public function createCommand(string $sql, array $params = []): BudgetYearFundReportTestCommand
     {
         $isReportLookup = strpos($sql, 'FROM report_templates') !== false
             && ($params[':slug'] ?? null) === 'budget-year-fund-report';
+        if (!$isReportLookup) {
+            return new BudgetYearFundReportTestCommand(0);
+        }
 
-        return new BudgetYearFundReportTestCommand($isReportLookup && $this->hasReportRow ? 1 : 0);
+        $requiresExactIdentity = strpos($sql, 'id = 37 AND slug = :slug') !== false;
+        $count = 0;
+        foreach ($this->reportRows as $row) {
+            $hasId = ($row['id'] ?? null) === 37;
+            $hasSlug = ($row['slug'] ?? null) === 'budget-year-fund-report';
+            if (($requiresExactIdentity && $hasId && $hasSlug)
+                || (!$requiresExactIdentity && ($hasId || $hasSlug))) {
+                $count++;
+            }
+        }
+
+        return new BudgetYearFundReportTestCommand($count);
     }
 }
 
@@ -113,13 +127,25 @@ assertContainsText('"Remaining Difference"', $sql, 'Report must include reconcil
 assertTrueValue(substr_count($sql, 'ROUND(') >= 13, 'All monetary outputs must be rounded.');
 assertTrueValue(stripos($sql, 'TO_CHAR') === false, 'Monetary outputs must remain numeric.');
 
+$reservePosition = strpos($sql, 'SET @budget_year_fund_report_displaced_id = (');
+$displacePosition = strpos($sql, "UPDATE report_templates\nSET id = @budget_year_fund_report_displaced_id\nWHERE id = 37\n  AND slug <> 'budget-year-fund-report'");
+$claimPosition = strpos($sql, "UPDATE report_templates\nSET id = 37\nWHERE slug = 'budget-year-fund-report'\n  AND id <> 37");
+$seedPosition = strpos($sql, 'INSERT INTO `report_templates`');
+assertTrueValue($reservePosition !== false, 'Migration must reserve a new ID before displacing an unrelated report at ID 37.');
+assertTrueValue($displacePosition !== false, 'Migration must preserve an unrelated ID 37 report at the reserved ID.');
+assertTrueValue($claimPosition !== false, 'Migration must move an existing fixed slug to ID 37 before seeding.');
+assertTrueValue(
+    $reservePosition < $displacePosition && $displacePosition < $claimPosition && $claimPosition < $seedPosition,
+    'Migration must safely reconcile both unique keys before seeding the fixed report.'
+);
+
 $initSql = (string)file_get_contents($initPath);
 assertContainsText('help_text LONGTEXT NULL', $initSql, 'Fresh-install schema must include reusable report help metadata.');
 
 $migrationApplied = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
 $databaseCurrent = new ReflectionMethod(MigrationService::class, 'databaseAppearsCurrent');
 
-$columnOnlyDatabase = new BudgetYearFundReportTestDatabase(true, false);
+$columnOnlyDatabase = new BudgetYearFundReportTestDatabase(true, []);
 assertTrueValue(
     $migrationApplied->invoke(null, $columnOnlyDatabase, '035_budget_year_fund_report.sql') === false,
     'Migration 035 must not appear applied when only help_text exists.'
@@ -129,7 +155,9 @@ assertTrueValue(
     'Fresh-init schema must not be baselined before the fixed report row exists.'
 );
 
-$rowOnlyDatabase = new BudgetYearFundReportTestDatabase(false, true);
+$rowOnlyDatabase = new BudgetYearFundReportTestDatabase(false, [
+    ['id' => 37, 'slug' => 'budget-year-fund-report'],
+]);
 assertTrueValue(
     $migrationApplied->invoke(null, $rowOnlyDatabase, '035_budget_year_fund_report.sql') === false,
     'Migration 035 must not appear applied when only the fixed report row exists.'
@@ -139,7 +167,46 @@ assertTrueValue(
     'Database must not appear current before help_text exists.'
 );
 
-$completeDatabase = new BudgetYearFundReportTestDatabase(true, true);
+$idOnlyDatabase = new BudgetYearFundReportTestDatabase(true, [
+    ['id' => 37, 'slug' => 'unrelated-report'],
+]);
+assertTrueValue(
+    $migrationApplied->invoke(null, $idOnlyDatabase, '035_budget_year_fund_report.sql') === false,
+    'Migration 035 must not appear applied when ID 37 belongs to an unrelated report.'
+);
+assertTrueValue(
+    $databaseCurrent->invoke(null, $idOnlyDatabase) === false,
+    'Database must not appear current when ID 37 belongs to an unrelated report.'
+);
+
+$slugOnlyDatabase = new BudgetYearFundReportTestDatabase(true, [
+    ['id' => 42, 'slug' => 'budget-year-fund-report'],
+]);
+assertTrueValue(
+    $migrationApplied->invoke(null, $slugOnlyDatabase, '035_budget_year_fund_report.sql') === false,
+    'Migration 035 must not appear applied when the fixed slug has the wrong ID.'
+);
+assertTrueValue(
+    $databaseCurrent->invoke(null, $slugOnlyDatabase) === false,
+    'Database must not appear current when the fixed slug has the wrong ID.'
+);
+
+$mismatchedDatabase = new BudgetYearFundReportTestDatabase(true, [
+    ['id' => 37, 'slug' => 'unrelated-report'],
+    ['id' => 42, 'slug' => 'budget-year-fund-report'],
+]);
+assertTrueValue(
+    $migrationApplied->invoke(null, $mismatchedDatabase, '035_budget_year_fund_report.sql') === false,
+    'Migration 035 must not appear applied when ID and slug belong to different rows.'
+);
+assertTrueValue(
+    $databaseCurrent->invoke(null, $mismatchedDatabase) === false,
+    'Database must not appear current when ID and slug belong to different rows.'
+);
+
+$completeDatabase = new BudgetYearFundReportTestDatabase(true, [
+    ['id' => 37, 'slug' => 'budget-year-fund-report'],
+]);
 assertTrueValue(
     $migrationApplied->invoke(null, $completeDatabase, '035_budget_year_fund_report.sql') === true,
     'Migration 035 must appear applied when help_text and the fixed report row both exist.'

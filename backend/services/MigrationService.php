@@ -238,7 +238,7 @@ class MigrationService
             && self::rowExists(
                 $db,
                 'report_templates',
-                'id = 37 OR slug = :slug',
+                'id = 37 AND slug = :slug',
                 [':slug' => 'budget-year-fund-report']
             );
     }
@@ -324,7 +324,7 @@ class MigrationService
                     && self::rowExists(
                         $db,
                         'report_templates',
-                        'id = 37 OR slug = :slug',
+                        'id = 37 AND slug = :slug',
                         [':slug' => 'budget-year-fund-report']
                     );
         }

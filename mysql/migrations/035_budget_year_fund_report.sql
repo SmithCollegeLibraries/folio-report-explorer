@@ -3,6 +3,21 @@ ALTER TABLE `report_templates`
   COMMENT 'Optional explanatory content shown in the report help modal'
   AFTER `description`;
 
+SET @budget_year_fund_report_displaced_id = (
+  SELECT COALESCE(MAX(id), 0) + 1
+  FROM report_templates
+);
+
+UPDATE report_templates
+SET id = @budget_year_fund_report_displaced_id
+WHERE id = 37
+  AND slug <> 'budget-year-fund-report';
+
+UPDATE report_templates
+SET id = 37
+WHERE slug = 'budget-year-fund-report'
+  AND id <> 37;
+
 INSERT INTO `report_templates`
   (`id`, `slug`, `name`, `description`, `help_text`, `category`, `sql_template`,
    `parameters`, `data_source`, `default_limit`, `is_active`, `created_by`)
