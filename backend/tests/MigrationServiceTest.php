@@ -215,6 +215,10 @@ class MigrationServiceRetryTestCommand
             return 0;
         }
 
+        if (strpos($this->sql, 'sql_template LIKE :series_marker') !== false) {
+            return 0;
+        }
+
         $requiresCompleteSeed = strpos($this->sql, 'name = :name') !== false
             && strpos($this->sql, 'sql_template LIKE :sql_marker') !== false
             && strpos($this->sql, 'help_text LIKE :help_marker') !== false;

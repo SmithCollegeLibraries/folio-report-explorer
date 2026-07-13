@@ -164,6 +164,10 @@ class BudgetYearFundReportTestDatabase
             return new BudgetYearFundReportTestCommand(0);
         }
 
+        if (strpos($sql, 'sql_template LIKE :series_marker') !== false) {
+            return new BudgetYearFundReportTestCommand(0);
+        }
+
         $requiresExactIdentity = strpos($sql, 'id = 37 AND slug = :slug') !== false;
         $requiresCompleteSeed = strpos($sql, 'name = :name') !== false
             && strpos($sql, 'sql_template LIKE :sql_marker') !== false
@@ -304,8 +308,8 @@ assertTrueValue(
     'Migration 035 must appear applied when help_text and the fixed report row both exist.'
 );
 assertTrueValue(
-    $databaseCurrent->invoke(null, $completeDatabase) === true,
-    'Database should appear current once help_text and the fixed report row both exist.'
+    $databaseCurrent->invoke(null, $completeDatabase) === false,
+    'The migration-035 report definition must not make the database appear current after migration 036 exists.'
 );
 
 $staleDatabase = new BudgetYearFundReportTestDatabase(true, [

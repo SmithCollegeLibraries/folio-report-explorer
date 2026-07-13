@@ -252,7 +252,7 @@ class MigrationService
             }
         }
 
-        return self::budgetYearFundReportAppearsComplete($db);
+        return self::budgetYearFundReportFiscalYearOptionsAppearComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -333,6 +333,8 @@ class MigrationService
                 return self::hasTable($db, 'folio_reference_tables') && self::hasTable($db, 'folio_reference_values');
             case '035_budget_year_fund_report.sql':
                 return self::budgetYearFundReportAppearsComplete($db);
+            case '036_budget_year_fund_report_fiscal_year_options.sql':
+                return self::budgetYearFundReportFiscalYearOptionsAppearComplete($db);
         }
 
         return false;
@@ -370,6 +372,46 @@ class MigrationService
                     ':help_marker' => '%Remaining Difference: Calculated Remaining minus FOLIO Available.%',
                     ':fiscal_year_parameter' => '%"fiscalYearId"%',
                     ':acq_unit_parameter' => '%"acqUnitId"%',
+                ]
+            );
+    }
+
+    private static function budgetYearFundReportFiscalYearOptionsAppearComplete($db): bool
+    {
+        return self::hasColumn($db, 'report_templates', 'help_text')
+            && self::rowExists(
+                $db,
+                'report_templates',
+                'id = 37 AND slug = :slug'
+                    . ' AND name = :name'
+                    . ' AND description = :description'
+                    . ' AND category = :category'
+                    . ' AND data_source = :data_source'
+                    . ' AND default_limit = :default_limit'
+                    . ' AND is_active = 1'
+                    . ' AND created_by = :created_by'
+                    . ' AND sql_template LIKE :series_marker'
+                    . ' AND sql_template LIKE :remaining_marker'
+                    . ' AND sql_template NOT LIKE :difference_marker'
+                    . ' AND help_text LIKE :help_marker'
+                    . ' AND CAST(parameters AS CHAR) LIKE :fiscal_year_parameter'
+                    . ' AND CAST(parameters AS CHAR) LIKE :acq_unit_parameter'
+                    . ' AND CAST(parameters AS CHAR) NOT LIKE :legacy_fiscal_year_parameter',
+                [
+                    ':slug' => 'budget-year-fund-report',
+                    ':name' => 'Budget Year Fund Report',
+                    ':description' => 'Shows allocation, paid invoice distributions, current encumbrances, calculated remaining, and FOLIO budget balances for every allocated fund in a selected fiscal year and acquisition unit.',
+                    ':category' => 'finance',
+                    ':data_source' => 'folio',
+                    ':default_limit' => 1000,
+                    ':created_by' => 'manual',
+                    ':series_marker' => "%fy.series = au.code || 'FY'%",
+                    ':remaining_marker' => '%AS "Calculated Remaining"%',
+                    ':difference_marker' => '%Remaining Difference%',
+                    ':help_marker' => '%Calculated Remaining: Allocated minus Payments minus Calculated Current Encumbrances.%',
+                    ':fiscal_year_parameter' => '%"fiscalYearEndYear"%',
+                    ':acq_unit_parameter' => '%"acqUnitId"%',
+                    ':legacy_fiscal_year_parameter' => '%"fiscalYearId"%',
                 ]
             );
     }
