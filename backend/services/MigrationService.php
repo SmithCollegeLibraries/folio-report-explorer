@@ -212,8 +212,26 @@ class MigrationService
     private static function executeSqlFile($db, string $path): void
     {
         $sql = (string)file_get_contents($path);
+        $explicitTransactionActive = false;
         foreach (self::splitSqlStatements($sql) as $statement) {
-            $db->createCommand($statement)->execute();
+            try {
+                $db->createCommand($statement)->execute();
+            } catch (\Throwable $exception) {
+                if ($explicitTransactionActive) {
+                    try {
+                        $db->createCommand('ROLLBACK')->execute();
+                    } catch (\Throwable $rollbackException) {
+                        // Preserve the original migration failure.
+                    }
+                }
+                throw $exception;
+            }
+
+            if (preg_match('/^START\s+TRANSACTION\b/i', $statement) === 1) {
+                $explicitTransactionActive = true;
+            } elseif (preg_match('/^(?:COMMIT|ROLLBACK)\b/i', $statement) === 1) {
+                $explicitTransactionActive = false;
+            }
         }
     }
 

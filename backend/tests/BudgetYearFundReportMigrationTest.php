@@ -21,6 +21,70 @@ function assertContainsText(string $needle, string $haystack, string $message): 
     assertTrueValue(strpos($haystack, $needle) !== false, $message);
 }
 
+function assertSameValue($expected, $actual, string $message): void
+{
+    if ($expected !== $actual) {
+        fwrite(STDERR, $message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true) . "\n");
+        exit(1);
+    }
+}
+
+function reconcileBudgetYearFundReportState(array $state, ?string $interruptAfter = null): array
+{
+    $initialState = $state;
+    $fixedSlug = 'budget-year-fund-report';
+    $reservedId = empty($state['reports']) ? 1 : max(array_keys($state['reports'])) + 1;
+    $hasDisplacedReport = isset($state['reports'][37]) && $state['reports'][37] !== $fixedSlug;
+    $existingId = array_search($fixedSlug, $state['reports'], true);
+
+    if ($hasDisplacedReport) {
+        $state['reports'][$reservedId] = $state['reports'][37];
+        unset($state['reports'][37]);
+    }
+    if ($interruptAfter === 'displace_report') {
+        return $initialState;
+    }
+
+    if ($hasDisplacedReport) {
+        foreach ($state['widgets'] as $widget => $reportId) {
+            if ($reportId === 37) {
+                $state['widgets'][$widget] = $reservedId;
+            }
+        }
+    }
+    if ($interruptAfter === 'repoint_displaced_widgets') {
+        return $initialState;
+    }
+
+    if ($existingId !== false && $existingId !== 37) {
+        $state['reports'][37] = $state['reports'][$existingId];
+        unset($state['reports'][$existingId]);
+    }
+    if ($interruptAfter === 'claim_report') {
+        return $initialState;
+    }
+
+    if ($existingId !== false && $existingId !== 37) {
+        foreach ($state['widgets'] as $widget => $reportId) {
+            if ($reportId === $existingId) {
+                $state['widgets'][$widget] = 37;
+            }
+        }
+    }
+    if ($interruptAfter === 'repoint_existing_widgets') {
+        return $initialState;
+    }
+
+    $state['reports'][37] = $fixedSlug;
+    if ($interruptAfter === 'seed_report') {
+        return $initialState;
+    }
+
+    ksort($state['reports']);
+    ksort($state['widgets']);
+    return $state;
+}
+
 class BudgetYearFundReportTestColumn
 {
 }
@@ -128,6 +192,8 @@ assertTrueValue(substr_count($sql, 'ROUND(') >= 13, 'All monetary outputs must b
 assertTrueValue(stripos($sql, 'TO_CHAR') === false, 'Monetary outputs must remain numeric.');
 
 $reservePosition = strpos($sql, 'SET @budget_year_fund_report_displaced_id = (');
+$alterPosition = strpos($sql, 'ALTER TABLE `report_templates`');
+$startTransactionPosition = strpos($sql, 'START TRANSACTION;');
 $captureDisplacedPosition = strpos($sql, "SET @budget_year_fund_report_has_displaced_row = EXISTS (\n  SELECT 1\n  FROM report_templates\n  WHERE id = 37\n    AND slug <> 'budget-year-fund-report'\n)");
 $captureExistingPosition = strpos($sql, "SET @budget_year_fund_report_existing_id = (\n  SELECT id\n  FROM report_templates\n  WHERE slug = 'budget-year-fund-report'\n  LIMIT 1\n)");
 $displacePosition = strpos($sql, "UPDATE report_templates\nSET id = @budget_year_fund_report_displaced_id\nWHERE id = 37\n  AND slug <> 'budget-year-fund-report'");
@@ -135,7 +201,10 @@ $repointDisplacedPosition = strpos($sql, "UPDATE dashboard_widget_templates\nSET
 $claimPosition = strpos($sql, "UPDATE report_templates\nSET id = 37\nWHERE slug = 'budget-year-fund-report'\n  AND id <> 37");
 $repointExistingPosition = strpos($sql, "UPDATE dashboard_widget_templates\nSET report_template_id = 37\nWHERE report_template_id = @budget_year_fund_report_existing_id\n  AND @budget_year_fund_report_existing_id <> 37");
 $seedPosition = strpos($sql, 'INSERT INTO `report_templates`');
+$commitPosition = strrpos($sql, 'COMMIT;');
 assertTrueValue($reservePosition !== false, 'Migration must reserve a new ID before displacing an unrelated report at ID 37.');
+assertTrueValue($startTransactionPosition !== false, 'Migration must start a reconciliation transaction after the DDL implicit commit.');
+assertTrueValue($commitPosition !== false, 'Migration must commit only after the complete seed succeeds.');
 assertTrueValue($captureDisplacedPosition !== false, 'Migration must remember whether ID 37 belongs to an unrelated report.');
 assertTrueValue($captureExistingPosition !== false, 'Migration must capture the fixed slug old ID before changing report identities.');
 assertTrueValue($displacePosition !== false, 'Migration must preserve an unrelated ID 37 report at the reserved ID.');
@@ -143,7 +212,9 @@ assertTrueValue($repointDisplacedPosition !== false, 'Migration must keep widget
 assertTrueValue($claimPosition !== false, 'Migration must move an existing fixed slug to ID 37 before seeding.');
 assertTrueValue($repointExistingPosition !== false, 'Migration must keep widgets attached to the fixed slug when it moves to ID 37.');
 assertTrueValue(
-    $reservePosition < $captureDisplacedPosition
+    $alterPosition < $startTransactionPosition
+        && $startTransactionPosition < $reservePosition
+        && $reservePosition < $captureDisplacedPosition
         && $captureDisplacedPosition < $captureExistingPosition
         && $captureExistingPosition < $displacePosition
         && $displacePosition < $repointDisplacedPosition
@@ -152,6 +223,7 @@ assertTrueValue(
         && $repointExistingPosition < $seedPosition,
     'Migration must preserve each logical report-widget association while reconciling both unique keys.'
 );
+assertTrueValue($seedPosition < $commitPosition, 'Migration must not commit before the fixed report seed succeeds.');
 
 $initSql = (string)file_get_contents($initPath);
 assertContainsText('help_text LONGTEXT NULL', $initSql, 'Fresh-install schema must include reusable report help metadata.');
@@ -229,5 +301,45 @@ assertTrueValue(
     $databaseCurrent->invoke(null, $completeDatabase) === true,
     'Database should appear current once help_text and the fixed report row both exist.'
 );
+
+$idOnlyState = [
+    'reports' => [37 => 'unrelated-report'],
+    'widgets' => ['unrelated-widget' => 37],
+];
+assertSameValue(
+    ['reports' => [37 => 'budget-year-fund-report', 38 => 'unrelated-report'], 'widgets' => ['unrelated-widget' => 38]],
+    reconcileBudgetYearFundReportState($idOnlyState),
+    'ID-only reconciliation must preserve the unrelated report and its widget association.'
+);
+
+$slugOnlyState = [
+    'reports' => [42 => 'budget-year-fund-report'],
+    'widgets' => ['budget-widget' => 42],
+];
+assertSameValue(
+    ['reports' => [37 => 'budget-year-fund-report'], 'widgets' => ['budget-widget' => 37]],
+    reconcileBudgetYearFundReportState($slugOnlyState),
+    'Slug-only reconciliation must move the fixed report and its widget association to ID 37.'
+);
+
+$mixedState = [
+    'reports' => [37 => 'unrelated-report', 42 => 'budget-year-fund-report'],
+    'widgets' => ['budget-widget' => 42, 'unrelated-widget' => 37],
+];
+$mixedExpected = [
+    'reports' => [37 => 'budget-year-fund-report', 43 => 'unrelated-report'],
+    'widgets' => ['budget-widget' => 37, 'unrelated-widget' => 43],
+];
+assertSameValue(
+    $mixedExpected,
+    reconcileBudgetYearFundReportState($mixedState),
+    'Mixed reconciliation must preserve both logical report-widget associations.'
+);
+
+foreach (['displace_report', 'repoint_displaced_widgets', 'claim_report', 'repoint_existing_widgets', 'seed_report'] as $boundary) {
+    $rolledBackState = reconcileBudgetYearFundReportState($mixedState, $boundary);
+    assertSameValue($mixedState, $rolledBackState, "Interruption after {$boundary} must roll back all reconciliation DML.");
+    assertSameValue($mixedExpected, reconcileBudgetYearFundReportState($rolledBackState), "Retry after {$boundary} must converge to the expected state.");
+}
 
 fwrite(STDOUT, "BudgetYearFundReportMigration test passed\n");

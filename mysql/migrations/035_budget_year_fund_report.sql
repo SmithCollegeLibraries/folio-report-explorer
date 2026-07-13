@@ -3,6 +3,8 @@ ALTER TABLE `report_templates`
   COMMENT 'Optional explanatory content shown in the report help modal'
   AFTER `description`;
 
+START TRANSACTION;
+
 SET @budget_year_fund_report_displaced_id = (
   SELECT COALESCE(MAX(id), 0) + 1
   FROM report_templates
@@ -138,3 +140,5 @@ ON DUPLICATE KEY UPDATE
   `default_limit` = VALUES(`default_limit`),
   `is_active` = VALUES(`is_active`),
   `created_by` = VALUES(`created_by`);
+
+COMMIT;

@@ -59,6 +59,64 @@ assertMigrationSame(['001_create_table.sql', '002_add_code.sql', '002_add_name.s
 }, $files), 'Migration discovery should sort deterministically by filename.');
 assertMigrationTrue(strlen($files[0]['checksum']) === 64, 'Migration discovery should compute SHA-256 checksums.');
 
+class MigrationServiceTransactionTestDatabase
+{
+    public $executed = [];
+
+    public function createCommand(string $sql): MigrationServiceTransactionTestCommand
+    {
+        return new MigrationServiceTransactionTestCommand($this, $sql);
+    }
+}
+
+class MigrationServiceTransactionTestCommand
+{
+    private $database;
+    private $sql;
+
+    public function __construct(MigrationServiceTransactionTestDatabase $database, string $sql)
+    {
+        $this->database = $database;
+        $this->sql = $sql;
+    }
+
+    public function execute(): void
+    {
+        $this->database->executed[] = $this->sql;
+        if ($this->sql === 'FAIL RECONCILIATION') {
+            throw new RuntimeException('simulated reconciliation failure');
+        }
+    }
+}
+
+$transactionMigration = $tempDir . '/003_transactional_reconciliation.sql';
+file_put_contents($transactionMigration, "ALTER TABLE sample ADD COLUMN help_text TEXT;\nSTART TRANSACTION;\nUPDATE sample SET name = 'changed';\nFAIL RECONCILIATION;\nCOMMIT;\n");
+$executeSqlFile = new ReflectionMethod(MigrationService::class, 'executeSqlFile');
+$transactionDatabase = new MigrationServiceTransactionTestDatabase();
+$transactionFailure = null;
+try {
+    $executeSqlFile->invoke(null, $transactionDatabase, $transactionMigration);
+} catch (ReflectionException $exception) {
+    throw $exception;
+} catch (Throwable $exception) {
+    $transactionFailure = $exception;
+}
+assertMigrationTrue($transactionFailure instanceof RuntimeException, 'Transactional migration failures must be rethrown.');
+assertMigrationSame('simulated reconciliation failure', $transactionFailure->getMessage(), 'Rollback must preserve the original migration failure.');
+assertMigrationSame(
+    [
+        'ALTER TABLE sample ADD COLUMN help_text TEXT',
+        'START TRANSACTION',
+        "UPDATE sample SET name = 'changed'",
+        'FAIL RECONCILIATION',
+        'ROLLBACK',
+    ],
+    $transactionDatabase->executed,
+    'Failed explicit transactions must roll back without undoing the preceding DDL statement.'
+);
+
+@unlink($transactionMigration);
+
 @unlink($tempDir . '/001_create_table.sql');
 @unlink($tempDir . '/002_add_name.sql');
 @unlink($tempDir . '/002_add_code.sql');
