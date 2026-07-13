@@ -165,11 +165,15 @@ class BudgetYearFundReportTestDatabase
         }
 
         $requiresExactIdentity = strpos($sql, 'id = 37 AND slug = :slug') !== false;
+        $requiresCompleteSeed = strpos($sql, 'name = :name') !== false
+            && strpos($sql, 'sql_template LIKE :sql_marker') !== false
+            && strpos($sql, 'help_text LIKE :help_marker') !== false;
         $count = 0;
         foreach ($this->reportRows as $row) {
             $hasId = ($row['id'] ?? null) === 37;
             $hasSlug = ($row['slug'] ?? null) === 'budget-year-fund-report';
-            if (($requiresExactIdentity && $hasId && $hasSlug)
+            $hasCompleteSeed = ($row['complete'] ?? false) === true;
+            if (($requiresExactIdentity && $hasId && $hasSlug && (!$requiresCompleteSeed || $hasCompleteSeed))
                 || (!$requiresExactIdentity && ($hasId || $hasSlug))) {
                 $count++;
             }
@@ -291,7 +295,7 @@ assertTrueValue(
 );
 
 $completeDatabase = new BudgetYearFundReportTestDatabase(true, [
-    ['id' => 37, 'slug' => 'budget-year-fund-report'],
+    ['id' => 37, 'slug' => 'budget-year-fund-report', 'complete' => true],
 ]);
 assertTrueValue(
     $migrationApplied->invoke(null, $completeDatabase, '035_budget_year_fund_report.sql') === true,
@@ -300,6 +304,18 @@ assertTrueValue(
 assertTrueValue(
     $databaseCurrent->invoke(null, $completeDatabase) === true,
     'Database should appear current once help_text and the fixed report row both exist.'
+);
+
+$staleDatabase = new BudgetYearFundReportTestDatabase(true, [
+    ['id' => 37, 'slug' => 'budget-year-fund-report', 'complete' => false],
+]);
+assertTrueValue(
+    $migrationApplied->invoke(null, $staleDatabase, '035_budget_year_fund_report.sql') === false,
+    'Migration 035 must not appear applied when the exact row still has stale seeded content.'
+);
+assertTrueValue(
+    $databaseCurrent->invoke(null, $staleDatabase) === false,
+    'Database must not appear current when the exact report row still has stale seeded content.'
 );
 
 $idOnlyState = [

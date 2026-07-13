@@ -117,6 +117,172 @@ assertMigrationSame(
 
 @unlink($transactionMigration);
 
+class MigrationServiceRetryTestTableSchema
+{
+    public $columns;
+
+    public function __construct(array $columns = [])
+    {
+        $this->columns = [];
+        foreach ($columns as $column) {
+            $this->columns[$column] = new stdClass();
+        }
+    }
+}
+
+class MigrationServiceRetryTestSchema
+{
+    private $database;
+
+    public function __construct(MigrationServiceRetryTestDatabase $database)
+    {
+        $this->database = $database;
+    }
+
+    public function getTableSchema(string $table, bool $refresh = false)
+    {
+        $tables = [
+            'schema_migrations',
+            'users',
+            'query_jobs',
+            'report_templates',
+            'ai_clarification_events',
+            'ai_query_feedback',
+            'folio_reference_tables',
+            'dashboard_widget_templates',
+        ];
+        if (!in_array($table, $tables, true)) {
+            return null;
+        }
+
+        $columns = $table === 'report_templates' && $this->database->hasHelpText ? ['help_text'] : [];
+        return new MigrationServiceRetryTestTableSchema($columns);
+    }
+}
+
+class MigrationServiceRetryTestDatabase
+{
+    public $schema;
+    public $hasHelpText = false;
+    public $reportComplete = false;
+    public $ledger = [];
+    public $executed = [];
+    public $failReconciliationOnce = true;
+    public $transactionActive = false;
+    public $transactionSnapshot = null;
+
+    public function __construct()
+    {
+        $this->schema = new MigrationServiceRetryTestSchema($this);
+    }
+
+    public function createCommand(string $sql = '', array $params = []): MigrationServiceRetryTestCommand
+    {
+        return new MigrationServiceRetryTestCommand($this, $sql, $params);
+    }
+}
+
+class MigrationServiceRetryTestCommand
+{
+    private $database;
+    private $sql;
+    private $params;
+    private $insertTable;
+    private $insertRow;
+
+    public function __construct(MigrationServiceRetryTestDatabase $database, string $sql, array $params)
+    {
+        $this->database = $database;
+        $this->sql = $sql;
+        $this->params = $params;
+    }
+
+    public function insert(string $table, array $row): self
+    {
+        $this->insertTable = $table;
+        $this->insertRow = $row;
+        return $this;
+    }
+
+    public function queryAll(): array
+    {
+        return $this->database->ledger;
+    }
+
+    public function queryScalar(): int
+    {
+        if (strpos($this->sql, 'FROM report_templates') === false) {
+            return 0;
+        }
+
+        $requiresCompleteSeed = strpos($this->sql, 'name = :name') !== false
+            && strpos($this->sql, 'sql_template LIKE :sql_marker') !== false
+            && strpos($this->sql, 'help_text LIKE :help_marker') !== false;
+        return $requiresCompleteSeed && !$this->database->reportComplete ? 0 : 1;
+    }
+
+    public function execute(): void
+    {
+        if ($this->insertTable === 'schema_migrations') {
+            $this->database->ledger[] = $this->insertRow;
+            return;
+        }
+
+        $this->database->executed[] = $this->sql;
+        if (strpos($this->sql, 'ALTER TABLE `report_templates`') === 0) {
+            $this->database->hasHelpText = true;
+            return;
+        }
+        if ($this->sql === 'START TRANSACTION') {
+            $this->database->transactionActive = true;
+            $this->database->transactionSnapshot = $this->database->reportComplete;
+            return;
+        }
+        if (strpos($this->sql, 'SET @budget_year_fund_report_displaced_id') === 0
+            && $this->database->failReconciliationOnce) {
+            $this->database->failReconciliationOnce = false;
+            throw new RuntimeException('simulated post-DDL reconciliation failure');
+        }
+        if (strpos($this->sql, 'INSERT INTO `report_templates`') === 0) {
+            $this->database->reportComplete = true;
+            return;
+        }
+        if ($this->sql === 'ROLLBACK') {
+            $this->database->reportComplete = (bool)$this->database->transactionSnapshot;
+            $this->database->transactionActive = false;
+            return;
+        }
+        if ($this->sql === 'COMMIT') {
+            $this->database->transactionActive = false;
+        }
+    }
+}
+
+$retryMigrationDir = $tempDir . '/retry';
+mkdir($retryMigrationDir, 0775, true);
+$retryMigrationPath = $retryMigrationDir . '/035_budget_year_fund_report.sql';
+file_put_contents($retryMigrationPath, file_get_contents($migrationDir . '/035_budget_year_fund_report.sql'));
+$retryDatabase = new MigrationServiceRetryTestDatabase();
+$firstFailure = null;
+try {
+    MigrationService::run($retryDatabase, $retryMigrationDir);
+} catch (Throwable $exception) {
+    $firstFailure = $exception;
+}
+assertMigrationSame('simulated post-DDL reconciliation failure', $firstFailure ? $firstFailure->getMessage() : null, 'First migration run should fail after the DDL has committed.');
+assertMigrationTrue($retryDatabase->hasHelpText, 'DDL must remain applied after reconciliation rollback.');
+assertMigrationTrue(!$retryDatabase->reportComplete, 'Failed reconciliation must leave the exact report row stale after rollback.');
+assertMigrationSame([], $retryDatabase->ledger, 'Failed reconciliation must not be recorded as applied.');
+
+$retryResult = MigrationService::run($retryDatabase, $retryMigrationDir);
+assertMigrationSame(['035_budget_year_fund_report.sql'], $retryResult['applied'], 'Retry must execute migration 035 reconciliation for an exact-but-stale row.');
+assertMigrationSame([], $retryResult['baselined'], 'Retry must not baseline an exact-but-stale row.');
+assertMigrationTrue($retryDatabase->reportComplete, 'Retry must restore the complete seeded report definition.');
+assertMigrationSame('035_budget_year_fund_report.sql', $retryDatabase->ledger[0]['filename'] ?? null, 'Successful retry must record migration 035.');
+
+@unlink($retryMigrationPath);
+@rmdir($retryMigrationDir);
+
 @unlink($tempDir . '/001_create_table.sql');
 @unlink($tempDir . '/002_add_name.sql');
 @unlink($tempDir . '/002_add_code.sql');
