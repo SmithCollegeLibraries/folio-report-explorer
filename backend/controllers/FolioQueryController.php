@@ -2628,7 +2628,7 @@ class FolioQueryController extends Controller
 
     /**
      * POST /api/reports — create a new report template.
-     * Body: {slug, name, description, category, sqlTemplate, parameters, defaultLimit?, createdBy?}
+     * Body: {slug, name, description, helpText?, category, sqlTemplate, parameters, defaultLimit?, createdBy?}
      */
     public function actionReportCreate()
     {
@@ -2638,6 +2638,9 @@ class FolioQueryController extends Controller
         $report->slug = $body['slug'] ?? '';
         $report->name = $body['name'] ?? '';
         $report->description = $body['description'] ?? '';
+        if ($report->hasAttribute('help_text')) {
+            $report->help_text = $body['helpText'] ?? null;
+        }
         $report->category = $body['category'] ?? 'other';
         $report->sql_template = $body['sqlTemplate'] ?? '';
         $report->parameters = is_string($body['parameters'] ?? null)
@@ -2679,6 +2682,9 @@ class FolioQueryController extends Controller
 
         if (isset($body['name'])) $report->name = $body['name'];
         if (isset($body['description'])) $report->description = $body['description'];
+        if ($report->hasAttribute('help_text') && array_key_exists('helpText', $body)) {
+            $report->help_text = $body['helpText'];
+        }
         if (isset($body['category'])) $report->category = $body['category'];
         if (isset($body['sqlTemplate'])) {
             SqlBuilderService::validateSafety($body['sqlTemplate']);

@@ -517,6 +517,7 @@ export interface ReportTemplate {
   slug: string;
   name: string;
   description: string;
+  helpText?: string | null;
   category: ReportCategory;
   sqlTemplate: string;
   parameters: ReportParam[];

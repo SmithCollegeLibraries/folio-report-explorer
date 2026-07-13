@@ -12,6 +12,7 @@ use yii\db\ActiveRecord;
  * @property string $slug
  * @property string $name
  * @property string $description
+ * @property string|null $help_text
  * @property string $category
  * @property string $sql_template
  * @property string $parameters   JSON array of parameter definitions
@@ -40,12 +41,18 @@ class ReportTemplate extends ActiveRecord
 
     public function rules()
     {
+        $stringAttributes = ['description'];
+        if ($this->hasAttribute('help_text')) {
+            $stringAttributes[] = 'help_text';
+        }
+        $stringAttributes[] = 'sql_template';
+
         return [
             [['slug', 'name', 'sql_template', 'parameters'], 'required'],
             [['slug'], 'string', 'max' => 100],
             [['slug'], 'unique', 'filter' => ['is_active' => 1]],
             [['name'], 'string', 'max' => 255],
-            [['description', 'sql_template'], 'string'],
+            [$stringAttributes, 'string'],
             [['category'], 'in', 'range' => [
                 self::CAT_ACQUISITIONS, self::CAT_CIRCULATION,
                 self::CAT_INVENTORY, self::CAT_FINANCE,
@@ -273,6 +280,7 @@ class ReportTemplate extends ActiveRecord
             'slug' => $this->slug,
             'name' => $this->name,
             'description' => $this->description,
+            'helpText' => $this->hasAttribute('help_text') ? $this->help_text : null,
             'category' => $this->category,
             'dataSource' => $this->hasAttribute('data_source') ? ($this->data_source ?: 'folio') : 'folio',
             'sqlTemplate' => $this->sql_template,
