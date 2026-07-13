@@ -1,8 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent } from '@testing-library/react';
-import { render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import ReportDetail from './ReportDetail';
 import Reports from './Reports';
 
@@ -47,6 +46,8 @@ vi.mock('../api/client', async () => {
     convertReportFromPhp: vi.fn(),
   };
 });
+
+afterEach(cleanup);
 
 describe('Reports', () => {
   it('shows grouped category sections on the reports landing page', async () => {
@@ -174,5 +175,49 @@ describe('Reports', () => {
     expect(
       await screen.findByRole('button', { name: /how to read this report/i }),
     ).toBeInTheDocument();
+  });
+
+  it('does not show report help when help text contains only whitespace', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    const { getReport } = await import('../api/client');
+    vi.mocked(getReport).mockResolvedValue({
+      id: 4,
+      slug: 'budget-year-fund-report',
+      name: 'Budget Year Fund Report',
+      description: 'Shows fund balances for a selected budget year.',
+      helpText: '  \n\t  ',
+      category: 'finance',
+      sqlTemplate: 'select 1',
+      parameters: [],
+      defaultLimit: 10000,
+      isActive: true,
+      createdBy: 'manual',
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T00:00:00Z',
+      selectOptions: {},
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/reports/4']}>
+          <Routes>
+            <Route path="/reports/:id" element={<ReportDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Budget Year Fund Report' }))
+      .toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /how to read this report/i }),
+    ).not.toBeInTheDocument();
   });
 });
