@@ -28,6 +28,13 @@ assertRevisionTrue(
 assertRevisionTrue(file_exists($migration036), 'Migration 036 must exist.');
 
 $sql = file_exists($migration036) ? (string)file_get_contents($migration036) : '';
+$storedReportStart = strpos($sql, 'WITH selected_acquisition_unit AS (');
+$storedReportEnd = $storedReportStart === false ? false : strpos($sql, "\n  'folio',", $storedReportStart);
+assertRevisionTrue($storedReportStart !== false, 'Migration 036 must contain the stored report SQL.');
+assertRevisionTrue($storedReportEnd !== false, 'Migration 036 must contain the outer folio data source after its parameter metadata.');
+$storedReportRegion = ($storedReportStart !== false && $storedReportEnd !== false)
+    ? substr($sql, $storedReportStart, $storedReportEnd - $storedReportStart)
+    : '';
 assertRevisionContains("'budget-year-fund-report'", $sql, 'Migration 036 must update the fixed report slug.');
 assertRevisionContains('ON DUPLICATE KEY UPDATE', $sql, 'Migration 036 must be idempotent.');
 assertRevisionContains('SELECT DISTINCT EXTRACT(YEAR FROM period_end::date)::int AS value', $sql, 'Fiscal-year options must group campus rows by end year.');
@@ -39,10 +46,10 @@ assertRevisionContains(':acqUnitId', $sql, 'The selected acquisition unit must r
 assertRevisionContains('COALESCE(b.allocated, 0) <> 0', $sql, 'Only allocated funds must be returned.');
 assertRevisionContains('inv.payment_date::date BETWEEN fy.period_start AND fy.period_end', $sql, 'Payment dates must use FOLIO fiscal-year dates.');
 assertRevisionContains("t.encumbrance__status IN (''Unreleased'', ''Active'')", $sql, 'Current encumbrances must use active and unreleased transactions.');
-assertRevisionTrue(preg_match("/''[A-Z]{2}FY''/i", $sql) !== 1, 'Migration 036 must not hardcode a two-letter campus series.');
-assertRevisionTrue(preg_match('/FY[0-9]{4}/', $sql) !== 1, 'Migration 036 must not hardcode a fiscal-year label.');
-assertRevisionTrue(preg_match("/''[0-9]{4}-[0-9]{2}-[0-9]{2}''/", $sql) !== 1, 'Migration 036 must not hardcode an ISO date literal.');
-assertRevisionTrue(preg_match('/\b(?:19|20)[0-9]{2}\b/', $sql) !== 1, 'Migration 036 must not hardcode a four-digit fiscal year or date component.');
+assertRevisionTrue(preg_match("/''[A-Z]+FY''/i", $storedReportRegion) !== 1, 'Migration 036 must not hardcode an alphabetic campus series.');
+assertRevisionTrue(preg_match('/FY[0-9]{4}/', $storedReportRegion) !== 1, 'Migration 036 must not hardcode a fiscal-year label.');
+assertRevisionTrue(preg_match("/''[0-9]{4}-[0-9]{2}-[0-9]{2}''/", $storedReportRegion) !== 1, 'Migration 036 must not hardcode an ISO date literal.');
+assertRevisionTrue(preg_match('/\b[0-9]{4}\b/', $storedReportRegion) !== 1, 'Migration 036 must not hardcode a standalone four-digit fiscal year or date component.');
 
 $parameterNames = [];
 if (preg_match_all('/"name":"([^"]+)"/', $sql, $matches)) {
