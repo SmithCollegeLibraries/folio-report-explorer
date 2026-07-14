@@ -252,7 +252,7 @@ class MigrationService
             }
         }
 
-        return self::budgetYearFundReportFiscalYearOptionsAppearComplete($db);
+        return self::budgetYearFundReportPaymentDistributionsAppearComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -335,6 +335,8 @@ class MigrationService
                 return self::budgetYearFundReportAppearsComplete($db);
             case '036_budget_year_fund_report_fiscal_year_options.sql':
                 return self::budgetYearFundReportFiscalYearOptionsAppearComplete($db);
+            case '037_budget_year_fund_report_payment_distributions.sql':
+                return self::budgetYearFundReportPaymentDistributionsAppearComplete($db);
         }
 
         return false;
@@ -414,6 +416,125 @@ class MigrationService
                     ':acq_unit_parameter' => 'acqUnitId',
                 ]
             );
+    }
+
+    private static function budgetYearFundReportPaymentDistributionsAppearComplete($db): bool
+    {
+        $where = 'id = 37 AND slug = :slug'
+            . ' AND name = :name'
+            . ' AND description = :description'
+            . ' AND category = :category'
+            . ' AND data_source = :data_source'
+            . ' AND default_limit = :default_limit'
+            . ' AND is_active = 1'
+            . ' AND created_by = :created_by'
+            . ' AND JSON_LENGTH(parameters) = 2';
+
+        $parameterFields = ['name', 'type', 'label', 'default', 'description', 'options_sql', 'options_db', 'placeholder'];
+        foreach ([0 => 'fiscal_year', 1 => 'acq_unit'] as $index => $prefix) {
+            foreach ($parameterFields as $field) {
+                $where .= " AND BINARY JSON_UNQUOTE(JSON_EXTRACT(parameters, '$[{$index}].{$field}'))"
+                    . " = BINARY :{$prefix}_{$field}";
+            }
+            $where .= " AND JSON_EXTRACT(parameters, '$[{$index}].required') = true";
+        }
+
+        $outputAliases = [
+            'Fund Code',
+            'Fund Name',
+            'Fiscal Year',
+            'Allocated',
+            'Payments',
+            'Calculated Current Encumbrances',
+            'Total Committed',
+            'Calculated Remaining',
+            'FOLIO Expenditures',
+            'FOLIO Encumbered',
+            'FOLIO Available',
+        ];
+        foreach ($outputAliases as $index => $alias) {
+            $where .= " AND sql_template LIKE :output_alias_{$index}";
+        }
+
+        $sqlMarkers = [
+            'series_marker',
+            'payment_type_marker',
+            'payment_amount_marker',
+            'payment_percentage_marker',
+            'encumbrance_scope_marker',
+            'encumbrance_arithmetic_marker',
+            'encumbrance_expended_marker',
+            'encumbrance_awaiting_marker',
+            'calculated_remaining_marker',
+        ];
+        foreach ($sqlMarkers as $marker) {
+            $where .= " AND sql_template LIKE :{$marker}";
+        }
+
+        $helpMarkers = [
+            'help_allocated',
+            'help_payments',
+            'help_payment_semantics',
+            'help_encumbrances',
+            'help_total_committed',
+            'help_calculated_remaining',
+            'help_folio_expenditures',
+            'help_folio_encumbered',
+            'help_folio_available',
+        ];
+        foreach ($helpMarkers as $marker) {
+            $where .= " AND help_text LIKE :{$marker}";
+        }
+
+        $params = [
+            ':slug' => 'budget-year-fund-report',
+            ':name' => 'Budget Year Fund Report',
+            ':description' => 'Shows allocation, paid invoice distributions, current encumbrances, calculated remaining, and FOLIO budget balances for every allocated fund in a selected fiscal year and acquisition unit.',
+            ':category' => 'finance',
+            ':data_source' => 'folio',
+            ':default_limit' => 1000,
+            ':created_by' => 'manual',
+            ':fiscal_year_name' => 'fiscalYearEndYear',
+            ':fiscal_year_type' => 'select',
+            ':fiscal_year_label' => 'Fiscal Year',
+            ':fiscal_year_default' => '',
+            ':fiscal_year_description' => 'Campus-neutral fiscal year; the selected acquisition unit determines the matching FOLIO fiscal-year series.',
+            ':fiscal_year_options_sql' => "SELECT DISTINCT EXTRACT(YEAR FROM period_end::date)::int AS value, 'FY' || EXTRACT(YEAR FROM period_end::date)::int::text AS label FROM finance.fiscal_year__t WHERE period_end IS NOT NULL ORDER BY value DESC",
+            ':fiscal_year_options_db' => 'folio',
+            ':fiscal_year_placeholder' => 'Select fiscal year',
+            ':acq_unit_name' => 'acqUnitId',
+            ':acq_unit_type' => 'select',
+            ':acq_unit_label' => 'Acquisition Unit',
+            ':acq_unit_default' => '',
+            ':acq_unit_description' => 'Determines both fund membership and the campus fiscal-year series.',
+            ':acq_unit_options_sql' => 'SELECT id AS value, TRIM(name) AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY TRIM(name)',
+            ':acq_unit_options_db' => 'folio',
+            ':acq_unit_placeholder' => 'Select acquisition unit',
+            ':series_marker' => "%fy.series = au.code || 'FY'%",
+            ':payment_type_marker' => "%LOWER(COALESCE(fd.fund_distributions__distribution_type, 'percentage'))%",
+            ':payment_amount_marker' => "%WHEN 'amount' THEN COALESCE(fd.fund_distributions__value, 0)%",
+            ':payment_percentage_marker' => '%ELSE COALESCE(fd.total, 0) * (COALESCE(fd.fund_distributions__value, 0) * 0.01)%',
+            ':encumbrance_scope_marker' => "%t.encumbrance__status IN ('Unreleased', 'Active')%",
+            ':encumbrance_arithmetic_marker' => '%COALESCE(t.encumbrance__initial_amount_encumbered, 0)%',
+            ':encumbrance_expended_marker' => '%- COALESCE(t.encumbrance__amount_expended, 0)%',
+            ':encumbrance_awaiting_marker' => '%- COALESCE(t.encumbrance__amount_awaiting_payment, 0)%',
+            ':calculated_remaining_marker' => '%COALESCE(b.allocated, 0) - COALESCE(p.payment, 0) - COALESCE(e.current_encumbrance, 0)%',
+            ':help_allocated' => '%Allocated: the allocation total stored on the FOLIO budget.%',
+            ':help_payments' => '%Payments: paid invoice-line fund distributions whose invoice payment date falls inside the resolved FOLIO fiscal year.%',
+            ':help_payment_semantics' => '%Percentage distributions contribute the invoice-line total multiplied by the distribution value divided by 100; amount distributions contribute the distribution value directly; distribution types are matched case-insensitively, and a missing type is treated as percentage.%',
+            ':help_encumbrances' => '%Calculated Current Encumbrances: active or unreleased encumbrance transactions, calculated as initial amount minus expended amount minus awaiting-payment amount.%',
+            ':help_total_committed' => '%Total Committed: Payments plus Calculated Current Encumbrances.%',
+            ':help_calculated_remaining' => '%Calculated Remaining: Allocated minus Payments minus Calculated Current Encumbrances.%',
+            ':help_folio_expenditures' => '%FOLIO Expenditures: the expenditure total currently stored on the FOLIO budget.%',
+            ':help_folio_encumbered' => '%FOLIO Encumbered: the encumbrance total currently stored on the FOLIO budget.%',
+            ':help_folio_available' => '%FOLIO Available: the operational available balance stored on the FOLIO budget.%',
+        ];
+        foreach ($outputAliases as $index => $alias) {
+            $params[":output_alias_{$index}"] = '%AS "' . $alias . '"%';
+        }
+
+        return self::hasColumn($db, 'report_templates', 'help_text')
+            && self::rowExists($db, 'report_templates', $where, $params);
     }
 
     private static function hasTable($db, string $table): bool

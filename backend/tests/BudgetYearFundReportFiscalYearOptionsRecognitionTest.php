@@ -212,7 +212,7 @@ function databaseAppearsCurrentWithReport(array $report): bool
 
 $revisedDefinition = revisedFiscalYearOptionsReport();
 assertRecognitionSame(true, migration036AppearsApplied($revisedDefinition), 'Migration 036 must recognize the fully revised definition.');
-assertRecognitionSame(true, databaseAppearsCurrentWithReport($revisedDefinition), 'The fully revised definition should make an otherwise-current database appear current.');
+assertRecognitionSame(false, databaseAppearsCurrentWithReport($revisedDefinition), 'The migration-036 definition must not make a database appear current after migration 037 exists.');
 assertRecognitionSame(false, migration036AppearsApplied(oldBudgetYearFundReport()), 'Migration 036 must not recognize the old report definition.');
 assertRecognitionSame(false, databaseAppearsCurrentWithReport(oldBudgetYearFundReport()), 'The old report definition must not make a ledger-less database appear current.');
 
