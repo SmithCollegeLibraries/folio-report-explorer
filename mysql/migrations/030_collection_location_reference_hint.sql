@@ -21,6 +21,7 @@ SELECT
     NULL,
     NOW(),
     NOW()
+FROM DUAL
 WHERE NOT EXISTS (
     SELECT 1
     FROM ai_training_hints
@@ -50,6 +51,7 @@ SELECT
     NULL,
     NOW(),
     NOW()
+FROM DUAL
 WHERE NOT EXISTS (
     SELECT 1
     FROM ai_training_hints
