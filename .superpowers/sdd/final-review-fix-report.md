@@ -161,3 +161,80 @@ Result: exit 0; all 79 self-contained backend PHP tests passed. `QueryWorkerConc
 ## Concerns
 
 No implementation concerns. Existing PHP 8.5 deprecation and fake-app warnings remain outside this fix set; the vendor-dependent concurrency test was not run, per the established self-contained suite contract.
+
+## Whole-Branch Review Follow-Up: Executed PostgreSQL Payment Expression
+
+Added `backend/tests/BudgetYearFundReportPaymentDistributionsPostgresTest.php`. The test reads migration 037, extracts the actual `CASE` expression inside `SUM(... ) AS payment`, converts the MySQL-literal doubled quotes back to PostgreSQL quotes, and injects that exact expression into one read-only `WITH fixture AS (VALUES ...) SELECT`. The PostgreSQL result set must equal the deterministic percentage, amount, mixed/case-insensitive, and null-type totals. The test emits an explicit `SKIP` only when the PDO PostgreSQL driver or connection settings/connection are unavailable. PostgreSQL connection attempts use an explicit 10-second `connect_timeout` by default, configurable through `BUDGET_REPORT_PG_TIMEOUT`.
+
+The configured remote FOLIO PostgreSQL connection was attempted first from the existing PHP container with its saved application settings:
+
+```text
+docker exec -e FOLIO_APP_ROOT=/var/www/html \
+  -e BUDGET_REPORT_MIGRATION_037=/tmp/037_budget_year_fund_report_payment_distributions.sql \
+  folio-report-explorer-main-clean-php-1 \
+  php /tmp/BudgetYearFundReportPaymentDistributionsPostgresTest.php
+```
+
+Result: exit 0 with explicit environment skip after the remote host timed out:
+
+```text
+SKIP: FOLIO PostgreSQL connection is unavailable: SQLSTATE[08006] [7] timeout expired
+```
+
+To obtain executed PostgreSQL RED/GREEN evidence without relying on that unavailable remote host, an isolated temporary `postgres:16-alpine` container was attached to the existing application's Docker network. The existing `folio-report-explorer-main-clean-php-1` container executed the test; the SQL remained a table-free read-only `VALUES` query.
+
+### Mutation RED Proof
+
+Migration 037 was temporarily changed so the `amount` branch incorrectly used percentage arithmetic. The mutated migration and test were copied to `/tmp` in the existing PHP container and run with:
+
+```text
+docker exec \
+  -e BUDGET_REPORT_PG_USE_ENV=1 \
+  -e FOLIO_PG_HOST=budget-report-expression-postgres \
+  -e FOLIO_PG_PORT=5432 \
+  -e FOLIO_PG_DB=budget_report_test \
+  -e FOLIO_PG_USER=budget_report_test \
+  -e FOLIO_PG_PASS=budget_report_test \
+  -e FOLIO_PG_SSLMODE=disable \
+  -e BUDGET_REPORT_MIGRATION_037=/tmp/037_budget_year_fund_report_payment_distributions.sql \
+  folio-report-explorer-main-clean-php-1 \
+  php /tmp/BudgetYearFundReportPaymentDistributionsPostgresTest.php
+```
+
+Expected failure, exit 1:
+
+```text
+Stored payment CASE expression produced incorrect totals.
+Expected: {"amount":"25.00","mixed":"62.50","null-type":"10.00","percentage":"50.00"}
+Actual: {"amount":"50.00","mixed":"174.88","null-type":"10.00","percentage":"50.00"}
+```
+
+The temporary mutation was immediately reverted and was not committed. `git diff --quiet` confirmed migrations 035, 036, and 037 all match `HEAD`.
+
+### Restored Migration GREEN Proof
+
+The exact same Docker/PHP/PostgreSQL command was rerun after copying the restored migration 037:
+
+```text
+BudgetYearFundReportPaymentDistributionsPostgres test passed
+```
+
+Result: exit 0. The temporary PostgreSQL container was then stopped and removed.
+
+### Focused Regression Evidence
+
+Commands:
+
+```text
+php backend/tests/BudgetYearFundReportPaymentDistributionsPostgresTest.php
+php backend/tests/BudgetYearFundReportPaymentDistributionsMigrationTest.php
+php backend/tests/BudgetYearFundReportFinalRevisionRecognitionTest.php
+php backend/tests/BudgetYearFundReportMigrationTest.php
+php backend/tests/BudgetYearFundReportFiscalYearOptionsMigrationTest.php
+php backend/tests/BudgetYearFundReportFiscalYearOptionsRecognitionTest.php
+php backend/tests/MigrationServiceTest.php
+php -l backend/tests/BudgetYearFundReportPaymentDistributionsPostgresTest.php
+git diff --check
+```
+
+Results: all focused self-contained contracts passed; the new integration test explicitly skipped outside Docker because no local FOLIO PostgreSQL environment was available; PHP lint and diff hygiene passed. Per the follow-up contract, the full 79-file suite was not rerun.
