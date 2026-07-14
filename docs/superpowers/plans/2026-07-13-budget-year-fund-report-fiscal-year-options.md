@@ -8,6 +8,12 @@
 
 **Tech Stack:** MySQL 8, PostgreSQL SQL, PHP 7.2+, Yii2, Docker Compose
 
+## Final-Review Amendment
+
+Add idempotent migration `037_budget_year_fund_report_payment_distributions.sql`; do not edit applied migrations 035 or 036. In the payments CTE, calculate case-insensitive `amount` distributions from `fund_distributions__value` directly and calculate `percentage` distributions from invoice-line `total * value / 100`, treating null type as percentage for legacy compatibility. Preserve report ID 37, the exact two parameters, the exact 11 output columns, and eight numeric two-decimal monetary outputs.
+
+Harden `MigrationService` with a 037-specific completeness predicate covering both full ordered parameter objects, dynamic option SQL, all output aliases, payment and encumbrance arithmetic/scope, calculated remaining, and help definitions. Add RED-first migration, deterministic payment-fixture, and negative recognition tests; then run focused tests and every self-contained backend test. The checksum-preserving delivery consists only of the new 037 migration plus service, test, and documentation changes.
+
 ## Global Constraints
 
 - Report name remains `Budget Year Fund Report` and fixed identity remains `id = 37`, `slug = budget-year-fund-report`.

@@ -126,3 +126,9 @@ Docker validation will apply migration 036 to the existing `folio-report-explore
 - Changes to shared report execution, parameter binding, jobs, exports, charts, or the reusable modal component.
 - Adding difference columns or restoring the wider reconciliation layout.
 - Changing FOLIO source data when a campus/year combination is missing.
+
+## Final-Review Amendment: Payment Distributions
+
+Payments preserve each FOLIO fund distribution's declared semantics. A `percentage` distribution contributes the invoice-line total multiplied by its value divided by 100, while an `amount` distribution contributes its value directly. Distribution types are compared case-insensitively; a null type retains the legacy percentage calculation.
+
+Because migrations 035 and 036 may already be recorded in migration ledgers, their bytes and checksums remain unchanged. Idempotent migration `037_budget_year_fund_report_payment_distributions.sql` replaces report 37 with the corrected payment expression and expanded help text. Migration 037 preserves the two-parameter and 11-column contracts, and current-database recognition requires the materially complete 037 definition while migration-specific recognition for 035 and 036 remains available.
