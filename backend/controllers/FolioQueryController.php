@@ -385,6 +385,7 @@ class FolioQueryController extends Controller
             $dataSource = (string)($result['dataSource'] ?? 'folio');
             $estimate = $preflight((string)$result['sql'], $dataSource);
             if (!isset($estimate['error'])) {
+                $this->logExploratoryTerminalOutcome($result, $prompt, 'validated', 'validated');
                 return $result;
             }
 
@@ -472,7 +473,6 @@ class FolioQueryController extends Controller
             if (!isset($result['sql'])) {
                 $failureCategory = (string)($result['validationSummary']['failureCategory']
                     ?? $this->classifyPreflightErrorFamily($error));
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'exhausted', $failureCategory);
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
                     $prompt,
@@ -624,6 +624,7 @@ class FolioQueryController extends Controller
             'unknown_column',
             'unknown_error',
             'unknown_table',
+            'validated',
             'validation_failure',
         ];
 
@@ -959,7 +960,11 @@ class FolioQueryController extends Controller
         }
 
         if ($this->shouldPreflightExecuteSql($dataSource, $source)) {
-            $estimate = $this->estimateQueryComplexity($sql, $dataSource, $params);
+            try {
+                $estimate = $this->estimateQueryComplexity($sql, $dataSource, $params);
+            } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
+                return $this->buildDatabaseCancelledResponse();
+            }
             if (isset($estimate['error'])) {
                 $this->logPreflightValidationFailure('api.execute', (string) $estimate['error'], $dataSource, $source, $sql);
                 Yii::$app->response->statusCode = 422;
@@ -1048,10 +1053,8 @@ class FolioQueryController extends Controller
 
             Yii::$app->response->statusCode = 422;
             return [
-                'error' => 'Query execution failed',
-                'message' => $e->getMessage(),
-                'sql' => $sql,
-                'dataSource' => $dataSource,
+                'errorType' => 'query_execution_failed',
+                'error' => 'Query execution failed.',
             ];
         }
     }
@@ -1109,7 +1112,11 @@ class FolioQueryController extends Controller
 
         $estimate = null;
         if ($dataSource === 'folio') {
-            $estimate = $this->estimateQueryComplexity($sql, $dataSource, $params);
+            try {
+                $estimate = $this->estimateQueryComplexity($sql, $dataSource, $params);
+            } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
+                return $this->buildDatabaseCancelledResponse();
+            }
             // Surface PostgreSQL validation errors immediately instead of queuing a doomed 30-minute job.
             if (isset($estimate['error'])) {
                 $this->logPreflightValidationFailure('api.query_submit', (string) $estimate['error'], $dataSource, $source, $sql);
@@ -1607,13 +1614,7 @@ class FolioQueryController extends Controller
     ): array {
         $message = trim($error->getMessage());
         if ($error instanceof \app\exceptions\DatabaseQueryCancelledException) {
-            Yii::$app->response->statusCode = 503;
-            return [
-                'errorType' => 'database_cancelled',
-                'error' => 'Database validation was cancelled before the query could run. Please retry the request.',
-                'route' => 'database_cancelled',
-                'routeReason' => 'database_query_cancelled',
-            ];
+            return $this->buildDatabaseCancelledResponse();
         }
         // Prefer the typed policy violation; fall back to message matching for
         // policy errors that bubble up from elsewhere as plain exceptions.
@@ -1666,6 +1667,17 @@ class FolioQueryController extends Controller
             '/\bSQLSTATE\[(?:08006|08001|08004|HY000)\].*(?:timeout expired|could not connect|connection refused|no connection|SSL SYSCALL|server closed the connection)|\b(?:timeout expired|could not connect to server|connection refused|no route to host)\b/i',
             $message
         ) === 1;
+    }
+
+    private function buildDatabaseCancelledResponse(): array
+    {
+        Yii::$app->response->statusCode = 503;
+        return [
+            'errorType' => 'database_cancelled',
+            'error' => 'Database validation was cancelled before the query could run. Please retry the request.',
+            'route' => 'database_cancelled',
+            'routeReason' => 'database_query_cancelled',
+        ];
     }
 
     private function buildAskPostgresConnectivityRecovery(string $prompt, $campus, string $routeReason): array

@@ -110,6 +110,7 @@ namespace app\services {
     {
         public static $calls = [];
         public static $nextResult = null;
+        public static $nextException;
 
         public static function estimateQueryComplexity($db, string $sql, int $queryTimeoutMs, int $preflightTimeoutMs = 10000, array $params = [])
         {
@@ -119,6 +120,9 @@ namespace app\services {
                 'preflightTimeoutMs' => $preflightTimeoutMs,
                 'params' => $params,
             ];
+            if (self::$nextException instanceof \Throwable) {
+                throw self::$nextException;
+            }
             return self::$nextResult;
         }
     }
@@ -344,6 +348,46 @@ namespace {
     \app\services\SqlBuilderService::$policyException = null;
 
     \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$nextException = new \app\exceptions\DatabaseQueryCancelledException();
+    Yii::$app = (object) [
+        'request' => new FakeExecuteRequest([
+            'sql' => 'SELECT * FROM inventory.items',
+            'source' => 'nl',
+            'dataSource' => 'folio',
+        ]),
+        'response' => new FakeExecuteResponse(),
+        'folioDb' => $folioDb,
+        'user' => (object) ['isGuest' => true, 'id' => null],
+        'params' => ['maxQueryRows' => 100, 'queryTimeoutMs' => 1800000],
+    ];
+    $cancelledExecute = (new \app\controllers\FolioQueryController('folio-query', null))->actionExecute();
+    assertSameValue(503, Yii::$app->response->statusCode, 'Execute preflight cancellation should return a stable service status.');
+    assertSameValue('database_cancelled', $cancelledExecute['errorType'] ?? null, 'Execute preflight cancellation should retain its database classification.');
+    assertSameValue('Database validation was cancelled before the query could run. Please retry the request.', $cancelledExecute['error'] ?? null, 'Execute preflight cancellation should expose only safe copy.');
+
+    Yii::$app = (object) [
+        'request' => new FakeExecuteRequest([
+            'sql' => 'SELECT * FROM inventory.items',
+            'source' => 'nl',
+            'dataSource' => 'folio',
+        ]),
+        'response' => new FakeExecuteResponse(),
+        'folioDb' => $folioDb,
+        'user' => (object) ['isGuest' => true, 'id' => null],
+        'params' => [
+            'maxQueryRows' => 100,
+            'queryTimeoutMs' => 1800000,
+            'exportRowThreshold' => 1000,
+            'exportCostThreshold' => 500000,
+        ],
+    ];
+    $cancelledSubmit = (new \app\controllers\FolioQueryController('folio-query', null))->actionQuerySubmit();
+    assertSameValue(503, Yii::$app->response->statusCode, 'Submit preflight cancellation should return a stable service status.');
+    assertSameValue('database_cancelled', $cancelledSubmit['errorType'] ?? null, 'Submit preflight cancellation should retain its database classification.');
+    assertSameValue('Database validation was cancelled before the query could run. Please retry the request.', $cancelledSubmit['error'] ?? null, 'Submit preflight cancellation should expose only safe copy.');
+    \app\services\SqlPreflightService::$nextException = null;
+
+    \app\services\SqlPreflightService::$calls = [];
     \app\services\SqlPreflightService::$nextResult = ['error' => 'syntax error at end of input'];
     Yii::$warnings = [];
 
@@ -430,6 +474,28 @@ namespace {
     assertCountValue(0, \app\services\SqlPreflightService::$calls, 'Manual execute requests should skip PostgreSQL preflight.');
     assertCountValue(1, $manualDb->queriedSql, 'Manual execute requests should reach the database execution path.');
     assertCountValue(0, Yii::$warnings, 'Manual execute requests should not emit preflight telemetry warnings.');
+
+    $failedExecutionDb = new FakeExecuteDb();
+    $failedExecutionDb->queryException = new \RuntimeException(
+        'SQLSTATE[XX999]: relation inventory.secret__t failed; PDO driver detail'
+    );
+    Yii::$app = (object) [
+        'request' => new FakeExecuteRequest([
+            'sql' => 'SELECT * FROM inventory.secret__t',
+            'source' => 'manual',
+            'dataSource' => 'folio',
+        ]),
+        'response' => new FakeExecuteResponse(),
+        'folioDb' => $failedExecutionDb,
+        'user' => (object) ['isGuest' => true, 'id' => null],
+        'params' => ['maxQueryRows' => 100, 'queryTimeoutMs' => 1800000],
+    ];
+    $failedExecution = (new \app\controllers\FolioQueryController('folio-query', null))->actionExecute();
+    assertSameValue(422, Yii::$app->response->statusCode, 'Execution failures should retain the validation error status.');
+    assertSameValue('query_execution_failed', $failedExecution['errorType'] ?? null, 'Execution failures should expose only a stable category.');
+    assertSameValue('Query execution failed.', $failedExecution['error'] ?? null, 'Execution failures should expose only safe copy.');
+    assertSameValue(false, isset($failedExecution['message']), 'Execution failures must not expose raw database or driver messages.');
+    assertSameValue(false, isset($failedExecution['sql']), 'Execution failures must not echo SQL to the browser.');
 
     fwrite(STDOUT, "FolioQueryController execute preflight test passed\n");
 }

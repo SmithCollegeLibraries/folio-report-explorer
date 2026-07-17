@@ -115,3 +115,51 @@ The existing Vite advisory for chunks over 500 kB remains.
 - The two existing PHP 8.5 Reflection deprecations remain in the approved tests.
 - The existing Vite large-chunk advisory remains.
 - No final whole-branch review was performed here; the root agent will re-dispatch the existing reviewer as requested.
+
+## Final re-review follow-up
+
+The re-dispatched whole-branch reviewer found one Important and one Minor issue after commit `fec9f6b`:
+
+1. `actionExecute()` and `actionQuerySubmit()` did not catch the typed cancellation thrown directly by `SqlPreflightService`.
+2. Gemini static/model validation emitted terminal `validated` before the controller completed database preflight, allowing contradictory terminal outcomes when preflight later failed.
+
+### Follow-up RED
+
+Focused regressions failed on the intended missing behavior:
+
+```text
+FolioQueryControllerExecutePreflightTest.php
+Uncaught app\exceptions\DatabaseQueryCancelledException:
+Database query validation was cancelled.
+
+GeminiServiceExploratoryRepairTest.php
+Static/model validation must not emit terminal validated before database preflight.
+Expected: 0
+Actual: 1
+
+FolioQueryControllerExploratoryRepairTest.php
+Exploratory controller handling should emit exactly one terminal outcome after re-preflight.
+Expected: 1
+Actual: 0
+```
+
+A related execution-safety assertion also proved the existing execution catch exposed raw database details and SQL instead of a stable category.
+
+### Follow-up GREEN
+
+- Both synchronous execute and background-submit preflight boundaries now catch `DatabaseQueryCancelledException` and return HTTP 503 with stable `database_cancelled` copy.
+- The actual query-execution catch remains separate and now returns only `query_execution_failed` plus safe copy; it does not expose exception messages or SQL.
+- Gemini generation and preflight-repair methods no longer emit terminal `validated` for candidates that still require controller preflight.
+- `validateAndRepairNlResult()` emits terminal `validated` only after the final candidate passes preflight. Repaired candidates restart and complete preflight before this event.
+- Terminal failure outcomes remain emitted at the point where no further validation can succeed, and canonical routes remain excluded from exploratory terminal telemetry.
+
+### Follow-up verification
+
+- Exact 17-test Task 6 matrix plus `SqlPreflightServiceTest.php` and `FolioQueryControllerExecutePreflightTest.php`: exit 0, all 19 passed.
+- Frontend: 21 files and 101 tests passed.
+- Production build: exit 0; 2,503 modules transformed in 5.64 seconds.
+- PHP lint passed for all changed production/test PHP files.
+- `git diff --check` was silent.
+- Canonical query-family and schema artifacts remained unchanged.
+
+The only advisories remain the two approved PHP 8.5 Reflection deprecations and the existing Vite large-chunk warning.

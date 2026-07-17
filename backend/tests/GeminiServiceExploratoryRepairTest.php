@@ -236,10 +236,7 @@ foreach (Yii::$logs as $logRecord) {
 }
 repairAssertSame(4, $repairTelemetryCount, 'Bad-then-valid generation should emit attempt and outcome telemetry for both candidates.');
 $terminalOutcomes = terminalTelemetryOutcomes();
-repairAssertSame(1, count($terminalOutcomes), 'Successful exploratory generation should emit one terminal outcome.');
-repairAssertSame('validated', $terminalOutcomes[0]['outcome'] ?? null, 'Successful exploratory generation should use the validated outcome.');
-repairAssertSame(true, !empty($terminalOutcomes[0]['route'] ?? null), 'Terminal telemetry should retain a safe route.');
-repairAssertSame(true, !empty($terminalOutcomes[0]['routeReason'] ?? null), 'Terminal telemetry should retain a safe route reason.');
+repairAssertSame(0, count($terminalOutcomes), 'Static/model validation must not emit terminal validated before database preflight.');
 
 Yii::$logs = [];
 $logValidationFailure = new ReflectionMethod(GeminiService::class, 'logValidationFailure');
@@ -430,6 +427,7 @@ try {
 }
 
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];
+Yii::$logs = [];
 $preflight = GeminiService::repairExploratorySqlAfterPreflight(
     roiPrompt(),
     'Smith College',
@@ -446,6 +444,7 @@ repairAssertSame('validated', $preflight['validationSummary']['status'] ?? null,
 $preflightPayload = json_encode(TestTransport::$requests[count(TestTransport::$requests) - 1]);
 repairAssertContains('unknown_column', $preflightPayload, 'Preflight errors should be reduced to a safe category.');
 repairAssertSame(false, strpos($preflightPayload, 'at character 15') !== false, 'Raw PostgreSQL error detail must not enter repair prompts.');
+repairAssertSame(0, count(terminalTelemetryOutcomes()), 'A repaired candidate must not emit terminal validated until controller re-preflight succeeds.');
 
 Yii::$logs = [];
 try {

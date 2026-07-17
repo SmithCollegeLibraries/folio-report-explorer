@@ -52,7 +52,11 @@ namespace {
     class Yii
     {
         public static $app;
-        public static function warning($message, $category = 'application') {}
+        public static $warnings = [];
+        public static function warning($message, $category = 'application')
+        {
+            self::$warnings[] = ['message' => $message, 'category' => $category];
+        }
     }
 
     function repairAssertSame($expected, $actual, string $message): void
@@ -83,6 +87,7 @@ namespace {
 
     $preflightSql = [];
     $repairCalls = 0;
+    Yii::$warnings = [];
     $repaired = $validateAndRepair->invoke(
         $controller,
         [
@@ -124,6 +129,21 @@ namespace {
     repairAssertSame(1, $repaired['repairAttempts'] ?? null, 'The repair count should be preserved.');
     repairAssertSame('exploratory', $repaired['mode'] ?? null, 'AI-repaired canonical output should be relabeled exploratory.');
     repairAssertSame('exploratory', $repaired['route'] ?? null, 'AI-repaired canonical output should not retain a canonical route.');
+    $terminalOutcomes = [];
+    foreach (Yii::$warnings as $warning) {
+        $message = (string)($warning['message'] ?? '');
+        if (strpos($message, 'NL2SQL telemetry: ') !== 0) {
+            continue;
+        }
+        $record = json_decode(substr($message, strlen('NL2SQL telemetry: ')), true);
+        if (($record['event'] ?? null) === 'nl2sql.exploratory_terminal_outcome') {
+            $terminalOutcomes[] = $record;
+        }
+    }
+    repairAssertSame(1, count($terminalOutcomes), 'Exploratory controller handling should emit exactly one terminal outcome after re-preflight.');
+    repairAssertSame('validated', $terminalOutcomes[0]['outcome'] ?? null, 'Successful re-preflight should emit terminal validated.');
+    repairAssertSame('validated', $terminalOutcomes[0]['category'] ?? null, 'Successful re-preflight should retain a safe validated category.');
+    repairAssertSame('exploratory', $terminalOutcomes[0]['route'] ?? null, 'Terminal validation telemetry should preserve the final exploratory route.');
 
     $exhaustedRepairCalls = 0;
     $exhausted = $validateAndRepair->invoke(

@@ -315,8 +315,6 @@ class GeminiService
             return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
         }
 
-        self::logExploratoryTerminalOutcome($context, 'validated', null, (int)($outcome['repairAttempts'] ?? 0));
-
         $primary = self::decorateExploratoryResponse($outcome['result'], $reason);
         $primary = self::decorateValidatedExploratoryResult(
             $primary,
@@ -5400,8 +5398,6 @@ PROMPT;
             );
             return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
         }
-
-        self::logExploratoryTerminalOutcome($context, 'validated', null, (int)($outcome['repairAttempts'] ?? 0));
 
         $result = self::decorateExploratoryResponse($outcome['result'], $reason);
         return self::decorateValidatedExploratoryResult(
