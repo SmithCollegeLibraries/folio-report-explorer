@@ -489,4 +489,85 @@ describe('Builder', () => {
     await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledTimes(1));
     expect(apiMocks.buildQuery).toHaveBeenLastCalledWith(expect.objectContaining({ joins: 'auto' }));
   });
+
+  it('invalidates generated and edited SQL when an unavailable relationship override is pruned', async () => {
+    const effective = {
+      from_table: 'inventory.item__t',
+      from_column: 'effective_location_id',
+      to_table: 'inventory.location__t',
+      to_column: 'id',
+      parent_table: 'inventory.location__t',
+      parent_column: 'id',
+      local_column: 'effective_location_id',
+      foreign_key: 'Effective location',
+      relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+      pair_id: 'inventory.item__t<->inventory.location__t',
+      label: 'Effective location',
+      is_default: true,
+      source: 'overlay',
+    };
+    const permanent = {
+      ...effective,
+      from_column: 'permanent_location_id',
+      local_column: 'permanent_location_id',
+      relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+      label: 'Permanent location',
+      is_default: false,
+    };
+    const itemDetail = {
+      name: 'inventory.item__t',
+      table: { columns: [] },
+      relationships: { parents: [effective, permanent], children: [] },
+    };
+    let resolveLocationDetail!: (detail: {
+      name: string;
+      table: { columns: never[] };
+      relationships: { parents: never[]; children: typeof effective[] };
+    }) => void;
+    apiMocks.fetchTableDetail.mockImplementation((table: string) => {
+      if (table === 'inventory.item__t') return Promise.resolve(itemDetail);
+      return new Promise((resolve) => {
+        resolveLocationDetail = resolve;
+      });
+    });
+    apiMocks.buildQuery.mockResolvedValue({ sql: 'SELECT alternate_path', params: {} });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter><Builder /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Discover default joins' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use permanent relationship' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    expect(await screen.findByDisplayValue('SELECT alternate_path')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit SQL' }));
+    fireEvent.change(screen.getByLabelText('SQL Preview'), {
+      target: { value: 'SELECT stale_alternate_path' },
+    });
+    expect(screen.getByRole('button', { name: 'Run' })).toBeInTheDocument();
+
+    itemDetail.relationships.parents = [effective];
+    await act(async () => {
+      resolveLocationDetail({
+        name: 'inventory.location__t',
+        table: { columns: [] },
+        relationships: { parents: [], children: [effective] },
+      });
+    });
+
+    expect(await screen.findByText(/relationship choice was reset/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('SELECT stale_alternate_path')).not.toBeInTheDocument();
+  });
 });

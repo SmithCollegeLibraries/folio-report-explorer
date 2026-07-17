@@ -143,6 +143,8 @@ export default function Builder() {
     if (Object.keys(pruned).length !== Object.keys(activeRelationshipOverrides).length) {
       setActiveRelationshipOverrides(pruned);
       setRelationshipNotice('A relationship choice was reset because it is no longer available.');
+      setBuilt(null);
+      setEditedSql(null);
     }
   }, [selectedTables, relationshipGroups, activeRelationshipOverrides]);
 

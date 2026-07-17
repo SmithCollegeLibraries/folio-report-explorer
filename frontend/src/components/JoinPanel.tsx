@@ -147,6 +147,16 @@ export default function JoinPanel({
     onCustomJoinsChange(discoveredJoins.map((j) => ({ ...j, join_type: 'JOIN' })));
   };
 
+  const enterManualMode = () => {
+    if (customJoins.length === 0 && discoveredJoins.length > 0) {
+      onCustomJoinsChange(discoveredJoins.map((join) => ({
+        ...join,
+        join_type: join.join_type || 'JOIN',
+      })));
+    }
+    onJoinModeChange('manual');
+  };
+
   if (selectedTables.length < 2) {
     return (
       <div className="p-6 text-center text-gray-400 text-sm">
@@ -166,7 +176,7 @@ export default function JoinPanel({
         <div className="flex items-center gap-3">
           <button
             onClick={() =>
-              joinMode === 'auto' ? onJoinModeChange('manual') : resetToAuto()
+              joinMode === 'auto' ? enterManualMode() : resetToAuto()
             }
             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border transition-colors ${
               joinMode === 'auto'

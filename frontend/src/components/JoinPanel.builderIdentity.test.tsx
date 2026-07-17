@@ -1,5 +1,5 @@
-import { act, render, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import JoinPanel from './JoinPanel';
 
 const findPath = vi.hoisted(() => vi.fn());
@@ -7,6 +7,8 @@ const findPath = vi.hoisted(() => vi.fn());
 vi.mock('../api/client', () => ({ findPath }));
 
 describe('JoinPanel Builder identity', () => {
+  afterEach(cleanup);
+
   beforeEach(() => {
     findPath.mockReset();
   });
@@ -58,6 +60,72 @@ describe('JoinPanel Builder identity', () => {
       }),
     ]));
     expect(onCustomJoinsChange).not.toHaveBeenCalled();
+  });
+
+  it('seeds manual joins from the complete discovered path when auto mode is toggled', async () => {
+    const onJoinModeChange = vi.fn();
+    const onCustomJoinsChange = vi.fn();
+    const onDefaultJoinsChange = vi.fn();
+    const discoveredJoin = {
+      from_table: 'inventory.item__t',
+      from_column: 'effective_location_id',
+      to_table: 'inventory.location__t',
+      to_column: 'id',
+      foreign_key: 'item_effective_location_fk',
+      relationship_id: 'item-effective-location',
+      pair_id: 'item-location',
+    };
+    findPath.mockResolvedValue({
+      path: {
+        chain: ['inventory.item__t', 'inventory.location__t'],
+        hops: 1,
+        joins: [discoveredJoin],
+        sql_fragment: '',
+      },
+    });
+
+    const baseProps = {
+      schemaIdentity: 'ldlite' as const,
+      selectedTables: ['inventory.item__t', 'inventory.location__t'],
+      tableDetails: {},
+      onJoinModeChange,
+      onCustomJoinsChange,
+      onDefaultJoinsChange,
+    };
+    const { getByRole, rerender } = render(
+      <JoinPanel {...baseProps} joinMode="auto" customJoins={[]} />,
+    );
+
+    await waitFor(() => expect(onDefaultJoinsChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({ relationship_id: 'item-effective-location' }),
+    ]));
+    fireEvent.click(getByRole('button', { name: 'Auto Joins' }));
+
+    expect(onCustomJoinsChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        relationship_id: 'item-effective-location',
+        pair_id: 'item-location',
+        join_type: 'JOIN',
+      }),
+    ]);
+    expect(onJoinModeChange).toHaveBeenLastCalledWith('manual');
+
+    const lastCustomJoinCall = onCustomJoinsChange.mock.calls[
+      onCustomJoinsChange.mock.calls.length - 1
+    ];
+    const seededJoins = lastCustomJoinCall[0];
+    rerender(
+      <JoinPanel {...baseProps} joinMode="manual" customJoins={seededJoins} />,
+    );
+    fireEvent.change(getByRole('combobox'), { target: { value: 'LEFT JOIN' } });
+
+    expect(onCustomJoinsChange).toHaveBeenLastCalledWith([
+      expect.objectContaining({
+        relationship_id: 'item-effective-location',
+        pair_id: 'item-location',
+        join_type: 'LEFT JOIN',
+      }),
+    ]);
   });
 
   it('replaces and clears the default path independently of custom joins', async () => {
