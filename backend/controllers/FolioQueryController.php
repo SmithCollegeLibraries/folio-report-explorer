@@ -5,6 +5,7 @@ namespace app\controllers;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
+use app\services\BuilderSchemaService;
 use app\services\FolioSchemaService;
 use app\services\SqlBuilderService;
 use app\services\GeminiService;
@@ -471,7 +472,9 @@ class FolioQueryController extends Controller
         $filter = Yii::$app->request->get('tables');
         $filterArray = $filter ? array_map('trim', explode(',', $filter)) : null;
 
-        $tables = FolioSchemaService::getTables($filterArray);
+        $tables = $this->usesLdliteBuilderIdentity()
+            ? BuilderSchemaService::getTables($filterArray)
+            : FolioSchemaService::getTables($filterArray);
         $meta = FolioSchemaService::getMetadata();
 
         return [
@@ -485,7 +488,9 @@ class FolioQueryController extends Controller
      */
     public function actionSchemaDetail($table)
     {
-        $data = FolioSchemaService::getTable($table);
+        $data = $this->usesLdliteBuilderIdentity()
+            ? BuilderSchemaService::getTable($table)
+            : FolioSchemaService::getTable($table);
         if ($data === null) {
             Yii::$app->response->statusCode = 404;
             return ['error' => "Table '$table' not found"];
@@ -507,6 +512,29 @@ class FolioQueryController extends Controller
         if (!$from || !$to) {
             Yii::$app->response->statusCode = 400;
             return ['error' => 'Both "from" and "to" parameters are required'];
+        }
+
+        if ($this->usesLdliteBuilderIdentity()) {
+            if ($all) {
+                $paths = BuilderSchemaService::findAllPaths($from, $to, $maxDepth);
+                return [
+                    'from' => $from,
+                    'to' => $to,
+                    'total_paths' => count($paths),
+                    'paths' => $paths,
+                ];
+            }
+
+            $path = BuilderSchemaService::findShortestPath($from, $to);
+            if ($path === null) {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => "No FK path found between '$from' and '$to'"];
+            }
+            return [
+                'from' => $from,
+                'to' => $to,
+                'path' => $path,
+            ];
         }
 
         $resolvedFrom = FolioSchemaService::fuzzyMatch($from);
@@ -545,6 +573,11 @@ class FolioQueryController extends Controller
                 'path' => FolioSchemaService::formatPath($path, $resolvedFrom),
             ];
         }
+    }
+
+    private function usesLdliteBuilderIdentity(): bool
+    {
+        return strtolower(trim((string)Yii::$app->request->get('identity', ''))) === 'ldlite';
     }
 
     /**
