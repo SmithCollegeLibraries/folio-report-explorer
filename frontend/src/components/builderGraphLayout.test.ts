@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
-import { layoutRelationshipGraph } from './builderGraphLayout';
+import { createRelationshipGraphLayout, layoutRelationshipGraph } from './builderGraphLayout';
 
 const node = (id: string): Node => ({
   id,
@@ -8,6 +8,18 @@ const node = (id: string): Node => ({
   measured: { width: 180, height: 48 },
   data: { label: id },
 });
+
+const rectanglesOverlap = (left: Node, right: Node) => {
+  const leftWidth = left.measured?.width ?? 190;
+  const leftHeight = left.measured?.height ?? 48;
+  const rightWidth = right.measured?.width ?? 190;
+  const rightHeight = right.measured?.height ?? 48;
+
+  return left.position.x < right.position.x + rightWidth
+    && left.position.x + leftWidth > right.position.x
+    && left.position.y < right.position.y + rightHeight
+    && left.position.y + leftHeight > right.position.y;
+};
 
 describe('layoutRelationshipGraph', () => {
   it('orders a parent chain from left to right without overlap', async () => {
@@ -20,9 +32,10 @@ describe('layoutRelationshipGraph', () => {
     const result = await layoutRelationshipGraph({ nodes, edges, direction: 'RIGHT' });
     const positions = Object.fromEntries(result.nodes.map((entry) => [entry.id, entry.position]));
 
-    expect(positions.items.x).toBeLessThan(positions.holdings.x);
-    expect(positions.holdings.x).toBeLessThan(positions.instances.x);
-    expect(new Set(result.nodes.map((entry) => `${entry.position.x}:${entry.position.y}`)).size).toBe(3);
+    expect(positions.items.x + 180).toBeLessThanOrEqual(positions.holdings.x);
+    expect(positions.holdings.x + 180).toBeLessThanOrEqual(positions.instances.x);
+    expect(rectanglesOverlap(result.nodes[0], result.nodes[1])).toBe(false);
+    expect(rectanglesOverlap(result.nodes[1], result.nodes[2])).toBe(false);
   });
 
   it('preserves node identity and data', async () => {
@@ -40,7 +53,7 @@ describe('layoutRelationshipGraph', () => {
       direction: 'RIGHT',
     });
 
-    expect(result.nodes[0].position).not.toEqual(result.nodes[1].position);
+    expect(rectanglesOverlap(result.nodes[0], result.nodes[1])).toBe(false);
   });
 
   it('lays out a cycle without throwing', async () => {
@@ -53,5 +66,18 @@ describe('layoutRelationshipGraph', () => {
     await expect(layoutRelationshipGraph({ nodes, edges, direction: 'RIGHT' })).resolves.toMatchObject({
       nodes: expect.arrayContaining([expect.objectContaining({ id: 'a' }), expect.objectContaining({ id: 'b' })]),
     });
+  });
+
+  it('loads the layout engine on demand and reuses it', async () => {
+    const layout = vi.fn(async (graph) => graph);
+    const loadElk = vi.fn(async () => ({ layout }));
+    const layoutGraph = createRelationshipGraphLayout(loadElk);
+
+    expect(loadElk).not.toHaveBeenCalled();
+    await layoutGraph({ nodes: [node('items')], edges: [], direction: 'RIGHT' });
+    await layoutGraph({ nodes: [node('holdings')], edges: [], direction: 'RIGHT' });
+
+    expect(loadElk).toHaveBeenCalledTimes(1);
+    expect(layout).toHaveBeenCalledTimes(2);
   });
 });

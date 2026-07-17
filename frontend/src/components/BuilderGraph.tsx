@@ -40,6 +40,15 @@ function shortName(fullName: string): string {
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
 }
 
+function graphTopologySignature(nodes: Node[], edges: Edge[]): string {
+  return JSON.stringify({
+    nodes: nodes.map((node) => node.id).sort(),
+    edges: edges
+      .map((edge) => JSON.stringify([edge.id, edge.source, edge.target]))
+      .sort(),
+  });
+}
+
 type LayoutMode = 'automatic' | 'user-arranged';
 
 function BuilderGraphCanvas({
@@ -198,7 +207,16 @@ function BuilderGraphCanvas({
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const layoutSequence = useRef(0);
   const layoutFrame = useRef<number | null>(null);
+  const automaticTopologySignature = useRef<string | null>(null);
   const mounted = useRef(true);
+  const latestGraphNodes = useRef(graphNodes);
+  const latestGraphEdges = useRef(graphEdges);
+  latestGraphNodes.current = graphNodes;
+  latestGraphEdges.current = graphEdges;
+  const topologySignature = useMemo(
+    () => graphTopologySignature(graphNodes, graphEdges),
+    [graphEdges, graphNodes],
+  );
   const { fitView } = useReactFlow();
 
   const cancelScheduledFit = useCallback(() => {
@@ -212,6 +230,7 @@ function BuilderGraphCanvas({
     return () => {
       mounted.current = false;
       layoutSequence.current += 1;
+      automaticTopologySignature.current = null;
       cancelScheduledFit();
     };
   }, [cancelScheduledFit]);
@@ -234,20 +253,25 @@ function BuilderGraphCanvas({
       if (!mounted.current || sequence !== layoutSequence.current) return;
       setNodes((current) => {
         const currentById = new Map(current.map((node) => [node.id, node]));
+        const resultPositions = new Map(result.nodes.map((node) => [node.id, node.position]));
         const promotedPositions = new Map(
-          nextNodes
+          latestGraphNodes.current
             .filter((node) => (
               node.data.isSelected === true
               && currentById.get(node.id)?.data.isSelected === false
             ))
             .map((node) => [node.id, currentById.get(node.id)!.position]),
         );
-        return result.nodes.map((node) => ({
+        return latestGraphNodes.current.map((node) => ({
           ...node,
-          position: promotedPositions.get(node.id) ?? node.position,
+          position: promotedPositions.get(node.id) ?? resultPositions.get(node.id) ?? node.position,
         }));
       });
-      setEdges(result.edges);
+      const resultEdgeTypes = new Map(result.edges.map((edge) => [edge.id, edge.type]));
+      setEdges(latestGraphEdges.current.map((edge) => ({
+        ...edge,
+        type: resultEdgeTypes.get(edge.id) ?? edge.type,
+      })));
       if (resetMode) {
         layoutModeRef.current = 'automatic';
         setLayoutMode('automatic');
@@ -263,8 +287,12 @@ function BuilderGraphCanvas({
     } catch {
       if (!mounted.current || sequence !== layoutSequence.current) return;
       setLayoutError('Could not arrange this graph');
-      setNodes((current) => reconcileUserArrangedNodes(nextNodes, current, nextEdges));
-      setEdges(nextEdges);
+      setNodes((current) => reconcileUserArrangedNodes(
+        latestGraphNodes.current,
+        current,
+        latestGraphEdges.current,
+      ));
+      setEdges(latestGraphEdges.current);
     } finally {
       if (mounted.current && sequence === layoutSequence.current) setLayoutPending(false);
     }
@@ -272,7 +300,13 @@ function BuilderGraphCanvas({
 
   useEffect(() => {
     if (layoutModeRef.current === 'automatic') {
-      void runAutomaticLayout(graphNodes, graphEdges, false);
+      if (automaticTopologySignature.current !== topologySignature) {
+        automaticTopologySignature.current = topologySignature;
+        void runAutomaticLayout(graphNodes, graphEdges, false);
+        return;
+      }
+      setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
+      setEdges(graphEdges);
       return;
     }
     layoutSequence.current += 1;
@@ -280,7 +314,7 @@ function BuilderGraphCanvas({
     setLayoutPending(false);
     setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
     setEdges(graphEdges);
-  }, [cancelScheduledFit, graphEdges, graphNodes, runAutomaticLayout, setEdges, setNodes]);
+  }, [cancelScheduledFit, graphEdges, graphNodes, runAutomaticLayout, setEdges, setNodes, topologySignature]);
 
   const onNodeDragStop = useCallback(() => {
     layoutSequence.current += 1;
@@ -336,7 +370,10 @@ function BuilderGraphCanvas({
             <button
               type="button"
               aria-label="Re-layout relationship graph"
-              onClick={() => void runAutomaticLayout(graphNodes, graphEdges, true)}
+              onClick={() => {
+                automaticTopologySignature.current = topologySignature;
+                void runAutomaticLayout(graphNodes, graphEdges, true);
+              }}
               disabled={layoutPending || graphNodes.length === 0}
               className="rounded-lg border bg-white/95 px-3 py-2 text-xs font-medium text-gray-700 shadow-sm backdrop-blur transition-colors hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60"
             >

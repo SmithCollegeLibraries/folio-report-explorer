@@ -90,6 +90,20 @@ const graphElement = (selectedTables: string[]) => (
   />
 );
 
+const graphElementWithData = (
+  selectedTables: string[],
+  nextTableDetails: Record<string, TableDetail>,
+  nextTables: Record<string, TableSummary>,
+) => (
+  <BuilderGraph
+    selectedTables={selectedTables}
+    tableDetails={nextTableDetails}
+    tables={nextTables}
+    onAddTable={vi.fn()}
+    onRemoveTable={vi.fn()}
+  />
+);
+
 const renderGraph = (selectedTables: string[]) => render(graphElement(selectedTables));
 
 const layoutWithIds = (ids: string[]) => ({
@@ -197,6 +211,27 @@ describe('BuilderGraph layout behavior', () => {
     await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
   });
 
+  it('does not lay out or refit an equivalent cloned topology', async () => {
+    const view = renderGraph(['items']);
+    await waitFor(() => expect(flowHarness.animationFrames).toHaveLength(1));
+    flushAnimationFrames();
+    expect(flowHarness.fitView).toHaveBeenCalledTimes(1);
+    const positionsBeforeRefresh = currentNodes().map(({ id, position }) => ({ id, position }));
+
+    view.rerender(graphElementWithData(
+      structuredClone(['items']),
+      structuredClone(tableDetails),
+      structuredClone(tables),
+    ));
+    await act(async () => Promise.resolve());
+
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
+    expect(reconcileUserArrangedNodes).toHaveBeenCalled();
+    expect(currentNodes().map(({ id, position }) => ({ id, position }))).toEqual(positionsBeforeRefresh);
+    expect(flowHarness.animationFrames).toHaveLength(0);
+    expect(flowHarness.fitView).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves retained positions after a node drag', async () => {
     const view = renderGraph(['items']);
     await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
@@ -207,13 +242,31 @@ describe('BuilderGraph layout behavior', () => {
     expect(currentNode('items')?.position).toEqual(draggedItemsNode.position);
   });
 
-  it('runs full layout again only after Re-layout is clicked', async () => {
+  it('preserves retained coordinates when a table is removed in user-arranged mode', async () => {
+    const view = renderGraph(['items', 'holdings']);
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    dragNode(draggedItemsNode);
+
+    view.rerender(graphElement(['items']));
+    await waitFor(() => expect(reconcileUserArrangedNodes).toHaveBeenCalled());
+
+    expect(currentNode('items')?.position).toEqual(draggedItemsNode.position);
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
+  });
+
+  it('refits after Re-layout and resumes automatic layout for later topology changes', async () => {
     const user = userEvent.setup();
-    renderGraph(['items']);
+    const view = renderGraph(['items']);
     await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
     dragNode(draggedItemsNode);
     await user.click(screen.getByRole('button', { name: 'Re-layout relationship graph' }));
     await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(flowHarness.animationFrames).toHaveLength(1));
+    flushAnimationFrames();
+    expect(flowHarness.fitView).toHaveBeenCalledTimes(1);
+
+    view.rerender(graphElement(['items', 'holdings']));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(3));
   });
 
   it('ignores stale layout results and retains the latest topology', async () => {
