@@ -6229,38 +6229,33 @@ PROMPT;
         );
         $references = $directMatches[1] ?? [];
 
-        preg_match_all(
-            '/\bFROM\b(.*?)(?=\b(?:WHERE|GROUP\s+BY|HAVING|ORDER\s+BY|LIMIT|OFFSET|UNION|EXCEPT|INTERSECT|WINDOW|RETURNING)\b|$)/is',
-            $sql,
-            $fromClauses,
-            PREG_OFFSET_CAPTURE
-        );
-        foreach ($fromClauses[1] ?? [] as $fromClauseMatch) {
-            $clause = (string)$fromClauseMatch[0];
-            $clauseOffset = (int)$fromClauseMatch[1];
-            foreach (self::findTopLevelSqlCommaOffsets($clause) as $commaOffset) {
-                $candidate = substr($clause, $commaOffset + 1);
-                if (preg_match('/^\s*(' . $referencePattern . ')/i', $candidate, $match, PREG_OFFSET_CAPTURE) !== 1) {
-                    continue;
-                }
-                $references[] = [
-                    (string)$match[1][0],
-                    $clauseOffset + $commaOffset + 1 + (int)$match[1][1],
-                ];
+        foreach (self::findSqlFromClauseCommaOffsets($sql) as $commaOffset) {
+            $candidate = substr($sql, $commaOffset + 1);
+            if (preg_match('/^\s*(' . $referencePattern . ')/i', $candidate, $match, PREG_OFFSET_CAPTURE) !== 1) {
+                continue;
             }
+            $references[] = [
+                (string)$match[1][0],
+                $commaOffset + 1 + (int)$match[1][1],
+            ];
         }
 
         return $references;
     }
 
-    private static function findTopLevelSqlCommaOffsets(string $sql): array
+    private static function findSqlFromClauseCommaOffsets(string $sql): array
     {
         $offsets = [];
         $depth = 0;
+        $fromDepths = [];
         $quote = null;
         $inLineComment = false;
         $inBlockComment = false;
         $length = strlen($sql);
+        $clauseBoundaryWords = [
+            'SELECT', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET',
+            'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'RETURNING',
+        ];
 
         for ($index = 0; $index < $length; $index++) {
             $char = $sql[$index];
@@ -6309,10 +6304,29 @@ PROMPT;
             }
             if ($char === ')') {
                 $depth = max(0, $depth - 1);
+                foreach (array_keys($fromDepths) as $fromDepth) {
+                    if ($fromDepth > $depth) {
+                        unset($fromDepths[$fromDepth]);
+                    }
+                }
                 continue;
             }
-            if ($char === ',' && $depth === 0) {
+            if ($char === ',' && isset($fromDepths[$depth])) {
                 $offsets[] = $index;
+                continue;
+            }
+            if (preg_match('/[A-Za-z_]/', $char) === 1) {
+                $wordEnd = $index + 1;
+                while ($wordEnd < $length && preg_match('/[A-Za-z0-9_]/', $sql[$wordEnd]) === 1) {
+                    $wordEnd++;
+                }
+                $word = strtoupper(substr($sql, $index, $wordEnd - $index));
+                if ($word === 'FROM') {
+                    $fromDepths[$depth] = true;
+                } elseif (in_array($word, $clauseBoundaryWords, true)) {
+                    unset($fromDepths[$depth]);
+                }
+                $index = $wordEnd - 1;
             }
         }
 

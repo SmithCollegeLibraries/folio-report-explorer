@@ -226,6 +226,12 @@ TestTransport::$responses = [
 $cteResult = GeminiService::generateSqlWithShadow('Show recent item identifiers from a derived set.', null, null, true);
 repairAssertSame(0, $cteResult['repairAttempts'] ?? null, 'A CTE alias should not be treated as an unknown physical table.');
 
+TestTransport::$responses = [
+    geminiText('WITH c AS (SELECT id FROM inventory.item__t) SELECT c.id, c.name FROM c'),
+];
+$cteWithOuterProjection = GeminiService::generateSqlWithShadow('Show identifiers and names from a derived item set.', null, null, true);
+repairAssertSame(0, $cteWithOuterProjection['repairAttempts'] ?? null, 'An outer SELECT projection comma must not be treated as an inner CTE relation separator.');
+
 foreach (['MATERIALIZED', 'NOT MATERIALIZED'] as $materialization) {
     TestTransport::$responses = [
         geminiText("WITH recent(id) AS {$materialization} (SELECT ii.id FROM inventory.item__t ii) SELECT recent.id FROM recent"),
