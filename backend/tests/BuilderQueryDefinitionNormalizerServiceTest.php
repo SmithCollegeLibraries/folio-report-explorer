@@ -34,11 +34,16 @@ $catalog = [
     'relationships_by_id' => [
         'inventory.item__t.permanent_location_id->inventory.location__t.id' => [
             'relationship_id' => 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+            'pair_id' => 'inventory.item__t<->inventory.location__t',
             'from_table' => 'inventory.item__t',
             'from_column' => 'permanent_location_id',
             'to_table' => 'inventory.location__t',
             'to_column' => 'id',
+            'is_default' => true,
         ],
+    ],
+    'defaults_by_pair' => [
+        'inventory.item__t<->inventory.location__t' => 'inventory.item__t.permanent_location_id->inventory.location__t.id',
     ],
 ];
 
@@ -79,6 +84,101 @@ expectNormalizer($normalized['joins'][0]['to_column'] === 'id', 'Join target col
 expectNormalizer($normalized['joins'][0]['join_type'] === 'LEFT JOIN', 'Join type must be preserved.');
 expectNormalizer(!isset($normalized['schemaIdentity']), 'Internal definition must not retain schemaIdentity.');
 
+$reverseDefinition = $definition;
+$reverseDefinition['tables'] = ['inventory.location__t', 'inventory.item__t'];
+$reverseNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $reverseDefinition,
+    $mapping,
+    $catalog
+);
+expectNormalizer(
+    $reverseNormalized['joins'][0]['from_table'] === 'inventory_locations'
+        && $reverseNormalized['joins'][0]['from_column'] === 'id',
+    'A reverse table order must orient the trusted predicate from the already-joined location table.'
+);
+expectNormalizer(
+    $reverseNormalized['joins'][0]['to_table'] === 'inventory_items'
+        && $reverseNormalized['joins'][0]['to_column'] === 'permanent_location_id',
+    'A reverse table order must join the item table exactly once.'
+);
+
+foreach ([null, 'auto', []] as $defaultJoins) {
+    $defaultDefinition = $definition;
+    if ($defaultJoins === null) {
+        unset($defaultDefinition['joins']);
+    } else {
+        $defaultDefinition['joins'] = $defaultJoins;
+    }
+    $defaultNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+        $defaultDefinition,
+        $mapping,
+        $catalog
+    );
+    expectNormalizer(
+        count($defaultNormalized['joins']) === 1
+            && $defaultNormalized['joins'][0]['from_column'] === 'permanent_location_id',
+        'Omitted, auto, and empty canonical joins must resolve the server-owned default relationship.'
+    );
+}
+
+$singleTable = $definition;
+$singleTable['tables'] = ['inventory.item__t'];
+$singleTable['joins'] = 'auto';
+$singleNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $singleTable,
+    $mapping,
+    $catalog
+);
+expectNormalizer($singleNormalized['joins'] === [], 'A single canonical table must not require a relationship.');
+
+$multiHopCatalog = [
+    'relationships_by_id' => [
+        'a.id->b.a_id' => [
+            'relationship_id' => 'a.id->b.a_id',
+            'pair_id' => 'a<->b',
+            'from_table' => 'a',
+            'from_column' => 'id',
+            'to_table' => 'b',
+            'to_column' => 'a_id',
+            'is_default' => true,
+        ],
+        'b.id->c.b_id' => [
+            'relationship_id' => 'b.id->c.b_id',
+            'pair_id' => 'b<->c',
+            'from_table' => 'b',
+            'from_column' => 'id',
+            'to_table' => 'c',
+            'to_column' => 'b_id',
+            'is_default' => true,
+        ],
+    ],
+    'defaults_by_pair' => [
+        'a<->b' => 'a.id->b.a_id',
+        'b<->c' => 'b.id->c.b_id',
+    ],
+];
+$multiHopDefinition = [
+    'schemaIdentity' => 'ldlite',
+    'tables' => ['c', 'a', 'b'],
+    'columns' => [],
+    'joins' => [
+        ['relationship_id' => 'a.id->b.a_id'],
+        ['relationship_id' => 'b.id->c.b_id'],
+    ],
+];
+$multiHopNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $multiHopDefinition,
+    ['a' => 'a_legacy', 'b' => 'b_legacy', 'c' => 'c_legacy'],
+    $multiHopCatalog
+);
+expectNormalizer(
+    $multiHopNormalized['joins'][0]['from_table'] === 'c_legacy'
+        && $multiHopNormalized['joins'][0]['to_table'] === 'b_legacy'
+        && $multiHopNormalized['joins'][1]['from_table'] === 'b_legacy'
+        && $multiHopNormalized['joins'][1]['to_table'] === 'a_legacy',
+    'Explicit multi-hop joins must be reordered and oriented from the already-joined table set.'
+);
+
 $unknownRelationship = $definition;
 $unknownRelationship['joins'][0]['relationship_id'] = 'inventory.item__t.unknown->inventory.location__t.id';
 expectNormalizerInvalidArgument(
@@ -86,6 +186,41 @@ expectNormalizerInvalidArgument(
         BuilderQueryDefinitionNormalizerService::normalizeWithCatalog($unknownRelationship, $mapping, $catalog);
     },
     'Unknown Builder relationship'
+);
+
+foreach ([null, 'invalid'] as $malformedJoins) {
+    $malformed = $definition;
+    $malformed['joins'] = $malformedJoins;
+    expectNormalizerInvalidArgument(
+        function () use ($malformed, $mapping, $catalog): void {
+            BuilderQueryDefinitionNormalizerService::normalizeWithCatalog($malformed, $mapping, $catalog);
+        },
+        'Canonical joins must be'
+    );
+}
+
+$malformedEntry = $definition;
+$malformedEntry['joins'] = ['not-an-object'];
+expectNormalizerInvalidArgument(
+    function () use ($malformedEntry, $mapping, $catalog): void {
+        BuilderQueryDefinitionNormalizerService::normalizeWithCatalog($malformedEntry, $mapping, $catalog);
+    },
+    'relationship_id'
+);
+
+$disconnectedCatalog = $catalog;
+$disconnectedDefinition = $definition;
+$disconnectedDefinition['tables'][] = 'inventory.campus__t';
+$disconnectedDefinition['joins'] = 'auto';
+expectNormalizerInvalidArgument(
+    function () use ($disconnectedDefinition, $mapping, $disconnectedCatalog): void {
+        BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+            $disconnectedDefinition,
+            $mapping + ['inventory.campus__t' => 'inventory_campuses'],
+            $disconnectedCatalog
+        );
+    },
+    'Cannot resolve reviewed Builder relationships'
 );
 
 $missingEndpoint = $definition;

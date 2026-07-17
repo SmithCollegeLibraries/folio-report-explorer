@@ -90,13 +90,21 @@ foreach (['effective', 'permanent', 'temporary'] as $kind) {
     $id = "inventory.item__t.{$column}->inventory.location__t.id";
     $relationships[$id] = [
         'relationship_id' => $id,
+        'pair_id' => 'inventory.item__t<->inventory.location__t',
         'from_table' => 'inventory.item__t',
         'from_column' => $column,
         'to_table' => 'inventory.location__t',
         'to_column' => 'id',
+        'is_default' => $kind === 'effective',
     ];
 }
-$catalog = ['relationships_by_id' => $relationships];
+$catalog = [
+    'relationships_by_id' => $relationships,
+    'defaults_by_pair' => [
+        'inventory.item__t<->inventory.location__t'
+            => 'inventory.item__t.effective_location_id->inventory.location__t.id',
+    ],
+];
 
 $baseDefinition = [
     'schemaIdentity' => 'ldlite',
@@ -126,5 +134,31 @@ foreach (['effective', 'permanent', 'temporary'] as $kind) {
     expectSqlContains($result['sql'], 'JOIN inventory.location__t il');
     expectSqlContains($result['sql'], "ON il.id = ii.{$column}");
 }
+
+$reverseDefinition = $baseDefinition;
+$reverseDefinition['tables'] = ['inventory.location__t', 'inventory.item__t'];
+$reverseDefinition['columns'] = [['table' => 'inventory.location__t', 'column' => 'name']];
+$reverseDefinition['joins'] = [[
+    'relationship_id' => 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+]];
+$reverseNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $reverseDefinition,
+    $mapping,
+    $catalog
+);
+$reverseResult = SqlBuilderService::build($reverseNormalized);
+expectSqlContains($reverseResult['sql'], 'FROM inventory.location__t il');
+expectSqlContains($reverseResult['sql'], 'JOIN inventory.item__t ii');
+expectSqlContains($reverseResult['sql'], 'ON ii.permanent_location_id = il.id');
+
+$defaultDefinition = $baseDefinition;
+$defaultDefinition['joins'] = 'auto';
+$defaultNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $defaultDefinition,
+    $mapping,
+    $catalog
+);
+$defaultResult = SqlBuilderService::build($defaultNormalized);
+expectSqlContains($defaultResult['sql'], 'ON il.id = ii.effective_location_id');
 
 fwrite(STDOUT, "SqlBuilderService LDLite relationship test passed\n");
