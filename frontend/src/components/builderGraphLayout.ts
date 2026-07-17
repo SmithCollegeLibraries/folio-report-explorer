@@ -83,7 +83,11 @@ export function createRelationshipGraphLayout(
         ...node,
         position: positions.get(node.id) ?? node.position,
       })),
-      edges: edges.map((edge) => ({ ...edge, type: 'smoothstep' })),
+      edges: edges.map((edge) => (
+        edge.type === 'builderRelationship'
+          ? edge
+          : { ...edge, type: 'smoothstep' }
+      )),
     };
   };
 }

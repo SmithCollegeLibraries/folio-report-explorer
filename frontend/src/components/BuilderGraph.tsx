@@ -176,8 +176,8 @@ function BuilderGraphCanvas({
       edgeSet.add(group.pairId);
       edges.push({
         id: group.pairId,
-        source: active.from_table,
-        target: active.to_table,
+        source: group.leftTable,
+        target: group.rightTable,
         label,
         style: { strokeWidth: 2.5, stroke: '#3b82f6' },
         markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6', width: 16, height: 16 },
@@ -414,7 +414,9 @@ function BuilderGraphCanvas({
       const resultEdgeTypes = new Map(result.edges.map((edge) => [edge.id, edge.type]));
       setEdges(latestGraphEdges.current.map((edge) => ({
         ...edge,
-        type: resultEdgeTypes.get(edge.id) ?? edge.type,
+        type: edge.type === 'builderRelationship'
+          ? edge.type
+          : resultEdgeTypes.get(edge.id) ?? edge.type,
       })));
       if (resetMode) {
         explicitRelayoutPending.current = false;
