@@ -18,6 +18,7 @@ use app\services\PreviousSuccessfulQueryReuseService;
 use app\services\ReferenceCacheRefreshService;
 use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
+use app\services\SqlSelectStructureService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -1752,28 +1753,15 @@ class FolioQueryController extends Controller
 
     private function assertEditedCanonicalSqlBinding(string $trustedSql, string $editedSql): void
     {
-        $trusted = $this->normalizeSqlForBinding($trustedSql);
-        $edited = $this->normalizeSqlForBinding($editedSql);
+        $trusted = SqlSelectStructureService::analyzeCanonical($trustedSql);
+        $edited = SqlSelectStructureService::analyzeCanonical($editedSql);
 
-        preg_match_all('/\b(?:from|join)\s+([a-z0-9_."]+)/i', $trusted, $trustedTableMatches);
-        preg_match_all('/\b(?:from|join)\s+([a-z0-9_."]+)/i', $edited, $editedTableMatches);
-        $trustedTables = array_values(array_unique($trustedTableMatches[1] ?? []));
-        $editedTables = array_values(array_unique($editedTableMatches[1] ?? []));
-        sort($trustedTables, SORT_STRING);
-        sort($editedTables, SORT_STRING);
-        if ($trustedTables !== $editedTables) {
+        if ($trusted['tables'] !== $edited['tables']) {
             throw new \InvalidArgumentException(
                 'Edited canonical SQL must retain exactly the tables in the query definition.'
             );
         }
-
-        preg_match_all('/\bon\s+([^\r\n]+?)(?=\s+(?:join|left\s+join|where|group\s+by|having|order\s+by|limit)\b|$)/i', $trusted, $trustedJoinMatches);
-        preg_match_all('/\bon\s+([^\r\n]+?)(?=\s+(?:join|left\s+join|where|group\s+by|having|order\s+by|limit)\b|$)/i', $edited, $editedJoinMatches);
-        $trustedJoins = array_map('trim', $trustedJoinMatches[1] ?? []);
-        $editedJoins = array_map('trim', $editedJoinMatches[1] ?? []);
-        sort($trustedJoins, SORT_STRING);
-        sort($editedJoins, SORT_STRING);
-        if ($trustedJoins !== $editedJoins) {
+        if ($trusted['joins'] !== $edited['joins']) {
             throw new \InvalidArgumentException(
                 'Edited canonical SQL must retain the server-approved table links.'
             );

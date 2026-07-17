@@ -744,6 +744,26 @@ describe('Builder', () => {
     expect(apiMocks.buildQuery).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['a rejected discovery request', () => Promise.reject(new Error('path service unavailable'))],
+    ['a completed null path', () => Promise.resolve({ path: null })],
+  ])('keeps Build disabled after %s', async (_label, discoveryResult) => {
+    apiMocks.findPath.mockImplementation(discoveryResult);
+    apiMocks.buildQuery.mockResolvedValue({ sql: 'SELECT unsafe', params: {} });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalled());
+    const buildButton = screen.getByRole('button', { name: 'Build SQL' });
+    await waitFor(() => expect(buildButton).toBeDisabled());
+    fireEvent.click(buildButton);
+    expect(apiMocks.buildQuery).not.toHaveBeenCalled();
+  });
+
   it('invalidates generated and edited SQL when an unavailable relationship override is pruned', async () => {
     const effective = {
       from_table: 'inventory.item__t',

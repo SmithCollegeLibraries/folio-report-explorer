@@ -71,6 +71,7 @@ namespace {
         if (!$condition) { fwrite(STDERR, $message . "\n"); exit(1); }
     }
 
+    require_once __DIR__ . '/../services/SqlSelectStructureService.php';
     require_once __DIR__ . '/../controllers/FolioQueryController.php';
     Yii::$app = (object)['request' => null, 'response' => (object)['statusCode' => 200], 'user' => (object)['isGuest' => true, 'id' => null]];
     $controller = new \app\controllers\FolioQueryController('folio-query', null);
@@ -123,6 +124,29 @@ namespace {
     Yii::$app->request = new CanonicalSaveRequest(['name' => 'Edited', 'queryDefinition' => $definition, 'generatedSql' => $editedSql, 'sqlEdited' => true]);
     $edited = $controller->actionSave();
     expectCanonicalSave(Yii::$app->response->statusCode === 201 && end(\app\models\SavedQuery::$saved)->generated_sql === $editedSql, 'Safe edited SQL retaining trusted joins must be preserved.');
+
+    $safeFormattedSql = "SELECT item_alias.id, location_alias.name\n"
+        . "FROM inventory.item__t AS item_alias\n"
+        . "INNER JOIN inventory.location__t AS location_alias\n"
+        . "  ON ( location_alias.id= item_alias.effective_location_id )\n"
+        . "WHERE item_alias.status = 'Available'\nORDER BY item_alias.id";
+    Yii::$app->response->statusCode = 200;
+    Yii::$app->request = new CanonicalSaveRequest(['name' => 'Formatted', 'queryDefinition' => $definition, 'generatedSql' => $safeFormattedSql, 'sqlEdited' => true]);
+    $formatted = $controller->actionSave();
+    expectCanonicalSave(Yii::$app->response->statusCode === 201, 'Alias renames, formatting, and safe select/filter/order edits must be accepted.');
+
+    foreach ([
+        ['sql' => str_replace('JOIN inventory.location__t', 'LEFT JOIN inventory.location__t', $trustedSql), 'message' => 'Changing the trusted join type must be rejected.'],
+        ['sql' => str_replace('effective_location_id', 'permanent_location_id', $safeFormattedSql), 'message' => 'Changing the trusted relationship endpoint must be rejected.'],
+        ['sql' => $trustedSql . "\n, users.users__t blocked", 'message' => 'An implicit-comma extra blocked table must be rejected.'],
+        ['sql' => $trustedSql . "\n, inventory.holdings_record__t extra", 'message' => 'Any implicit-comma extra table must be rejected.'],
+        ['sql' => str_replace('il.id = ii.effective_location_id', 'il.id = ii.effective_location_id AND il.code = ii.status', $trustedSql), 'message' => 'Compound join predicates must fail closed.'],
+    ] as $case) {
+        Yii::$app->response->statusCode = 200;
+        Yii::$app->request = new CanonicalSaveRequest(['name' => 'Unsafe edit', 'queryDefinition' => $definition, 'generatedSql' => $case['sql'], 'sqlEdited' => true]);
+        $unsafeEdit = $controller->actionSave();
+        expectCanonicalSave(Yii::$app->response->statusCode === 422 && isset($unsafeEdit['error']), $case['message']);
+    }
 
     fwrite(STDOUT, "FolioQueryController canonical save test passed\n");
 }

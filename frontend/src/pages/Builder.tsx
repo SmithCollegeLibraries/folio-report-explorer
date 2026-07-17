@@ -438,7 +438,9 @@ export default function Builder() {
     return result;
   }, [selectedTables, tableDetails]);
 
-  const canBuild = selectedTables.length > 0 && columns.length > 0 && !joinDiscoveryLoading;
+  const joinTopologyReady = selectedTables.length < 2
+    || (!joinDiscoveryLoading && joinDiscoveryError === null && defaultJoins.length > 0);
+  const canBuild = selectedTables.length > 0 && columns.length > 0 && joinTopologyReady;
   const canRun = !!effectiveSql && !isRunning;
 
   if (schemaLoading) {
