@@ -284,6 +284,17 @@ TestTransport::$responses = [
 $multiArgumentTableFunction = GeminiService::generateSqlWithShadow('Expand a constructed JSON object.', null, null, true);
 repairAssertSame(0, $multiArgumentTableFunction['repairAttempts'] ?? null, 'Commas inside a table function must not be treated as relation separators.');
 
+foreach ([
+    'SELECT EXTRACT(YEAR FROM ii.created_date) AS created_year FROM inventory.item__t ii',
+    "SELECT TRIM(BOTH ' ' FROM ii.title) AS clean_title FROM inventory.item__t ii",
+    "SELECT 'FROM inventory.missing_table__t JOIN inventory.other_missing__t' AS note FROM inventory.item__t ii",
+    'SELECT ii.id /* FROM inventory.missing_table__t */ FROM inventory.item__t ii -- JOIN inventory.other_missing__t',
+] as $sqlWithInertRelationText) {
+    TestTransport::$responses = [geminiText($sqlWithInertRelationText)];
+    $contextAwareResult = GeminiService::generateSqlWithShadow('Show item data using PostgreSQL expressions.', null, null, true);
+    repairAssertSame(0, $contextAwareResult['repairAttempts'] ?? null, 'Expression, string, and comment FROM/JOIN text must not be treated as physical relations.');
+}
+
 TestTransport::$responses = [
     geminiText('SELECT ii.id FROM inventory.item__t ii, inventory.missing_table__t mt'),
     geminiText('SELECT ii.id FROM inventory.item__t ii'),

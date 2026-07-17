@@ -6221,39 +6221,33 @@ PROMPT;
     private static function extractSqlTableReferenceMatches(string $sql, string $identifierPattern): array
     {
         $referencePattern = '(?:' . $identifierPattern . ')(?:\s*\.\s*(?:' . $identifierPattern . '))?';
-        preg_match_all(
-            '/(?:FROM|JOIN)\s+(' . $referencePattern . ')/i',
-            $sql,
-            $directMatches,
-            PREG_OFFSET_CAPTURE
-        );
-        $references = $directMatches[1] ?? [];
-
-        foreach (self::findSqlFromClauseCommaOffsets($sql) as $commaOffset) {
-            $candidate = substr($sql, $commaOffset + 1);
+        $references = [];
+        foreach (self::findSqlRelationReferenceOffsets($sql) as $referenceOffset) {
+            $candidate = substr($sql, $referenceOffset);
             if (preg_match('/^\s*(' . $referencePattern . ')/i', $candidate, $match, PREG_OFFSET_CAPTURE) !== 1) {
                 continue;
             }
             $references[] = [
                 (string)$match[1][0],
-                $commaOffset + 1 + (int)$match[1][1],
+                $referenceOffset + (int)$match[1][1],
             ];
         }
 
         return $references;
     }
 
-    private static function findSqlFromClauseCommaOffsets(string $sql): array
+    private static function findSqlRelationReferenceOffsets(string $sql): array
     {
         $offsets = [];
         $depth = 0;
+        $selectDepths = [];
         $fromDepths = [];
         $quote = null;
         $inLineComment = false;
         $inBlockComment = false;
         $length = strlen($sql);
         $clauseBoundaryWords = [
-            'SELECT', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET',
+            'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET',
             'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'RETURNING',
         ];
 
@@ -6309,10 +6303,15 @@ PROMPT;
                         unset($fromDepths[$fromDepth]);
                     }
                 }
+                foreach (array_keys($selectDepths) as $selectDepth) {
+                    if ($selectDepth > $depth) {
+                        unset($selectDepths[$selectDepth]);
+                    }
+                }
                 continue;
             }
             if ($char === ',' && isset($fromDepths[$depth])) {
-                $offsets[] = $index;
+                $offsets[] = $index + 1;
                 continue;
             }
             if (preg_match('/[A-Za-z_]/', $char) === 1) {
@@ -6321,8 +6320,14 @@ PROMPT;
                     $wordEnd++;
                 }
                 $word = strtoupper(substr($sql, $index, $wordEnd - $index));
-                if ($word === 'FROM') {
+                if ($word === 'SELECT') {
+                    $selectDepths[$depth] = true;
+                    unset($fromDepths[$depth]);
+                } elseif ($word === 'FROM' && isset($selectDepths[$depth])) {
                     $fromDepths[$depth] = true;
+                    $offsets[] = $wordEnd;
+                } elseif ($word === 'JOIN' && isset($fromDepths[$depth])) {
+                    $offsets[] = $wordEnd;
                 } elseif (in_array($word, $clauseBoundaryWords, true)) {
                     unset($fromDepths[$depth]);
                 }
