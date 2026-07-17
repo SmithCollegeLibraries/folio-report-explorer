@@ -1,6 +1,7 @@
-import { useMemo, useCallback, useEffect } from 'react';
+import { useMemo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   type Node,
@@ -8,10 +9,13 @@ import {
   MarkerType,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   Panel,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { TableDetail, TableSummary } from '../types';
+import { layoutRelationshipGraph } from './builderGraphLayout';
+import { reconcileUserArrangedNodes } from './builderGraphPositions';
 
 interface ConnectedTable {
   name: string;
@@ -36,44 +40,9 @@ function shortName(fullName: string): string {
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
 }
 
-/** Improved layout: selected tables in a horizontal chain, ghost nodes below */
-function computeLayout(
-  selectedTables: string[],
-  connectedTables: ConnectedTable[],
-) {
-  const positions = new Map<string, { x: number; y: number }>();
+type LayoutMode = 'automatic' | 'user-arranged';
 
-  // Place selected tables in a wider horizontal layout
-  const spacing = 320;
-  const maxCols = Math.min(selectedTables.length, 5);
-  const cols = Math.max(1, maxCols);
-  selectedTables.forEach((t, i) => {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    positions.set(t, { x: col * spacing + 60, y: row * 200 + 60 });
-  });
-
-  // Place ghost nodes in a row below, centered under the selected tables
-  const ghostPositions = new Map<string, { x: number; y: number }>();
-  const maxRows = Math.ceil(selectedTables.length / cols);
-  const baseY = maxRows * 200 + 120;
-  const ghostSpacing = 240;
-  const maxGhosts = Math.min(connectedTables.length, 10);
-  const totalGhostWidth = (maxGhosts - 1) * ghostSpacing;
-  const selectedWidth = (Math.min(selectedTables.length, cols) - 1) * spacing;
-  const ghostStartX = (selectedWidth - totalGhostWidth) / 2 + 60;
-
-  connectedTables.slice(0, maxGhosts).forEach((ct, i) => {
-    ghostPositions.set(ct.name, {
-      x: ghostStartX + i * ghostSpacing,
-      y: baseY,
-    });
-  });
-
-  return { positions, ghostPositions };
-}
-
-export default function BuilderGraph({
+function BuilderGraphCanvas({
   selectedTables,
   tableDetails,
   tables,
@@ -125,16 +94,14 @@ export default function BuilderGraph({
   const { graphNodes, graphEdges } = useMemo(() => {
     const nodes: Node[] = [];
     const edges: Edge[] = [];
-    const { positions, ghostPositions } = computeLayout(selectedTables, connectedTables);
     const selectedSet = new Set(selectedTables);
 
     // Selected table nodes
     for (const t of selectedTables) {
-      const pos = positions.get(t) || { x: 0, y: 0 };
       nodes.push({
         id: t,
         data: { label: shortName(t), isSelected: true, tableName: t },
-        position: pos,
+        position: { x: 60, y: 60 },
         type: 'default',
         style: {
           background: '#1e40af',
@@ -170,6 +137,7 @@ export default function BuilderGraph({
           label: `${rel.local_column} → ${rel.parent_column || 'id'}`,
           style: { strokeWidth: 2.5, stroke: '#3b82f6' },
           markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6', width: 16, height: 16 },
+          type: 'smoothstep',
           labelStyle: { fontSize: 11, fill: '#1f2937', fontFamily: 'ui-monospace, monospace', fontWeight: 600 },
           labelBgPadding: [6, 4] as [number, number],
           labelBgStyle: { fill: '#eff6ff', fillOpacity: 0.95, stroke: '#bfdbfe', strokeWidth: 1, rx: 4 },
@@ -180,11 +148,10 @@ export default function BuilderGraph({
     // Ghost nodes (connected but not selected)
     const maxGhosts = 10;
     connectedTables.slice(0, maxGhosts).forEach((ct) => {
-      const pos = ghostPositions.get(ct.name) || { x: 0, y: 400 };
       nodes.push({
         id: ct.name,
         data: { label: shortName(ct.name), isSelected: false, tableName: ct.name, connectionCount: ct.connections.length },
-        position: pos,
+        position: { x: 60, y: 60 },
         type: 'default',
         style: {
           background: '#ffffff',
@@ -212,6 +179,7 @@ export default function BuilderGraph({
           label: conn.column,
           style: { strokeWidth: 1.5, stroke: '#9ca3af', strokeDasharray: '6 4' },
           markerEnd: { type: MarkerType.ArrowClosed, color: '#9ca3af', width: 14, height: 14 },
+          type: 'smoothstep',
           labelStyle: { fontSize: 10, fill: '#9ca3af', fontFamily: 'ui-monospace, monospace' },
           labelBgPadding: [4, 3] as [number, number],
           labelBgStyle: { fill: '#f9fafb', fillOpacity: 0.9, rx: 3 },
@@ -224,12 +192,64 @@ export default function BuilderGraph({
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graphEdges);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('automatic');
+  const layoutModeRef = useRef<LayoutMode>('automatic');
+  const [layoutPending, setLayoutPending] = useState(false);
+  const [layoutError, setLayoutError] = useState<string | null>(null);
+  const layoutSequence = useRef(0);
+  const { fitView } = useReactFlow();
 
-  // Sync when graph data changes
+  const runAutomaticLayout = useCallback(async (
+    nextNodes: Node[],
+    nextEdges: Edge[],
+    resetMode: boolean,
+  ) => {
+    const sequence = ++layoutSequence.current;
+    setLayoutPending(true);
+    setLayoutError(null);
+    try {
+      const result = await layoutRelationshipGraph({
+        nodes: nextNodes,
+        edges: nextEdges,
+        direction: 'RIGHT',
+      });
+      if (sequence !== layoutSequence.current) return;
+      setNodes(result.nodes);
+      setEdges(result.edges);
+      if (resetMode) {
+        layoutModeRef.current = 'automatic';
+        setLayoutMode('automatic');
+      }
+      requestAnimationFrame(() => {
+        void fitView({ padding: 0.4, maxZoom: 1.2, duration: 250 });
+      });
+    } catch {
+      if (sequence !== layoutSequence.current) return;
+      setLayoutError('Could not arrange this graph');
+      setNodes((current) => reconcileUserArrangedNodes(nextNodes, current, nextEdges));
+      setEdges(nextEdges);
+    } finally {
+      if (sequence === layoutSequence.current) setLayoutPending(false);
+    }
+  }, [fitView, setEdges, setNodes]);
+
   useEffect(() => {
-    setNodes(graphNodes);
+    if (layoutModeRef.current === 'automatic') {
+      void runAutomaticLayout(graphNodes, graphEdges, false);
+      return;
+    }
+    layoutSequence.current += 1;
+    setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
     setEdges(graphEdges);
-  }, [graphNodes, graphEdges, setNodes, setEdges]);
+  }, [graphEdges, graphNodes, runAutomaticLayout, setEdges, setNodes]);
+
+  const onNodeDragStop = useCallback(() => {
+    layoutSequence.current += 1;
+    layoutModeRef.current = 'user-arranged';
+    setLayoutMode('user-arranged');
+    setLayoutPending(false);
+    setLayoutError(null);
+  }, []);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
@@ -252,7 +272,7 @@ export default function BuilderGraph({
   );
 
   return (
-    <div className="h-full w-full relative">
+    <div className="builder-relationship-graph h-full w-full relative">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -260,8 +280,7 @@ export default function BuilderGraph({
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
-        fitView
-        fitViewOptions={{ padding: 0.4, maxZoom: 1.2 }}
+        onNodeDragStop={onNodeDragStop}
         proOptions={{ hideAttribution: true }}
         minZoom={0.2}
         maxZoom={2.5}
@@ -269,6 +288,30 @@ export default function BuilderGraph({
       >
         <Background gap={24} size={1} color="#e5e7eb" />
         <Controls showInteractive={false} />
+
+        <Panel position="top-right">
+          <div className="flex flex-col items-end gap-2">
+            <button
+              type="button"
+              aria-label="Re-layout relationship graph"
+              onClick={() => void runAutomaticLayout(graphNodes, graphEdges, true)}
+              disabled={layoutPending || graphNodes.length === 0}
+              className="rounded-lg border bg-white/95 px-3 py-2 text-xs font-medium text-gray-700 shadow-sm backdrop-blur transition-colors hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60"
+            >
+              {layoutPending ? 'Arranging…' : 'Re-layout'}
+            </button>
+            {layoutMode === 'user-arranged' && (
+              <span className="rounded bg-white/90 px-2 py-1 text-[10px] text-gray-500 shadow-sm">
+                Manual layout preserved
+              </span>
+            )}
+            {layoutError && (
+              <span role="status" className="rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800 shadow-sm">
+                {layoutError}
+              </span>
+            )}
+          </div>
+        </Panel>
 
         {/* Legend */}
         <Panel position="bottom-left">
@@ -302,5 +345,13 @@ export default function BuilderGraph({
         </div>
       )}
     </div>
+  );
+}
+
+export default function BuilderGraph(props: Props) {
+  return (
+    <ReactFlowProvider>
+      <BuilderGraphCanvas {...props} />
+    </ReactFlowProvider>
   );
 }
