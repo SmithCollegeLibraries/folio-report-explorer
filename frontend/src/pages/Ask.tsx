@@ -8,6 +8,8 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
+import { ExploratoryAssumptionsPanel } from '../components/ExploratoryAssumptionsPanel';
+import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel';
 import { useToast } from '../components/ToastProvider';
 import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
@@ -48,6 +50,7 @@ export const ASK_RESOLVER_LOADING_STEPS = [
   'Checking known FOLIO report filters and lookup values',
   'Looking for named terms in contributors/authors, titles, identifiers, and notes',
   'Preparing a follow-up question if anything is ambiguous',
+  'Automatically repairing SQL that does not pass validation',
 ];
 
 export const ASK_SQL_GENERATION_LOADING_STEPS = [
@@ -67,7 +70,7 @@ export function getAskProgressCopy(phase: AskProgressPhase): { title: string; st
   }
 
   return {
-    title: 'Checking your request before SQL generation',
+    title: 'Generating and validating your query',
     steps: ASK_RESOLVER_LOADING_STEPS,
   };
 }
@@ -463,7 +466,7 @@ export function buildBatchClarificationResolutionInput(
 
 export function buildCurrentAskFollowUpContext(
   previousPrompt: string,
-  result: Pick<NlResponse, 'sql'> | null | undefined,
+  result: Pick<NlResponse, 'sql' | 'assumptions'> | null | undefined,
   previousColumns: string[] = [],
 ): FollowUpContext | null {
   const previousSql = result?.sql?.trim();
@@ -474,6 +477,7 @@ export function buildCurrentAskFollowUpContext(
     previousPrompt: previousPrompt.trim() || 'Previous Ask query',
     previousSql,
     previousColumns,
+    ...(result?.assumptions?.length ? { previousAssumptions: result.assumptions } : {}),
   };
 }
 
@@ -981,6 +985,58 @@ export default function Ask() {
     setFollowUpContext(context);
     setFollowUpError(null);
     setPrompt('');
+  };
+
+  const handleCorrectAssumption = (example: string) => {
+    const context = buildCurrentAskFollowUpContext(
+      history[0]?.prompt || prompt,
+      nlResult,
+      results?.columns || [],
+    );
+    if (!context) {
+      setFollowUpError('Assumptions can be corrected after a query has generated SQL.');
+      return;
+    }
+
+    setPrompt(example);
+    setAskProgressPhase('building_sql_after_clarification');
+    askMut.mutate({
+      question: example,
+      includeSuggestions: true,
+      shouldExecute: true,
+      followUpContext: context,
+      allowExploratory: true,
+    });
+  };
+
+  const handleRetryExploratory = (question: string) => {
+    const preservedQuestion = question.trim();
+    if (!preservedQuestion) return;
+    setPrompt(preservedQuestion);
+    setAskProgressPhase('checking_request');
+    askMut.mutate({
+      question: preservedQuestion,
+      includeSuggestions: true,
+      shouldExecute: true,
+      followUpContext: null,
+      allowExploratory: true,
+    });
+  };
+
+  const handleRefineExploratory = (question: string, suggestion: string) => {
+    const originalQuestion = question.trim();
+    const correction = suggestion.trim();
+    if (!originalQuestion || !correction) return;
+    const refinedQuestion = `${originalQuestion}\n\nCorrection: ${correction}`;
+    setPrompt(refinedQuestion);
+    setAskProgressPhase('checking_request');
+    askMut.mutate({
+      question: refinedQuestion,
+      includeSuggestions: true,
+      shouldExecute: true,
+      followUpContext: null,
+      allowExploratory: true,
+    });
   };
 
   const handleClarificationChoice = async (option: ClarificationOption | null) => {
@@ -2056,9 +2112,26 @@ export default function Ask() {
           </div>
         )}
 
-        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && (
+        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && nlResult.validationSummary?.status === 'exhausted' && (
+          <div className="mx-auto w-full max-w-4xl p-3">
+            <ExploratoryRecoveryPanel
+              response={nlResult}
+              onRetry={handleRetryExploratory}
+              onRefine={handleRefineExploratory}
+            />
+          </div>
+        )}
+
+        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && nlResult.validationSummary?.status !== 'exhausted' && (
           <div className="mx-auto w-full max-w-6xl p-3 space-y-3">
             <ExploratoryNoticePanel result={nlResult} />
+            {nlResult.mode === 'exploratory' && nlResult.assumptions && nlResult.assumptions.length > 0 && (
+              <ExploratoryAssumptionsPanel
+                assumptions={nlResult.assumptions}
+                repairCount={nlResult.repairAttempts ?? nlResult.validationSummary?.repairAttempts ?? 0}
+                onCorrect={handleCorrectAssumption}
+              />
+            )}
 
             {/* Tab toggle bar */}
             <div className="flex items-center gap-1 border-b pb-0">

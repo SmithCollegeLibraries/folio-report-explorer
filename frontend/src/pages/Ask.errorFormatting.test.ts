@@ -157,8 +157,9 @@ describe('Ask error formatting', () => {
     const initial = AskPage.getAskProgressCopy?.('checking_request');
     const clarified = AskPage.getAskProgressCopy?.('building_sql_after_clarification');
 
-    expect(initial?.title).toBe('Checking your request before SQL generation');
+    expect(initial?.title).toBe('Generating and validating your query');
     expect(initial?.steps).toContain('Checking known FOLIO report filters and lookup values');
+    expect(initial?.steps).toContain('Automatically repairing SQL that does not pass validation');
     expect(clarified?.title).toBe('Using your clarification to build SQL');
     expect(clarified?.steps.join(' ')).not.toContain('Checking known FOLIO report filters');
     expect(clarified?.steps.join(' ')).toContain('Starting AI SQL generation');

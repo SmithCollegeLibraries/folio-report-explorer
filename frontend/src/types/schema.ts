@@ -236,6 +236,33 @@ export interface ExploratoryNotice {
   reason?: string;
 }
 
+export interface ExploratoryAssumption {
+  key: string;
+  label: string;
+  value: string;
+  explanation: string;
+  correctionExample: string;
+  source: 'default' | 'explicit';
+}
+
+export interface ValidationSummary {
+  status: 'validated' | 'exhausted';
+  repairAttempts: number;
+  validatorStage?: string;
+  failureCategory?: string;
+  message?: string;
+}
+
+export interface ExploratoryPlan {
+  summary?: string;
+  suggestions?: string[];
+}
+
+export interface RecoveryContext {
+  originalQuestion: string;
+  campus?: string | null;
+}
+
 export interface NlResponse {
   sql?: string;
   explanation?: string;
@@ -248,12 +275,12 @@ export interface NlResponse {
   message?: string;
   repeatabilityWarning?: string;
   exploratoryNotice?: ExploratoryNotice;
-  exploratoryPlan?: {
-    prompt?: string;
-    campus?: string;
-    status?: string;
-    suggestions?: string[];
-  };
+  exploratoryPlan?: ExploratoryPlan;
+  assumptions?: ExploratoryAssumption[];
+  repairAttempts?: number;
+  validationSummary?: ValidationSummary;
+  recoveryContext?: RecoveryContext;
+  attemptedPlan?: string;
   clarificationType?: string;
   clarificationBatchId?: string;
   clarificationItems?: ClarificationItem[];
@@ -274,6 +301,7 @@ export interface FollowUpContext {
   previousPrompt?: string;
   previousSql?: string;
   previousColumns?: string[];
+  previousAssumptions?: ExploratoryAssumption[];
   jobId?: string;
 }
 

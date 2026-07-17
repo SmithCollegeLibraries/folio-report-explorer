@@ -7,6 +7,14 @@ describe('Ask follow-up context helpers', () => {
     const result: NlResponse = {
       sql: 'SELECT inst.title FROM inventory.instance__t inst',
       dataSource: 'folio',
+      assumptions: [{
+        key: 'purchase_date_basis',
+        label: 'Purchase date',
+        value: 'payment_date',
+        explanation: 'Purchases use the invoice payment date.',
+        correctionExample: 'Use invoice date instead of payment date.',
+        source: 'default',
+      }],
     };
 
     expect(buildCurrentAskFollowUpContext('Original MRBC list', result, ['title'])).toEqual({
@@ -14,6 +22,7 @@ describe('Ask follow-up context helpers', () => {
       previousPrompt: 'Original MRBC list',
       previousSql: 'SELECT inst.title FROM inventory.instance__t inst',
       previousColumns: ['title'],
+      previousAssumptions: result.assumptions,
     });
   });
 
