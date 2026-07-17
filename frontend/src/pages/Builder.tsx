@@ -161,20 +161,19 @@ export default function Builder() {
     if (defaultJoins.length > 0 && (hasOverride || joinMode === 'manual')) {
       return activeJoinSelections;
     }
-    if (joinMode === 'manual' && customJoins.length > 0) {
-      return relationshipSelections(customJoins);
-    }
     return 'auto';
   }, [activeJoinSelections, activeRelationshipOverrides, customJoins, defaultJoins, joinMode]);
+
+  const handleDefaultJoinsChange = useCallback((joins: JoinEdge[]) => {
+    setDefaultJoins(joins.filter(isCanonicalJoinEdge));
+    setBuilt(null);
+  }, []);
 
   const handleCustomJoinsChange = useCallback((joins: JoinEdge[]) => {
     const canonical = joins.filter(isCanonicalJoinEdge);
     setCustomJoins(canonical);
-    if (joinMode === 'auto' && canonical.length > 0) {
-      setDefaultJoins(canonical);
-    }
     setBuilt(null);
-  }, [joinMode]);
+  }, []);
 
   // Clear edited SQL when build changes
   useEffect(() => {
@@ -584,6 +583,7 @@ export default function Builder() {
                   customJoins={customJoins}
                   onJoinModeChange={(m) => { setJoinMode(m); setBuilt(null); }}
                   onCustomJoinsChange={handleCustomJoinsChange}
+                  onDefaultJoinsChange={handleDefaultJoinsChange}
                   relationshipGroups={relationshipGroups}
                   activeRelationshipOverrides={activeRelationshipOverrides}
                   onRelationshipChange={selectRelationship}

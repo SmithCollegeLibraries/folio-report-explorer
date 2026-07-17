@@ -19,6 +19,7 @@ interface Props {
   customJoins: JoinEdge[];
   onJoinModeChange: (mode: 'auto' | 'manual') => void;
   onCustomJoinsChange: (joins: JoinEdge[]) => void;
+  onDefaultJoinsChange: (joins: JoinEdge[]) => void;
   relationshipGroups?: RelationshipGroups;
   activeRelationshipOverrides?: RelationshipOverrides;
   onRelationshipChange?: (pairId: string, relationshipId: string) => void;
@@ -31,6 +32,7 @@ export default function JoinPanel({
   customJoins,
   onJoinModeChange,
   onCustomJoinsChange,
+  onDefaultJoinsChange,
 }: Props) {
   const [discoveredJoins, setDiscoveredJoins] = useState<JoinEdge[]>([]);
   const [loading, setLoading] = useState(false);
@@ -40,6 +42,7 @@ export default function JoinPanel({
   useEffect(() => {
     if (selectedTables.length < 2) {
       setDiscoveredJoins([]);
+      onDefaultJoinsChange([]);
       setError(null);
       return;
     }
@@ -101,10 +104,7 @@ export default function JoinPanel({
 
       if (!cancelled) {
         setDiscoveredJoins(joins);
-        // If switching to auto mode and custom joins are empty, populate them
-        if (customJoins.length === 0 && joins.length > 0) {
-          onCustomJoinsChange(joins.map((j) => ({ ...j })));
-        }
+        onDefaultJoinsChange(joins.map((join) => ({ ...join })));
         setLoading(false);
       }
     }
@@ -114,7 +114,7 @@ export default function JoinPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTables.join(','), schemaIdentity]);
+  }, [selectedTables.join(','), schemaIdentity, onDefaultJoinsChange]);
 
   // The joins to display — in auto mode show discovered, in manual show custom
   const displayJoins = joinMode === 'auto' ? discoveredJoins : customJoins;
