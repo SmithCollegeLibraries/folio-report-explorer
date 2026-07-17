@@ -190,6 +190,9 @@ assertSameValue('exploratory_legacy_freeform', $unsupported['route'] ?? null, 'U
 assertSameValue('unsupported_query_family', $unsupported['routeReason'] ?? null, 'Unsupported prompts should preserve the route reason that forced exploratory generation.');
 assertSameValue('exploratory', $unsupported['mode'] ?? null, 'Unsupported prompts should be labeled as exploratory.');
 assertContainsText('SELECT', strtoupper($unsupported['sql'] ?? ''), 'Unsupported prompts should return generated exploratory SQL.');
+assertSameValue(0, $unsupported['repairAttempts'] ?? null, 'A valid initial exploratory candidate should report zero repairs.');
+assertSameValue('validated', $unsupported['validationSummary']['status'] ?? null, 'Exploratory SQL should expose its validation status.');
+assertSameValue([], $unsupported['assumptions'] ?? null, 'Prompts without documented defaults should expose an empty assumption list.');
 assertSameValue(
     'AI-assisted query',
     $unsupported['exploratoryNotice']['title'] ?? null,

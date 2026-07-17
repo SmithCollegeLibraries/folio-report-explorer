@@ -4,8 +4,13 @@ namespace app\services;
 
 use Yii;
 use yii\httpclient\Client;
+use app\exceptions\ExploratorySqlValidationException;
 
 require_once __DIR__ . '/ClarificationService.php';
+require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
+require_once __DIR__ . '/ExploratorySqlRepairService.php';
+require_once __DIR__ . '/../exceptions/ExploratorySqlValidationException.php';
+require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
 
 /**
  * GeminiService — sends natural-language prompts to Google Gemini 2.5 Flash
@@ -167,8 +172,11 @@ class GeminiService
         }
 
         if ($allowExploratory) {
-            $primary = self::generateSql($effectivePrompt, $campus, true, false);
-            $primary = self::decorateExploratoryResponse($primary, 'user_requested_exploratory_generation');
+            $primary = self::generateExploratorySqlResponse(
+                (string)$effectivePrompt,
+                $campus,
+                'user_requested_exploratory_generation'
+            );
 
             if (!empty($referenceResolution['guidanceLines'])) {
                 $primary['referenceResolver'] = [
@@ -250,8 +258,45 @@ class GeminiService
 
     private static function generateExploratorySqlResponse(string $prompt, $campus = null, string $reason = 'unsupported_query_family'): array
     {
-        $primary = self::generateSql($prompt, $campus, true, false);
-        $primary = self::decorateExploratoryResponse($primary, $reason);
+        $assumptions = ExploratoryQueryDefaultsService::resolve($prompt);
+        $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
+        $context = [
+            'originalQuestion' => $prompt,
+            'campus' => is_string($campus) ? $campus : null,
+            'assumptions' => $assumptions,
+            'attemptedPlan' => $attemptedPlan,
+        ];
+
+        $outcome = ExploratorySqlRepairService::run(
+            function (array $attemptContext) use ($prompt, $campus, $attemptedPlan): array {
+                return self::runExploratorySqlAttempt(
+                    $attemptContext,
+                    function () use ($attemptContext, $prompt, $campus, $attemptedPlan): array {
+                        if ((int)($attemptContext['repairNumber'] ?? 0) === 0) {
+                            $guidedPrompt = $prompt;
+                            if ($attemptedPlan !== '') {
+                                $guidedPrompt .= "\n\n" . $attemptedPlan;
+                            }
+                            return self::generateSql($guidedPrompt, $campus, true, false);
+                        }
+
+                        return self::generateExploratoryRepairCandidate($attemptContext);
+                    }
+                );
+            },
+            $context
+        );
+
+        if (($outcome['status'] ?? null) !== 'validated') {
+            return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
+        }
+
+        $primary = self::decorateExploratoryResponse($outcome['result'], $reason);
+        $primary = self::decorateValidatedExploratoryResult(
+            $primary,
+            $assumptions,
+            (int)$outcome['repairAttempts']
+        );
 
         self::logRouteSelection('exploratory_legacy_freeform', $reason, [
             'query' => [],
@@ -265,6 +310,55 @@ class GeminiService
         ]);
 
         return $primary;
+    }
+
+    private static function decorateValidatedExploratoryResult(
+        array $result,
+        array $assumptions,
+        int $repairAttempts
+    ): array {
+        $result['assumptions'] = $assumptions;
+        $result['repairAttempts'] = $repairAttempts;
+        $result['validationSummary'] = [
+            'status' => 'validated',
+            'repairAttempts' => $repairAttempts,
+            'message' => $repairAttempts > 0
+                ? 'SQL passed validation after ' . $repairAttempts . ' automatic repair attempt(s).'
+                : 'The initial SQL candidate passed validation.',
+        ];
+
+        return $result;
+    }
+
+    private static function buildExploratoryRecoveryResponse(
+        array $context,
+        array $outcome,
+        string $reason
+    ): array {
+        return [
+            'mode' => 'exploratory',
+            'exploratory' => true,
+            'route' => 'exploratory_recovery',
+            'routeReason' => $reason,
+            'needsClarification' => false,
+            'needsExploratoryApproval' => false,
+            'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
+            'assumptions' => $context['assumptions'] ?? [],
+            'attemptedPlan' => $context['attemptedPlan'] ?? '',
+            'suggestions' => $outcome['suggestions'] ?? [],
+            'validationSummary' => [
+                'status' => 'exhausted',
+                'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
+                'validatorStage' => $outcome['validatorStage'] ?? 'response_validation',
+                'failureCategory' => $outcome['failureCategory'] ?? 'validation_failure',
+                'message' => 'I could not produce SQL that passed validation within the automatic repair limit.',
+            ],
+            'recoveryContext' => [
+                'originalQuestion' => (string)($context['originalQuestion'] ?? ''),
+            ],
+            'repeatabilityWarning' => self::getExploratoryRepeatabilityWarning(),
+            'exploratoryNotice' => self::buildExploratoryNotice($reason),
+        ];
     }
 
     private static function decorateExploratoryResponse(array $primary, string $reason): array
@@ -5113,15 +5207,251 @@ PROMPT;
     }
 
     /**
+     * Repair exploratory SQL rejected by PostgreSQL preflight while preserving
+     * the same two-repair budget used during static validation.
+     */
+    public static function repairExploratorySqlAfterPreflight(
+        string $prompt,
+        $campus,
+        array $currentResult,
+        string $preflightError
+    ): array {
+        if (self::isPreflightConnectivityFailure($preflightError)) {
+            throw new \RuntimeException($preflightError);
+        }
+
+        $candidateSql = (string)($currentResult['sql'] ?? '');
+        $repairAttemptsUsed = (int)($currentResult['repairAttempts'] ?? 0);
+        $assumptions = is_array($currentResult['assumptions'] ?? null)
+            ? $currentResult['assumptions']
+            : ExploratoryQueryDefaultsService::resolve($prompt);
+        $attemptedPlan = trim((string)($currentResult['attemptedPlan'] ?? $currentResult['explanation'] ?? ''));
+        if ($attemptedPlan === '') {
+            $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
+        }
+
+        $context = [
+            'originalQuestion' => $prompt,
+            'campus' => is_string($campus) ? $campus : null,
+            'assumptions' => $assumptions,
+            'attemptedPlan' => $attemptedPlan,
+        ];
+        $failure = new ExploratorySqlValidationException(
+            'database_preflight',
+            self::sanitizePreflightFailureCategory($preflightError),
+            $candidateSql,
+            true,
+            'PostgreSQL preflight rejected the exploratory SQL candidate.'
+        );
+
+        $outcome = ExploratorySqlRepairService::run(
+            function (array $attemptContext): array {
+                return self::runExploratorySqlAttempt(
+                    $attemptContext,
+                    function () use ($attemptContext): array {
+                        return self::generateExploratoryRepairCandidate($attemptContext);
+                    }
+                );
+            },
+            $context,
+            $repairAttemptsUsed,
+            $failure
+        );
+
+        $reason = (string)($currentResult['routeReason'] ?? 'preflight_validation_failed');
+        if (($outcome['status'] ?? null) !== 'validated') {
+            return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
+        }
+
+        $result = self::decorateExploratoryResponse($outcome['result'], $reason);
+        return self::decorateValidatedExploratoryResult(
+            $result,
+            $assumptions,
+            (int)$outcome['repairAttempts']
+        );
+    }
+
+    private static function generateExploratoryRepairCandidate(array $context): array
+    {
+        $apiKey = self::getAiApiKey();
+        if ($apiKey === '') {
+            throw new \RuntimeException(self::getMissingAiApiKeyMessage());
+        }
+
+        $model = self::getAiModel();
+        $question = (string)($context['originalQuestion'] ?? '');
+        $schemaContext = FolioSchemaService::buildSchemaContext($question);
+        $assumptionGuidance = ExploratoryQueryDefaultsService::buildPromptGuidance(
+            is_array($context['assumptions'] ?? null) ? $context['assumptions'] : []
+        );
+        $systemPrompt = <<<'PROMPT'
+You are repairing one PostgreSQL SELECT query for a FOLIO reporting request.
+Return exactly one corrected SELECT statement, a concise explanation, and DATA SOURCE.
+Preserve requested outputs, campus scope, and documented interpretations.
+Correct the reported validation failure without weakening filters or omitting requested domains.
+Use only supplied schema tables and columns. Never access blocked data or produce non-SELECT SQL.
+PROMPT;
+
+        $userContent = implode("\n\n", [
+            "ORIGINAL QUESTION\n" . $question,
+            "PREVIOUS CANDIDATE\n" . (string)($context['previousCandidate'] ?? ''),
+            "VALIDATOR STAGE\n" . (string)($context['validatorStage'] ?? 'response_validation'),
+            "SAFE CATEGORY\n" . (string)($context['safeCategory'] ?? 'validation_failure'),
+            "ASSUMPTIONS\n" . ($assumptionGuidance !== '' ? $assumptionGuidance : 'None documented.'),
+            "ATTEMPTED PLAN\n" . (string)($context['attemptedPlan'] ?? ''),
+            "SCOPED SCHEMA CONTEXT\n" . $schemaContext,
+        ]);
+
+        $requestResult = self::sendGeminiRequestWithRetries(
+            self::API_BASE . "/{$model}:generateContent?key={$apiKey}",
+            [
+                'system_instruction' => ['parts' => [['text' => $systemPrompt]]],
+                'contents' => [['parts' => [['text' => $userContent]]]],
+                'generationConfig' => [
+                    'temperature' => 0.1,
+                    'maxOutputTokens' => 16384,
+                ],
+            ],
+            'nl2sql.exploratory_repair'
+        );
+        $data = json_decode($requestResult['response']->content, true);
+        $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
+
+        return self::parseResponse($text);
+    }
+
+    private static function runExploratorySqlAttempt(array $context, callable $attempt): array
+    {
+        $startedAt = microtime(true);
+        $repairNumber = (int)($context['repairNumber'] ?? 0);
+        $assumptionKeys = [];
+        foreach (($context['assumptions'] ?? []) as $assumption) {
+            if (is_array($assumption) && isset($assumption['key'])) {
+                $assumptionKeys[] = (string)$assumption['key'];
+            }
+        }
+        sort($assumptionKeys);
+        $telemetry = [
+            'promptFingerprint' => self::fingerprintPrompt((string)($context['originalQuestion'] ?? '')),
+            'phase' => $repairNumber === 0 ? 'initial_generation' : 'automatic_repair',
+            'repairNumber' => $repairNumber,
+            'maximumRepairs' => ExploratorySqlRepairService::MAX_REPAIR_ATTEMPTS,
+            'stage' => $context['validatorStage'] ?? null,
+            'category' => $context['safeCategory'] ?? null,
+            'candidateLength' => strlen((string)($context['previousCandidate'] ?? '')),
+            'provider' => self::getAiProvider(),
+            'elapsedMs' => 0,
+            'assumptionKeys' => $assumptionKeys,
+        ];
+        self::logNlTelemetry('nl2sql.exploratory_repair_attempt', $telemetry + ['outcome' => 'started']);
+
+        try {
+            $result = $attempt();
+            self::logNlTelemetry('nl2sql.exploratory_repair_outcome', array_merge($telemetry, [
+                'candidateLength' => strlen((string)($result['sql'] ?? '')),
+                'elapsedMs' => (int)round((microtime(true) - $startedAt) * 1000),
+                'outcome' => 'validated',
+            ]));
+            return $result;
+        } catch (\Throwable $exception) {
+            $failureTelemetry = $telemetry;
+            if ($exception instanceof ExploratorySqlValidationException) {
+                $failureTelemetry['stage'] = $exception->getStage();
+                $failureTelemetry['category'] = $exception->getSafeCategory();
+                $failureTelemetry['candidateLength'] = strlen($exception->getCandidateSql());
+            }
+            $failureTelemetry['elapsedMs'] = (int)round((microtime(true) - $startedAt) * 1000);
+            $failureTelemetry['outcome'] = 'rejected';
+            self::logNlTelemetry('nl2sql.exploratory_repair_outcome', $failureTelemetry, true);
+            throw $exception;
+        }
+    }
+
+    private static function isPreflightConnectivityFailure(string $error): bool
+    {
+        return preg_match(
+            '/SQLSTATE\[08[0-9A-Z]{3}\]|server closed the connection|connection (?:refused|reset|failed)|could not connect|no connection to the server/i',
+            $error
+        ) === 1;
+    }
+
+    private static function sanitizePreflightFailureCategory(string $error): string
+    {
+        $patterns = [
+            'unknown_column' => '/\bcolumn\b.+\bdoes not exist\b|undefined column/i',
+            'unknown_table' => '/\b(?:relation|table)\b.+\bdoes not exist\b|undefined table/i',
+            'ambiguous_column' => '/\bcolumn reference\b.+\bambiguous\b|ambiguous column/i',
+            'invalid_operator' => '/operator does not exist|invalid operator/i',
+            'grouping_error' => '/must appear in the GROUP BY|grouping error/i',
+            'syntax_error' => '/syntax error/i',
+            'query_too_complex' => '/statement timeout|query.+too complex|canceling statement due to/i',
+        ];
+
+        foreach ($patterns as $category => $pattern) {
+            if (preg_match($pattern, $error) === 1) {
+                return $category;
+            }
+        }
+
+        return 'database_validation';
+    }
+
+    /**
      * Parse the Gemini response into SQL and explanation.
      * @param string $text Raw Gemini response text
       * @return array {sql: string, explanation: string, dataSource: string}
      */
     private static function parseResponse($text)
     {
+        $parsed = self::extractSqlResponseParts((string)$text);
+        $sql = $parsed['sql'];
+        $explanation = $parsed['explanation'];
+        $dataSource = $parsed['dataSource'];
+
+        try {
+            $sql = self::repairInvalidInventoryTitleReferences($sql);
+            $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
+            $sql = self::repairResolvedLocationPredicateMisuse($sql);
+            self::validateNoOnlyHoldingLocationAliasLeaks($sql);
+            self::validateNoResolvedLocationPredicateMisuse($sql);
+        } catch (ExploratorySqlValidationException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
+            throw new ExploratorySqlValidationException(
+                'semantic_validation',
+                'semantic_guard',
+                $sql,
+                true,
+                'The SQL candidate failed a semantic validation guard.',
+                $exception
+            );
+        }
+
+        // Policy and destructive/non-SELECT failures are deliberate hard stops.
+        // Keep their original exception types so the repair coordinator cannot
+        // convert them into retryable validation feedback.
+        SqlBuilderService::validateSafety($sql);
+        SqlBuilderService::validateTablePolicy($sql);
+        self::validateTableReferences($sql);
+
+        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
+            $dataSource = 'local';
+        }
+
+        $sql = self::normalizeGeneratedSql($sql);
+
+        return [
+            'sql' => $sql,
+            'explanation' => $explanation,
+            'dataSource' => $dataSource,
+        ];
+    }
+
+    private static function extractSqlResponseParts(string $text): array
+    {
         $sql = '';
         $explanation = '';
-          $dataSource = 'folio';
+        $dataSource = 'folio';
 
         // Extract SQL from ```sql ... ``` code block
         if (preg_match('/```sql\s*\n(.*?)```/s', $text, $matches)) {
@@ -5148,31 +5478,14 @@ PROMPT;
         $sql = trim($sql);
 
         if (empty($sql)) {
-            throw new \RuntimeException(
-                'Could not extract SQL from Gemini response. Raw response: ' . substr($text, 0, 500)
+            throw new ExploratorySqlValidationException(
+                'response_format',
+                'missing_select',
+                '',
+                true,
+                'Could not extract a SELECT statement from the AI response.'
             );
         }
-
-        $sql = self::repairInvalidInventoryTitleReferences($sql);
-        $sql = self::repairOnlyHoldingLocationAliasLeaks($sql);
-        $sql = self::repairResolvedLocationPredicateMisuse($sql);
-        self::validateNoOnlyHoldingLocationAliasLeaks($sql);
-        self::validateNoResolvedLocationPredicateMisuse($sql);
-
-        // Validate the generated SQL
-        SqlBuilderService::validateSafety($sql);
-        SqlBuilderService::validateTablePolicy($sql);
-
-        // Validate that referenced tables exist
-        self::validateTableReferences($sql);
-
-        // Safety net: if SQL clearly uses local tables, force local datasource
-        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
-            $dataSource = 'local';
-        }
-
-        // Normalize all ID-column comparisons to use ::text on both sides
-        $sql = self::normalizeGeneratedSql($sql);
 
         return [
             'sql' => $sql,
@@ -5775,20 +6088,38 @@ PROMPT;
      */
     private static function validateTableReferences($sql)
     {
-        $tableNames = FolioSchemaService::getTableNames();
         $metadbMap = FolioSchemaService::discoverTableMapping();
-        $metadbValues = array_flip(array_values($metadbMap));
+        $metadbValues = [];
+        foreach (array_values($metadbMap) as $metadbName) {
+            $metadbValues[strtolower((string)$metadbName)] = true;
+        }
         $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];
+        $cteAliases = [];
+
+        if (preg_match('/^\s*WITH\s+(?:RECURSIVE\s+)?/i', (string)$sql) === 1) {
+            preg_match_all(
+                '/(?:\bWITH\b|,)\s*([a-z_][\w-]*)\s+AS\s*\(/i',
+                (string)$sql,
+                $cteMatches
+            );
+            foreach ($cteMatches[1] ?? [] as $cteAlias) {
+                $cteAliases[strtolower((string)$cteAlias)] = true;
+            }
+        }
 
         // Extract table references from FROM and JOIN clauses
         // Handle both plain names and schema-qualified names (schema.table)
         // Table names may contain hyphens (e.g. loc-campus__t), underscores, etc.
         preg_match_all('/(?:FROM|JOIN)\s+([\w-]+(?:\.[\w-]+)?)/i', $sql, $matches);
-        $warnings = [];
+        $unknownTables = [];
 
         foreach ($matches[1] as $ref) {
             $ref = strtolower($ref);
             if ($ref === 'select' || $ref === 'lateral' || $ref === 'unnest') {
+                continue;
+            }
+
+            if (isset($cteAliases[$ref])) {
                 continue;
             }
 
@@ -5807,12 +6138,18 @@ PROMPT;
                 continue;
             }
 
-            $warnings[] = "Table '$ref' not found in schema";
+            $unknownTables[] = $ref;
         }
 
-        // We warn but don't block — the SQL might use derived tables or CTEs
-        if (!empty($warnings)) {
-            Yii::warning('Gemini SQL validation warnings: ' . implode('; ', $warnings));
+        if (!empty($unknownTables)) {
+            $unknownTables = array_values(array_unique($unknownTables));
+            throw new ExploratorySqlValidationException(
+                'schema_reference',
+                'unknown_table',
+                (string)$sql,
+                true,
+                'The SQL candidate references unknown physical table(s): ' . implode(', ', $unknownTables) . '.'
+            );
         }
     }
 
