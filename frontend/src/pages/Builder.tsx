@@ -33,7 +33,6 @@ import type {
   FilterCondition,
   SortSpec,
   JoinEdge,
-  GroupBySpec,
   BuildResponse,
   TableDetail,
 } from '../types';
@@ -59,11 +58,24 @@ function isCanonicalJoinEdge(edge: JoinEdge): edge is CanonicalJoinEdge {
   return typeof edge.relationship_id === 'string' && typeof edge.pair_id === 'string';
 }
 
-function relationshipSelections(joins: CanonicalJoinEdge[]): RelationshipSelection[] {
-  return joins.map(({ relationship_id, join_type }) => ({
-    relationship_id,
-    ...(join_type ? { join_type } : {}),
-  }));
+function buildDefaultSaveJoins(
+  joinMode: 'auto' | 'manual',
+  defaultJoins: CanonicalJoinEdge[],
+  customJoins: CanonicalJoinEdge[],
+): 'auto' | RelationshipSelection[] {
+  if (joinMode === 'auto') return 'auto';
+
+  const typeByPair = new Map(
+    customJoins.map((join) => [join.pair_id, join.join_type]),
+  );
+
+  return defaultJoins.map((join) => {
+    const joinType = typeByPair.get(join.pair_id) ?? join.join_type;
+    return {
+      relationship_id: join.relationship_id,
+      ...(joinType ? { join_type: joinType } : {}),
+    };
+  });
 }
 
 export default function Builder() {
@@ -142,7 +154,7 @@ export default function Builder() {
     );
     if (Object.keys(pruned).length !== Object.keys(activeRelationshipOverrides).length) {
       setActiveRelationshipOverrides(pruned);
-      setRelationshipNotice('A relationship choice was reset because it is no longer available.');
+      setRelationshipNotice('A selected table link is no longer available. Query Builder restored the default link.');
       setBuilt(null);
       setEditedSql(null);
     }
@@ -194,31 +206,30 @@ export default function Builder() {
     setEditedSql(null);
   }, [built]);
 
+  const createQueryDefinition = (joins: CanonicalQueryDefinition['joins']): CanonicalQueryDefinition => {
+    const hasAggregates = columns.some((column) => Boolean(column.aggregate));
+    const groupBy = hasAggregates
+      ? columns
+        .filter((column) => !column.aggregate)
+        .map((column) => ({ table: column.table, column: column.column }))
+      : undefined;
+
+    return {
+      schemaIdentity,
+      tables: selectedTables,
+      columns,
+      filters,
+      joins,
+      orderBy,
+      limit,
+      distinct,
+      ...(groupBy && groupBy.length > 0 ? { groupBy } : {}),
+    };
+  };
+
   // --- mutations ---
   const buildMut = useMutation({
-    mutationFn: () => {
-      // Auto-compute GROUP BY: if any column has an aggregate, group by all non-aggregated columns
-      const hasAggregates = columns.some((c) => Boolean(c.aggregate));
-      let groupBy: GroupBySpec[] | undefined;
-      if (hasAggregates) {
-        groupBy = columns
-          .filter((c) => !c.aggregate)
-          .map((c) => ({ table: c.table, column: c.column }));
-      }
-
-      const def: CanonicalQueryDefinition = {
-        schemaIdentity,
-        tables: selectedTables,
-        columns,
-        filters,
-        joins: joinsForBuild,
-        orderBy,
-        limit,
-        distinct,
-        ...(groupBy && groupBy.length > 0 ? { groupBy } : {}),
-      };
-      return buildQuery(def);
-    },
+    mutationFn: () => buildQuery(createQueryDefinition(joinsForBuild)),
     onSuccess: (data: BuildResponse) => {
       setBuilt(data);
       setActiveTab('sql');
@@ -255,25 +266,23 @@ export default function Builder() {
   });
 
   const saveMut = useMutation({
-    mutationFn: () => {
-      const queryDefinition: CanonicalQueryDefinition = {
-        schemaIdentity,
-        tables: selectedTables,
-        columns,
-        filters,
-        joins: joinMode === 'manual' && customJoins.length > 0
-          ? relationshipSelections(customJoins)
-          : 'auto',
-        orderBy,
-        limit,
-        distinct,
-      };
+    mutationFn: async () => {
+      const queryDefinition = createQueryDefinition(
+        buildDefaultSaveJoins(joinMode, defaultJoins, customJoins),
+      );
+
+      let defaultBuild: BuildResponse;
+      try {
+        defaultBuild = await buildQuery(queryDefinition);
+      } catch {
+        throw new Error('Could not rebuild the default joins. The query was not saved.');
+      }
 
       return saveQuery({
         name: saveName,
         description: saveDesc,
         queryDefinition,
-        generatedSql: effectiveSql,
+        generatedSql: defaultBuild.sql,
       });
     },
     onSuccess: () => {
@@ -464,7 +473,10 @@ export default function Builder() {
       {/* ─── Main area: two-column layout ─── */}
       <div className="flex-1 flex overflow-hidden">
         {relationshipNotice && (
-          <div className="absolute right-4 top-16 z-20 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-sm">
+          <div
+            role="status"
+            className="absolute right-4 top-16 z-20 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-sm"
+          >
             {relationshipNotice}
             <button
               type="button"
@@ -785,8 +797,17 @@ export default function Builder() {
       {/* ─── Save dialog ─── */}
       {saveOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-96">
-            <h3 className="font-semibold mb-4">Save Query</h3>
+          <div
+            role="dialog"
+            aria-labelledby="save-query-heading"
+            className="bg-white rounded-lg shadow-xl p-6 w-96"
+          >
+            <h3 id="save-query-heading" className="font-semibold mb-4">Save Query</h3>
+            {Object.keys(activeRelationshipOverrides).length > 0 && (
+              <p className="mb-3 text-sm text-amber-800" role="status">
+                Alternate joins apply to this session only. Saved queries use the default table links.
+              </p>
+            )}
             <input
               placeholder="Query name"
               value={saveName}
@@ -799,6 +820,11 @@ export default function Builder() {
               onChange={(e) => setSaveDesc(e.target.value)}
               className="border rounded w-full px-3 py-2 mb-3 text-sm h-20 resize-none"
             />
+            {saveMut.isError && (
+              <p className="mb-3 text-sm text-red-700" role="alert">
+                {saveMut.error instanceof Error ? saveMut.error.message : String(saveMut.error)}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setSaveOpen(false)}

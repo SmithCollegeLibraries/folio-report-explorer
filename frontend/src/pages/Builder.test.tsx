@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Builder from './Builder';
@@ -7,6 +7,7 @@ import Builder from './Builder';
 const apiMocks = vi.hoisted(() => ({
   buildQuery: vi.fn(),
   submitQuery: vi.fn(),
+  saveQuery: vi.fn(),
   fetchSchema: vi.fn().mockResolvedValue({ metadata: {}, tables: {} }),
   fetchTableDetail: vi.fn().mockResolvedValue({
     table: { columns: [] },
@@ -19,7 +20,7 @@ vi.mock('../api/client', () => ({
   fetchTableDetail: apiMocks.fetchTableDetail,
   buildQuery: apiMocks.buildQuery,
   submitQuery: apiMocks.submitQuery,
-  saveQuery: vi.fn(),
+  saveQuery: apiMocks.saveQuery,
   downloadExportCsv: vi.fn(),
 }));
 
@@ -576,8 +577,169 @@ describe('Builder', () => {
       });
     });
 
-    expect(await screen.findByText(/relationship choice was reset/i)).toBeInTheDocument();
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'A selected table link is no longer available. Query Builder restored the default link.',
+    );
     expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue('SELECT stale_alternate_path')).not.toBeInTheDocument();
+  });
+
+  it('rebuilds and saves default joins without replacing the active alternate SQL', async () => {
+    apiMocks.buildQuery.mockReset();
+    apiMocks.saveQuery.mockReset();
+    const effective = {
+      from_table: 'inventory.item__t',
+      from_column: 'effective_location_id',
+      to_table: 'inventory.location__t',
+      to_column: 'id',
+      parent_table: 'inventory.location__t',
+      parent_column: 'id',
+      local_column: 'effective_location_id',
+      foreign_key: 'Effective location',
+      relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+      pair_id: 'inventory.item__t<->inventory.location__t',
+      label: 'Effective location',
+      is_default: true,
+      source: 'overlay',
+    };
+    const permanent = {
+      ...effective,
+      from_column: 'permanent_location_id',
+      local_column: 'permanent_location_id',
+      relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+      label: 'Permanent location',
+      is_default: false,
+    };
+    apiMocks.fetchTableDetail.mockImplementation(async (table: string) => ({
+      name: table,
+      table: { columns: [] },
+      relationships: table === 'inventory.item__t'
+        ? { parents: [effective, permanent], children: [] }
+        : { parents: [], children: [effective, permanent] },
+    }));
+    apiMocks.buildQuery
+      .mockResolvedValueOnce({ sql: 'SELECT permanent_location_id', params: {} })
+      .mockResolvedValueOnce({ sql: 'SELECT effective_location_id', params: {} });
+    apiMocks.submitQuery.mockResolvedValue({ jobId: 'job-permanent' });
+    apiMocks.saveQuery.mockResolvedValue({ id: 42 });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter><Builder /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Discover default joins' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use permanent relationship' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+
+    expect(await screen.findByDisplayValue('SELECT permanent_location_id')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    await waitFor(() => expect(apiMocks.submitQuery).toHaveBeenCalledWith(
+      'SELECT permanent_location_id',
+      {},
+      'builder',
+      'Builder: inventory.item__t, inventory.location__t',
+      'folio',
+      undefined,
+    ));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.getByText(
+      'Alternate joins apply to this session only. Saved queries use the default table links.',
+    )).toBeInTheDocument();
+    const saveDialog = screen.getByRole('dialog', { name: 'Save Query' });
+    fireEvent.change(within(saveDialog).getByPlaceholderText('Query name'), { target: { value: 'Locations' } });
+    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMocks.saveQuery).toHaveBeenCalledTimes(1));
+    expect(apiMocks.buildQuery).toHaveBeenLastCalledWith(expect.objectContaining({
+      schemaIdentity: 'ldlite',
+      joins: 'auto',
+    }));
+    expect(apiMocks.saveQuery).toHaveBeenCalledWith(expect.objectContaining({
+      queryDefinition: expect.objectContaining({
+        schemaIdentity: 'ldlite',
+        joins: 'auto',
+      }),
+      generatedSql: expect.stringContaining('effective_location_id'),
+    }));
+    expect(screen.getByDisplayValue('SELECT permanent_location_id')).toBeInTheDocument();
+  });
+
+  it('keeps the save dialog open and does not save when the default rebuild fails', async () => {
+    apiMocks.buildQuery.mockReset();
+    apiMocks.saveQuery.mockReset();
+    const effective = {
+      from_table: 'inventory.item__t',
+      from_column: 'effective_location_id',
+      to_table: 'inventory.location__t',
+      to_column: 'id',
+      parent_table: 'inventory.location__t',
+      parent_column: 'id',
+      local_column: 'effective_location_id',
+      foreign_key: 'Effective location',
+      relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+      pair_id: 'inventory.item__t<->inventory.location__t',
+      label: 'Effective location',
+      is_default: true,
+      source: 'overlay',
+    };
+    const permanent = {
+      ...effective,
+      from_column: 'permanent_location_id',
+      local_column: 'permanent_location_id',
+      relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+      label: 'Permanent location',
+      is_default: false,
+    };
+    apiMocks.fetchTableDetail.mockImplementation(async (table: string) => ({
+      name: table,
+      table: { columns: [] },
+      relationships: table === 'inventory.item__t'
+        ? { parents: [effective, permanent], children: [] }
+        : { parents: [], children: [effective, permanent] },
+    }));
+    apiMocks.buildQuery
+      .mockResolvedValueOnce({ sql: 'SELECT permanent_location_id', params: {} })
+      .mockRejectedValueOnce(new Error('default build failed'));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter><Builder /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Discover default joins' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use permanent relationship' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    expect(await screen.findByDisplayValue('SELECT permanent_location_id')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const saveDialog = screen.getByRole('dialog', { name: 'Save Query' });
+    fireEvent.change(within(saveDialog).getByPlaceholderText('Query name'), { target: { value: 'Locations' } });
+    fireEvent.click(within(saveDialog).getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText(
+      'Could not rebuild the default joins. The query was not saved.',
+    )).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Save Query' })).toBeInTheDocument();
+    expect(apiMocks.saveQuery).not.toHaveBeenCalled();
+    expect(screen.getByDisplayValue('SELECT permanent_location_id')).toBeInTheDocument();
   });
 });

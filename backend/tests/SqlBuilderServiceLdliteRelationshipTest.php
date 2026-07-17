@@ -5,6 +5,10 @@ mkdir($builderSqlCacheDir, 0700, true);
 foreach (['table_mapping_cache.json', 'subtable_cache.json', 'column_cache.json'] as $cacheFile) {
     $cache = json_decode((string)file_get_contents(__DIR__ . '/../data/' . $cacheFile), true);
     $cache['_discovered_at'] = date('c');
+    if ($cacheFile === 'table_mapping_cache.json') {
+        $cache['mapping']['inventory_items'] = 'inventory.item__t';
+        $cache['mapping']['inventory_locations'] = 'inventory.location__t';
+    }
     file_put_contents(
         $builderSqlCacheDir . '/' . $cacheFile,
         json_encode($cache, JSON_PRETTY_PRINT)
