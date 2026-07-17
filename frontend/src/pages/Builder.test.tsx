@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { useLayoutEffect } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import Builder from './Builder';
+import Builder, { resolvedJoinsForTopology } from './Builder';
 
 const apiMocks = vi.hoisted(() => ({
   buildQuery: vi.fn(),
@@ -14,6 +15,10 @@ const apiMocks = vi.hoisted(() => ({
     relationships: { parents: [], children: [] },
   }),
   findPath: vi.fn(),
+}));
+
+const uiTestControls = vi.hoisted(() => ({
+  clickBuildOnThreeTableLayout: false,
 }));
 
 vi.mock('../api/client', () => ({
@@ -39,13 +44,20 @@ vi.mock('../hooks/useJobPolling', () => ({
 }));
 
 vi.mock('../components/TableBrowser', () => ({
-  default: ({ onAddTable }: { onAddTable: (table: string) => void }) => (
-    <>
-      <button onClick={() => onAddTable('inventory.item__t')}>Add item</button>
-      <button onClick={() => onAddTable('inventory.location__t')}>Add location</button>
-      <button onClick={() => onAddTable('inventory.holdings_record__t')}>Toggle holdings</button>
-    </>
-  ),
+  default: ({ onAddTable, selectedTables }: { onAddTable: (table: string) => void; selectedTables: string[] }) => {
+    useLayoutEffect(() => {
+      if (uiTestControls.clickBuildOnThreeTableLayout && selectedTables.length === 3) {
+        screen.getByRole('button', { name: 'Build SQL' }).click();
+      }
+    }, [selectedTables]);
+    return (
+      <>
+        <button onClick={() => onAddTable('inventory.item__t')}>Add item</button>
+        <button onClick={() => onAddTable('inventory.location__t')}>Add location</button>
+        <button onClick={() => onAddTable('inventory.holdings_record__t')}>Toggle holdings</button>
+      </>
+    );
+  },
 }));
 
 vi.mock('../components/ColumnPicker', () => ({
@@ -206,6 +218,7 @@ describe('Builder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    uiTestControls.clickBuildOnThreeTableLayout = false;
     apiMocks.findPath.mockImplementation(async (_source: string, target: string) => ({
       path: {
         joins: [target === 'inventory.holdings_record__t' ? {
@@ -228,6 +241,15 @@ describe('Builder', () => {
       },
     }));
     vi.spyOn(window, 'confirm').mockReturnValue(false);
+  });
+
+  it('projects no resolved joins when they belong to a previous table topology', () => {
+    const oldJoins = [{ relationship_id: 'old-path' }] as Parameters<typeof resolvedJoinsForTopology>[0];
+    expect(resolvedJoinsForTopology(
+      oldJoins,
+      'inventory.item__t\u001finventory.location__t',
+      'inventory.item__t\u001finventory.location__t\u001finventory.holdings_record__t',
+    )).toEqual([]);
   });
 
   it('discovers defaults without mounting Joins and builds a graph-selected alternate', async () => {
@@ -742,6 +764,38 @@ describe('Builder', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Build SQL' })).toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
     expect(apiMocks.buildQuery).not.toHaveBeenCalled();
+  });
+
+  it('cannot build with the previous resolved path immediately after the selected-table topology changes', async () => {
+    apiMocks.buildQuery.mockResolvedValue({ sql: 'SELECT stale_path', params: {} });
+    let resolveHoldingsPath!: (value: { path: { joins: Array<Record<string, string>> } }) => void;
+    apiMocks.findPath.mockImplementation((_source: string, target: string) => {
+      if (target === 'inventory.holdings_record__t') {
+        return new Promise((resolve) => { resolveHoldingsPath = resolve; });
+      }
+      return Promise.resolve({ path: { joins: [{
+        from_table: 'inventory.item__t', from_column: 'effective_location_id',
+        to_table: 'inventory.location__t', to_column: 'id',
+        relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+        pair_id: 'inventory.item__t<->inventory.location__t', join_type: 'JOIN',
+      }] } });
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Build SQL' })).toBeEnabled());
+
+    uiTestControls.clickBuildOnThreeTableLayout = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle holdings' }));
+    const buildButton = screen.getByRole('button', { name: 'Build SQL' });
+    expect(buildButton).toBeDisabled();
+    expect(apiMocks.buildQuery).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(resolveHoldingsPath).toBeTypeOf('function'));
+    await act(async () => resolveHoldingsPath({ path: { joins: [] } }));
   });
 
   it.each([

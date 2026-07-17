@@ -140,6 +140,9 @@ namespace {
         ['sql' => str_replace('effective_location_id', 'permanent_location_id', $safeFormattedSql), 'message' => 'Changing the trusted relationship endpoint must be rejected.'],
         ['sql' => $trustedSql . "\n, users.users__t blocked", 'message' => 'An implicit-comma extra blocked table must be rejected.'],
         ['sql' => $trustedSql . "\n, inventory.holdings_record__t extra", 'message' => 'Any implicit-comma extra table must be rejected.'],
+        ['sql' => str_replace('SELECT ii.id', 'SELECT ii.id, (SELECT h.id FROM inventory.holdings_record__t h LIMIT 1)', $trustedSql), 'message' => 'An extra allowed table in a scalar SELECT subquery must be rejected.'],
+        ['sql' => $trustedSql . "\nWHERE EXISTS (SELECT 1 FROM inventory.holdings_record__t h WHERE h.id = ii.holdings_record_id)", 'message' => 'An extra allowed table in a WHERE EXISTS subquery must be rejected.'],
+        ['sql' => $trustedSql . "\nWHERE ii.id IN (SELECT nested.id FROM (SELECT id FROM inventory.holdings_record__t) nested)", 'message' => 'An extra allowed table in a nested subquery must be rejected.'],
         ['sql' => str_replace('il.id = ii.effective_location_id', 'il.id = ii.effective_location_id AND il.code = ii.status', $trustedSql), 'message' => 'Compound join predicates must fail closed.'],
     ] as $case) {
         Yii::$app->response->statusCode = 200;

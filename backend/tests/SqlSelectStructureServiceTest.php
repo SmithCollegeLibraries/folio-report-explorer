@@ -33,6 +33,9 @@ foreach ([
     "SELECT * FROM inventory.item__t ii JOIN inventory.location__t il ON il.id = ii.effective_location_id AND il.code = 'x'",
     "SELECT * FROM (SELECT * FROM inventory.item__t) ii",
     "SELECT * FROM inventory.item__t ii RIGHT JOIN inventory.location__t il ON il.id = ii.effective_location_id",
+    "SELECT (SELECT h.id FROM inventory.holdings_record__t h LIMIT 1) FROM inventory.item__t ii JOIN inventory.location__t il ON il.id = ii.effective_location_id",
+    "SELECT * FROM inventory.item__t ii JOIN inventory.location__t il ON il.id = ii.effective_location_id WHERE EXISTS (SELECT 1 FROM inventory.holdings_record__t h WHERE h.id = ii.holdings_record_id)",
+    "SELECT * FROM inventory.item__t ii JOIN inventory.location__t il ON il.id = ii.effective_location_id WHERE ii.id IN (SELECT nested.id FROM (SELECT id FROM inventory.holdings_record__t) nested)",
 ] as $unsupportedSql) {
     $rejected = false;
     try {
@@ -57,6 +60,22 @@ $mixedReferences = SqlSelectStructureService::extractTableReferences(
 expectStructure(
     $mixedReferences === ['inventory.item__t', 'inventory.location__t', 'users.users__t'],
     'Policy extraction must continue across explicit joins followed by comma-separated tables.'
+);
+
+$onlyReferences = SqlSelectStructureService::extractTableReferences(
+    'SELECT * FROM ONLY users.users__t u'
+);
+expectStructure(
+    $onlyReferences === ['users.users__t'],
+    'Policy extraction must treat PostgreSQL ONLY as a table-source modifier, not a table name.'
+);
+
+$parenthesizedOnlyReferences = SqlSelectStructureService::extractTableReferences(
+    'SELECT * FROM ONLY (users.users__t) u'
+);
+expectStructure(
+    $parenthesizedOnlyReferences === ['users.users__t'],
+    'Policy extraction must support PostgreSQL parenthesized ONLY table syntax.'
 );
 
 fwrite(STDOUT, "SqlSelectStructureService test passed\n");

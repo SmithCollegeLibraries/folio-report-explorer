@@ -79,6 +79,14 @@ function buildDefaultSaveJoins(
   });
 }
 
+export function resolvedJoinsForTopology(
+  joins: CanonicalJoinEdge[],
+  resolvedTopologySignature: string | null,
+  currentTopologySignature: string,
+): CanonicalJoinEdge[] {
+  return resolvedTopologySignature === currentTopologySignature ? joins : [];
+}
+
 export default function Builder() {
   // --- state ---
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
@@ -98,6 +106,7 @@ export default function Builder() {
   const [joinMode, setJoinMode] = useState<'auto' | 'manual'>('auto');
   const [customJoins, setCustomJoins] = useState<CanonicalJoinEdge[]>([]);
   const [defaultJoins, setDefaultJoins] = useState<CanonicalJoinEdge[]>([]);
+  const [resolvedJoinTopologySignature, setResolvedJoinTopologySignature] = useState<string | null>(null);
   const [joinDiscoveryLoading, setJoinDiscoveryLoading] = useState(false);
   const [joinDiscoveryError, setJoinDiscoveryError] = useState<string | null>(null);
   const [activeRelationshipOverrides, setActiveRelationshipOverrides] = useState<RelationshipOverrides>({});
@@ -143,15 +152,23 @@ export default function Builder() {
     () => groupDirectRelationships(tableDetails, selectedTables),
     [selectedTables, tableDetails],
   );
+  const selectedTableTopologySignature = selectedTables.join('\u001f');
+  const resolvedDefaultJoins = resolvedJoinsForTopology(
+    defaultJoins,
+    resolvedJoinTopologySignature,
+    selectedTableTopologySignature,
+  );
 
   useEffect(() => {
     setDefaultJoins([]);
+    setResolvedJoinTopologySignature(null);
     setJoinDiscoveryError(null);
     invalidateQueryResult();
     const discoveryVersion = ++discoveryRequestRef.current;
 
     if (selectedTables.length < 2) {
       setJoinDiscoveryLoading(false);
+      setResolvedJoinTopologySignature(selectedTableTopologySignature);
       return;
     }
 
@@ -198,13 +215,14 @@ export default function Builder() {
       if (cancelled || discoveryVersion !== discoveryRequestRef.current) return;
       invalidateQueryResult();
       setDefaultJoins(missingTarget ? [] : joins);
+      setResolvedJoinTopologySignature(selectedTableTopologySignature);
       setJoinDiscoveryError(missingTarget ? `Cannot find FK path to "${missingTarget}"` : null);
       setJoinDiscoveryLoading(false);
     }
 
     void discoverDefaultPath();
     return () => { cancelled = true; };
-  }, [selectedTables.join(','), invalidateQueryResult]);
+  }, [selectedTableTopologySignature, invalidateQueryResult]);
 
   const selectRelationship = useCallback((pairId: string, relationshipId: string) => {
     setActiveRelationshipOverrides((current) => {
@@ -235,21 +253,21 @@ export default function Builder() {
 
   const activeJoinSelections = useMemo(
     () => currentRelationshipSelections(
-      defaultJoins,
+      resolvedDefaultJoins,
       relationshipGroups,
       activeRelationshipOverrides,
       customJoins,
     ),
-    [defaultJoins, relationshipGroups, activeRelationshipOverrides, customJoins],
+    [resolvedDefaultJoins, relationshipGroups, activeRelationshipOverrides, customJoins],
   );
 
   const joinsForBuild = useMemo<CanonicalQueryDefinition['joins']>(() => {
     const hasOverride = Object.keys(activeRelationshipOverrides).length > 0;
-    if (defaultJoins.length > 0 && (hasOverride || joinMode === 'manual')) {
+    if (resolvedDefaultJoins.length > 0 && (hasOverride || joinMode === 'manual')) {
       return activeJoinSelections;
     }
     return 'auto';
-  }, [activeJoinSelections, activeRelationshipOverrides, customJoins, defaultJoins, joinMode]);
+  }, [activeJoinSelections, activeRelationshipOverrides, customJoins, resolvedDefaultJoins, joinMode]);
 
   const handleCustomJoinsChange = useCallback((joins: JoinEdge[]) => {
     const canonical = joins.filter(isCanonicalJoinEdge);
@@ -387,14 +405,14 @@ export default function Builder() {
       description: saveDesc,
       queryDefinition: createQueryDefinition(
         rebuildDefault
-          ? buildDefaultSaveJoins(joinMode, defaultJoins, customJoins)
+          ? buildDefaultSaveJoins(joinMode, resolvedDefaultJoins, customJoins)
           : joinsForBuild,
       ),
       generatedSql: effectiveSql,
       sqlEdited: !rebuildDefault && editedSql !== null,
       rebuildDefault,
     });
-  }, [saveName, saveDesc, activeRelationshipOverrides, joinMode, defaultJoins, customJoins, joinsForBuild, effectiveSql, editedSql, saveMut]);
+  }, [saveName, saveDesc, activeRelationshipOverrides, joinMode, resolvedDefaultJoins, customJoins, joinsForBuild, effectiveSql, editedSql, saveMut]);
 
   // --- handlers ---
   const toggleTable = useCallback(
@@ -439,7 +457,10 @@ export default function Builder() {
   }, [selectedTables, tableDetails]);
 
   const joinTopologyReady = selectedTables.length < 2
-    || (!joinDiscoveryLoading && joinDiscoveryError === null && defaultJoins.length > 0);
+    || (resolvedJoinTopologySignature === selectedTableTopologySignature
+      && !joinDiscoveryLoading
+      && joinDiscoveryError === null
+      && resolvedDefaultJoins.length > 0);
   const canBuild = selectedTables.length > 0 && columns.length > 0 && joinTopologyReady;
   const canRun = !!effectiveSql && !isRunning;
 
@@ -711,7 +732,7 @@ export default function Builder() {
                   customJoins={customJoins}
                   onJoinModeChange={(m) => { setJoinMode(m); invalidateQueryResult(); }}
                   onCustomJoinsChange={handleCustomJoinsChange}
-                  defaultJoins={defaultJoins}
+                  defaultJoins={resolvedDefaultJoins}
                   discoveryLoading={joinDiscoveryLoading}
                   discoveryError={joinDiscoveryError}
                   relationshipGroups={relationshipGroups}

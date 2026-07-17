@@ -89,4 +89,28 @@ assertSameValue(
     'A blocked comma table after an explicit join must not evade table policy.'
 );
 
+$onlyThrown = null;
+try {
+    SqlBuilderService::validateTablePolicy('SELECT * FROM ONLY users.users__t u');
+} catch (\Throwable $e) {
+    $onlyThrown = get_class($e);
+}
+assertSameValue(
+    'app\\exceptions\\PolicyViolationException',
+    $onlyThrown,
+    'A blocked table introduced through PostgreSQL FROM ONLY must not evade table policy.'
+);
+
+$parenthesizedOnlyThrown = null;
+try {
+    SqlBuilderService::validateTablePolicy('SELECT * FROM ONLY (users.users__t) u');
+} catch (\Throwable $e) {
+    $parenthesizedOnlyThrown = get_class($e);
+}
+assertSameValue(
+    'app\\exceptions\\PolicyViolationException',
+    $parenthesizedOnlyThrown,
+    'A blocked table introduced through parenthesized PostgreSQL ONLY must not evade table policy.'
+);
+
 fwrite(STDOUT, "SqlBuilderService policy violation test passed\n");

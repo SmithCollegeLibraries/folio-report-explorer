@@ -42,6 +42,11 @@ class SqlSelectStructureService
             if (($depths[$index] ?? 0) === 0 && in_array(self::upper($token), ['UNION', 'INTERSECT', 'EXCEPT'], true)) {
                 throw new \InvalidArgumentException('Set operations are not supported in edited canonical SQL.');
             }
+            if (($depths[$index] ?? 0) > 0 && self::upper($token) === 'SELECT') {
+                throw new \InvalidArgumentException(
+                    'Nested queries are not supported in edited canonical SQL.'
+                );
+            }
         }
 
         $fromIndex = self::findTopLevelKeyword($tokens, $depths, 'FROM');
@@ -169,9 +174,23 @@ class SqlSelectStructureService
             }
 
             $cursor = $index + 1;
-            if (!isset($tokens[$cursor]) || $tokens[$cursor]['value'] === '(') {
+            $only = false;
+            if (isset($tokens[$cursor]) && self::upper($tokens[$cursor]) === 'ONLY') {
+                $only = true;
+                $cursor++;
+            }
+            if (!isset($tokens[$cursor])) {
                 continue;
             }
+            if ($only && $tokens[$cursor]['value'] === '(') {
+                [$table, $afterTable] = self::readTableName($tokens, $cursor + 1);
+                if (!isset($tokens[$afterTable]) || $tokens[$afterTable]['value'] !== ')') {
+                    throw new \InvalidArgumentException('Unsupported PostgreSQL ONLY table source.');
+                }
+                $references[] = $table;
+                continue;
+            }
+            if ($tokens[$cursor]['value'] === '(') continue;
             try {
                 [$table] = self::readTableName($tokens, $cursor);
                 $references[] = $table;
@@ -294,7 +313,7 @@ class SqlSelectStructureService
         if (!isset($tokens[$cursor]) || $tokens[$cursor]['kind'] !== 'identifier') {
             throw new \InvalidArgumentException('Expected a direct schema-qualified table name.');
         }
-        if (in_array(self::upper($tokens[$cursor]), ['SELECT', 'LATERAL', 'UNNEST'], true)) {
+        if (in_array(self::upper($tokens[$cursor]), ['SELECT', 'LATERAL', 'UNNEST', 'ONLY'], true)) {
             throw new \InvalidArgumentException('Derived table expressions are not supported here.');
         }
         $parts = [$tokens[$cursor]['value']];
