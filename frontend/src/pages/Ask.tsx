@@ -57,6 +57,7 @@ export const ASK_SQL_GENERATION_LOADING_STEPS = [
   'Applying your selected clarification to the request',
   'Checking whether the request now has enough context for SQL generation',
   'Starting AI SQL generation; review the SQL and results for accuracy',
+  'Automatically repairing SQL that does not pass validation',
 ];
 
 export type AskProgressPhase = 'checking_request' | 'building_sql_after_clarification';
@@ -64,7 +65,7 @@ export type AskProgressPhase = 'checking_request' | 'building_sql_after_clarific
 export function getAskProgressCopy(phase: AskProgressPhase): { title: string; steps: string[] } {
   if (phase === 'building_sql_after_clarification') {
     return {
-      title: 'Using your clarification to build SQL',
+      title: 'Generating and validating your query',
       steps: ASK_SQL_GENERATION_LOADING_STEPS,
     };
   }

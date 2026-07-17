@@ -160,9 +160,10 @@ describe('Ask error formatting', () => {
     expect(initial?.title).toBe('Generating and validating your query');
     expect(initial?.steps).toContain('Checking known FOLIO report filters and lookup values');
     expect(initial?.steps).toContain('Automatically repairing SQL that does not pass validation');
-    expect(clarified?.title).toBe('Using your clarification to build SQL');
+    expect(clarified?.title).toBe('Generating and validating your query');
     expect(clarified?.steps.join(' ')).not.toContain('Checking known FOLIO report filters');
     expect(clarified?.steps.join(' ')).toContain('Starting AI SQL generation');
+    expect(clarified?.steps).toContain('Automatically repairing SQL that does not pass validation');
   });
 
   it('clamps the resizable Ask workspace split to usable pane widths', () => {
