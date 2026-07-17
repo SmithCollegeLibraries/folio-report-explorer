@@ -120,6 +120,7 @@ namespace {
     assertSameValue('AI-assisted query', $softFailure['exploratoryNotice']['title'] ?? null, 'Soft Ask recovery should return advisory notice metadata.');
     assertContainsText('could not produce fully validated SQL', $softFailure['exploratoryNotice']['message'] ?? '', 'Soft Ask recovery should use staff-facing advisory copy.');
     assertSameValue('exploratory', $softFailure['mode'] ?? null, 'Soft Ask recovery should be labeled exploratory.');
+    assertSameValue(null, $softFailure['errorType'] ?? null, 'Generation recovery should remain distinct from SQL repair exhaustion.');
 
     Yii::$app->response->statusCode = 200;
     $postgresFailure = $continuation->invoke(
@@ -134,6 +135,7 @@ namespace {
     assertSameValue('postgres_connectivity', $postgresFailure['errorType'] ?? null, 'Postgres connectivity failures should be classified separately.');
     assertContainsText('FOLIO reporting database', $postgresFailure['exploratoryNotice']['message'] ?? '', 'Postgres connectivity recovery should name the database connection issue.');
     assertContainsText('VPN', $postgresFailure['exploratoryNotice']['message'] ?? '', 'Postgres connectivity recovery should mention VPN/off-campus access.');
+    assertSameValue('postgres_connectivity_recovery', $postgresFailure['route'] ?? null, 'Postgres connectivity should not be routed as SQL repair exhaustion.');
 
     Yii::$app->response->statusCode = 200;
     $policyFailure = $continuation->invoke(

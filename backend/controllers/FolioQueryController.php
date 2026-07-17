@@ -348,6 +348,184 @@ class FolioQueryController extends Controller
     }
 
     /**
+     * Normalize and database-preflight an NL2SQL result, repairing exploratory
+     * SQL while the shared two-repair budget still has capacity.
+     */
+    private function validateAndRepairNlResult(
+        array $result,
+        string $prompt,
+        $campus,
+        ?callable $preflight = null,
+        ?callable $repair = null
+    ): array {
+        $preflight = $preflight ?: function (string $sql, string $dataSource): array {
+            return $this->estimateQueryComplexity($sql, $dataSource) ?? [];
+        };
+        $repair = $repair ?: function (string $question, $campusScope, array $currentResult, string $error): array {
+            return GeminiService::repairExploratorySqlAfterPreflight(
+                $question,
+                $campusScope,
+                $currentResult,
+                $error
+            );
+        };
+
+        while (isset($result['sql'])) {
+            $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
+            if (!$this->isSelectOnlyNlSql((string)$result['sql'])) {
+                return $this->buildUnsafeGeneratedSqlResponse($result, $prompt, $campus);
+            }
+
+            $dataSource = (string)($result['dataSource'] ?? 'folio');
+            $estimate = $preflight((string)$result['sql'], $dataSource);
+            if (!isset($estimate['error'])) {
+                return $result;
+            }
+
+            $error = (string)$estimate['error'];
+            $this->logPreflightValidationFailure(
+                'api.nl',
+                $error,
+                $dataSource,
+                'nl',
+                (string)$result['sql'],
+                [
+                    'route' => $result['route'] ?? null,
+                    'routeReason' => $result['routeReason'] ?? null,
+                    'promptFingerprint' => $this->fingerprintPrompt($prompt),
+                    'repairAttempts' => (int)($result['repairAttempts'] ?? 0),
+                ]
+            );
+
+            if ($this->isAskPostgresConnectivityFailure($error)) {
+                return $this->buildAskPostgresConnectivityRecovery(
+                    $prompt,
+                    $campus,
+                    'ask_sql_preflight_recovery'
+                );
+            }
+            if ($this->isAskPreflightPolicyFailure($error)) {
+                return $this->buildAskContinuationFromFailure(
+                    new \app\exceptions\PolicyViolationException($error),
+                    $prompt,
+                    $campus,
+                    'ask_sql_preflight_recovery'
+                );
+            }
+
+            $repairAttempts = (int)($result['repairAttempts'] ?? 0);
+            if ($repairAttempts >= 2) {
+                return $this->buildExploratoryRepairExhaustedResponse(
+                    $result,
+                    $prompt,
+                    $campus,
+                    $this->classifyPreflightErrorFamily($error)
+                );
+            }
+
+            $previousResult = $result;
+            $repairResult = $repair($prompt, $campus, $result, $error);
+            if (!is_array($repairResult)) {
+                $repairResult = [];
+            }
+            $result = array_replace($previousResult, $repairResult);
+            if (!array_key_exists('sql', $repairResult)) {
+                unset($result['sql']);
+            }
+            $result['repairAttempts'] = max(
+                $repairAttempts + 1,
+                (int)($result['repairAttempts'] ?? 0)
+            );
+            $result['mode'] = 'exploratory';
+            $result['route'] = 'exploratory';
+
+            if (!isset($result['sql'])) {
+                return $this->buildExploratoryRepairExhaustedResponse(
+                    $result,
+                    $prompt,
+                    $campus,
+                    (string)($result['validationSummary']['failureCategory']
+                        ?? $this->classifyPreflightErrorFamily($error))
+                );
+            }
+        }
+
+        return $result;
+    }
+
+    private function isSelectOnlyNlSql(string $sql): bool
+    {
+        $trimmed = ltrim($sql);
+        if (preg_match('/^(?:SELECT|WITH)\b/i', $trimmed) !== 1) {
+            return false;
+        }
+
+        return preg_match(
+            '/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY|CALL|DO|MERGE)\b/i',
+            $trimmed
+        ) !== 1;
+    }
+
+    private function isAskPreflightPolicyFailure(string $message): bool
+    {
+        return preg_match(
+            '/SQLSTATE\[42501\]|permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
+            $message
+        ) === 1;
+    }
+
+    private function buildExploratoryRepairExhaustedResponse(
+        array $result,
+        string $prompt,
+        $campus,
+        string $safeCategory
+    ): array {
+        $repairAttempts = (int)($result['repairAttempts'] ?? 0);
+        $response = [
+            'needsClarification' => false,
+            'needsExploratoryApproval' => false,
+            'mode' => 'exploratory',
+            'errorType' => 'sql_repair_exhausted',
+            'message' => 'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
+            'route' => 'exploratory_recovery',
+            'routeReason' => 'sql_repair_exhausted',
+            'validationSummary' => [
+                'status' => 'exhausted',
+                'failureCategory' => trim($safeCategory) !== '' ? trim($safeCategory) : 'unknown_error',
+                'repairAttempts' => $repairAttempts,
+            ],
+            'recoveryContext' => [
+                'originalQuestion' => $prompt,
+                'campus' => $campus,
+            ],
+        ];
+
+        foreach (['assumptions', 'attemptedPlan', 'suggestions'] as $field) {
+            if (array_key_exists($field, $result)) {
+                $response[$field] = $result[$field];
+            }
+        }
+
+        return $response;
+    }
+
+    private function buildUnsafeGeneratedSqlResponse(array $result, string $prompt, $campus): array
+    {
+        $response = $this->buildExploratoryRepairExhaustedResponse(
+            array_replace($result, ['repairAttempts' => 0]),
+            $prompt,
+            $campus,
+            'non_select'
+        );
+        $response['errorType'] = 'unsafe_generated_sql';
+        $response['message'] = 'The generated query was not a safe SELECT statement, so no unsafe SQL ran. Your request and assumptions are preserved below so you can adjust and retry.';
+        $response['routeReason'] = 'unsafe_generated_sql';
+        $response['validationSummary']['status'] = 'rejected';
+        unset($response['sql']);
+        return $response;
+    }
+
+    /**
      * Normalize optional NL follow-up context from Ask or History.
      *
      * @param mixed $rawContext
@@ -375,11 +553,31 @@ class FolioQueryController extends Controller
             $previousColumns = [];
         }
 
+        $previousAssumptions = [];
+        if (is_array($rawContext['previousAssumptions'] ?? null)) {
+            $allowedFields = ['key', 'label', 'value', 'explanation', 'correctionExample', 'source'];
+            foreach ($rawContext['previousAssumptions'] as $assumption) {
+                if (!is_array($assumption)) {
+                    continue;
+                }
+                $normalizedAssumption = [];
+                foreach ($allowedFields as $field) {
+                    if (isset($assumption[$field]) && is_scalar($assumption[$field])) {
+                        $normalizedAssumption[$field] = trim((string)$assumption[$field]);
+                    }
+                }
+                if (($normalizedAssumption['key'] ?? '') !== '' && ($normalizedAssumption['value'] ?? '') !== '') {
+                    $previousAssumptions[] = $normalizedAssumption;
+                }
+            }
+        }
+
         return [
             'source' => 'ask',
             'previousPrompt' => trim((string)($rawContext['previousPrompt'] ?? 'Previous Ask query')),
             'previousSql' => $previousSql,
             'previousColumns' => array_values(array_filter(array_map('strval', $previousColumns))),
+            'previousAssumptions' => $previousAssumptions,
         ];
     }
 
@@ -449,11 +647,27 @@ class FolioQueryController extends Controller
             ? implode(', ', array_values(array_filter(array_map('strval', $previousColumns))))
             : 'not provided';
 
+        $assumptionLines = [];
+        foreach (($context['previousAssumptions'] ?? []) as $assumption) {
+            if (!is_array($assumption)) {
+                continue;
+            }
+            $line = '- ' . ($assumption['key'] ?? 'interpretation') . ' = ' . ($assumption['value'] ?? '');
+            if (($assumption['explanation'] ?? '') !== '') {
+                $line .= ': ' . $assumption['explanation'];
+            }
+            $assumptionLines[] = $line;
+        }
+        $assumptionBlock = "Previous documented interpretations:\n"
+            . (!empty($assumptionLines) ? implode("\n", $assumptionLines) : 'none provided');
+
         return implode("\n\n", [
             'This is a follow-up request to a previously generated library report.',
             'Previous request: ' . $previousPrompt,
             "Previous SQL:\n```sql\n{$previousSql}\n```",
             'Previous result columns: ' . $columnText,
+            $assumptionBlock,
+            'The follow-up request overrides any previous documented interpretation that addresses the same concept.',
             'Follow-up request: ' . trim((string)$prompt),
             'Preserve all previous filters, joins, CTEs, and result-set semantics unless the follow-up request explicitly changes them.',
             'Add or modify only the columns, grouping, ordering, or constraints requested by the follow-up. Return one complete executable SQL query for the revised request.',
@@ -1215,36 +1429,15 @@ class FolioQueryController extends Controller
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
             }
-            if (isset($result['sql'])) {
-                $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
+            $result = $this->validateAndRepairNlResult(
+                $result,
+                $effectivePrompt,
+                $campus ?: null
+            );
 
-                $estimate = $this->estimateQueryComplexity(
-                    (string) $result['sql'],
-                    (string) ($result['dataSource'] ?? 'folio')
-                );
-                if (isset($estimate['error'])) {
-                    $this->logPreflightValidationFailure(
-                        'api.nl',
-                        (string) $estimate['error'],
-                        (string) ($result['dataSource'] ?? 'folio'),
-                        'nl',
-                        (string) $result['sql'],
-                        [
-                            'route' => $result['route'] ?? null,
-                            'routeReason' => $result['routeReason'] ?? null,
-                            'promptFingerprint' => $this->fingerprintPrompt($effectivePrompt),
-                        ]
-                    );
-                    return $this->buildAskContinuationFromFailure(
-                        new \RuntimeException((string)$estimate['error']),
-                        $effectivePrompt,
-                        $campus ?: null,
-                        'ask_sql_preflight_recovery'
-                    );
-                }
+            if (!array_key_exists('suggestions', $result)) {
+                $result['suggestions'] = [];
             }
-
-            $result['suggestions'] = [];
             if ($includeSuggestions && empty($result['needsClarification']) && !empty($result['sql'])) {
                 try {
                     $result['suggestions'] = GeminiService::suggestFollowUpQueries(

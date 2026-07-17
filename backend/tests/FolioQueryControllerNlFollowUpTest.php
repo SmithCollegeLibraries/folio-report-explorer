@@ -134,6 +134,15 @@ namespace {
         'previousSql' => 'SELECT inst.title FROM inventory.instance__t inst',
         'previousColumns' => ['title'],
         'source' => 'ask',
+        'previousAssumptions' => [[
+            'key' => 'purchase_date_basis',
+            'label' => 'Purchase date basis',
+            'value' => 'payment_date',
+            'explanation' => 'Purchases are assigned to the payment date.',
+            'correctionExample' => 'Use invoice date instead.',
+            'source' => 'default',
+            'untrustedExtraField' => 'must not survive',
+        ]],
     ]);
     $expandedPrompt = $build->invoke(
         $controller,
@@ -148,6 +157,11 @@ namespace {
     assertContainsText('Follow-up request:', $expandedPrompt, 'Expanded follow-up prompt should label the follow-up request.');
     assertContainsText('include instance numbers and call numbers', $expandedPrompt, 'Expanded follow-up prompt should include the follow-up request.');
     assertContainsText('Preserve all previous filters, joins, CTEs, and result-set semantics unless the follow-up request explicitly changes them.', $expandedPrompt, 'Expanded follow-up prompt should preserve prior query semantics.');
+    assertSameValue(false, isset($context['previousAssumptions'][0]['untrustedExtraField']), 'Follow-up assumptions should whitelist known fields only.');
+    assertContainsText('Previous documented interpretations:', $expandedPrompt, 'Expanded follow-up prompt should label previous documented interpretations.');
+    assertContainsText('purchase_date_basis', $expandedPrompt, 'Expanded follow-up prompt should preserve assumption keys.');
+    assertContainsText('payment_date', $expandedPrompt, 'Expanded follow-up prompt should preserve assumption values.');
+    assertContainsText('The follow-up request overrides any previous documented interpretation that addresses the same concept.', $expandedPrompt, 'Expanded follow-up prompt should make corrections override keyed interpretations.');
 
     $completed = new \app\models\QueryJob();
     $completed->id = 'done-job';
