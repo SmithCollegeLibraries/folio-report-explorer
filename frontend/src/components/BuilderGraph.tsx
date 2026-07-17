@@ -208,6 +208,7 @@ function BuilderGraphCanvas({
   const layoutSequence = useRef(0);
   const layoutFrame = useRef<number | null>(null);
   const automaticTopologySignature = useRef<string | null>(null);
+  const explicitRelayoutPending = useRef(false);
   const mounted = useRef(true);
   const latestGraphNodes = useRef(graphNodes);
   const latestGraphEdges = useRef(graphEdges);
@@ -231,6 +232,7 @@ function BuilderGraphCanvas({
       mounted.current = false;
       layoutSequence.current += 1;
       automaticTopologySignature.current = null;
+      explicitRelayoutPending.current = false;
       cancelScheduledFit();
     };
   }, [cancelScheduledFit]);
@@ -273,6 +275,7 @@ function BuilderGraphCanvas({
         type: resultEdgeTypes.get(edge.id) ?? edge.type,
       })));
       if (resetMode) {
+        explicitRelayoutPending.current = false;
         layoutModeRef.current = 'automatic';
         setLayoutMode('automatic');
       }
@@ -293,16 +296,17 @@ function BuilderGraphCanvas({
         latestGraphEdges.current,
       ));
       setEdges(latestGraphEdges.current);
+      if (resetMode) explicitRelayoutPending.current = false;
     } finally {
       if (mounted.current && sequence === layoutSequence.current) setLayoutPending(false);
     }
   }, [cancelScheduledFit, fitView, setEdges, setNodes]);
 
   useEffect(() => {
-    if (layoutModeRef.current === 'automatic') {
+    if (layoutModeRef.current === 'automatic' || explicitRelayoutPending.current) {
       if (automaticTopologySignature.current !== topologySignature) {
         automaticTopologySignature.current = topologySignature;
-        void runAutomaticLayout(graphNodes, graphEdges, false);
+        void runAutomaticLayout(graphNodes, graphEdges, explicitRelayoutPending.current);
         return;
       }
       setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
@@ -319,6 +323,7 @@ function BuilderGraphCanvas({
   const onNodeDragStop = useCallback(() => {
     layoutSequence.current += 1;
     cancelScheduledFit();
+    explicitRelayoutPending.current = false;
     layoutModeRef.current = 'user-arranged';
     setLayoutMode('user-arranged');
     setLayoutPending(false);
@@ -371,6 +376,7 @@ function BuilderGraphCanvas({
               type="button"
               aria-label="Re-layout relationship graph"
               onClick={() => {
+                explicitRelayoutPending.current = true;
                 automaticTopologySignature.current = topologySignature;
                 void runAutomaticLayout(graphNodes, graphEdges, true);
               }}

@@ -269,6 +269,48 @@ describe('BuilderGraph layout behavior', () => {
     await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(3));
   });
 
+  it('completes an explicit Re-layout across an equivalent cloned refresh', async () => {
+    const user = userEvent.setup();
+    const view = renderGraph(['items']);
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    dragNode(draggedItemsNode);
+    const explicitLayout = deferredLayout();
+    vi.mocked(layoutRelationshipGraph).mockReturnValueOnce(explicitLayout.promise);
+
+    await user.click(screen.getByRole('button', { name: 'Re-layout relationship graph' }));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
+    view.rerender(graphElementWithData(
+      structuredClone(['items']),
+      structuredClone(tableDetails),
+      structuredClone(tables),
+    ));
+    await act(async () => Promise.resolve());
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2);
+
+    await act(async () => explicitLayout.resolve(layoutWithIds(['items'])));
+    await waitFor(() => expect(screen.queryByText('Manual layout preserved')).not.toBeInTheDocument());
+    expect(currentNode('items')?.position).toEqual({ x: 0, y: 0 });
+  });
+
+  it('lays out the latest topology when it changes during an explicit Re-layout', async () => {
+    const user = userEvent.setup();
+    const view = renderGraph(['items']);
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    dragNode(draggedItemsNode);
+    const staleExplicitLayout = deferredLayout();
+    vi.mocked(layoutRelationshipGraph).mockReturnValueOnce(staleExplicitLayout.promise);
+
+    await user.click(screen.getByRole('button', { name: 'Re-layout relationship graph' }));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
+    view.rerender(graphElement(['items', 'holdings']));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(renderedNodeIds()).toEqual(['holdings', 'items']));
+
+    await act(async () => staleExplicitLayout.resolve(layoutWithIds(['items'])));
+    expect(renderedNodeIds()).toEqual(['holdings', 'items']);
+    expect(screen.queryByText('Manual layout preserved')).not.toBeInTheDocument();
+  });
+
   it('ignores stale layout results and retains the latest topology', async () => {
     const first = deferredLayout();
     const second = deferredLayout();

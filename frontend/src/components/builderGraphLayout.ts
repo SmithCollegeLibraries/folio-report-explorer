@@ -41,7 +41,10 @@ export function createRelationshipGraphLayout(
       return { nodes, edges };
     }
 
-    elkPromise ??= loadElk();
+    elkPromise ??= loadElk().catch((error: unknown) => {
+      elkPromise = null;
+      throw error;
+    });
     const elk = await elkPromise;
 
     const graph = await elk.layout({

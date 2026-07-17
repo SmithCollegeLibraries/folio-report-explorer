@@ -80,4 +80,20 @@ describe('layoutRelationshipGraph', () => {
     expect(loadElk).toHaveBeenCalledTimes(1);
     expect(layout).toHaveBeenCalledTimes(2);
   });
+
+  it('retries loading the layout engine after a load failure', async () => {
+    const layout = vi.fn(async (graph) => graph);
+    const loadElk = vi.fn()
+      .mockRejectedValueOnce(new Error('chunk failed to load'))
+      .mockResolvedValueOnce({ layout });
+    const layoutGraph = createRelationshipGraphLayout(loadElk);
+
+    await expect(layoutGraph({ nodes: [node('items')], edges: [], direction: 'RIGHT' }))
+      .rejects.toThrow('chunk failed to load');
+    await expect(layoutGraph({ nodes: [node('items')], edges: [], direction: 'RIGHT' }))
+      .resolves.toMatchObject({ nodes: [expect.objectContaining({ id: 'items' })] });
+
+    expect(loadElk).toHaveBeenCalledTimes(2);
+    expect(layout).toHaveBeenCalledTimes(1);
+  });
 });
