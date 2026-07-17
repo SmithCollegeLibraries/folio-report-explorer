@@ -43,17 +43,21 @@ export default function JoinPanel({
     if (selectedTables.length < 2) {
       setDiscoveredJoins([]);
       onDefaultJoinsChange([]);
+      setLoading(false);
       setError(null);
       return;
     }
 
     let cancelled = false;
+    setDiscoveredJoins([]);
+    onDefaultJoinsChange([]);
     setLoading(true);
     setError(null);
 
     async function discover() {
       const joins: JoinEdge[] = [];
       const joined = new Set<string>([selectedTables[0]]);
+      let complete = true;
 
       for (let i = 1; i < selectedTables.length; i++) {
         const target = selectedTables[i];
@@ -94,17 +98,20 @@ export default function JoinPanel({
             joined.add(edge.from_table);
           }
         } else {
+          complete = false;
           if (!cancelled) {
             setError(`Cannot find FK path to "${target}"`);
           }
+          break;
         }
 
         joined.add(target);
       }
 
       if (!cancelled) {
-        setDiscoveredJoins(joins);
-        onDefaultJoinsChange(joins.map((join) => ({ ...join })));
+        const completeJoins = complete ? joins : [];
+        setDiscoveredJoins(completeJoins);
+        onDefaultJoinsChange(completeJoins.map((join) => ({ ...join })));
         setLoading(false);
       }
     }
