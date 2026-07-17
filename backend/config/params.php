@@ -41,6 +41,7 @@ return [
     ),
     'schemaPath' => dirname(__DIR__) . '/data/folio_schema.json',
     'derivedPath' => dirname(__DIR__) . '/data/folio_derived_tables.json',
+    'builderRelationshipOverlayPath' => dirname(__DIR__) . '/data/builder_relationship_overrides.json',
     'maxQueryRows' => 10000,
     'defaultQueryLimit' => 100,
     'queryTimeoutMs' => 1800000,

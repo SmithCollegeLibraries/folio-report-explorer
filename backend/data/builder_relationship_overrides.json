@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "relationships": [
+    {
+      "fromTable": "inventory.item__t",
+      "fromColumn": "effective_location_id",
+      "toTable": "inventory.location__t",
+      "toColumn": "id",
+      "label": "Effective location",
+      "default": true
+    },
+    {
+      "fromTable": "inventory.item__t",
+      "fromColumn": "permanent_location_id",
+      "toTable": "inventory.location__t",
+      "toColumn": "id",
+      "label": "Permanent location",
+      "default": false
+    },
+    {
+      "fromTable": "inventory.item__t",
+      "fromColumn": "temporary_location_id",
+      "toTable": "inventory.location__t",
+      "toColumn": "id",
+      "label": "Temporary location",
+      "default": false
+    }
+  ]
+}
