@@ -71,6 +71,7 @@ vi.mock('../components/JoinPanel', () => ({
   default: ({
     onJoinModeChange,
     onCustomJoinsChange,
+    onRelationshipChange,
   }: {
     onJoinModeChange: (mode: 'auto' | 'manual') => void;
     onCustomJoinsChange: (joins: Array<{
@@ -83,24 +84,49 @@ vi.mock('../components/JoinPanel', () => ({
       pair_id: string;
       join_type: 'LEFT JOIN';
     }>) => void;
+    onRelationshipChange?: (pairId: string, relationshipId: string) => void;
   }) => (
-    <button
-      onClick={() => {
-        onCustomJoinsChange([{
+    <>
+      <button
+        onClick={() => onCustomJoinsChange([{
           from_table: 'inventory.item__t',
           from_column: 'effective_location_id',
           to_table: 'inventory.location__t',
           to_column: 'id',
           foreign_key: 'item_effective_location_fk',
-          relationship_id: 'inventory.item__t.effective_location_id--inventory.location__t.id',
-          pair_id: 'inventory.item__t--inventory.location__t',
+          relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+          pair_id: 'inventory.item__t<->inventory.location__t',
           join_type: 'LEFT JOIN',
-        }]);
-        onJoinModeChange('manual');
-      }}
-    >
-      Use manual join
-    </button>
+        }])}
+      >
+        Discover default joins
+      </button>
+      <button
+        onClick={() => {
+          onCustomJoinsChange([{
+            from_table: 'inventory.item__t',
+            from_column: 'effective_location_id',
+            to_table: 'inventory.location__t',
+            to_column: 'id',
+            foreign_key: 'item_effective_location_fk',
+            relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+            pair_id: 'inventory.item__t<->inventory.location__t',
+            join_type: 'LEFT JOIN',
+          }]);
+          onJoinModeChange('manual');
+        }}
+      >
+        Use manual join
+      </button>
+      <button
+        onClick={() => onRelationshipChange?.(
+          'inventory.item__t<->inventory.location__t',
+          'inventory.item__t.permanent_location_id->inventory.location__t.id',
+        )}
+      >
+        Use permanent relationship
+      </button>
+    </>
   ),
 }));
 vi.mock('../components/ResultsTable', () => ({ default: () => null }));
@@ -204,7 +230,67 @@ describe('Builder', () => {
       schemaIdentity: 'ldlite',
       tables: ['inventory.item__t', 'inventory.location__t'],
       joins: [{
-        relationship_id: 'inventory.item__t.effective_location_id--inventory.location__t.id',
+        relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+        join_type: 'LEFT JOIN',
+      }],
+    }));
+  });
+
+  it('builds with a session relationship override from the complete default path', async () => {
+    const effective = {
+      from_table: 'inventory.item__t',
+      from_column: 'effective_location_id',
+      to_table: 'inventory.location__t',
+      to_column: 'id',
+      parent_table: 'inventory.location__t',
+      parent_column: 'id',
+      local_column: 'effective_location_id',
+      foreign_key: 'Effective location',
+      relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+      pair_id: 'inventory.item__t<->inventory.location__t',
+      label: 'Effective location',
+      is_default: true,
+      source: 'overlay',
+    };
+    const permanent = {
+      ...effective,
+      from_column: 'permanent_location_id',
+      local_column: 'permanent_location_id',
+      relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+      label: 'Permanent location',
+      is_default: false,
+    };
+    apiMocks.fetchTableDetail.mockImplementation(async (table: string) => ({
+      name: table,
+      table: { columns: [] },
+      relationships: table === 'inventory.item__t'
+        ? { parents: [effective, permanent], children: [] }
+        : { parents: [], children: [effective, permanent] },
+    }));
+    apiMocks.buildQuery.mockResolvedValue({ sql: 'SELECT 1', params: {} });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter><Builder /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Discover default joins' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use permanent relationship' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+
+    await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalled());
+    expect(apiMocks.buildQuery).toHaveBeenCalledWith(expect.objectContaining({
+      joins: [{
+        relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id',
         join_type: 'LEFT JOIN',
       }],
     }));

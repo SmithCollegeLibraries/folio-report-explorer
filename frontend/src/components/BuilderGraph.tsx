@@ -14,6 +14,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { TableDetail, TableSummary } from '../types';
+import type { RelationshipGroups, RelationshipOverrides } from './builderRelationships';
 import { layoutRelationshipGraph } from './builderGraphLayout';
 import { reconcileUserArrangedNodes } from './builderGraphPositions';
 
@@ -33,6 +34,9 @@ interface Props {
   tables: Record<string, TableSummary>;
   onAddTable: (name: string) => void;
   onRemoveTable: (name: string) => void;
+  relationshipGroups?: RelationshipGroups;
+  activeRelationshipOverrides?: RelationshipOverrides;
+  onRelationshipChange?: (pairId: string, relationshipId: string) => void;
 }
 
 function shortName(fullName: string): string {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { findPath } from '../api/client';
 import type { JoinEdge, JoinType, SchemaIdentity, TableDetail } from '../types';
+import type { RelationshipGroups, RelationshipOverrides } from './builderRelationships';
 import {
   Link2,
   ArrowRight,
@@ -18,6 +19,9 @@ interface Props {
   customJoins: JoinEdge[];
   onJoinModeChange: (mode: 'auto' | 'manual') => void;
   onCustomJoinsChange: (joins: JoinEdge[]) => void;
+  relationshipGroups?: RelationshipGroups;
+  activeRelationshipOverrides?: RelationshipOverrides;
+  onRelationshipChange?: (pairId: string, relationshipId: string) => void;
 }
 
 export default function JoinPanel({

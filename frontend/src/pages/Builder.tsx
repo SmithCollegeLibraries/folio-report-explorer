@@ -19,6 +19,12 @@ import SortPanel from '../components/SortPanel';
 import JoinPanel from '../components/JoinPanel';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
+import {
+  currentRelationshipSelections,
+  groupDirectRelationships,
+  pruneRelationshipOverrides,
+  type RelationshipOverrides,
+} from '../components/builderRelationships';
 import type {
   CanonicalQueryDefinition,
   CanonicalJoinEdge,
@@ -78,6 +84,9 @@ export default function Builder() {
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [joinMode, setJoinMode] = useState<'auto' | 'manual'>('auto');
   const [customJoins, setCustomJoins] = useState<CanonicalJoinEdge[]>([]);
+  const [defaultJoins, setDefaultJoins] = useState<CanonicalJoinEdge[]>([]);
+  const [activeRelationshipOverrides, setActiveRelationshipOverrides] = useState<RelationshipOverrides>({});
+  const [relationshipNotice, setRelationshipNotice] = useState<string | null>(null);
   const [leftPanel, setLeftPanel] = useState<'browse' | 'relationships'>('browse');
   const [graphOpen, setGraphOpen] = useState(false);
 
@@ -105,6 +114,68 @@ export default function Builder() {
     }
   }, [selectedTables]);
 
+  const relationshipGroups = useMemo(
+    () => groupDirectRelationships(tableDetails, selectedTables),
+    [selectedTables, tableDetails],
+  );
+
+  const selectRelationship = useCallback((pairId: string, relationshipId: string) => {
+    setActiveRelationshipOverrides((current) => {
+      const group = relationshipGroups[pairId];
+      const next = { ...current };
+      if (!group || relationshipId === group.defaultRelationshipId) {
+        delete next[pairId];
+      } else if (group.relationships.some((item) => item.relationship_id === relationshipId)) {
+        next[pairId] = relationshipId;
+      }
+      return next;
+    });
+    setBuilt(null);
+    setEditedSql(null);
+  }, [relationshipGroups]);
+
+  useEffect(() => {
+    const pruned = pruneRelationshipOverrides(
+      activeRelationshipOverrides,
+      selectedTables,
+      relationshipGroups,
+    );
+    if (Object.keys(pruned).length !== Object.keys(activeRelationshipOverrides).length) {
+      setActiveRelationshipOverrides(pruned);
+      setRelationshipNotice('A relationship choice was reset because it is no longer available.');
+    }
+  }, [selectedTables, relationshipGroups, activeRelationshipOverrides]);
+
+  const activeJoinSelections = useMemo(
+    () => currentRelationshipSelections(
+      defaultJoins,
+      relationshipGroups,
+      activeRelationshipOverrides,
+      customJoins,
+    ),
+    [defaultJoins, relationshipGroups, activeRelationshipOverrides, customJoins],
+  );
+
+  const joinsForBuild = useMemo<CanonicalQueryDefinition['joins']>(() => {
+    const hasOverride = Object.keys(activeRelationshipOverrides).length > 0;
+    if (defaultJoins.length > 0 && (hasOverride || joinMode === 'manual')) {
+      return activeJoinSelections;
+    }
+    if (joinMode === 'manual' && customJoins.length > 0) {
+      return relationshipSelections(customJoins);
+    }
+    return 'auto';
+  }, [activeJoinSelections, activeRelationshipOverrides, customJoins, defaultJoins, joinMode]);
+
+  const handleCustomJoinsChange = useCallback((joins: JoinEdge[]) => {
+    const canonical = joins.filter(isCanonicalJoinEdge);
+    setCustomJoins(canonical);
+    if (joinMode === 'auto' && canonical.length > 0) {
+      setDefaultJoins(canonical);
+    }
+    setBuilt(null);
+  }, [joinMode]);
+
   // Clear edited SQL when build changes
   useEffect(() => {
     setEditedSql(null);
@@ -127,9 +198,7 @@ export default function Builder() {
         tables: selectedTables,
         columns,
         filters,
-        joins: joinMode === 'manual' && customJoins.length > 0
-          ? relationshipSelections(customJoins)
-          : 'auto',
+        joins: joinsForBuild,
         orderBy,
         limit,
         distinct,
@@ -381,6 +450,18 @@ export default function Builder() {
 
       {/* ─── Main area: two-column layout ─── */}
       <div className="flex-1 flex overflow-hidden">
+        {relationshipNotice && (
+          <div className="absolute right-4 top-16 z-20 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-sm">
+            {relationshipNotice}
+            <button
+              type="button"
+              className="ml-2 underline"
+              onClick={() => setRelationshipNotice(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {/* ─── Left column: Table browser / Graph ─── */}
         <div className="w-80 border-r flex flex-col flex-shrink-0">
           {/* Panel toggle */}
@@ -502,10 +583,10 @@ export default function Builder() {
                   joinMode={joinMode}
                   customJoins={customJoins}
                   onJoinModeChange={(m) => { setJoinMode(m); setBuilt(null); }}
-                  onCustomJoinsChange={(joins) => {
-                    setCustomJoins(joins.filter(isCanonicalJoinEdge));
-                    setBuilt(null);
-                  }}
+                  onCustomJoinsChange={handleCustomJoinsChange}
+                  relationshipGroups={relationshipGroups}
+                  activeRelationshipOverrides={activeRelationshipOverrides}
+                  onRelationshipChange={selectRelationship}
                 />
               )}
               {activeTab === 'sql' && (
@@ -679,6 +760,9 @@ export default function Builder() {
                 tables={schemaData?.tables || {}}
                 onAddTable={toggleTable}
                 onRemoveTable={removeTable}
+                relationshipGroups={relationshipGroups}
+                activeRelationshipOverrides={activeRelationshipOverrides}
+                onRelationshipChange={selectRelationship}
               />
             </div>
           </div>
