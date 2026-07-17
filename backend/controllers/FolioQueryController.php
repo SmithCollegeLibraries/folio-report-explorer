@@ -5,6 +5,7 @@ namespace app\controllers;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
+use app\services\BuilderQueryDefinitionNormalizerService;
 use app\services\BuilderSchemaService;
 use app\services\FolioSchemaService;
 use app\services\SqlBuilderService;
@@ -599,7 +600,8 @@ class FolioQueryController extends Controller
         $body = Yii::$app->request->getBodyParams();
 
         try {
-            $result = SqlBuilderService::build($body);
+            $definition = BuilderQueryDefinitionNormalizerService::normalize($body);
+            $result = SqlBuilderService::build($definition);
             return $result;
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 400;
