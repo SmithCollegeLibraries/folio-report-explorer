@@ -249,6 +249,57 @@ namespace {
     repairAssertSame('database_cancelled', $cancelResponse['errorType'] ?? null, 'Controller handling should preserve database cancellation as a distinct hard stop.');
     repairAssertSame(false, strpos(strtolower((string)($cancelResponse['error'] ?? '')), 'ai') !== false, 'Database cancellation copy must not mention an AI/model timeout.');
 
+    Yii::$warnings = [];
+    try {
+        $validateAndRepair->invoke(
+            $controller,
+            [
+                'sql' => 'SELECT title FROM inventory.instance__t',
+                'mode' => 'exploratory',
+                'route' => 'exploratory',
+                'routeReason' => 'unsupported_query_family',
+            ],
+            'Show titles',
+            'Smith College',
+            function (): array {
+                throw new \app\exceptions\DatabaseQueryCancelledException();
+            },
+            function (): array {
+                fwrite(STDERR, "Typed database cancellation must not invoke repair.\n");
+                exit(1);
+            }
+        );
+        fwrite(STDERR, "Typed preflight cancellation must propagate to sanitized controller handling.\n");
+        exit(1);
+    } catch (\Throwable $exception) {
+        $typedCancellation = $exception instanceof \app\exceptions\DatabaseQueryCancelledException
+            || $exception->getPrevious() instanceof \app\exceptions\DatabaseQueryCancelledException;
+        repairAssertSame(true, $typedCancellation, 'A direct preflight cancellation should remain typed.');
+    }
+    $typedCancelOutcomes = [];
+    foreach (Yii::$warnings as $warning) {
+        $message = (string)($warning['message'] ?? '');
+        if (strpos($message, 'NL2SQL telemetry: ') !== 0) {
+            continue;
+        }
+        $record = json_decode(substr($message, strlen('NL2SQL telemetry: ')), true);
+        if (($record['event'] ?? null) === 'nl2sql.exploratory_terminal_outcome') {
+            $typedCancelOutcomes[] = $record;
+        }
+    }
+    repairAssertSame(1, count($typedCancelOutcomes), 'Direct typed preflight cancellation should emit exactly one terminal outcome.');
+    repairAssertSame('cancelled', $typedCancelOutcomes[0]['outcome'] ?? null, 'Direct typed preflight cancellation should use the cancelled outcome.');
+    repairAssertSame('database_cancelled', $typedCancelOutcomes[0]['category'] ?? null, 'Direct typed preflight cancellation should expose only a safe category.');
+    repairAssertSame('exploratory', $typedCancelOutcomes[0]['route'] ?? null, 'Direct typed preflight cancellation should preserve the safe route.');
+    repairAssertSame(false, isset($typedCancelOutcomes[0]['error']), 'Cancellation telemetry must not expose exception detail.');
+    $typedCancelResponse = $continuation->invoke(
+        $controller,
+        new \app\exceptions\DatabaseQueryCancelledException(),
+        'Show titles',
+        'Smith College'
+    );
+    repairAssertSame('database_cancelled', $typedCancelResponse['errorType'] ?? null, 'Direct typed cancellation should return the sanitized database response.');
+
     $unsafeRepairCalls = 0;
     $unsafe = $validateAndRepair->invoke(
         $controller,

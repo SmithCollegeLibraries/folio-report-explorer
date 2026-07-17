@@ -163,3 +163,38 @@ A related execution-safety assertion also proved the existing execution catch ex
 - Canonical query-family and schema artifacts remained unchanged.
 
 The only advisories remain the two approved PHP 8.5 Reflection deprecations and the existing Vite large-chunk warning.
+
+## Approval telemetry completion
+
+The approval review recorded one nonblocking Minor: the controller emitted a safe terminal `cancelled` event when preflight returned an error array, but not when the production preflight callable directly threw `DatabaseQueryCancelledException`.
+
+### RED
+
+The focused controller regression invoked `validateAndRepairNlResult()` with a preflight callable that directly threw the typed exception. The exception propagated and the sanitized response path remained available, but telemetry failed as intended:
+
+```text
+Direct typed preflight cancellation should emit exactly one terminal outcome.
+Expected: 1
+Actual: 0
+```
+
+### GREEN
+
+The controller preflight boundary now catches only `DatabaseQueryCancelledException`, emits one safe exploratory terminal event using the still-available route, reason, prompt fingerprint, repair count, and `database_cancelled` category, then rethrows to the existing sanitized response handler. The test verifies:
+
+- exactly one terminal event;
+- `outcome = cancelled`;
+- `category = database_cancelled`;
+- the safe exploratory route is retained;
+- no exception/error detail is present;
+- repair is never invoked;
+- the browser response remains `database_cancelled` with safe copy.
+
+### Final verification
+
+- Exact 17-test Task 6 matrix plus the two final-fix tests: all 19 passed.
+- Frontend: 21 files and 101 tests passed.
+- Production build passed; 2,503 modules transformed in 6.89 seconds.
+- PHP lint, `git diff --check`, and canonical/schema artifact isolation checks passed.
+
+The only advisories remain the two approved PHP 8.5 Reflection deprecations and the existing Vite large-chunk warning.

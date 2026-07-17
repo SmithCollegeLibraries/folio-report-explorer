@@ -383,7 +383,12 @@ class FolioQueryController extends Controller
             }
 
             $dataSource = (string)($result['dataSource'] ?? 'folio');
-            $estimate = $preflight((string)$result['sql'], $dataSource);
+            try {
+                $estimate = $preflight((string)$result['sql'], $dataSource);
+            } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
+                $this->logExploratoryTerminalOutcome($result, $prompt, 'cancelled', 'database_cancelled');
+                throw $exception;
+            }
             if (!isset($estimate['error'])) {
                 $this->logExploratoryTerminalOutcome($result, $prompt, 'validated', 'validated');
                 return $result;
