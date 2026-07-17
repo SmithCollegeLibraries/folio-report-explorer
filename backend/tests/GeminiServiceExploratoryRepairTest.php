@@ -113,6 +113,9 @@ namespace app\services {
             if (self::$blockPolicy) {
                 throw new \app\exceptions\PolicyViolationException('Blocked by reporting policy.');
             }
+            if (preg_match('/\bFROM\s+users\.users__t\b/i', (string)$sql) === 1) {
+                throw new \app\exceptions\PolicyViolationException('Blocked users table.');
+            }
         }
     }
 }
@@ -244,6 +247,18 @@ $quotedCte = GeminiService::generateSqlWithShadow('Show item identifiers from a 
 repairAssertSame(0, $quotedCte['repairAttempts'] ?? null, 'A quoted CTE alias should not be treated as a physical table.');
 
 TestTransport::$responses = [
+    geminiText('SELECT u.id FROM "users"."users__t" u'),
+];
+$requestCount = count(TestTransport::$requests);
+try {
+    GeminiService::generateSqlWithShadow('Show restricted user identifiers.', null, null, true);
+    fwrite(STDERR, "A quoted blocked table must be a policy hard stop.\n");
+    exit(1);
+} catch (PolicyViolationException $exception) {
+    repairAssertSame($requestCount + 1, count(TestTransport::$requests), 'A quoted blocked table should make no repair request.');
+}
+
+TestTransport::$responses = [
     geminiText('SELECT mt.id FROM "inventory"."missing_table__t" mt'),
     geminiText('SELECT ii.id FROM "inventory"."item__t" ii'),
 ];
@@ -256,6 +271,20 @@ TestTransport::$responses = [
 ];
 $tableFunction = GeminiService::generateSqlWithShadow('Expand a JSON object into key/value rows.', null, null, true);
 repairAssertSame(0, $tableFunction['repairAttempts'] ?? null, 'A set-returning table function should not be validated as a physical table.');
+
+TestTransport::$responses = [
+    geminiText("SELECT kv.key FROM jsonb_each_text(jsonb_build_object('a', 1, 'b', 2)) kv"),
+];
+$multiArgumentTableFunction = GeminiService::generateSqlWithShadow('Expand a constructed JSON object.', null, null, true);
+repairAssertSame(0, $multiArgumentTableFunction['repairAttempts'] ?? null, 'Commas inside a table function must not be treated as relation separators.');
+
+TestTransport::$responses = [
+    geminiText('SELECT ii.id FROM inventory.item__t ii, inventory.missing_table__t mt'),
+    geminiText('SELECT ii.id FROM inventory.item__t ii'),
+];
+$commaSeparatedTable = GeminiService::generateSqlWithShadow('Show identifiers across comma-separated inventory relations.', null, null, true);
+repairAssertSame(1, $commaSeparatedTable['repairAttempts'] ?? null, 'An unknown later comma-separated physical table must be rejected.');
+repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $commaSeparatedTable['sql'] ?? null, 'Comma-separated relation repair should return validated SQL.');
 
 TestTransport::$responses = [
     geminiText('SELECT items.id FROM items'),

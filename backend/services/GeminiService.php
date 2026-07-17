@@ -6165,15 +6165,9 @@ PROMPT;
             }
         }
 
-        preg_match_all(
-            '/(?:FROM|JOIN)\s+((?:' . $identifierPattern . ')(?:\s*\.\s*(?:' . $identifierPattern . '))?)/i',
-            (string)$sql,
-            $matches,
-            PREG_OFFSET_CAPTURE
-        );
         $unknownTables = [];
 
-        foreach ($matches[1] as $referenceMatch) {
+        foreach (self::extractSqlTableReferenceMatches((string)$sql, $identifierPattern) as $referenceMatch) {
             $rawReference = (string)$referenceMatch[0];
             $referenceEnd = (int)$referenceMatch[1] + strlen($rawReference);
             if (preg_match('/^\s*\(/', substr((string)$sql, $referenceEnd)) === 1) {
@@ -6188,6 +6182,10 @@ PROMPT;
             if (isset($cteAliases[$ref])) {
                 continue;
             }
+
+            // Re-run the canonical table policy against the normalized
+            // physical reference so quoted identifiers cannot bypass it.
+            SqlBuilderService::validateTablePolicy('SELECT 1 FROM ' . $ref);
 
             // Check if it's a known MetaDB name (schema.table format)
             if (isset($metadbValues[$ref])) {
@@ -6218,6 +6216,107 @@ PROMPT;
                 'The SQL candidate references unknown physical table(s): ' . implode(', ', $unknownTables) . '.'
             );
         }
+    }
+
+    private static function extractSqlTableReferenceMatches(string $sql, string $identifierPattern): array
+    {
+        $referencePattern = '(?:' . $identifierPattern . ')(?:\s*\.\s*(?:' . $identifierPattern . '))?';
+        preg_match_all(
+            '/(?:FROM|JOIN)\s+(' . $referencePattern . ')/i',
+            $sql,
+            $directMatches,
+            PREG_OFFSET_CAPTURE
+        );
+        $references = $directMatches[1] ?? [];
+
+        preg_match_all(
+            '/\bFROM\b(.*?)(?=\b(?:WHERE|GROUP\s+BY|HAVING|ORDER\s+BY|LIMIT|OFFSET|UNION|EXCEPT|INTERSECT|WINDOW|RETURNING)\b|$)/is',
+            $sql,
+            $fromClauses,
+            PREG_OFFSET_CAPTURE
+        );
+        foreach ($fromClauses[1] ?? [] as $fromClauseMatch) {
+            $clause = (string)$fromClauseMatch[0];
+            $clauseOffset = (int)$fromClauseMatch[1];
+            foreach (self::findTopLevelSqlCommaOffsets($clause) as $commaOffset) {
+                $candidate = substr($clause, $commaOffset + 1);
+                if (preg_match('/^\s*(' . $referencePattern . ')/i', $candidate, $match, PREG_OFFSET_CAPTURE) !== 1) {
+                    continue;
+                }
+                $references[] = [
+                    (string)$match[1][0],
+                    $clauseOffset + $commaOffset + 1 + (int)$match[1][1],
+                ];
+            }
+        }
+
+        return $references;
+    }
+
+    private static function findTopLevelSqlCommaOffsets(string $sql): array
+    {
+        $offsets = [];
+        $depth = 0;
+        $quote = null;
+        $inLineComment = false;
+        $inBlockComment = false;
+        $length = strlen($sql);
+
+        for ($index = 0; $index < $length; $index++) {
+            $char = $sql[$index];
+            $next = $index + 1 < $length ? $sql[$index + 1] : '';
+
+            if ($inLineComment) {
+                if ($char === "\n") {
+                    $inLineComment = false;
+                }
+                continue;
+            }
+            if ($inBlockComment) {
+                if ($char === '*' && $next === '/') {
+                    $inBlockComment = false;
+                    $index++;
+                }
+                continue;
+            }
+            if ($quote !== null) {
+                if ($char === $quote) {
+                    if ($next === $quote) {
+                        $index++;
+                    } else {
+                        $quote = null;
+                    }
+                }
+                continue;
+            }
+            if ($char === '-' && $next === '-') {
+                $inLineComment = true;
+                $index++;
+                continue;
+            }
+            if ($char === '/' && $next === '*') {
+                $inBlockComment = true;
+                $index++;
+                continue;
+            }
+            if ($char === "'" || $char === '"') {
+                $quote = $char;
+                continue;
+            }
+            if ($char === '(') {
+                $depth++;
+                continue;
+            }
+            if ($char === ')') {
+                $depth = max(0, $depth - 1);
+                continue;
+            }
+            if ($char === ',' && $depth === 0) {
+                $offsets[] = $index;
+            }
+        }
+
+        return $offsets;
     }
 
     private static function normalizeSqlIdentifierReference(string $reference): string
