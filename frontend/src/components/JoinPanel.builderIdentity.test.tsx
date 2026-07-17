@@ -6,6 +6,13 @@ const findPath = vi.hoisted(() => vi.fn());
 
 vi.mock('../api/client', () => ({ findPath }));
 
+const relationshipProps = {
+  relationshipGroups: {},
+  activeRelationshipOverrides: {},
+  onRelationshipChange: vi.fn(),
+  onResetRelationships: vi.fn(),
+};
+
 describe('JoinPanel Builder identity', () => {
   afterEach(cleanup);
 
@@ -35,9 +42,8 @@ describe('JoinPanel Builder identity', () => {
 
     render(
       <JoinPanel
-        schemaIdentity="ldlite"
+        {...relationshipProps}
         selectedTables={['inventory.item__t', 'inventory.location__t']}
-        tableDetails={{}}
         joinMode="auto"
         customJoins={[]}
         onJoinModeChange={vi.fn()}
@@ -85,9 +91,8 @@ describe('JoinPanel Builder identity', () => {
     });
 
     const baseProps = {
-      schemaIdentity: 'ldlite' as const,
+      ...relationshipProps,
       selectedTables: ['inventory.item__t', 'inventory.location__t'],
-      tableDetails: {},
       onJoinModeChange,
       onCustomJoinsChange,
       onDefaultJoinsChange,
@@ -150,9 +155,8 @@ describe('JoinPanel Builder identity', () => {
 
     const { rerender } = render(
       <JoinPanel
-        schemaIdentity="ldlite"
+        {...relationshipProps}
         selectedTables={['inventory.item__t', 'inventory.location__t']}
-        tableDetails={{}}
         joinMode="manual"
         customJoins={[{
           from_table: 'inventory.item__t',
@@ -179,9 +183,8 @@ describe('JoinPanel Builder identity', () => {
     findPath.mockResolvedValue({ path: null });
     rerender(
       <JoinPanel
-        schemaIdentity="ldlite"
+        {...relationshipProps}
         selectedTables={['inventory.item__t', 'inventory.holdings_record__t']}
-        tableDetails={{}}
         joinMode="manual"
         customJoins={[]}
         onJoinModeChange={vi.fn()}
@@ -195,9 +198,8 @@ describe('JoinPanel Builder identity', () => {
     onDefaultJoinsChange.mockClear();
     rerender(
       <JoinPanel
-        schemaIdentity="ldlite"
+        {...relationshipProps}
         selectedTables={['inventory.item__t']}
-        tableDetails={{}}
         joinMode="manual"
         customJoins={[]}
         onJoinModeChange={vi.fn()}
@@ -230,8 +232,7 @@ describe('JoinPanel Builder identity', () => {
     });
 
     const props = {
-      schemaIdentity: 'ldlite' as const,
-      tableDetails: {},
+      ...relationshipProps,
       joinMode: 'manual' as const,
       customJoins: [{ ...itemLocationJoin, join_type: 'LEFT JOIN' as const }],
       onJoinModeChange: vi.fn(),
@@ -316,8 +317,7 @@ describe('JoinPanel Builder identity', () => {
       .mockResolvedValueOnce({ path: { joins: [currentJoin] } });
 
     const props = {
-      schemaIdentity: 'ldlite' as const,
-      tableDetails: {},
+      ...relationshipProps,
       joinMode: 'auto' as const,
       customJoins: [],
       onJoinModeChange: vi.fn(),

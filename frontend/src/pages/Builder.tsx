@@ -166,8 +166,8 @@ export default function Builder() {
     return 'auto';
   }, [activeJoinSelections, activeRelationshipOverrides, customJoins, defaultJoins, joinMode]);
 
-  const handleDefaultJoinsChange = useCallback((joins: JoinEdge[]) => {
-    setDefaultJoins(joins.filter(isCanonicalJoinEdge));
+  const handleDefaultJoinsChange = useCallback((joins: CanonicalJoinEdge[]) => {
+    setDefaultJoins(joins);
     setBuilt(null);
   }, []);
 
@@ -176,6 +176,18 @@ export default function Builder() {
     setCustomJoins(canonical);
     setBuilt(null);
   }, []);
+
+  const resetRelationships = useCallback(() => {
+    setActiveRelationshipOverrides({});
+    setBuilt(null);
+    setEditedSql(null);
+  }, []);
+
+  useEffect(() => {
+    if (selectedTables.length < 2) {
+      setDefaultJoins([]);
+    }
+  }, [selectedTables]);
 
   // Clear edited SQL when build changes
   useEffect(() => {
@@ -578,9 +590,7 @@ export default function Builder() {
               )}
               {activeTab === 'joins' && (
                 <JoinPanel
-                  schemaIdentity={schemaIdentity}
                   selectedTables={selectedTables}
-                  tableDetails={tableDetails}
                   joinMode={joinMode}
                   customJoins={customJoins}
                   onJoinModeChange={(m) => { setJoinMode(m); setBuilt(null); }}
@@ -589,6 +599,7 @@ export default function Builder() {
                   relationshipGroups={relationshipGroups}
                   activeRelationshipOverrides={activeRelationshipOverrides}
                   onRelationshipChange={selectRelationship}
+                  onResetRelationships={resetRelationships}
                 />
               )}
               {activeTab === 'sql' && (

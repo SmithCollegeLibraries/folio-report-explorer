@@ -74,6 +74,7 @@ vi.mock('../components/JoinPanel', () => ({
     onCustomJoinsChange,
     onDefaultJoinsChange,
     onRelationshipChange,
+    onResetRelationships,
   }: {
     onJoinModeChange: (mode: 'auto' | 'manual') => void;
     onCustomJoinsChange: (joins: Array<{
@@ -97,6 +98,7 @@ vi.mock('../components/JoinPanel', () => ({
       join_type: 'LEFT JOIN';
     }>) => void;
     onRelationshipChange?: (pairId: string, relationshipId: string) => void;
+    onResetRelationships?: () => void;
   }) => (
     <>
       <button
@@ -168,6 +170,7 @@ vi.mock('../components/JoinPanel', () => ({
       >
         Use permanent relationship
       </button>
+      <button onClick={() => onResetRelationships?.()}>Reset relationships</button>
     </>
   ),
 }));
@@ -336,6 +339,13 @@ describe('Builder', () => {
         join_type: 'LEFT JOIN',
       }],
     }));
+
+    apiMocks.buildQuery.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset relationships' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledTimes(1));
+    expect(apiMocks.buildQuery).toHaveBeenLastCalledWith(expect.objectContaining({ joins: 'auto' }));
   });
 
   it('replaces the complete default path as tables are added and removed', async () => {

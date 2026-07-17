@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { findPath } from '../api/client';
-import type { JoinEdge, JoinType, SchemaIdentity, TableDetail } from '../types';
+import type { CanonicalJoinEdge, JoinEdge, JoinType } from '../types';
 import type { RelationshipGroups, RelationshipOverrides } from './builderRelationships';
+import { activeRelationship, applyRelationshipOverrides } from './builderRelationships';
 import {
   Link2,
   ArrowRight,
@@ -12,29 +13,31 @@ import {
 } from 'lucide-react';
 
 interface Props {
-  schemaIdentity?: SchemaIdentity;
   selectedTables: string[];
-  tableDetails: Record<string, TableDetail>;
   joinMode: 'auto' | 'manual';
   customJoins: JoinEdge[];
+  relationshipGroups: RelationshipGroups;
+  activeRelationshipOverrides: RelationshipOverrides;
+  onRelationshipChange: (pairId: string, relationshipId: string) => void;
+  onResetRelationships: () => void;
+  onDefaultJoinsChange: (joins: CanonicalJoinEdge[]) => void;
   onJoinModeChange: (mode: 'auto' | 'manual') => void;
   onCustomJoinsChange: (joins: JoinEdge[]) => void;
-  onDefaultJoinsChange: (joins: JoinEdge[]) => void;
-  relationshipGroups?: RelationshipGroups;
-  activeRelationshipOverrides?: RelationshipOverrides;
-  onRelationshipChange?: (pairId: string, relationshipId: string) => void;
 }
 
 export default function JoinPanel({
-  schemaIdentity,
   selectedTables,
   joinMode,
   customJoins,
+  relationshipGroups,
+  activeRelationshipOverrides,
+  onRelationshipChange,
+  onResetRelationships,
   onJoinModeChange,
   onCustomJoinsChange,
   onDefaultJoinsChange,
 }: Props) {
-  const [discoveredJoins, setDiscoveredJoins] = useState<JoinEdge[]>([]);
+  const [discoveredJoins, setDiscoveredJoins] = useState<CanonicalJoinEdge[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +58,7 @@ export default function JoinPanel({
     setError(null);
 
     async function discover() {
-      const joins: JoinEdge[] = [];
+      const joins: CanonicalJoinEdge[] = [];
       const joined = new Set<string>([selectedTables[0]]);
       let complete = true;
 
@@ -63,12 +66,10 @@ export default function JoinPanel({
         const target = selectedTables[i];
         if (joined.has(target)) continue;
 
-        let bestPath: JoinEdge[] | null = null;
+        let bestPath: CanonicalJoinEdge[] | null = null;
         for (const source of joined) {
           try {
-            const resp = schemaIdentity === 'ldlite'
-              ? await findPath(source, target, false, 6, schemaIdentity)
-              : await findPath(source, target);
+            const resp = await findPath(source, target, false, 6, 'ldlite');
             if (resp.path && resp.path.joins.length > 0) {
               if (!bestPath || resp.path.joins.length < bestPath.length) {
                 bestPath = resp.path.joins;
@@ -121,10 +122,19 @@ export default function JoinPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTables.join(','), schemaIdentity, onDefaultJoinsChange]);
+  }, [selectedTables.join(','), onDefaultJoinsChange]);
 
   // The joins to display — in auto mode show discovered, in manual show custom
-  const displayJoins = joinMode === 'auto' ? discoveredJoins : customJoins;
+  const baseDisplayJoins = joinMode === 'auto'
+    ? discoveredJoins
+    : customJoins.filter((join): join is CanonicalJoinEdge => (
+      typeof join.relationship_id === 'string' && typeof join.pair_id === 'string'
+    ));
+  const displayJoins = applyRelationshipOverrides(
+    baseDisplayJoins,
+    relationshipGroups,
+    activeRelationshipOverrides,
+  );
 
   const updateJoinType = (index: number, type: JoinType) => {
     if (joinMode === 'auto') {
@@ -143,6 +153,7 @@ export default function JoinPanel({
   };
 
   const resetToAuto = () => {
+    onResetRelationships();
     onJoinModeChange('auto');
     onCustomJoinsChange(discoveredJoins.map((j) => ({ ...j, join_type: 'JOIN' })));
   };
@@ -228,22 +239,34 @@ export default function JoinPanel({
       {/* Join list */}
       {!loading && displayJoins.length > 0 && (
         <div className="space-y-2">
-          {displayJoins.map((j, i) => (
+          {displayJoins.map((j, i) => {
+            const group = relationshipGroups[j.pair_id];
+            const selectedRelationship = group
+              ? activeRelationship(group, activeRelationshipOverrides)
+              : null;
+            return (
             <div
-              key={i}
-              className="flex items-center gap-3 bg-gray-50 rounded-lg px-4 py-3 border"
+              key={j.relationship_id || i}
+              className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-lg px-4 py-3 border"
             >
               {/* From */}
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-xs font-mono font-semibold text-gray-700 truncate">
                   {j.from_table}
                 </span>
-                <span className="text-xs text-gray-400">.{j.from_column}</span>
+                <span className="text-xs text-gray-400">.</span>
+                <span
+                  className="text-xs text-gray-400"
+                  data-testid={`join-from-column-${j.pair_id}`}
+                >
+                  {j.from_column}
+                </span>
               </div>
 
               {/* Join type selector */}
               <div className="flex-shrink-0">
                 <select
+                  aria-label={`Join type for ${j.from_table} and ${j.to_table}`}
                   value={j.join_type || 'JOIN'}
                   onChange={(e) => updateJoinType(i, e.target.value as JoinType)}
                   className={`text-xs font-semibold px-2 py-1 rounded border cursor-pointer ${
@@ -265,7 +288,13 @@ export default function JoinPanel({
                 <span className="text-xs font-mono font-semibold text-gray-700 truncate">
                   {j.to_table}
                 </span>
-                <span className="text-xs text-gray-400">.{j.to_column}</span>
+                <span className="text-xs text-gray-400">.</span>
+                <span
+                  className="text-xs text-gray-400"
+                  data-testid={`join-to-column-${j.pair_id}`}
+                >
+                  {j.to_column}
+                </span>
               </div>
 
               {/* FK name */}
@@ -274,8 +303,30 @@ export default function JoinPanel({
                   {j.foreign_key}
                 </span>
               )}
+
+              {group && group.relationships.length > 1 && selectedRelationship && (
+                <label className="basis-full flex items-center gap-2 text-xs text-gray-600">
+                  <span>Relationship</span>
+                  <select
+                    aria-label={`Relationship for ${group.leftTable} and ${group.rightTable}`}
+                    value={selectedRelationship.relationship_id}
+                    onChange={(event) => onRelationshipChange(group.pairId, event.target.value)}
+                    className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 font-mono text-xs text-gray-700"
+                  >
+                    {group.relationships.map((relationship) => (
+                      <option
+                        key={relationship.relationship_id}
+                        value={relationship.relationship_id}
+                      >
+                        {relationship.label}{relationship.is_default ? ' — Default' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
