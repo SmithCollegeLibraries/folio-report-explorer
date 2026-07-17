@@ -93,7 +93,7 @@ namespace app\services {
                 $parts = explode('.', $name);
                 $name = end($parts);
             }
-            return $name === 'item__t' ? 'item__t' : null;
+            return in_array($name, ['item__t', 'items'], true) ? 'item__t' : null;
         }
     }
 
@@ -144,6 +144,7 @@ require_once __DIR__ . '/../services/QueryFamilyContractService.php';
 require_once __DIR__ . '/../services/GeminiService.php';
 
 use app\exceptions\PolicyViolationException;
+use app\exceptions\ExploratorySqlValidationException;
 use app\services\GeminiService;
 use app\services\SqlBuilderService;
 use yii\httpclient\TestTransport;
@@ -193,6 +194,7 @@ repairAssertContains('SELECT mt.id FROM inventory.missing_table__t mt', $repairP
 repairAssertContains('unknown_table', $repairPayload, 'The repair request should contain the safe validation category.');
 repairAssertContains('DOCUMENTED INTERPRETATIONS', $repairPayload, 'The repair request should contain documented assumptions.');
 repairAssertContains('SCOPED SCHEMA', $repairPayload, 'The repair request should contain fresh scoped schema context.');
+repairAssertContains('Smith College', $repairPayload, 'The repair request should explicitly preserve the separately supplied campus.');
 
 $telemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
 repairAssertSame(false, strpos($telemetry, 'SELECT mt.id FROM inventory.missing_table__t mt') !== false, 'Telemetry must not contain raw candidate SQL.');
@@ -221,6 +223,33 @@ TestTransport::$responses = [
 $cteResult = GeminiService::generateSqlWithShadow('Show recent item identifiers from a derived set.', null, null, true);
 repairAssertSame(0, $cteResult['repairAttempts'] ?? null, 'A CTE alias should not be treated as an unknown physical table.');
 
+foreach (['MATERIALIZED', 'NOT MATERIALIZED'] as $materialization) {
+    TestTransport::$responses = [
+        geminiText("WITH recent(id) AS {$materialization} (SELECT ii.id FROM inventory.item__t ii) SELECT recent.id FROM recent"),
+    ];
+    $cteWithColumns = GeminiService::generateSqlWithShadow('Show item identifiers from a named derived set.', null, null, true);
+    repairAssertSame(0, $cteWithColumns['repairAttempts'] ?? null, "A CTE column list with {$materialization} should be recognized.");
+}
+
+TestTransport::$responses = [
+    geminiText('SELECT items.id FROM items'),
+    geminiText('SELECT ii.id FROM inventory.item__t ii'),
+];
+$inexactTable = GeminiService::generateSqlWithShadow('Show item identifiers.', null, null, true);
+repairAssertSame(1, $inexactTable['repairAttempts'] ?? null, 'A fuzzy table suffix must not be accepted as a physical table name.');
+repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $inexactTable['sql'] ?? null, 'An inexact physical table should be replaced by an exact schema name.');
+
+TestTransport::$responses = ['DELETE FROM inventory.item__t'];
+try {
+    GeminiService::generateSqlWithShadow('Remove obsolete items.', null, null, true);
+    fwrite(STDERR, "An unfenced destructive response must be a hard stop.\n");
+    exit(1);
+} catch (ExploratorySqlValidationException $exception) {
+    repairAssertSame('non_select', $exception->getSafeCategory(), 'An unfenced destructive response should retain a non-SELECT safety category.');
+    repairAssertSame(false, $exception->isRepairable(), 'An unfenced destructive response must not be repairable.');
+    repairAssertSame(0, count(TestTransport::$responses), 'An unfenced destructive response should make no repair request.');
+}
+
 TestTransport::$responses = [
     geminiText('SELECT a.id FROM inventory.missing_a__t a'),
     geminiText('SELECT b.id FROM inventory.missing_b__t b'),
@@ -243,6 +272,42 @@ try {
     repairAssertSame(0, count(TestTransport::$responses), 'A policy hard stop should make no retry request.');
 }
 SqlBuilderService::$blockPolicy = false;
+
+foreach ([
+    'SQLSTATE[57014]: Query canceled: canceling statement due to user request',
+    'SQLSTATE[57014]: Query canceled: canceling statement due to statement timeout',
+] as $cancellationError) {
+    TestTransport::$responses = [];
+    $requestCount = count(TestTransport::$requests);
+    try {
+        GeminiService::repairExploratorySqlAfterPreflight(
+            'Show items',
+            null,
+            ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+            $cancellationError
+        );
+        fwrite(STDERR, "PostgreSQL cancellation must not be repaired.\n");
+        exit(1);
+    } catch (\RuntimeException $exception) {
+        repairAssertContains('57014', $exception->getMessage(), 'PostgreSQL cancellation should propagate to request handling.');
+        repairAssertSame($requestCount, count(TestTransport::$requests), 'PostgreSQL cancellation should make no repair request.');
+    }
+}
+
+TestTransport::$responses = [];
+$requestCount = count(TestTransport::$requests);
+try {
+    GeminiService::repairExploratorySqlAfterPreflight(
+        'Show items',
+        null,
+        ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+        'SQLSTATE[42501]: Insufficient privilege: permission denied for table item__t'
+    );
+    fwrite(STDERR, "PostgreSQL permission failures must not be repaired.\n");
+    exit(1);
+} catch (PolicyViolationException $exception) {
+    repairAssertSame($requestCount, count(TestTransport::$requests), 'PostgreSQL permission failures should make no repair request.');
+}
 
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];
 $preflight = GeminiService::repairExploratorySqlAfterPreflight(
