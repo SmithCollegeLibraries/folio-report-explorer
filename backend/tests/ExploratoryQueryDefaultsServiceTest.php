@@ -110,6 +110,14 @@ $estimatedPriceByKey = array_column($estimatedPriceAssumptions, null, 'key');
 assertSameValue('estimated_po_line_price', $estimatedPriceByKey['investment_cost_basis']['value'], 'Explicit estimated PO-line price language should replace the paid-distribution default.');
 assertSameValue('explicit', $estimatedPriceByKey['investment_cost_basis']['source'], 'Explicit investment language should be marked explicit.');
 
+$paidDistributionAssumptions = ExploratoryQueryDefaultsService::resolve(
+    $prompt . ' Do not use estimated PO-line price; use actual paid fund-distribution amounts.'
+);
+$paidDistributionByKey = array_column($paidDistributionAssumptions, null, 'key');
+
+assertSameValue('actual_paid_fund_distribution', $paidDistributionByKey['investment_cost_basis']['value'], 'A rejected estimated-price phrase must not override the requested paid fund-distribution basis.');
+assertSameValue('explicit', $paidDistributionByKey['investment_cost_basis']['source'], 'The requested paid fund-distribution basis should be marked explicit.');
+
 $lifetimeCirculationAssumptions = ExploratoryQueryDefaultsService::resolve(
     $prompt . ' Use lifetime circulation instead of the purchase window.'
 );
@@ -118,6 +126,14 @@ $lifetimeCirculationByKey = array_column($lifetimeCirculationAssumptions, null, 
 assertSameValue('lifetime_circulation', $lifetimeCirculationByKey['circulation_window']['value'], 'Explicit lifetime-circulation language should replace the reporting-window default.');
 assertSameValue('explicit', $lifetimeCirculationByKey['circulation_window']['source'], 'Explicit circulation-window language should be marked explicit.');
 
+$purchaseWindowAssumptions = ExploratoryQueryDefaultsService::resolve(
+    $prompt . ' Do not use lifetime circulation; use the purchase window.'
+);
+$purchaseWindowByKey = array_column($purchaseWindowAssumptions, null, 'key');
+
+assertSameValue('same_as_purchase_window', $purchaseWindowByKey['circulation_window']['value'], 'A rejected lifetime-circulation phrase must not override the requested purchase window.');
+assertSameValue('explicit', $purchaseWindowByKey['circulation_window']['source'], 'The requested purchase window should be marked explicit.');
+
 $firstTwoLettersAssumptions = ExploratoryQueryDefaultsService::resolve(
     $prompt . ' Group by the first two call-number letters instead.'
 );
@@ -125,6 +141,14 @@ $firstTwoLettersByKey = array_column($firstTwoLettersAssumptions, null, 'key');
 
 assertSameValue('first_two_call_number_letters', $firstTwoLettersByKey['call_number_grouping']['value'], 'Explicit first-two-letter language should replace the primary-class default.');
 assertSameValue('explicit', $firstTwoLettersByKey['call_number_grouping']['source'], 'Explicit call-number grouping language should be marked explicit.');
+
+$primaryClassAssumptions = ExploratoryQueryDefaultsService::resolve(
+    $prompt . ' Do not group by the first two call-number letters; group by the primary call-number class.'
+);
+$primaryClassByKey = array_column($primaryClassAssumptions, null, 'key');
+
+assertSameValue('primary_call_number_class', $primaryClassByKey['call_number_grouping']['value'], 'A rejected first-two-letter phrase must not override the requested primary call-number class.');
+assertSameValue('explicit', $primaryClassByKey['call_number_grouping']['source'], 'The requested primary call-number class should be marked explicit.');
 
 assertSameValue(
     [],

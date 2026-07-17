@@ -40,19 +40,29 @@ class ExploratoryQueryDefaultsService
             $assumptions['purchase_date_basis']['source'] = 'explicit';
         }
 
-        if (preg_match('/\b(?:use|using|prefer) (?:the )?estimated po line price\b/', $normalized) === 1) {
+        if (self::matchesExplicitRequest($normalized, 'actual paid fund distribution(?: amounts?)?')) {
+            $assumptions['investment_cost_basis']['explanation'] = 'Investment uses paid invoice fund-distribution amounts, as explicitly requested.';
+            $assumptions['investment_cost_basis']['source'] = 'explicit';
+        } elseif (self::matchesExplicitRequest($normalized, 'estimated po line price')) {
             $assumptions['investment_cost_basis']['value'] = 'estimated_po_line_price';
             $assumptions['investment_cost_basis']['explanation'] = 'Investment uses the estimated PO-line price, as explicitly requested.';
             $assumptions['investment_cost_basis']['source'] = 'explicit';
         }
 
-        if (preg_match('/\b(?:use|using|prefer) (?:the )?lifetime circulation\b/', $normalized) === 1) {
+        if (self::matchesExplicitRequest($normalized, 'purchase window')) {
+            $assumptions['circulation_window']['explanation'] = 'Circulation is counted in the purchase reporting window, as explicitly requested.';
+            $assumptions['circulation_window']['source'] = 'explicit';
+        } elseif (self::matchesExplicitRequest($normalized, 'lifetime circulation')) {
             $assumptions['circulation_window']['value'] = 'lifetime_circulation';
             $assumptions['circulation_window']['explanation'] = 'Circulation is counted over the item lifetime, as explicitly requested.';
             $assumptions['circulation_window']['source'] = 'explicit';
         }
 
-        if (preg_match('/\b(?:group by|use|using|prefer) (?:the )?first two call number letters\b/', $normalized) === 1) {
+        $groupingActions = '(?:group by|use|using|prefer)';
+        if (self::matchesExplicitRequest($normalized, 'primary call number class', $groupingActions)) {
+            $assumptions['call_number_grouping']['explanation'] = 'Call numbers are grouped into their primary classification, as explicitly requested.';
+            $assumptions['call_number_grouping']['source'] = 'explicit';
+        } elseif (self::matchesExplicitRequest($normalized, 'first two call number letters', $groupingActions)) {
             $assumptions['call_number_grouping']['value'] = 'first_two_call_number_letters';
             $assumptions['call_number_grouping']['explanation'] = 'Call numbers are grouped by their first two letters, as explicitly requested.';
             $assumptions['call_number_grouping']['source'] = 'explicit';
@@ -119,10 +129,14 @@ class ExploratoryQueryDefaultsService
         return (string)$normalized;
     }
 
-    private static function matchesExplicitRequest(string $normalized, string $phrasePattern): bool
+    private static function matchesExplicitRequest(
+        string $normalized,
+        string $phrasePattern,
+        string $actionPattern = '(?:use|using|prefer)'
+    ): bool
     {
         return preg_match(
-            '/(?<!not )\b(?:use|using|prefer) (?:the )?(?:' . $phrasePattern . ')\b/',
+            '/(?<!not )\b' . $actionPattern . ' (?:the )?(?:' . $phrasePattern . ')\b/',
             $normalized
         ) === 1;
     }
