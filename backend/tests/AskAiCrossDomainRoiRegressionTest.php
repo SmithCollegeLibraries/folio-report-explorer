@@ -88,7 +88,7 @@ namespace app\services {
                 'invoices',
                 'po_lines',
                 'items',
-                'loans',
+                'audit_loans',
                 'holdings_records',
                 'instances',
             ];
@@ -102,7 +102,7 @@ namespace app\services {
                 'invoices' => 'invoice.invoices__t',
                 'po_lines' => 'orders.po_line__t',
                 'items' => 'inventory.item__t',
-                'loans' => 'circulation.loan__t',
+                'audit_loans' => 'circulation.audit_loan__t',
                 'holdings_records' => 'inventory.holdings_record__t',
                 'instances' => 'inventory.instance__t',
             ];
@@ -230,11 +230,12 @@ WITH spend_by_instance AS (
 ), circulation_by_item AS (
     SELECT item.id AS item_id,
            item.holdings_record_id,
-           COUNT(loan.id) AS checkouts
+           COUNT(audit_loan.created_date) AS checkouts
     FROM inventory.item__t item
-    LEFT JOIN circulation.loan__t loan
-      ON loan.item_id = item.id
-     AND loan.loan_date >= CURRENT_DATE - INTERVAL '5 years'
+    LEFT JOIN circulation.audit_loan__t audit_loan
+      ON audit_loan.loan__item_id = item.id
+     AND audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')
+     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'
     GROUP BY item.id, item.holdings_record_id
 ), circulation_by_instance AS (
     SELECT holdings.instance_id,
@@ -279,12 +280,16 @@ roiRegressionAssertSame(
     array_column($repaired['assumptions'] ?? [], 'value', 'key'),
     'The motivating request should receive the exact five documented defaults.'
 );
+roiRegressionAssertSame(5, count($repaired['assumptions'] ?? []), 'The motivating request should receive exactly five assumptions without duplicates.');
 foreach (['spend_by_instance', 'circulation_by_item', 'purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'] as $requiredSqlShape) {
     roiRegressionAssertContains($requiredSqlShape, $repaired['sql'] ?? '', "The repaired SQL should retain {$requiredSqlShape}.");
 }
 roiRegressionAssertContains('invoice.invoices__t invoice', $repaired['sql'] ?? '', 'The repaired SQL should anchor purchase dates to invoices.');
 roiRegressionAssertContains("invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'", $repaired['sql'] ?? '', 'The repaired SQL should use invoice payment date for the last-five-years purchase window.');
-roiRegressionAssertContains("loan.loan_date >= CURRENT_DATE - INTERVAL '5 years'", $repaired['sql'] ?? '', 'The repaired SQL should apply the matching last-five-years window to circulation.');
+roiRegressionAssertContains('circulation.audit_loan__t audit_loan', $repaired['sql'] ?? '', 'The repaired SQL should use checkout audit events for circulation.');
+roiRegressionAssertContains('audit_loan.loan__item_id = item.id', $repaired['sql'] ?? '', 'The repaired SQL should join checkout audit events at item grain.');
+roiRegressionAssertContains("audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')", $repaired['sql'] ?? '', 'The repaired SQL should count only checkout actions.');
+roiRegressionAssertContains("audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'", $repaired['sql'] ?? '', 'The repaired SQL should apply the matching last-five-years window to checkout events.');
 roiRegressionAssertContains('ORDER BY purchase_count DESC', $repaired['sql'] ?? '', 'The repaired SQL should rank call-number classes by purchases made most.');
 roiRegressionAssertSame(2, count(RoiTestTransport::$requests), 'Success after one repair should make exactly two model calls.');
 
@@ -317,6 +322,7 @@ roiRegressionAssertSame(
     array_column($exhausted['assumptions'] ?? [], 'value', 'key'),
     'Exhausted recovery should preserve the exact five assumptions.'
 );
+roiRegressionAssertSame(5, count($exhausted['assumptions'] ?? []), 'Exhausted recovery should preserve exactly five assumptions without duplicates.');
 roiRegressionAssertContains('ROI PLAN GUIDANCE', $exhausted['attemptedPlan'] ?? '', 'Exhausted recovery should preserve the attempted plan.');
 roiRegressionAssertSame('unknown_table', $exhausted['validationSummary']['failureCategory'] ?? null, 'Exhausted recovery should expose a safe failure category.');
 roiRegressionAssertSame(
