@@ -84,6 +84,8 @@ namespace app\services {
         {
             return [
                 'invoice_lines_fund_distributions',
+                'invoice_lines',
+                'invoices',
                 'po_lines',
                 'items',
                 'loans',
@@ -96,6 +98,8 @@ namespace app\services {
         {
             return [
                 'invoice_lines_fund_distributions' => 'invoice.invoice_lines__t__fund_distributions',
+                'invoice_lines' => 'invoice.invoice_lines__t',
+                'invoices' => 'invoice.invoices__t',
                 'po_lines' => 'orders.po_line__t',
                 'items' => 'inventory.item__t',
                 'loans' => 'circulation.loan__t',
@@ -173,6 +177,32 @@ function roiRegressionAssertContains(string $needle, string $haystack, string $m
     }
 }
 
+function roiRegressionAssertNoSqlLeak($value, array $rejectedCandidates, string $path = 'response'): void
+{
+    if (is_array($value)) {
+        foreach ($value as $key => $nestedValue) {
+            $nestedPath = $path . '.' . (string)$key;
+            if (strtolower((string)$key) === 'sql') {
+                fwrite(STDERR, "Exhausted recovery must not contain an SQL field at {$nestedPath}.\n");
+                exit(1);
+            }
+            roiRegressionAssertNoSqlLeak($nestedValue, $rejectedCandidates, $nestedPath);
+        }
+        return;
+    }
+
+    if (!is_string($value)) {
+        return;
+    }
+
+    foreach ($rejectedCandidates as $candidate) {
+        if (strpos($value, $candidate) !== false) {
+            fwrite(STDERR, "Exhausted recovery leaked rejected candidate SQL at {$path}.\n");
+            exit(1);
+        }
+    }
+}
+
 function roiRegressionGeminiText(string $sql): string
 {
     return "```sql\n{$sql}\n```\nCandidate query.\nDATA SOURCE: folio";
@@ -192,14 +222,19 @@ WITH spend_by_instance AS (
            COUNT(DISTINCT pol.id) AS purchase_count,
            SUM(fd.total * fd.fund_distributions__value * 0.01) AS spend
     FROM invoice.invoice_lines__t__fund_distributions fd
+    JOIN invoice.invoice_lines__t invoice_line ON invoice_line.id = fd.id
+    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id
     JOIN orders.po_line__t pol ON pol.id = fd.po_line_id
+    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'
     GROUP BY pol.instance_id
 ), circulation_by_item AS (
     SELECT item.id AS item_id,
            item.holdings_record_id,
            COUNT(loan.id) AS checkouts
     FROM inventory.item__t item
-    LEFT JOIN circulation.loan__t loan ON loan.item_id = item.id
+    LEFT JOIN circulation.loan__t loan
+      ON loan.item_id = item.id
+     AND loan.loan_date >= CURRENT_DATE - INTERVAL '5 years'
     GROUP BY item.id, item.holdings_record_id
 ), circulation_by_instance AS (
     SELECT holdings.instance_id,
@@ -224,6 +259,7 @@ FROM spend_by_instance
 JOIN class_by_instance ON class_by_instance.instance_id = spend_by_instance.instance_id
 LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id
 GROUP BY class_by_instance.call_number_class
+ORDER BY purchase_count DESC
 SQL;
 
 RoiTestTransport::$responses = [
@@ -246,6 +282,10 @@ roiRegressionAssertSame(
 foreach (['spend_by_instance', 'circulation_by_item', 'purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'] as $requiredSqlShape) {
     roiRegressionAssertContains($requiredSqlShape, $repaired['sql'] ?? '', "The repaired SQL should retain {$requiredSqlShape}.");
 }
+roiRegressionAssertContains('invoice.invoices__t invoice', $repaired['sql'] ?? '', 'The repaired SQL should anchor purchase dates to invoices.');
+roiRegressionAssertContains("invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'", $repaired['sql'] ?? '', 'The repaired SQL should use invoice payment date for the last-five-years purchase window.');
+roiRegressionAssertContains("loan.loan_date >= CURRENT_DATE - INTERVAL '5 years'", $repaired['sql'] ?? '', 'The repaired SQL should apply the matching last-five-years window to circulation.');
+roiRegressionAssertContains('ORDER BY purchase_count DESC', $repaired['sql'] ?? '', 'The repaired SQL should rank call-number classes by purchases made most.');
 roiRegressionAssertSame(2, count(RoiTestTransport::$requests), 'Success after one repair should make exactly two model calls.');
 
 $repairPrompt = json_encode(RoiTestTransport::$requests[1]);
@@ -259,6 +299,11 @@ RoiTestTransport::$responses = [
     roiRegressionGeminiText('SELECT first.id FROM inventory.missing_first__t first'),
     roiRegressionGeminiText('SELECT second.id FROM inventory.missing_second__t second'),
     roiRegressionGeminiText('SELECT third.id FROM inventory.missing_third__t third'),
+];
+$rejectedCandidates = [
+    'SELECT first.id FROM inventory.missing_first__t first',
+    'SELECT second.id FROM inventory.missing_second__t second',
+    'SELECT third.id FROM inventory.missing_third__t third',
 ];
 RoiTestTransport::$requests = [];
 
@@ -279,6 +324,7 @@ roiRegressionAssertSame(
     $exhausted['suggestions'] ?? null,
     'Exhausted recovery should provide actionable suggestions.'
 );
+roiRegressionAssertNoSqlLeak($exhausted, $rejectedCandidates);
 
 fwrite(STDOUT, "Ask AI cross-domain ROI regression test passed\n");
 }
