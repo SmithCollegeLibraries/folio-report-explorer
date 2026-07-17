@@ -1682,13 +1682,54 @@ class FolioQueryController extends Controller
     public function actionSave()
     {
         $body = Yii::$app->request->getBodyParams();
+        $queryDefinition = $body['queryDefinition'] ?? [];
+        $generatedSql = $body['generatedSql'] ?? null;
+
+        if (($queryDefinition['schemaIdentity'] ?? null) === 'ldlite') {
+            try {
+                $normalizedDefinition = BuilderQueryDefinitionNormalizerService::normalize($queryDefinition);
+            } catch (\InvalidArgumentException $e) {
+                Yii::$app->response->statusCode = 400;
+                return ['error' => $e->getMessage()];
+            }
+
+            try {
+                $trustedBuild = SqlBuilderService::build($normalizedDefinition);
+            } catch (\Throwable $e) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Could not rebuild the canonical query. The query was not saved.'];
+            }
+
+            $trustedSql = trim((string)($trustedBuild['sql'] ?? ''));
+            $submittedSql = trim((string)$generatedSql);
+            if ($submittedSql === '') {
+                $submittedSql = $trustedSql;
+            }
+
+            try {
+                if (!empty($body['sqlEdited'])) {
+                    SqlBuilderService::validateSafety($submittedSql);
+                    SqlBuilderService::validateTablePolicy($submittedSql);
+                    $this->assertEditedCanonicalSqlBinding($trustedSql, $submittedSql);
+                } elseif ($this->normalizeSqlForBinding($submittedSql) !== $this->normalizeSqlForBinding($trustedSql)) {
+                    throw new \InvalidArgumentException(
+                        'Canonical SQL does not match the server-built query definition.'
+                    );
+                }
+            } catch (\InvalidArgumentException $e) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => $e->getMessage()];
+            }
+
+            $generatedSql = $submittedSql;
+        }
 
         $model = new SavedQuery();
         $model->name = $body['name'] ?? 'Untitled Query';
         $model->user_id = $this->getCurrentUserId();
         $model->description = $body['description'] ?? null;
-        $model->query_definition = json_encode($body['queryDefinition'] ?? []);
-        $model->generated_sql = $body['generatedSql'] ?? null;
+        $model->query_definition = json_encode($queryDefinition);
+        $model->generated_sql = $generatedSql;
         $model->source = $body['source'] ?? 'builder';
         $model->nl_prompt = $body['nlPrompt'] ?? null;
         $model->is_pinned = !empty($body['isPinned']) ? 1 : 0;
@@ -1700,6 +1741,43 @@ class FolioQueryController extends Controller
 
         Yii::$app->response->statusCode = 201;
         return $this->formatSaved($model);
+    }
+
+    private function normalizeSqlForBinding(string $sql): string
+    {
+        $sql = preg_replace('/\/\*.*?\*\//s', ' ', $sql);
+        $sql = preg_replace('/--[^\r\n]*/', ' ', (string)$sql);
+        return strtolower(trim((string)preg_replace('/\s+/', ' ', (string)$sql), " ;\t\n\r\0\x0B"));
+    }
+
+    private function assertEditedCanonicalSqlBinding(string $trustedSql, string $editedSql): void
+    {
+        $trusted = $this->normalizeSqlForBinding($trustedSql);
+        $edited = $this->normalizeSqlForBinding($editedSql);
+
+        preg_match_all('/\b(?:from|join)\s+([a-z0-9_."]+)/i', $trusted, $trustedTableMatches);
+        preg_match_all('/\b(?:from|join)\s+([a-z0-9_."]+)/i', $edited, $editedTableMatches);
+        $trustedTables = array_values(array_unique($trustedTableMatches[1] ?? []));
+        $editedTables = array_values(array_unique($editedTableMatches[1] ?? []));
+        sort($trustedTables, SORT_STRING);
+        sort($editedTables, SORT_STRING);
+        if ($trustedTables !== $editedTables) {
+            throw new \InvalidArgumentException(
+                'Edited canonical SQL must retain exactly the tables in the query definition.'
+            );
+        }
+
+        preg_match_all('/\bon\s+([^\r\n]+?)(?=\s+(?:join|left\s+join|where|group\s+by|having|order\s+by|limit)\b|$)/i', $trusted, $trustedJoinMatches);
+        preg_match_all('/\bon\s+([^\r\n]+?)(?=\s+(?:join|left\s+join|where|group\s+by|having|order\s+by|limit)\b|$)/i', $edited, $editedJoinMatches);
+        $trustedJoins = array_map('trim', $trustedJoinMatches[1] ?? []);
+        $editedJoins = array_map('trim', $editedJoinMatches[1] ?? []);
+        sort($trustedJoins, SORT_STRING);
+        sort($editedJoins, SORT_STRING);
+        if ($trustedJoins !== $editedJoins) {
+            throw new \InvalidArgumentException(
+                'Edited canonical SQL must retain the server-approved table links.'
+            );
+        }
     }
 
     /**

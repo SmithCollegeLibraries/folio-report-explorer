@@ -4,6 +4,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import {
   fetchSchema,
   fetchTableDetail,
+  findPath,
   buildQuery,
   submitQuery,
   saveQuery,
@@ -97,10 +98,22 @@ export default function Builder() {
   const [joinMode, setJoinMode] = useState<'auto' | 'manual'>('auto');
   const [customJoins, setCustomJoins] = useState<CanonicalJoinEdge[]>([]);
   const [defaultJoins, setDefaultJoins] = useState<CanonicalJoinEdge[]>([]);
+  const [joinDiscoveryLoading, setJoinDiscoveryLoading] = useState(false);
+  const [joinDiscoveryError, setJoinDiscoveryError] = useState<string | null>(null);
   const [activeRelationshipOverrides, setActiveRelationshipOverrides] = useState<RelationshipOverrides>({});
   const [relationshipNotice, setRelationshipNotice] = useState<string | null>(null);
   const [leftPanel, setLeftPanel] = useState<'browse' | 'relationships'>('browse');
   const [graphOpen, setGraphOpen] = useState(false);
+  const queryVersionRef = useRef(0);
+  const discoveryRequestRef = useRef(0);
+  const buildRequestRef = useRef(0);
+  const saveInFlightRef = useRef(false);
+
+  const invalidateQueryResult = useCallback(() => {
+    queryVersionRef.current += 1;
+    setBuilt(null);
+    setEditedSql(null);
+  }, []);
 
   // --- async job polling ---
   const { job, results, isRunning, error: jobError, cancel: cancelJob, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
@@ -131,6 +144,68 @@ export default function Builder() {
     [selectedTables, tableDetails],
   );
 
+  useEffect(() => {
+    setDefaultJoins([]);
+    setJoinDiscoveryError(null);
+    invalidateQueryResult();
+    const discoveryVersion = ++discoveryRequestRef.current;
+
+    if (selectedTables.length < 2) {
+      setJoinDiscoveryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setJoinDiscoveryLoading(true);
+
+    async function discoverDefaultPath() {
+      const joins: CanonicalJoinEdge[] = [];
+      const joined = new Set<string>([selectedTables[0]]);
+      let missingTarget: string | null = null;
+
+      for (let index = 1; index < selectedTables.length; index += 1) {
+        const target = selectedTables[index];
+        if (joined.has(target)) continue;
+
+        let bestPath: CanonicalJoinEdge[] | null = null;
+        for (const source of Array.from(joined)) {
+          try {
+            const response = await findPath(source, target, false, 6, schemaIdentity);
+            const candidate = response.path?.joins ?? [];
+            if (candidate.length > 0 && (!bestPath || candidate.length < bestPath.length)) {
+              bestPath = candidate;
+            }
+          } catch {
+            // A different already-connected source may still provide a complete path.
+          }
+        }
+
+        if (!bestPath) {
+          missingTarget = target;
+          break;
+        }
+
+        for (const edge of bestPath) {
+          if (!joins.some((join) => join.relationship_id === edge.relationship_id)) {
+            joins.push({ ...edge, join_type: 'JOIN' });
+          }
+          joined.add(edge.from_table);
+          joined.add(edge.to_table);
+        }
+        joined.add(target);
+      }
+
+      if (cancelled || discoveryVersion !== discoveryRequestRef.current) return;
+      invalidateQueryResult();
+      setDefaultJoins(missingTarget ? [] : joins);
+      setJoinDiscoveryError(missingTarget ? `Cannot find FK path to "${missingTarget}"` : null);
+      setJoinDiscoveryLoading(false);
+    }
+
+    void discoverDefaultPath();
+    return () => { cancelled = true; };
+  }, [selectedTables.join(','), invalidateQueryResult]);
+
   const selectRelationship = useCallback((pairId: string, relationshipId: string) => {
     setActiveRelationshipOverrides((current) => {
       const group = relationshipGroups[pairId];
@@ -142,8 +217,7 @@ export default function Builder() {
       }
       return next;
     });
-    setBuilt(null);
-    setEditedSql(null);
+    invalidateQueryResult();
   }, [relationshipGroups]);
 
   useEffect(() => {
@@ -155,10 +229,9 @@ export default function Builder() {
     if (Object.keys(pruned).length !== Object.keys(activeRelationshipOverrides).length) {
       setActiveRelationshipOverrides(pruned);
       setRelationshipNotice('A selected table link is no longer available. Query Builder restored the default link.');
-      setBuilt(null);
-      setEditedSql(null);
+      invalidateQueryResult();
     }
-  }, [selectedTables, relationshipGroups, activeRelationshipOverrides]);
+  }, [selectedTables, relationshipGroups, activeRelationshipOverrides, invalidateQueryResult]);
 
   const activeJoinSelections = useMemo(
     () => currentRelationshipSelections(
@@ -178,28 +251,16 @@ export default function Builder() {
     return 'auto';
   }, [activeJoinSelections, activeRelationshipOverrides, customJoins, defaultJoins, joinMode]);
 
-  const handleDefaultJoinsChange = useCallback((joins: CanonicalJoinEdge[]) => {
-    setDefaultJoins(joins);
-    setBuilt(null);
-  }, []);
-
   const handleCustomJoinsChange = useCallback((joins: JoinEdge[]) => {
     const canonical = joins.filter(isCanonicalJoinEdge);
     setCustomJoins(canonical);
-    setBuilt(null);
-  }, []);
+    invalidateQueryResult();
+  }, [invalidateQueryResult]);
 
   const resetRelationships = useCallback(() => {
     setActiveRelationshipOverrides({});
-    setBuilt(null);
-    setEditedSql(null);
-  }, []);
-
-  useEffect(() => {
-    if (selectedTables.length < 2) {
-      setDefaultJoins([]);
-    }
-  }, [selectedTables]);
+    invalidateQueryResult();
+  }, [invalidateQueryResult]);
 
   // Clear edited SQL when build changes
   useEffect(() => {
@@ -227,16 +288,30 @@ export default function Builder() {
     };
   };
 
+  const effectiveSql = editedSql ?? built?.sql ?? '';
+
   // --- mutations ---
   const buildMut = useMutation({
-    mutationFn: () => buildQuery(createQueryDefinition(joinsForBuild)),
-    onSuccess: (data: BuildResponse) => {
+    mutationFn: ({ definition }: { definition: CanonicalQueryDefinition; version: number; requestId: number }) => buildQuery(definition),
+    onSuccess: (data: BuildResponse, request) => {
+      if (request.version !== queryVersionRef.current || request.requestId !== buildRequestRef.current) {
+        return;
+      }
       setBuilt(data);
       setActiveTab('sql');
       resetJob();
       setActiveJobId(null);
     },
   });
+
+  const startBuild = useCallback(() => {
+    const requestId = ++buildRequestRef.current;
+    buildMut.mutate({
+      definition: createQueryDefinition(joinsForBuild),
+      version: queryVersionRef.current,
+      requestId,
+    });
+  }, [buildMut, joinsForBuild, selectedTables, columns, filters, orderBy, limit, distinct]);
 
   const execMut = useMutation({
     mutationFn: ({ sql, params, options }: { sql: string; params: Record<string, string>; options?: { confirmed?: boolean; outputMode?: 'table' | 'file' } }) => {
@@ -265,24 +340,32 @@ export default function Builder() {
     },
   });
 
-  const saveMut = useMutation({
-    mutationFn: async () => {
-      const queryDefinition = createQueryDefinition(
-        buildDefaultSaveJoins(joinMode, defaultJoins, customJoins),
-      );
+  type SaveSnapshot = {
+    name: string;
+    description: string;
+    queryDefinition: CanonicalQueryDefinition;
+    generatedSql: string;
+    sqlEdited: boolean;
+    rebuildDefault: boolean;
+  };
 
-      let defaultBuild: BuildResponse;
-      try {
-        defaultBuild = await buildQuery(queryDefinition);
-      } catch {
-        throw new Error('Could not rebuild the default joins. The query was not saved.');
+  const saveMut = useMutation({
+    mutationFn: async (snapshot: SaveSnapshot) => {
+      let generatedSql = snapshot.generatedSql;
+      if (snapshot.rebuildDefault) {
+        try {
+          generatedSql = (await buildQuery(snapshot.queryDefinition)).sql;
+        } catch {
+          throw new Error('Could not rebuild the default joins. The query was not saved.');
+        }
       }
 
       return saveQuery({
-        name: saveName,
-        description: saveDesc,
-        queryDefinition,
-        generatedSql: defaultBuild.sql,
+        name: snapshot.name,
+        description: snapshot.description,
+        queryDefinition: snapshot.queryDefinition,
+        generatedSql,
+        sqlEdited: snapshot.sqlEdited,
       });
     },
     onSuccess: () => {
@@ -290,7 +373,28 @@ export default function Builder() {
       setSaveName('');
       setSaveDesc('');
     },
+    onSettled: () => {
+      saveInFlightRef.current = false;
+    },
   });
+
+  const startSave = useCallback(() => {
+    if (saveInFlightRef.current || !saveName) return;
+    saveInFlightRef.current = true;
+    const rebuildDefault = Object.keys(activeRelationshipOverrides).length > 0;
+    saveMut.mutate({
+      name: saveName,
+      description: saveDesc,
+      queryDefinition: createQueryDefinition(
+        rebuildDefault
+          ? buildDefaultSaveJoins(joinMode, defaultJoins, customJoins)
+          : joinsForBuild,
+      ),
+      generatedSql: effectiveSql,
+      sqlEdited: !rebuildDefault && editedSql !== null,
+      rebuildDefault,
+    });
+  }, [saveName, saveDesc, activeRelationshipOverrides, joinMode, defaultJoins, customJoins, joinsForBuild, effectiveSql, editedSql, saveMut]);
 
   // --- handlers ---
   const toggleTable = useCallback(
@@ -304,7 +408,7 @@ export default function Builder() {
       } else {
         setSelectedTables((prev) => [...prev, table]);
       }
-      setBuilt(null);
+      invalidateQueryResult();
       resetJob();
       setActiveJobId(null);
     },
@@ -317,7 +421,7 @@ export default function Builder() {
       setColumns((prev) => prev.filter((c) => c.table !== table));
       setFilters((prev) => prev.filter((f) => f.table !== table));
       setOrderBy((prev) => prev.filter((s) => s.table !== table));
-      setBuilt(null);
+      invalidateQueryResult();
       resetJob();
       setActiveJobId(null);
     },
@@ -334,9 +438,7 @@ export default function Builder() {
     return result;
   }, [selectedTables, tableDetails]);
 
-  const effectiveSql = editedSql ?? built?.sql ?? '';
-
-  const canBuild = selectedTables.length > 0 && columns.length > 0;
+  const canBuild = selectedTables.length > 0 && columns.length > 0 && !joinDiscoveryLoading;
   const canRun = !!effectiveSql && !isRunning;
 
   if (schemaLoading) {
@@ -391,7 +493,7 @@ export default function Builder() {
 
         {/* DISTINCT toggle */}
         <button
-          onClick={() => { setDistinct((d) => !d); setBuilt(null); }}
+          onClick={() => { setDistinct((d) => !d); invalidateQueryResult(); }}
           className={`flex items-center gap-1 text-xs px-2 py-1 rounded border ${
             distinct
               ? 'bg-folio-50 text-folio-700 border-folio-300'
@@ -410,7 +512,7 @@ export default function Builder() {
             {LIMIT_PRESETS.map((n) => (
               <button
                 key={n}
-                onClick={() => { setLimit(n); setBuilt(null); }}
+                onClick={() => { setLimit(n); invalidateQueryResult(); }}
                 className={`text-xs px-2 py-1 rounded border ${
                   limit === n
                     ? 'bg-folio-600 text-white border-folio-600'
@@ -425,7 +527,7 @@ export default function Builder() {
               min={1}
               max={50000}
               value={limit}
-              onChange={(e) => { setLimit(Number(e.target.value) || 100); setBuilt(null); }}
+              onChange={(e) => { setLimit(Number(e.target.value) || 100); invalidateQueryResult(); }}
               className="w-16 text-xs border rounded px-1.5 py-1 text-center"
             />
           </div>
@@ -434,7 +536,7 @@ export default function Builder() {
         {/* Action buttons */}
         <div className="flex gap-2">
           <button
-            onClick={() => buildMut.mutate()}
+            onClick={startBuild}
             disabled={!canBuild || buildMut.isPending}
             className="flex items-center gap-1 bg-folio-600 text-white px-3 py-1.5 rounded text-sm hover:bg-folio-700 disabled:opacity-50"
           >
@@ -583,21 +685,21 @@ export default function Builder() {
                 <ColumnPicker
                   tableColumns={tableColumnsMap}
                   selectedColumns={columns}
-                  onColumnsChange={(cols) => { setColumns(cols); setBuilt(null); }}
+                  onColumnsChange={(cols) => { setColumns(cols); invalidateQueryResult(); }}
                 />
               )}
               {activeTab === 'filters' && (
                 <FilterPanel
                   tableColumns={tableColumnsMap}
                   filters={filters}
-                  onFiltersChange={(f) => { setFilters(f); setBuilt(null); }}
+                  onFiltersChange={(f) => { setFilters(f); invalidateQueryResult(); }}
                 />
               )}
               {activeTab === 'sort' && (
                 <SortPanel
                   tableColumns={tableColumnsMap}
                   orderBy={orderBy}
-                  onOrderByChange={(s) => { setOrderBy(s); setBuilt(null); }}
+                  onOrderByChange={(s) => { setOrderBy(s); invalidateQueryResult(); }}
                 />
               )}
               {activeTab === 'joins' && (
@@ -605,9 +707,11 @@ export default function Builder() {
                   selectedTables={selectedTables}
                   joinMode={joinMode}
                   customJoins={customJoins}
-                  onJoinModeChange={(m) => { setJoinMode(m); setBuilt(null); }}
+                  onJoinModeChange={(m) => { setJoinMode(m); invalidateQueryResult(); }}
                   onCustomJoinsChange={handleCustomJoinsChange}
-                  onDefaultJoinsChange={handleDefaultJoinsChange}
+                  defaultJoins={defaultJoins}
+                  discoveryLoading={joinDiscoveryLoading}
+                  discoveryError={joinDiscoveryError}
                   relationshipGroups={relationshipGroups}
                   activeRelationshipOverrides={activeRelationshipOverrides}
                   onRelationshipChange={selectRelationship}
@@ -808,16 +912,23 @@ export default function Builder() {
                 Alternate joins apply to this session only. Saved queries use the default table links.
               </p>
             )}
+            {Object.keys(activeRelationshipOverrides).length > 0 && editedSql !== null && (
+              <p className="mb-3 text-sm text-amber-800" role="status">
+                Session SQL edits are not persisted when an alternate table link is active.
+              </p>
+            )}
             <input
               placeholder="Query name"
               value={saveName}
               onChange={(e) => setSaveName(e.target.value)}
+              disabled={saveMut.isPending}
               className="border rounded w-full px-3 py-2 mb-3 text-sm"
             />
             <textarea
               placeholder="Description (optional)"
               value={saveDesc}
               onChange={(e) => setSaveDesc(e.target.value)}
+              disabled={saveMut.isPending}
               className="border rounded w-full px-3 py-2 mb-3 text-sm h-20 resize-none"
             />
             {saveMut.isError && (
@@ -827,13 +938,16 @@ export default function Builder() {
             )}
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setSaveOpen(false)}
+                onClick={() => {
+                  if (!saveInFlightRef.current) setSaveOpen(false);
+                }}
+                disabled={saveMut.isPending}
                 className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
-                onClick={() => saveMut.mutate()}
+                onClick={startSave}
                 disabled={!saveName || saveMut.isPending}
                 className="px-3 py-1.5 text-sm bg-folio-600 text-white rounded hover:bg-folio-700 disabled:opacity-50"
               >

@@ -13,11 +13,13 @@ const apiMocks = vi.hoisted(() => ({
     table: { columns: [] },
     relationships: { parents: [], children: [] },
   }),
+  findPath: vi.fn(),
 }));
 
 vi.mock('../api/client', () => ({
   fetchSchema: apiMocks.fetchSchema,
   fetchTableDetail: apiMocks.fetchTableDetail,
+  findPath: apiMocks.findPath,
   buildQuery: apiMocks.buildQuery,
   submitQuery: apiMocks.submitQuery,
   saveQuery: apiMocks.saveQuery,
@@ -65,8 +67,25 @@ vi.mock('../components/SqlPreview', () => ({
   ),
 }));
 
-vi.mock('../components/RelationshipPanel', () => ({ default: () => null }));
-vi.mock('../components/BuilderGraph', () => ({ default: () => null }));
+vi.mock('../components/RelationshipPanel', () => ({
+  default: ({ onShowGraph }: { onShowGraph: () => void }) => (
+    <button onClick={onShowGraph}>Show relationship graph</button>
+  ),
+}));
+vi.mock('../components/BuilderGraph', () => ({
+  default: ({ onRelationshipChange }: { onRelationshipChange?: (pairId: string, relationshipId: string) => void }) => (
+    <>
+      <button onClick={() => onRelationshipChange?.(
+        'inventory.item__t<->inventory.location__t',
+        'inventory.item__t.permanent_location_id->inventory.location__t.id',
+      )}>Graph permanent relationship</button>
+      <button onClick={() => onRelationshipChange?.(
+        'inventory.item__t<->inventory.location__t',
+        'inventory.item__t.temporary_location_id->inventory.location__t.id',
+      )}>Graph temporary relationship</button>
+    </>
+  ),
+}));
 vi.mock('../components/FilterPanel', () => ({ default: () => null }));
 vi.mock('../components/SortPanel', () => ({ default: () => null }));
 vi.mock('../components/JoinPanel', () => ({
@@ -76,6 +95,7 @@ vi.mock('../components/JoinPanel', () => ({
     onDefaultJoinsChange,
     onRelationshipChange,
     onResetRelationships,
+    defaultJoins,
   }: {
     onJoinModeChange: (mode: 'auto' | 'manual') => void;
     onCustomJoinsChange: (joins: Array<{
@@ -100,8 +120,12 @@ vi.mock('../components/JoinPanel', () => ({
     }>) => void;
     onRelationshipChange?: (pairId: string, relationshipId: string) => void;
     onResetRelationships?: () => void;
+    defaultJoins?: Array<{ relationship_id: string }>;
   }) => (
     <>
+      <output data-testid="builder-default-joins">
+        {(defaultJoins ?? []).map((join) => join.relationship_id).join(',')}
+      </output>
       <button
         onClick={() => onDefaultJoinsChange?.([{
           from_table: 'inventory.item__t',
@@ -182,7 +206,214 @@ describe('Builder', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    apiMocks.findPath.mockImplementation(async (_source: string, target: string) => ({
+      path: {
+        joins: [target === 'inventory.holdings_record__t' ? {
+          from_table: 'inventory.location__t',
+          from_column: 'holdings_id',
+          to_table: 'inventory.holdings_record__t',
+          to_column: 'id',
+          relationship_id: 'inventory.location__t.holdings_id->inventory.holdings_record__t.id',
+          pair_id: 'inventory.holdings_record__t<->inventory.location__t',
+          join_type: 'LEFT JOIN',
+        } : {
+          from_table: 'inventory.item__t',
+          from_column: 'effective_location_id',
+          to_table: 'inventory.location__t',
+          to_column: 'id',
+          relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+          pair_id: 'inventory.item__t<->inventory.location__t',
+          join_type: 'JOIN',
+        }],
+      },
+    }));
     vi.spyOn(window, 'confirm').mockReturnValue(false);
+  });
+
+  it('discovers defaults without mounting Joins and builds a graph-selected alternate', async () => {
+    const effective = {
+      from_table: 'inventory.item__t', from_column: 'effective_location_id',
+      to_table: 'inventory.location__t', to_column: 'id',
+      parent_table: 'inventory.location__t', parent_column: 'id', local_column: 'effective_location_id',
+      foreign_key: 'Effective location',
+      relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+      pair_id: 'inventory.item__t<->inventory.location__t', label: 'Effective location', is_default: true, source: 'overlay',
+    };
+    const permanent = { ...effective, from_column: 'permanent_location_id', local_column: 'permanent_location_id',
+      relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id', label: 'Permanent location', is_default: false };
+    apiMocks.fetchTableDetail.mockImplementation(async (table: string) => ({
+      name: table, table: { columns: [] },
+      relationships: table === 'inventory.item__t' ? { parents: [effective, permanent], children: [] } : { parents: [], children: [effective, permanent] },
+    }));
+    apiMocks.buildQuery.mockResolvedValue({ sql: 'SELECT permanent', params: {} });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalled());
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByRole('button', { name: 'Relationships' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show relationship graph' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Graph permanent relationship' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledWith(expect.objectContaining({
+      joins: [expect.objectContaining({
+        relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+      })],
+    })));
+  });
+
+  it('ignores a stale build response after the relationship changes', async () => {
+    const effective = {
+      from_table: 'inventory.item__t', from_column: 'effective_location_id', to_table: 'inventory.location__t', to_column: 'id',
+      parent_table: 'inventory.location__t', parent_column: 'id', local_column: 'effective_location_id', foreign_key: 'Effective',
+      relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id', pair_id: 'inventory.item__t<->inventory.location__t',
+      label: 'Effective', is_default: true, source: 'overlay',
+    };
+    const permanent = { ...effective, from_column: 'permanent_location_id', local_column: 'permanent_location_id',
+      relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id', label: 'Permanent', is_default: false };
+    const temporary = { ...effective, from_column: 'temporary_location_id', local_column: 'temporary_location_id',
+      relationship_id: 'inventory.item__t.temporary_location_id->inventory.location__t.id', label: 'Temporary', is_default: false };
+    apiMocks.fetchTableDetail.mockImplementation(async (table: string) => ({
+      name: table, table: { columns: [] },
+      relationships: table === 'inventory.item__t' ? { parents: [effective, permanent, temporary], children: [] } : { parents: [], children: [effective, permanent, temporary] },
+    }));
+    let resolvePermanent!: (value: { sql: string; params: Record<string, string> }) => void;
+    apiMocks.buildQuery.mockImplementationOnce(() => new Promise((resolve) => { resolvePermanent = resolve; }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Relationships' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show relationship graph' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Graph permanent relationship' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Graph temporary relationship' }));
+    await act(async () => resolvePermanent({ sql: 'SELECT stale_permanent', params: {} }));
+    expect(screen.queryByDisplayValue('SELECT stale_permanent')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+  });
+
+  it('ignores stale default-path discovery after topology changes', async () => {
+    let resolveOld!: (value: { path: { joins: Array<Record<string, string>> } }) => void;
+    const oldJoin = {
+      from_table: 'inventory.item__t', from_column: 'effective_location_id', to_table: 'inventory.location__t', to_column: 'id',
+      relationship_id: 'old-item-location', pair_id: 'old-pair', join_type: 'JOIN',
+    };
+    const currentJoin = {
+      from_table: 'inventory.item__t', from_column: 'holdings_record_id', to_table: 'inventory.holdings_record__t', to_column: 'id',
+      relationship_id: 'current-item-holdings', pair_id: 'current-pair', join_type: 'JOIN',
+    };
+    apiMocks.findPath
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }))
+      .mockResolvedValueOnce({ path: { joins: [currentJoin] } });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle holdings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    await waitFor(() => expect(screen.getByTestId('builder-default-joins')).toHaveTextContent('current-item-holdings'));
+    await act(async () => resolveOld({ path: { joins: [oldJoin] } }));
+    expect(screen.getByTestId('builder-default-joins')).toHaveTextContent('current-item-holdings');
+    expect(screen.getByTestId('builder-default-joins')).not.toHaveTextContent('old-item-location');
+  });
+
+  it('snapshots save fields and blocks duplicate submit and cancel while pending', async () => {
+    let resolveSave!: (value: { id: number }) => void;
+    apiMocks.buildQuery.mockResolvedValue({ sql: 'SELECT id', params: {} });
+    apiMocks.saveQuery.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    await screen.findByDisplayValue('SELECT id');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = screen.getByRole('dialog', { name: 'Save Query' });
+    const name = within(dialog).getByPlaceholderText('Query name');
+    fireEvent.change(name, { target: { value: 'Snapshot title' } });
+    const submit = within(dialog).getByRole('button', { name: 'Save' });
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(name).toBeDisabled();
+    fireEvent.change(name, { target: { value: 'Mutated after submit' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('dialog', { name: 'Save Query' })).toBeInTheDocument();
+    expect(apiMocks.saveQuery).toHaveBeenCalledTimes(1);
+    expect(apiMocks.saveQuery).toHaveBeenCalledWith(expect.objectContaining({ name: 'Snapshot title' }));
+    await act(async () => resolveSave({ id: 1 }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Save Query' })).not.toBeInTheDocument());
+  });
+
+  it('preserves edited SQL when no alternate relationship requires substitution', async () => {
+    apiMocks.buildQuery.mockResolvedValue({ sql: 'SELECT id', params: {} });
+    apiMocks.saveQuery.mockResolvedValue({ id: 1 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    await screen.findByDisplayValue('SELECT id');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit SQL' }));
+    fireEvent.change(screen.getByLabelText('SQL Preview'), { target: { value: 'SELECT id /* edited */' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const dialog = screen.getByRole('dialog', { name: 'Save Query' });
+    fireEvent.change(within(dialog).getByPlaceholderText('Query name'), { target: { value: 'Edited' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMocks.saveQuery).toHaveBeenCalledWith(expect.objectContaining({
+      generatedSql: 'SELECT id /* edited */',
+      sqlEdited: true,
+    })));
+  });
+
+  it('discloses that edited alternate SQL is not persisted', async () => {
+    apiMocks.buildQuery
+      .mockResolvedValueOnce({ sql: 'SELECT permanent_location_id', params: {} })
+      .mockResolvedValueOnce({ sql: 'SELECT effective_location_id', params: {} });
+    apiMocks.saveQuery.mockResolvedValue({ id: 1 });
+    const effective = {
+      from_table: 'inventory.item__t', from_column: 'effective_location_id', to_table: 'inventory.location__t', to_column: 'id',
+      parent_table: 'inventory.location__t', parent_column: 'id', local_column: 'effective_location_id', foreign_key: 'Effective',
+      relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id', pair_id: 'inventory.item__t<->inventory.location__t', label: 'Effective', is_default: true, source: 'overlay',
+    };
+    const permanent = { ...effective, from_column: 'permanent_location_id', local_column: 'permanent_location_id',
+      relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id', label: 'Permanent', is_default: false };
+    apiMocks.fetchTableDetail.mockImplementation(async (table: string) => ({
+      name: table, table: { columns: [] }, relationships: table === 'inventory.item__t' ? { parents: [effective, permanent], children: [] } : { parents: [], children: [effective, permanent] },
+    }));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><MemoryRouter><Builder /></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole('button', { name: 'Relationships' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Show relationship graph' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Graph permanent relationship' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
+    await screen.findByDisplayValue('SELECT permanent_location_id');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit SQL' }));
+    fireEvent.change(screen.getByLabelText('SQL Preview'), { target: { value: 'SELECT edited_permanent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(screen.getByText('Session SQL edits are not persisted when an alternate table link is active.')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'Save Query' });
+    fireEvent.change(within(dialog).getByPlaceholderText('Query name'), { target: { value: 'Default only' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMocks.saveQuery).toHaveBeenCalledWith(expect.objectContaining({
+      generatedSql: 'SELECT effective_location_id', sqlEdited: false,
+    })));
+    expect(screen.getByDisplayValue('SELECT edited_permanent')).toBeInTheDocument();
   });
 
   it('submits generated params with edited SQL on initial run and confirmation retry', async () => {
@@ -268,6 +499,7 @@ describe('Builder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
     fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Use manual join' }));
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
 
@@ -329,7 +561,7 @@ describe('Builder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
     fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
     await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByRole('button', { name: 'Discover default joins' }));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Use permanent relationship' }));
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
 
@@ -337,7 +569,7 @@ describe('Builder', () => {
     expect(apiMocks.buildQuery).toHaveBeenCalledWith(expect.objectContaining({
       joins: [{
         relationship_id: 'inventory.item__t.permanent_location_id->inventory.location__t.id',
-        join_type: 'LEFT JOIN',
+        join_type: 'JOIN',
       }],
     }));
 
@@ -398,12 +630,14 @@ describe('Builder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
     fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
     await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
-    fireEvent.click(screen.getByRole('button', { name: 'Discover default joins' }));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: 'Use manual join' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use permanent relationship' }));
 
     fireEvent.click(screen.getByRole('button', { name: 'Toggle holdings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discover three-table joins' }));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenCalledWith(
+      expect.any(String), 'inventory.holdings_record__t', false, 6, 'ldlite',
+    ));
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
 
     await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledTimes(1));
@@ -415,7 +649,7 @@ describe('Builder', () => {
         },
         {
           relationship_id: 'inventory.location__t.holdings_id->inventory.holdings_record__t.id',
-          join_type: 'LEFT JOIN',
+          join_type: 'JOIN',
         },
       ],
     }));
@@ -423,7 +657,9 @@ describe('Builder', () => {
     apiMocks.buildQuery.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Toggle holdings' }));
     fireEvent.click(screen.getByRole('button', { name: /Joins/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Discover default joins' }));
+    await waitFor(() => expect(apiMocks.findPath).toHaveBeenLastCalledWith(
+      'inventory.item__t', 'inventory.location__t', false, 6, 'ldlite',
+    ));
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
     await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledTimes(1));
     expect(apiMocks.buildQuery).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -434,14 +670,13 @@ describe('Builder', () => {
     }));
 
     apiMocks.buildQuery.mockClear();
-    fireEvent.click(screen.getByRole('button', { name: /Joins/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Clear default joins' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
     await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledTimes(1));
     expect(apiMocks.buildQuery).toHaveBeenLastCalledWith(expect.objectContaining({ joins: 'auto' }));
   });
 
-  it('falls back to auto while a manual overridden topology is incomplete', async () => {
+  it('guards Build while a manual overridden topology is incomplete', async () => {
     const effective = {
       from_table: 'inventory.item__t',
       from_column: 'effective_location_id',
@@ -490,15 +725,23 @@ describe('Builder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
     fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
     await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Build SQL' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Use manual join' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use permanent relationship' }));
 
+    apiMocks.findPath.mockImplementation((_source: string, target: string) => {
+      if (target === 'inventory.holdings_record__t') return new Promise(() => {});
+      return Promise.resolve({ path: { joins: [{
+        from_table: 'inventory.item__t', from_column: 'effective_location_id',
+        to_table: 'inventory.location__t', to_column: 'id',
+        relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+        pair_id: 'inventory.item__t<->inventory.location__t', join_type: 'JOIN',
+      }] } });
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Toggle holdings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Begin incomplete discovery' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Build SQL' })).toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
-
-    await waitFor(() => expect(apiMocks.buildQuery).toHaveBeenCalledTimes(1));
-    expect(apiMocks.buildQuery).toHaveBeenLastCalledWith(expect.objectContaining({ joins: 'auto' }));
+    expect(apiMocks.buildQuery).not.toHaveBeenCalled();
   });
 
   it('invalidates generated and edited SQL when an unavailable relationship override is pruned', async () => {

@@ -1,13 +1,9 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalRelationship } from '../types';
 import JoinPanel from './JoinPanel';
 import type { RelationshipGroups } from './builderRelationships';
-
-const findPath = vi.hoisted(() => vi.fn());
-
-vi.mock('../api/client', () => ({ findPath }));
 
 const pairId = 'inventory.item__t<->inventory.location__t';
 const effectiveId = 'inventory.item__t.effective_location_id->inventory.location__t.id';
@@ -53,23 +49,6 @@ describe('JoinPanel relationship alternatives', () => {
   afterEach(cleanup);
 
   beforeEach(() => {
-    findPath.mockReset();
-    findPath.mockResolvedValue({
-      path: {
-        chain: ['inventory.item__t', 'inventory.location__t'],
-        hops: 1,
-        joins: [{
-          from_table: 'inventory.item__t',
-          from_column: 'effective_location_id',
-          to_table: 'inventory.location__t',
-          to_column: 'id',
-          foreign_key: 'item_effective_location_id_fk',
-          relationship_id: effectiveId,
-          pair_id: pairId,
-        }],
-        sql_fragment: '',
-      },
-    });
   });
 
   it('selects and resets a direct relationship while preserving join type', async () => {
@@ -95,7 +74,14 @@ describe('JoinPanel relationship alternatives', () => {
       onResetRelationships,
       onJoinModeChange: vi.fn(),
       onCustomJoinsChange,
-      onDefaultJoinsChange: vi.fn(),
+      defaultJoins: [{
+        from_table: 'inventory.item__t', from_column: 'effective_location_id',
+        to_table: 'inventory.location__t', to_column: 'id',
+        foreign_key: 'item_effective_location_id_fk', relationship_id: effectiveId,
+        pair_id: pairId, join_type: 'JOIN' as const,
+      }],
+      discoveryLoading: false,
+      discoveryError: null,
     };
 
     const { rerender } = render(
@@ -134,9 +120,9 @@ describe('JoinPanel relationship alternatives', () => {
     await user.click(screen.getByRole('button', { name: 'Reset to auto' }));
     expect(onResetRelationships).toHaveBeenCalledTimes(1);
     expect(commonProps.onJoinModeChange).toHaveBeenCalledWith('auto');
-    await waitFor(() => expect(onCustomJoinsChange).toHaveBeenCalledWith([
+    expect(onCustomJoinsChange).toHaveBeenCalledWith([
       expect.objectContaining({ relationship_id: effectiveId, join_type: 'JOIN' }),
-    ]));
+    ]);
 
     rerender(
       <JoinPanel

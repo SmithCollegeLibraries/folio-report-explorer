@@ -293,6 +293,7 @@ export async function saveQuery(query: {
   description?: string;
   queryDefinition: QueryDefinition | Record<string, unknown>;
   generatedSql?: string;
+  sqlEdited?: boolean;
   source?: 'builder' | 'nl';
   nlPrompt?: string;
   isPinned?: boolean;
