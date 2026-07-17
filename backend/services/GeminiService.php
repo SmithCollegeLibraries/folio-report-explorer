@@ -5479,17 +5479,14 @@ PROMPT;
         $explanation = '';
         $dataSource = 'folio';
 
-        if (preg_match(
-            '/^\s*(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|MERGE|CALL|DO|COPY|VACUUM|ANALYZE)\b/i',
-            $text,
-            $commandMatch
-        ) === 1) {
+        $destructiveCommand = self::findDestructiveSqlCommand($text);
+        if ($destructiveCommand !== null) {
             throw new ExploratorySqlValidationException(
                 'safety',
                 'non_select',
                 trim($text),
                 false,
-                'The AI response begins with a non-SELECT SQL command: ' . strtoupper($commandMatch[1]) . '.'
+                'The AI response contains a non-SELECT SQL command: ' . $destructiveCommand . '.'
             );
         }
 
@@ -5532,6 +5529,22 @@ PROMPT;
             'explanation' => $explanation,
             'dataSource' => $dataSource,
         ];
+    }
+
+    private static function findDestructiveSqlCommand(string $text): ?string
+    {
+        $commands = 'INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|MERGE|CALL|DO|COPY|VACUUM|ANALYZE';
+        if (preg_match('/(?:^|\R)\s*(' . $commands . ')\b/im', $text, $matches) === 1) {
+            return strtoupper($matches[1]);
+        }
+
+        if (preg_match('/\bSELECT\b/i', $text) !== 1
+            && preg_match('/\b(' . $commands . ')\b/i', $text, $matches) === 1
+        ) {
+            return strtoupper($matches[1]);
+        }
+
+        return null;
     }
 
     /**
@@ -6139,26 +6152,35 @@ PROMPT;
         }
         $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];
         $cteAliases = [];
+        $identifierPattern = '"(?:[^"]|"")*"|[\w$-]+';
 
         if (preg_match('/^\s*WITH\s+(?:RECURSIVE\s+)?/i', (string)$sql) === 1) {
             preg_match_all(
-                '/(?:\bWITH\b|,)\s*([a-z_][\w-]*)\s*(?:\([^)]*\))?\s+AS\s+(?:(?:NOT\s+)?MATERIALIZED\s+)?\(/i',
+                '/(?:\bWITH\s+(?:RECURSIVE\s+)?|,\s*)(' . $identifierPattern . ')\s*(?:\([^)]*\))?\s+AS\s+(?:(?:NOT\s+)?MATERIALIZED\s+)?\(/i',
                 (string)$sql,
                 $cteMatches
             );
             foreach ($cteMatches[1] ?? [] as $cteAlias) {
-                $cteAliases[strtolower((string)$cteAlias)] = true;
+                $cteAliases[self::normalizeSqlIdentifierReference((string)$cteAlias)] = true;
             }
         }
 
-        // Extract table references from FROM and JOIN clauses
-        // Handle both plain names and schema-qualified names (schema.table)
-        // Table names may contain hyphens (e.g. loc-campus__t), underscores, etc.
-        preg_match_all('/(?:FROM|JOIN)\s+([\w-]+(?:\.[\w-]+)?)/i', $sql, $matches);
+        preg_match_all(
+            '/(?:FROM|JOIN)\s+((?:' . $identifierPattern . ')(?:\s*\.\s*(?:' . $identifierPattern . '))?)/i',
+            (string)$sql,
+            $matches,
+            PREG_OFFSET_CAPTURE
+        );
         $unknownTables = [];
 
-        foreach ($matches[1] as $ref) {
-            $ref = strtolower($ref);
+        foreach ($matches[1] as $referenceMatch) {
+            $rawReference = (string)$referenceMatch[0];
+            $referenceEnd = (int)$referenceMatch[1] + strlen($rawReference);
+            if (preg_match('/^\s*\(/', substr((string)$sql, $referenceEnd)) === 1) {
+                continue;
+            }
+
+            $ref = self::normalizeSqlIdentifierReference($rawReference);
             if ($ref === 'select' || $ref === 'lateral' || $ref === 'unnest') {
                 continue;
             }
@@ -6196,6 +6218,22 @@ PROMPT;
                 'The SQL candidate references unknown physical table(s): ' . implode(', ', $unknownTables) . '.'
             );
         }
+    }
+
+    private static function normalizeSqlIdentifierReference(string $reference): string
+    {
+        $parts = preg_split('/\s*\.\s*/', trim($reference));
+        $normalized = [];
+        foreach ($parts as $part) {
+            $part = trim((string)$part);
+            if (strlen($part) >= 2 && $part[0] === '"' && substr($part, -1) === '"') {
+                $normalized[] = str_replace('""', '"', substr($part, 1, -1));
+                continue;
+            }
+            $normalized[] = strtolower($part);
+        }
+
+        return implode('.', $normalized);
     }
 
     /**

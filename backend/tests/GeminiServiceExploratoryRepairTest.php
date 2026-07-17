@@ -232,6 +232,32 @@ foreach (['MATERIALIZED', 'NOT MATERIALIZED'] as $materialization) {
 }
 
 TestTransport::$responses = [
+    geminiText('SELECT ii.id FROM "inventory"."item__t" ii'),
+];
+$quotedPhysicalTable = GeminiService::generateSqlWithShadow('Show quoted item identifiers.', null, null, true);
+repairAssertSame(0, $quotedPhysicalTable['repairAttempts'] ?? null, 'An exact quoted physical table should validate.');
+
+TestTransport::$responses = [
+    geminiText('WITH "Recent Items"("id") AS (SELECT ii.id FROM "inventory"."item__t" ii) SELECT r.id FROM "Recent Items" r'),
+];
+$quotedCte = GeminiService::generateSqlWithShadow('Show item identifiers from a quoted CTE.', null, null, true);
+repairAssertSame(0, $quotedCte['repairAttempts'] ?? null, 'A quoted CTE alias should not be treated as a physical table.');
+
+TestTransport::$responses = [
+    geminiText('SELECT mt.id FROM "inventory"."missing_table__t" mt'),
+    geminiText('SELECT ii.id FROM "inventory"."item__t" ii'),
+];
+$unknownQuotedTable = GeminiService::generateSqlWithShadow('Show identifiers from quoted inventory tables.', null, null, true);
+repairAssertSame(1, $unknownQuotedTable['repairAttempts'] ?? null, 'An unknown quoted physical table must be rejected and repaired.');
+repairAssertSame('SELECT ii.id FROM "inventory"."item__t" ii', $unknownQuotedTable['sql'] ?? null, 'Quoted-table repair should use an exact physical table.');
+
+TestTransport::$responses = [
+    geminiText("SELECT kv.key FROM jsonb_each('{}'::jsonb) kv"),
+];
+$tableFunction = GeminiService::generateSqlWithShadow('Expand a JSON object into key/value rows.', null, null, true);
+repairAssertSame(0, $tableFunction['repairAttempts'] ?? null, 'A set-returning table function should not be validated as a physical table.');
+
+TestTransport::$responses = [
     geminiText('SELECT items.id FROM items'),
     geminiText('SELECT ii.id FROM inventory.item__t ii'),
 ];
@@ -239,15 +265,23 @@ $inexactTable = GeminiService::generateSqlWithShadow('Show item identifiers.', n
 repairAssertSame(1, $inexactTable['repairAttempts'] ?? null, 'A fuzzy table suffix must not be accepted as a physical table name.');
 repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $inexactTable['sql'] ?? null, 'An inexact physical table should be replaced by an exact schema name.');
 
-TestTransport::$responses = ['DELETE FROM inventory.item__t'];
-try {
-    GeminiService::generateSqlWithShadow('Remove obsolete items.', null, null, true);
-    fwrite(STDERR, "An unfenced destructive response must be a hard stop.\n");
-    exit(1);
-} catch (ExploratorySqlValidationException $exception) {
-    repairAssertSame('non_select', $exception->getSafeCategory(), 'An unfenced destructive response should retain a non-SELECT safety category.');
-    repairAssertSame(false, $exception->isRepairable(), 'An unfenced destructive response must not be repairable.');
-    repairAssertSame(0, count(TestTransport::$responses), 'An unfenced destructive response should make no repair request.');
+foreach ([
+    'DELETE FROM inventory.item__t',
+    "Here is the requested statement:\nDELETE FROM inventory.item__t",
+    "-- generated statement\nDELETE FROM inventory.item__t",
+    "/* generated statement */\nDELETE FROM inventory.item__t",
+] as $destructiveResponse) {
+    TestTransport::$responses = [$destructiveResponse];
+    $requestCount = count(TestTransport::$requests);
+    try {
+        GeminiService::generateSqlWithShadow('Remove obsolete items.', null, null, true);
+        fwrite(STDERR, "An unfenced destructive response must be a hard stop.\n");
+        exit(1);
+    } catch (ExploratorySqlValidationException $exception) {
+        repairAssertSame('non_select', $exception->getSafeCategory(), 'An unfenced destructive response should retain a non-SELECT safety category.');
+        repairAssertSame(false, $exception->isRepairable(), 'An unfenced destructive response must not be repairable.');
+        repairAssertSame($requestCount + 1, count(TestTransport::$requests), 'An unfenced destructive response should make no repair request.');
+    }
 }
 
 TestTransport::$responses = [
