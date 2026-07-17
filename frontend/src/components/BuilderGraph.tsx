@@ -197,13 +197,28 @@ function BuilderGraphCanvas({
   const [layoutPending, setLayoutPending] = useState(false);
   const [layoutError, setLayoutError] = useState<string | null>(null);
   const layoutSequence = useRef(0);
+  const layoutFrame = useRef<number | null>(null);
+  const mounted = useRef(true);
   const { fitView } = useReactFlow();
+
+  const cancelScheduledFit = useCallback(() => {
+    if (layoutFrame.current === null) return;
+    cancelAnimationFrame(layoutFrame.current);
+    layoutFrame.current = null;
+  }, []);
+
+  useEffect(() => () => {
+    mounted.current = false;
+    layoutSequence.current += 1;
+    cancelScheduledFit();
+  }, [cancelScheduledFit]);
 
   const runAutomaticLayout = useCallback(async (
     nextNodes: Node[],
     nextEdges: Edge[],
     resetMode: boolean,
   ) => {
+    cancelScheduledFit();
     const sequence = ++layoutSequence.current;
     setLayoutPending(true);
     setLayoutError(null);
@@ -213,25 +228,44 @@ function BuilderGraphCanvas({
         edges: nextEdges,
         direction: 'RIGHT',
       });
-      if (sequence !== layoutSequence.current) return;
-      setNodes(result.nodes);
+      if (!mounted.current || sequence !== layoutSequence.current) return;
+      setNodes((current) => {
+        const currentById = new Map(current.map((node) => [node.id, node]));
+        const promotedPositions = new Map(
+          nextNodes
+            .filter((node) => (
+              node.data.isSelected === true
+              && currentById.get(node.id)?.data.isSelected === false
+            ))
+            .map((node) => [node.id, currentById.get(node.id)!.position]),
+        );
+        return result.nodes.map((node) => ({
+          ...node,
+          position: promotedPositions.get(node.id) ?? node.position,
+        }));
+      });
       setEdges(result.edges);
       if (resetMode) {
         layoutModeRef.current = 'automatic';
         setLayoutMode('automatic');
       }
-      requestAnimationFrame(() => {
-        void fitView({ padding: 0.4, maxZoom: 1.2, duration: 250 });
+      let frame = 0;
+      frame = requestAnimationFrame(() => {
+        if (layoutFrame.current === frame) layoutFrame.current = null;
+        if (!mounted.current || sequence !== layoutSequence.current) return;
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+        void fitView({ padding: 0.4, maxZoom: 1.2, duration: reduceMotion ? 0 : 250 });
       });
+      layoutFrame.current = frame;
     } catch {
-      if (sequence !== layoutSequence.current) return;
+      if (!mounted.current || sequence !== layoutSequence.current) return;
       setLayoutError('Could not arrange this graph');
       setNodes((current) => reconcileUserArrangedNodes(nextNodes, current, nextEdges));
       setEdges(nextEdges);
     } finally {
-      if (sequence === layoutSequence.current) setLayoutPending(false);
+      if (mounted.current && sequence === layoutSequence.current) setLayoutPending(false);
     }
-  }, [fitView, setEdges, setNodes]);
+  }, [cancelScheduledFit, fitView, setEdges, setNodes]);
 
   useEffect(() => {
     if (layoutModeRef.current === 'automatic') {
@@ -239,17 +273,22 @@ function BuilderGraphCanvas({
       return;
     }
     layoutSequence.current += 1;
+    cancelScheduledFit();
+    setLayoutPending(false);
     setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
     setEdges(graphEdges);
-  }, [graphEdges, graphNodes, runAutomaticLayout, setEdges, setNodes]);
+  }, [cancelScheduledFit, graphEdges, graphNodes, runAutomaticLayout, setEdges, setNodes]);
 
   const onNodeDragStop = useCallback(() => {
     layoutSequence.current += 1;
+    cancelScheduledFit();
     layoutModeRef.current = 'user-arranged';
     setLayoutMode('user-arranged');
     setLayoutPending(false);
     setLayoutError(null);
-  }, []);
+    setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
+    setEdges(graphEdges);
+  }, [cancelScheduledFit, graphEdges, graphNodes, setEdges, setNodes]);
 
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
