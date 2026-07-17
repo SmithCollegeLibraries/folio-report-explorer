@@ -20,7 +20,9 @@ import JoinPanel from '../components/JoinPanel';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import type {
-  QueryDefinition,
+  CanonicalQueryDefinition,
+  CanonicalJoinEdge,
+  RelationshipSelection,
   SelectedColumn,
   FilterCondition,
   SortSpec,
@@ -47,6 +49,17 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
 const LIMIT_PRESETS = [10, 100, 500, 1000];
 const schemaIdentity = 'ldlite' as const;
 
+function isCanonicalJoinEdge(edge: JoinEdge): edge is CanonicalJoinEdge {
+  return typeof edge.relationship_id === 'string' && typeof edge.pair_id === 'string';
+}
+
+function relationshipSelections(joins: CanonicalJoinEdge[]): RelationshipSelection[] {
+  return joins.map(({ relationship_id, join_type }) => ({
+    relationship_id,
+    ...(join_type ? { join_type } : {}),
+  }));
+}
+
 export default function Builder() {
   // --- state ---
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
@@ -64,7 +77,7 @@ export default function Builder() {
   const [saveDesc, setSaveDesc] = useState('');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [joinMode, setJoinMode] = useState<'auto' | 'manual'>('auto');
-  const [customJoins, setCustomJoins] = useState<JoinEdge[]>([]);
+  const [customJoins, setCustomJoins] = useState<CanonicalJoinEdge[]>([]);
   const [leftPanel, setLeftPanel] = useState<'browse' | 'relationships'>('browse');
   const [graphOpen, setGraphOpen] = useState(false);
 
@@ -109,12 +122,14 @@ export default function Builder() {
           .map((c) => ({ table: c.table, column: c.column }));
       }
 
-      const def: QueryDefinition = {
+      const def: CanonicalQueryDefinition = {
         schemaIdentity,
         tables: selectedTables,
         columns,
         filters,
-        joins: joinMode === 'manual' && customJoins.length > 0 ? customJoins : 'auto',
+        joins: joinMode === 'manual' && customJoins.length > 0
+          ? relationshipSelections(customJoins)
+          : 'auto',
         orderBy,
         limit,
         distinct,
@@ -158,13 +173,27 @@ export default function Builder() {
   });
 
   const saveMut = useMutation({
-    mutationFn: () =>
-      saveQuery({
+    mutationFn: () => {
+      const queryDefinition: CanonicalQueryDefinition = {
+        schemaIdentity,
+        tables: selectedTables,
+        columns,
+        filters,
+        joins: joinMode === 'manual' && customJoins.length > 0
+          ? relationshipSelections(customJoins)
+          : 'auto',
+        orderBy,
+        limit,
+        distinct,
+      };
+
+      return saveQuery({
         name: saveName,
         description: saveDesc,
-        queryDefinition: { schemaIdentity, tables: selectedTables, columns, filters, joins: joinMode === 'manual' && customJoins.length > 0 ? customJoins : 'auto', orderBy, limit, distinct },
+        queryDefinition,
         generatedSql: effectiveSql,
-      }),
+      });
+    },
     onSuccess: () => {
       setSaveOpen(false);
       setSaveName('');
@@ -467,12 +496,16 @@ export default function Builder() {
               )}
               {activeTab === 'joins' && (
                 <JoinPanel
+                  schemaIdentity={schemaIdentity}
                   selectedTables={selectedTables}
                   tableDetails={tableDetails}
                   joinMode={joinMode}
                   customJoins={customJoins}
                   onJoinModeChange={(m) => { setJoinMode(m); setBuilt(null); }}
-                  onCustomJoinsChange={(j) => { setCustomJoins(j); setBuilt(null); }}
+                  onCustomJoinsChange={(joins) => {
+                    setCustomJoins(joins.filter(isCanonicalJoinEdge));
+                    setBuilt(null);
+                  }}
                 />
               )}
               {activeTab === 'sql' && (

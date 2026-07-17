@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { findPath } from '../api/client';
-import type { JoinEdge, JoinType, TableDetail } from '../types';
+import type { JoinEdge, JoinType, SchemaIdentity, TableDetail } from '../types';
 import {
   Link2,
   ArrowRight,
@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 
 interface Props {
+  schemaIdentity?: SchemaIdentity;
   selectedTables: string[];
   tableDetails: Record<string, TableDetail>;
   joinMode: 'auto' | 'manual';
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export default function JoinPanel({
+  schemaIdentity,
   selectedTables,
   joinMode,
   customJoins,
@@ -53,7 +55,9 @@ export default function JoinPanel({
         let bestPath: JoinEdge[] | null = null;
         for (const source of joined) {
           try {
-            const resp = await findPath(source, target);
+            const resp = schemaIdentity === 'ldlite'
+              ? await findPath(source, target, false, 6, schemaIdentity)
+              : await findPath(source, target);
             if (resp.path && resp.path.joins.length > 0) {
               if (!bestPath || resp.path.joins.length < bestPath.length) {
                 bestPath = resp.path.joins;
@@ -106,7 +110,7 @@ export default function JoinPanel({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTables.join(',')]);
+  }, [selectedTables.join(','), schemaIdentity]);
 
   // The joins to display — in auto mode show discovered, in manual show custom
   const displayJoins = joinMode === 'auto' ? discoveredJoins : customJoins;

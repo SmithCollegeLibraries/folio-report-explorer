@@ -42,6 +42,8 @@ import type {
   DashboardWidgetTemplate,
   FollowUpContext,
   SchemaIdentity,
+  CanonicalTableDetail,
+  CanonicalPathResponse,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -146,23 +148,45 @@ export async function fetchSchema(tables?: string[], identity?: SchemaIdentity):
   return data;
 }
 
+export function fetchTableDetail(
+  table: string,
+  identity: 'ldlite',
+): Promise<CanonicalTableDetail>;
+export function fetchTableDetail(
+  table: string,
+  identity?: undefined,
+): Promise<TableDetail>;
 export async function fetchTableDetail(
   table: string,
   identity?: SchemaIdentity,
-): Promise<TableDetail> {
+): Promise<TableDetail | CanonicalTableDetail> {
   const { data } = identity
     ? await api.get(`/schema/${table}`, { params: { identity } })
     : await api.get(`/schema/${table}`);
   return data;
 }
 
+export function findPath(
+  from: string,
+  to: string,
+  all: boolean | undefined,
+  maxDepth: number | undefined,
+  identity: 'ldlite',
+): Promise<CanonicalPathResponse>;
+export function findPath(
+  from: string,
+  to: string,
+  all?: boolean,
+  maxDepth?: number,
+  identity?: undefined,
+): Promise<PathResponse>;
 export async function findPath(
   from: string,
   to: string,
   all = false,
   maxDepth = 6,
   identity?: SchemaIdentity,
-): Promise<PathResponse> {
+): Promise<PathResponse | CanonicalPathResponse> {
   const { data } = await api.get('/path', {
     params: {
       from,

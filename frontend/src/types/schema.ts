@@ -102,6 +102,14 @@ export interface TableDetail {
   };
 }
 
+/** Table detail guaranteed to come from the canonical Builder catalog. */
+export interface CanonicalTableDetail extends Omit<TableDetail, 'relationships'> {
+  relationships: {
+    parents: CanonicalRelationship[];
+    children: CanonicalRelationship[];
+  };
+}
+
 /** Index definition */
 export interface IndexDef {
   name: string;
@@ -136,7 +144,8 @@ export interface CanonicalJoinEdge extends JoinEdge {
   pair_id: string;
 }
 
-export type BuilderJoin = JoinEdge | RelationshipSelection;
+/** The only join shape accepted by a canonical Builder request. */
+export type BuilderJoin = RelationshipSelection;
 
 /** Formatted join path */
 export interface JoinPath {
@@ -153,6 +162,17 @@ export interface PathResponse {
   path?: JoinPath;
   total_paths?: number;
   paths?: JoinPath[];
+}
+
+/** Formatted path whose edges are backed by trusted catalog identifiers. */
+export interface CanonicalJoinPath extends Omit<JoinPath, 'joins'> {
+  joins: CanonicalJoinEdge[];
+}
+
+/** Path response guaranteed by `identity=ldlite`. */
+export interface CanonicalPathResponse extends Omit<PathResponse, 'path' | 'paths'> {
+  path?: CanonicalJoinPath;
+  paths?: CanonicalJoinPath[];
 }
 
 // ─── Query Builder types ──────────────────────────────────────────
@@ -202,19 +222,31 @@ export interface HavingCondition {
   value: string;
 }
 
-/** Full query definition (what gets sent to /api/build) */
-export interface QueryDefinition {
+interface QueryDefinitionBase {
   tables: string[];
   columns: SelectedColumn[];
   filters: FilterCondition[];
-  joins: 'auto' | BuilderJoin[];
   orderBy: SortSpec[];
   groupBy?: GroupBySpec[];
   having?: HavingCondition[];
   distinct?: boolean;
   limit: number;
-  schemaIdentity?: SchemaIdentity;
 }
+
+/** Existing query contract retained for non-Builder and saved legacy callers. */
+export interface LegacyQueryDefinition extends QueryDefinitionBase {
+  schemaIdentity?: never;
+  joins: 'auto' | JoinEdge[];
+}
+
+/** Canonical Builder contract: joins can only reference trusted catalog IDs. */
+export interface CanonicalQueryDefinition extends QueryDefinitionBase {
+  schemaIdentity: 'ldlite';
+  joins: 'auto' | RelationshipSelection[];
+}
+
+/** Full query definition (what gets sent to /api/build). */
+export type QueryDefinition = LegacyQueryDefinition | CanonicalQueryDefinition;
 
 /** SQL build response */
 export interface BuildResponse {
