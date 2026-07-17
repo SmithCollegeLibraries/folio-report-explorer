@@ -53,7 +53,12 @@ vi.mock('@xyflow/react', async () => {
     Background: () => null,
     Controls: () => null,
     Panel: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    BaseEdge: ({ id }: { id: string }) => <span data-testid={`edge-path-${id}`} />,
+    BaseEdge: ({ id, interactionWidth }: { id: string; interactionWidth?: number }) => (
+      <span
+        data-testid={`edge-path-${id}`}
+        data-interaction-width={interactionWidth}
+      />
+    ),
     EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <>{children}</>,
     getSmoothStepPath: () => ['M 0 0 L 100 100', 50, 50],
     MarkerType: { ArrowClosed: 'arrowclosed' },
@@ -476,6 +481,10 @@ describe('BuilderGraph layout behavior', () => {
     const edges = flowHarness.latestProps?.edges as Edge[];
     expect(edges.filter((edge) => edge.type === 'builderRelationship')).toHaveLength(2);
     expect(edges.find((edge) => edge.id === holdingsPairId)?.interactionWidth).toBe(24);
+    expect(screen.getByTestId(`edge-path-${holdingsPairId}`)).toHaveAttribute(
+      'data-interaction-width',
+      '24',
+    );
 
     act(() => {
       const onEdgeClick = flowHarness.latestProps?.onEdgeClick as (event: unknown, edge: Edge) => void;

@@ -29,6 +29,7 @@ export default function BuilderRelationshipEdge({
   targetPosition,
   markerEnd,
   style,
+  interactionWidth,
   data,
 }: EdgeProps<BuilderRelationshipFlowEdge>) {
   const [edgePath, labelX, labelY] = getSmoothStepPath({
@@ -40,11 +41,27 @@ export default function BuilderRelationshipEdge({
     targetPosition,
   });
 
-  if (!data) return <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />;
+  if (!data) {
+    return (
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={style}
+        interactionWidth={interactionWidth}
+      />
+    );
+  }
 
   return (
     <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        markerEnd={markerEnd}
+        style={style}
+        interactionWidth={interactionWidth}
+      />
       <EdgeLabelRenderer>
         <div
           className="absolute nodrag nopan"
