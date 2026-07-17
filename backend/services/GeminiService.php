@@ -6150,6 +6150,13 @@ PROMPT;
         foreach (array_values($metadbMap) as $metadbName) {
             $metadbValues[strtolower((string)$metadbName)] = true;
         }
+        $mappingCachePath = Yii::getAlias('@app/data/table_mapping_cache.json');
+        $mappingCache = is_string($mappingCachePath) && is_file($mappingCachePath)
+            ? json_decode((string)file_get_contents($mappingCachePath), true)
+            : null;
+        foreach (array_values(is_array($mappingCache['mapping'] ?? null) ? $mappingCache['mapping'] : []) as $metadbName) {
+            $metadbValues[strtolower((string)$metadbName)] = true;
+        }
         $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];
         $cteAliases = [];
         $identifierPattern = '"(?:[^"]|"")*"|[\w$-]+';
