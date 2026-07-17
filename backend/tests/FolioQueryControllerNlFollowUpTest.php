@@ -162,6 +162,7 @@ namespace {
     assertContainsText('purchase_date_basis', $expandedPrompt, 'Expanded follow-up prompt should preserve assumption keys.');
     assertContainsText('payment_date', $expandedPrompt, 'Expanded follow-up prompt should preserve assumption values.');
     assertContainsText('The follow-up request overrides any previous documented interpretation that addresses the same concept.', $expandedPrompt, 'Expanded follow-up prompt should make corrections override keyed interpretations.');
+    assertContainsText('SELECT inst.title FROM inventory.instance__t inst', $expandedPrompt, 'The generation prompt should remain expanded with previous SQL.');
 
     $completed = new \app\models\QueryJob();
     $completed->id = 'done-job';

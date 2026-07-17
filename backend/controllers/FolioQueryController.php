@@ -358,6 +358,11 @@ class FolioQueryController extends Controller
         ?callable $preflight = null,
         ?callable $repair = null
     ): array {
+        if (isset($result['sql']) || array_key_exists('repairAttempts', $result)) {
+            $result['repairAttempts'] = $this->clampExploratoryRepairAttempts(
+                $result['repairAttempts'] ?? 0
+            );
+        }
         $preflight = $preflight ?: function (string $sql, string $dataSource): array {
             return $this->estimateQueryComplexity($sql, $dataSource) ?? [];
         };
@@ -432,9 +437,12 @@ class FolioQueryController extends Controller
             if (!array_key_exists('sql', $repairResult)) {
                 unset($result['sql']);
             }
-            $result['repairAttempts'] = max(
-                $repairAttempts + 1,
-                (int)($result['repairAttempts'] ?? 0)
+            $result['repairAttempts'] = min(
+                2,
+                max(
+                    $repairAttempts + 1,
+                    $this->clampExploratoryRepairAttempts($repairResult['repairAttempts'] ?? 0)
+                )
             );
             $result['mode'] = 'exploratory';
             $result['route'] = 'exploratory';
@@ -451,6 +459,11 @@ class FolioQueryController extends Controller
         }
 
         return $result;
+    }
+
+    private function clampExploratoryRepairAttempts($repairAttempts): int
+    {
+        return max(0, min(2, (int)$repairAttempts));
     }
 
     private function isSelectOnlyNlSql(string $sql): bool
@@ -480,7 +493,7 @@ class FolioQueryController extends Controller
         $campus,
         string $safeCategory
     ): array {
-        $repairAttempts = (int)($result['repairAttempts'] ?? 0);
+        $repairAttempts = $this->clampExploratoryRepairAttempts($result['repairAttempts'] ?? 0);
         $response = [
             'needsClarification' => false,
             'needsExploratoryApproval' => false,
@@ -491,7 +504,7 @@ class FolioQueryController extends Controller
             'routeReason' => 'sql_repair_exhausted',
             'validationSummary' => [
                 'status' => 'exhausted',
-                'failureCategory' => trim($safeCategory) !== '' ? trim($safeCategory) : 'unknown_error',
+                'failureCategory' => $this->sanitizeExploratoryFailureCategory($safeCategory),
                 'repairAttempts' => $repairAttempts,
             ],
             'recoveryContext' => [
@@ -507,6 +520,33 @@ class FolioQueryController extends Controller
         }
 
         return $response;
+    }
+
+    private function sanitizeExploratoryFailureCategory(string $category): string
+    {
+        $category = strtolower(trim($category));
+        $allowedCategories = [
+            'ambiguous_column',
+            'database_validation',
+            'function_error',
+            'grouping_error',
+            'invalid_operator',
+            'missing_column',
+            'missing_table',
+            'missing_type',
+            'non_select',
+            'operator_error',
+            'query_too_complex',
+            'syntax_error',
+            'unknown_column',
+            'unknown_error',
+            'unknown_table',
+            'validation_failure',
+        ];
+
+        return in_array($category, $allowedCategories, true)
+            ? $category
+            : 'database_validation';
     }
 
     private function buildUnsafeGeneratedSqlResponse(array $result, string $prompt, $campus): array
@@ -1431,7 +1471,7 @@ class FolioQueryController extends Controller
             }
             $result = $this->validateAndRepairNlResult(
                 $result,
-                $effectivePrompt,
+                $prompt,
                 $campus ?: null
             );
 

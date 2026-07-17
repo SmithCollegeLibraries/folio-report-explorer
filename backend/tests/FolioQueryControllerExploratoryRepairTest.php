@@ -196,5 +196,71 @@ namespace {
     repairAssertSame(false, array_key_exists('sql', $unsafe), 'Unsafe recovery must not include SQL.');
     repairAssertSame(true, strpos($unsafe['message'] ?? '', 'no unsafe SQL ran') !== false, 'Unsafe recovery should state that no unsafe SQL ran.');
 
+    $unsafeCategory = $validateAndRepair->invoke(
+        $controller,
+        ['sql' => 'SELECT broken FROM inventory.instance__t', 'repairAttempts' => 0],
+        'Show titles',
+        'Smith College',
+        function (): array { return ['error' => 'syntax error at or near "broken"']; },
+        function (): array {
+            return [
+                'repairAttempts' => 1,
+                'validationSummary' => [
+                    'failureCategory' => 'SQLSTATE[XX999] password=secret raw database details',
+                ],
+            ];
+        }
+    );
+    repairAssertSame(
+        'database_validation',
+        $unsafeCategory['validationSummary']['failureCategory'] ?? null,
+        'Untrusted repair failure categories should map to a fixed browser-safe category.'
+    );
+
+    $negativeRepairCalls = 0;
+    $negativeAttempts = $validateAndRepair->invoke(
+        $controller,
+        ['sql' => 'SELECT broken FROM inventory.instance__t', 'repairAttempts' => -50],
+        'Show titles',
+        'Smith College',
+        function (): array { return ['error' => 'syntax error at or near "broken"']; },
+        function () use (&$negativeRepairCalls): array {
+            $negativeRepairCalls++;
+            if ($negativeRepairCalls > 2) {
+                return ['repairAttempts' => -50];
+            }
+            return ['sql' => 'SELECT still_broken FROM inventory.instance__t', 'repairAttempts' => -50];
+        }
+    );
+    repairAssertSame(2, $negativeRepairCalls, 'Negative incoming repair counts must still allow at most two repairs.');
+    repairAssertSame(2, $negativeAttempts['validationSummary']['repairAttempts'] ?? null, 'Negative incoming repair counts should exhaust at two repairs.');
+
+    $excessiveRepairCalls = 0;
+    $excessiveAttempts = $validateAndRepair->invoke(
+        $controller,
+        ['sql' => 'SELECT broken FROM inventory.instance__t', 'repairAttempts' => 500],
+        'Show titles',
+        'Smith College',
+        function (): array { return ['error' => 'syntax error at or near "broken"']; },
+        function () use (&$excessiveRepairCalls): array {
+            $excessiveRepairCalls++;
+            return [];
+        }
+    );
+    repairAssertSame(0, $excessiveRepairCalls, 'Excessive incoming repair counts must not permit another repair.');
+    repairAssertSame(2, $excessiveAttempts['validationSummary']['repairAttempts'] ?? null, 'Excessive incoming repair counts should be clamped to two.');
+
+    $controllerSource = file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');
+    repairAssertSame(
+        1,
+        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$prompt,\s*\$campus/s', $controllerSource),
+        'Ask should pass the raw user prompt to repair/recovery instead of the expanded follow-up prompt.'
+    );
+    repairAssertSame(
+        0,
+        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$effectivePrompt,/s', $controllerSource),
+        'Ask must not expose the expanded follow-up prompt or previous SQL through repair recovery context.'
+    );
+
     fwrite(STDOUT, "FolioQueryController exploratory repair test passed\n");
 }
