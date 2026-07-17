@@ -207,10 +207,13 @@ function BuilderGraphCanvas({
     layoutFrame.current = null;
   }, []);
 
-  useEffect(() => () => {
-    mounted.current = false;
-    layoutSequence.current += 1;
-    cancelScheduledFit();
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      layoutSequence.current += 1;
+      cancelScheduledFit();
+    };
   }, [cancelScheduledFit]);
 
   const runAutomaticLayout = useCallback(async (

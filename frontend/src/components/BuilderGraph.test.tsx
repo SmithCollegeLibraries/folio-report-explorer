@@ -173,6 +173,15 @@ afterEach(() => {
 });
 
 describe('BuilderGraph layout behavior', () => {
+  it('recovers automatic layout state after Strict Mode effect replay', async () => {
+    render(<React.StrictMode>{graphElement(['items'])}</React.StrictMode>);
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(currentNode('items')?.position).toEqual({ x: 0, y: 0 }));
+
+    expect(screen.getByRole('button', { name: 'Re-layout relationship graph' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Re-layout relationship graph' })).toHaveTextContent('Re-layout');
+  });
+
   it('runs automatic layout for the initial graph and fits the viewport', async () => {
     renderGraph(['items']);
     await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
