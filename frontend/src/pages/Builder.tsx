@@ -45,6 +45,7 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 const LIMIT_PRESETS = [10, 100, 500, 1000];
+const schemaIdentity = 'ldlite' as const;
 
 export default function Builder() {
   // --- state ---
@@ -72,8 +73,8 @@ export default function Builder() {
 
   // --- data fetching ---
   const { data: schemaData, isLoading: schemaLoading } = useQuery({
-    queryKey: ['schema'],
-    queryFn: () => fetchSchema(),
+    queryKey: ['schema', schemaIdentity],
+    queryFn: () => fetchSchema(undefined, schemaIdentity),
   });
 
   // Fetch table details
@@ -84,7 +85,7 @@ export default function Builder() {
     for (const t of selectedTables) {
       if (!tableDetails[t] && !fetchedRef.current.has(t)) {
         fetchedRef.current.add(t);
-        fetchTableDetail(t).then((detail) => {
+        fetchTableDetail(t, schemaIdentity).then((detail) => {
           setTableDetails((prev) => ({ ...prev, [t]: detail }));
         });
       }
@@ -109,6 +110,7 @@ export default function Builder() {
       }
 
       const def: QueryDefinition = {
+        schemaIdentity,
         tables: selectedTables,
         columns,
         filters,
@@ -160,7 +162,7 @@ export default function Builder() {
       saveQuery({
         name: saveName,
         description: saveDesc,
-        queryDefinition: { tables: selectedTables, columns, filters, joins: joinMode === 'manual' && customJoins.length > 0 ? customJoins : 'auto', orderBy, limit, distinct },
+        queryDefinition: { schemaIdentity, tables: selectedTables, columns, filters, joins: joinMode === 'manual' && customJoins.length > 0 ? customJoins : 'auto', orderBy, limit, distinct },
         generatedSql: effectiveSql,
       }),
     onSuccess: () => {

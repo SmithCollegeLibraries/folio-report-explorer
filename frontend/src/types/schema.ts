@@ -64,6 +64,23 @@ export interface Relationship {
   child_column?: string;
   local_column: string;
   foreign_key: string;
+  relationship_id?: string;
+  pair_id?: string;
+  label?: string;
+  is_default?: boolean;
+  source?: 'metadb' | 'overlay';
+}
+
+/** Schema identity explicitly requested by Query Builder callers. */
+export type SchemaIdentity = 'ldlite';
+
+/** Relationship metadata guaranteed by the canonical Builder schema view. */
+export interface CanonicalRelationship extends Relationship {
+  relationship_id: string;
+  pair_id: string;
+  label: string;
+  is_default: boolean;
+  source: 'metadb' | 'overlay';
 }
 
 /** Full table detail */
@@ -103,7 +120,23 @@ export interface JoinEdge {
   to_column: string;
   foreign_key: string;
   join_type?: JoinType;
+  relationship_id?: string;
+  pair_id?: string;
 }
+
+/** Trusted relationship selection sent by the Builder instead of a raw predicate. */
+export interface RelationshipSelection {
+  relationship_id: string;
+  join_type?: JoinType;
+}
+
+/** Join path edge guaranteed to use the canonical relationship catalog. */
+export interface CanonicalJoinEdge extends JoinEdge {
+  relationship_id: string;
+  pair_id: string;
+}
+
+export type BuilderJoin = JoinEdge | RelationshipSelection;
 
 /** Formatted join path */
 export interface JoinPath {
@@ -174,12 +207,13 @@ export interface QueryDefinition {
   tables: string[];
   columns: SelectedColumn[];
   filters: FilterCondition[];
-  joins: 'auto' | JoinEdge[];
+  joins: 'auto' | BuilderJoin[];
   orderBy: SortSpec[];
   groupBy?: GroupBySpec[];
   having?: HavingCondition[];
   distinct?: boolean;
   limit: number;
+  schemaIdentity?: SchemaIdentity;
 }
 
 /** SQL build response */

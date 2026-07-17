@@ -41,6 +41,7 @@ import type {
   ExpenseMonitorRefreshResponse,
   DashboardWidgetTemplate,
   FollowUpContext,
+  SchemaIdentity,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -134,17 +135,24 @@ api.interceptors.response.use(
 
 // ─── Schema ───────────────────────────────────────────────────────
 
-export async function fetchSchema(tables?: string[]): Promise<{
+export async function fetchSchema(tables?: string[], identity?: SchemaIdentity): Promise<{
   metadata: SchemaMetadata;
   tables: Record<string, TableSummary>;
 }> {
-  const params = tables ? { tables: tables.join(',') } : {};
+  const params: { tables?: string; identity?: SchemaIdentity } = {};
+  if (tables) params.tables = tables.join(',');
+  if (identity) params.identity = identity;
   const { data } = await api.get('/schema', { params });
   return data;
 }
 
-export async function fetchTableDetail(table: string): Promise<TableDetail> {
-  const { data } = await api.get(`/schema/${table}`);
+export async function fetchTableDetail(
+  table: string,
+  identity?: SchemaIdentity,
+): Promise<TableDetail> {
+  const { data } = identity
+    ? await api.get(`/schema/${table}`, { params: { identity } })
+    : await api.get(`/schema/${table}`);
   return data;
 }
 
@@ -153,9 +161,16 @@ export async function findPath(
   to: string,
   all = false,
   maxDepth = 6,
+  identity?: SchemaIdentity,
 ): Promise<PathResponse> {
   const { data } = await api.get('/path', {
-    params: { from, to, all: all ? 1 : 0, maxDepth },
+    params: {
+      from,
+      to,
+      all: all ? 1 : 0,
+      maxDepth,
+      ...(identity ? { identity } : {}),
+    },
   });
   return data;
 }

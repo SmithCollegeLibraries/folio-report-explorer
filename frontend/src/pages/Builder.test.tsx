@@ -7,14 +7,16 @@ import Builder from './Builder';
 const apiMocks = vi.hoisted(() => ({
   buildQuery: vi.fn(),
   submitQuery: vi.fn(),
-}));
-
-vi.mock('../api/client', () => ({
   fetchSchema: vi.fn().mockResolvedValue({ metadata: {}, tables: {} }),
   fetchTableDetail: vi.fn().mockResolvedValue({
     table: { columns: [] },
     relationships: { parents: [], children: [] },
   }),
+}));
+
+vi.mock('../api/client', () => ({
+  fetchSchema: apiMocks.fetchSchema,
+  fetchTableDetail: apiMocks.fetchTableDetail,
   buildQuery: apiMocks.buildQuery,
   submitQuery: apiMocks.submitQuery,
   saveQuery: vi.fn(),
@@ -35,14 +37,14 @@ vi.mock('../hooks/useJobPolling', () => ({
 
 vi.mock('../components/TableBrowser', () => ({
   default: ({ onAddTable }: { onAddTable: (table: string) => void }) => (
-    <button onClick={() => onAddTable('users')}>Add users</button>
+    <button onClick={() => onAddTable('inventory.item__t')}>Add item</button>
   ),
 }));
 
 vi.mock('../components/ColumnPicker', () => ({
   default: ({ onColumnsChange }: { onColumnsChange: (columns: Array<{ table: string; column: string; aggregate: '' }>) => void }) => (
-    <button onClick={() => onColumnsChange([{ table: 'users', column: 'name', aggregate: '' }])}>
-      Select name
+    <button onClick={() => onColumnsChange([{ table: 'inventory.item__t', column: 'id', aggregate: '' }])}>
+      Select id
     </button>
   ),
 }));
@@ -72,8 +74,8 @@ describe('Builder', () => {
   });
 
   it('submits generated params with edited SQL on initial run and confirmation retry', async () => {
-    const generatedSql = 'SELECT name FROM users WHERE name LIKE :p0';
-    const editedSql = `${generatedSql} ORDER BY name`;
+    const generatedSql = 'SELECT id FROM inventory.item__t WHERE id LIKE :p0';
+    const editedSql = `${generatedSql} ORDER BY id`;
     const params = { ':p0': '%general%' };
     let resolveInitialSubmit!: (response: { requiresConfirmation: boolean; estimatedRows: number }) => void;
     apiMocks.buildQuery.mockResolvedValue({ sql: generatedSql, params });
@@ -95,11 +97,16 @@ describe('Builder', () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Add users' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Select name' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select id' }));
     fireEvent.click(screen.getByRole('button', { name: 'Build SQL' }));
 
     expect(await screen.findByDisplayValue(generatedSql)).toBeInTheDocument();
+    expect(apiMocks.buildQuery).toHaveBeenCalledWith(expect.objectContaining({
+      schemaIdentity: 'ldlite',
+      tables: ['inventory.item__t'],
+      columns: [expect.objectContaining({ table: 'inventory.item__t' })],
+    }));
     fireEvent.click(screen.getByRole('button', { name: 'Edit SQL' }));
     fireEvent.change(screen.getByLabelText('SQL Preview'), { target: { value: editedSql } });
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
@@ -116,7 +123,7 @@ describe('Builder', () => {
       editedSql,
       params,
       'builder',
-      'Builder: users',
+      'Builder: inventory.item__t',
       'folio',
       undefined,
     );
@@ -125,7 +132,7 @@ describe('Builder', () => {
       editedSql,
       params,
       'builder',
-      'Builder: users',
+      'Builder: inventory.item__t',
       'folio',
       { confirmed: true, outputMode: 'table' },
     );
