@@ -31,13 +31,37 @@ class ExploratoryQueryDefaultsService
             ];
         }
 
-        if (preg_match('/\binvoice date\b/', $normalized) === 1) {
+        if (self::matchesExplicitRequest($normalized, 'payment date')) {
+            $assumptions['purchase_date_basis']['explanation'] = 'Purchases are assigned to the payment date, as explicitly requested.';
+            $assumptions['purchase_date_basis']['source'] = 'explicit';
+        } elseif (self::matchesExplicitRequest($normalized, 'invoice date')) {
             $assumptions['purchase_date_basis']['value'] = 'invoice_date';
             $assumptions['purchase_date_basis']['explanation'] = 'Purchases are assigned to the invoice date, as explicitly requested.';
             $assumptions['purchase_date_basis']['source'] = 'explicit';
         }
 
-        if (preg_match('/\bcost per (?:checkout|use)\b/', $normalized) === 1) {
+        if (preg_match('/\b(?:use|using|prefer) (?:the )?estimated po line price\b/', $normalized) === 1) {
+            $assumptions['investment_cost_basis']['value'] = 'estimated_po_line_price';
+            $assumptions['investment_cost_basis']['explanation'] = 'Investment uses the estimated PO-line price, as explicitly requested.';
+            $assumptions['investment_cost_basis']['source'] = 'explicit';
+        }
+
+        if (preg_match('/\b(?:use|using|prefer) (?:the )?lifetime circulation\b/', $normalized) === 1) {
+            $assumptions['circulation_window']['value'] = 'lifetime_circulation';
+            $assumptions['circulation_window']['explanation'] = 'Circulation is counted over the item lifetime, as explicitly requested.';
+            $assumptions['circulation_window']['source'] = 'explicit';
+        }
+
+        if (preg_match('/\b(?:group by|use|using|prefer) (?:the )?first two call number letters\b/', $normalized) === 1) {
+            $assumptions['call_number_grouping']['value'] = 'first_two_call_number_letters';
+            $assumptions['call_number_grouping']['explanation'] = 'Call numbers are grouped by their first two letters, as explicitly requested.';
+            $assumptions['call_number_grouping']['source'] = 'explicit';
+        }
+
+        if (self::matchesExplicitRequest($normalized, 'checkouts? per dollar')) {
+            $assumptions['roi_formula']['explanation'] = 'ROI is checkouts per dollar, with cost per checkout returned as a companion measure, as explicitly requested.';
+            $assumptions['roi_formula']['source'] = 'explicit';
+        } elseif (self::matchesExplicitRequest($normalized, 'cost per (?:checkout|use)')) {
             $assumptions['roi_formula']['value'] = 'cost_per_checkout';
             $assumptions['roi_formula']['explanation'] = 'ROI is cost per checkout, as explicitly requested.';
             $assumptions['roi_formula']['source'] = 'explicit';
@@ -95,6 +119,14 @@ class ExploratoryQueryDefaultsService
         return (string)$normalized;
     }
 
+    private static function matchesExplicitRequest(string $normalized, string $phrasePattern): bool
+    {
+        return preg_match(
+            '/(?<!not )\b(?:use|using|prefer) (?:the )?(?:' . $phrasePattern . ')\b/',
+            $normalized
+        ) === 1;
+    }
+
     private static function loadArtifact(): array
     {
         $path = __DIR__ . '/../data/exploratory_query_defaults.json';
@@ -123,6 +155,7 @@ class ExploratoryQueryDefaultsService
         }
 
         $requiredFields = ['key', 'label', 'defaultValue', 'defaultExplanation', 'correctionExample'];
+        $actualKeys = [];
         foreach ($artifact['defaults'] as $default) {
             if (!is_array($default)) {
                 throw new \RuntimeException('Documented exploratory query defaults are invalid.');
@@ -133,6 +166,20 @@ class ExploratoryQueryDefaultsService
                     throw new \RuntimeException('Documented exploratory query defaults are invalid.');
                 }
             }
+
+            $actualKeys[] = $default['key'];
+        }
+
+        sort($actualKeys);
+        $requiredKeys = [
+            'call_number_grouping',
+            'circulation_window',
+            'investment_cost_basis',
+            'purchase_date_basis',
+            'roi_formula',
+        ];
+        if ($actualKeys !== $requiredKeys) {
+            throw new \RuntimeException('Documented exploratory query defaults must contain exactly the required unique keys.');
         }
 
         foreach ($artifact['roiPlanGuidance'] as $guidance) {
