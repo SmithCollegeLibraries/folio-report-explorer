@@ -140,7 +140,7 @@ Ask AI runs the validated query using the existing execution flow. Above the res
 
 ### Repair in progress
 
-The existing generation status will indicate `Generating query`, then `Repairing query (1 of 2)` or `Repairing query (2 of 2)`. No user acknowledgment is required between automatic attempts.
+The Ask endpoint remains synchronous in this implementation. While it is running, the existing generation status will say `Generating and validating query…`; no user acknowledgment is required between automatic attempts. When the response completes, the UI will report whether the initial candidate passed or how many automatic repairs were required. Live per-attempt progress would require a separate streaming or polling protocol and is outside this bounded repair-loop change.
 
 ### Repair exhausted
 
@@ -202,4 +202,3 @@ Frontend tests will cover the assumptions panel, repair progress copy, successfu
 - The generic "could not produce fully validated SQL" message is no longer used for repair exhaustion.
 - Users can see and correct documented assumptions.
 - Existing deterministic query-family tests and exploratory-generation behavior remain green.
-
