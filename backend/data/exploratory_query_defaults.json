@@ -1,0 +1,17 @@
+{
+  "artifactVersion": 1,
+  "defaults": [
+    {"key":"purchase_date_basis","label":"Purchase date","defaultValue":"payment_date","defaultExplanation":"Purchases are assigned to the date the invoice was paid.","correctionExample":"Use invoice date instead of payment date."},
+    {"key":"investment_cost_basis","label":"Investment","defaultValue":"actual_paid_fund_distribution","defaultExplanation":"Investment uses paid invoice fund-distribution amounts rather than estimated PO-line prices.","correctionExample":"Use estimated PO-line price as the investment amount."},
+    {"key":"circulation_window","label":"Circulation period","defaultValue":"same_as_purchase_window","defaultExplanation":"Circulation is counted in the same reporting period used for purchases.","correctionExample":"Use lifetime circulation instead of the purchase window."},
+    {"key":"roi_formula","label":"Return on investment","defaultValue":"checkouts_per_dollar_with_cost_per_use","defaultExplanation":"ROI is checkouts per dollar, with cost per checkout returned as a companion measure.","correctionExample":"Use cost per checkout as ROI."},
+    {"key":"call_number_grouping","label":"Call-number grouping","defaultValue":"primary_call_number_class","defaultExplanation":"Call numbers are grouped into their primary classification for comparison.","correctionExample":"Group by the first two call-number letters instead."}
+  ],
+  "roiPlanGuidance": [
+    "Join paid invoice fund distributions to PO lines using po_line_id.",
+    "Join orders.po_line__t.instance_id to inventory instances, holdings, and items.",
+    "Aggregate spend before joining item-level circulation so one-to-many rows do not multiply cost.",
+    "Aggregate circulation at item grain before grouping by primary call-number class.",
+    "Return purchase count, spend, circulation, checkouts per dollar, and cost per checkout, guarding division by zero."
+  ]
+}
