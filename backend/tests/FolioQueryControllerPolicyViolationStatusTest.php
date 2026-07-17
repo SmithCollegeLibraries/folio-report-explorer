@@ -95,6 +95,26 @@ namespace {
     );
     assertSameValue(403, Yii::$app->response->statusCode, 'A PolicyViolationException must return HTTP 403 even when the message lacks legacy keywords.');
     assertSameValue('blocked', $policyResult['route'] ?? null, 'A policy violation must be routed as blocked.');
+    assertSameValue(
+        false,
+        strpos((string)($policyResult['error'] ?? ''), $neutralPolicyMessage) !== false,
+        'Policy responses must not echo internal exception detail.'
+    );
+
+    $databasePolicyDetail = 'SQLSTATE[42501]: permission denied for table users.users__t; driver stack secret';
+    $databasePolicyResult = $continuation->invoke(
+        $controller,
+        new \app\exceptions\PolicyViolationException($databasePolicyDetail),
+        'Show restricted rows',
+        'Smith College'
+    );
+    foreach (['SQLSTATE', '42501', 'users.users__t', 'driver stack secret'] as $unsafeFragment) {
+        assertSameValue(
+            false,
+            stripos((string)($databasePolicyResult['error'] ?? ''), $unsafeFragment) !== false,
+            'Permission responses must expose only stable policy guidance.'
+        );
+    }
 
     // The same neutral wording as a plain InvalidArgumentException is a soft
     // failure and must still recover with 200.

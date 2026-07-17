@@ -168,6 +168,22 @@ function repairAssertContains(string $needle, string $haystack, string $message)
     }
 }
 
+function terminalTelemetryOutcomes(): array
+{
+    $outcomes = [];
+    foreach (Yii::$logs as $logRecord) {
+        $message = (string)($logRecord['message'] ?? '');
+        if (strpos($message, 'NL2SQL telemetry: ') !== 0) {
+            continue;
+        }
+        $record = json_decode(substr($message, strlen('NL2SQL telemetry: ')), true);
+        if (($record['event'] ?? null) === 'nl2sql.exploratory_terminal_outcome') {
+            $outcomes[] = $record;
+        }
+    }
+    return $outcomes;
+}
+
 function geminiText(string $sql, string $explanation = 'Candidate query.'): string
 {
     return "```sql\n{$sql}\n```\n{$explanation}\nDATA SOURCE: folio";
@@ -212,13 +228,31 @@ foreach (Yii::$logs as $logRecord) {
         continue;
     }
     $repairTelemetryCount++;
-    foreach (['promptFingerprint', 'phase', 'repairNumber', 'maximumRepairs', 'stage', 'category', 'candidateLength', 'provider', 'elapsedMs', 'assumptionKeys', 'outcome'] as $field) {
+    foreach (['promptFingerprint', 'route', 'routeReason', 'phase', 'repairNumber', 'maximumRepairs', 'stage', 'category', 'candidateLength', 'provider', 'elapsedMs', 'assumptionKeys', 'outcome'] as $field) {
         repairAssertSame(true, array_key_exists($field, $record), "Exploratory repair telemetry should include {$field}.");
     }
     repairAssertSame(false, array_key_exists('sql', $record), 'Exploratory repair telemetry must not expose a SQL field.');
     repairAssertSame(false, array_key_exists('prompt', $record), 'Exploratory repair telemetry must not expose a prompt field.');
 }
 repairAssertSame(4, $repairTelemetryCount, 'Bad-then-valid generation should emit attempt and outcome telemetry for both candidates.');
+$terminalOutcomes = terminalTelemetryOutcomes();
+repairAssertSame(1, count($terminalOutcomes), 'Successful exploratory generation should emit one terminal outcome.');
+repairAssertSame('validated', $terminalOutcomes[0]['outcome'] ?? null, 'Successful exploratory generation should use the validated outcome.');
+repairAssertSame(true, !empty($terminalOutcomes[0]['route'] ?? null), 'Terminal telemetry should retain a safe route.');
+repairAssertSame(true, !empty($terminalOutcomes[0]['routeReason'] ?? null), 'Terminal telemetry should retain a safe route reason.');
+
+Yii::$logs = [];
+$logValidationFailure = new ReflectionMethod(GeminiService::class, 'logValidationFailure');
+$logValidationFailure->invoke(null, 'legacy_sql_parse', [
+    'route' => 'legacy_freeform',
+    'routeReason' => 'forced_legacy_mode',
+    'error' => 'SQLSTATE[42P01] relation inventory.secret_table__t does not exist; PDO driver exception',
+]);
+$parserTelemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
+foreach (['SQLSTATE', '42P01', 'inventory.secret_table__t', 'PDO driver exception'] as $unsafeFragment) {
+    repairAssertSame(false, stripos($parserTelemetry, $unsafeFragment) !== false, 'Parser telemetry must contain only a safe failure category.');
+}
+repairAssertContains('parser_failure', $parserTelemetry, 'Parser telemetry should retain a stable safe category.');
 
 TestTransport::$responses = [
     geminiText('WITH recent AS (SELECT ii.id FROM inventory.item__t ii) SELECT recent.id FROM recent'),
@@ -335,21 +369,25 @@ TestTransport::$responses = [
     geminiText('SELECT b.id FROM inventory.missing_b__t b'),
     geminiText('SELECT c.id FROM inventory.missing_c__t c'),
 ];
+Yii::$logs = [];
 $exhausted = GeminiService::generateSqlWithShadow(roiPrompt(), 'Smith College', null, true);
 repairAssertSame(false, isset($exhausted['sql']), 'Exhausted recovery must not return unvalidated SQL.');
 repairAssertSame('exploratory_recovery', $exhausted['route'] ?? null, 'Exhausted recovery should use the safe recovery route.');
 repairAssertSame(2, $exhausted['repairAttempts'] ?? null, 'Exhaustion should consume exactly two repair attempts.');
 repairAssertSame(roiPrompt(), $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should retain the original question for an explicit retry.');
 repairAssertSame('unknown_table', $exhausted['validationSummary']['failureCategory'] ?? null, 'Recovery should expose only the safe failure category.');
+repairAssertSame('exhausted', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Repair exhaustion should emit a terminal exhausted outcome.');
 
 SqlBuilderService::$blockPolicy = true;
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];
+Yii::$logs = [];
 try {
     GeminiService::generateSqlWithShadow('Show restricted patron details.', null, null, true);
     fwrite(STDERR, "Policy violations must not be repaired.\n");
     exit(1);
 } catch (PolicyViolationException $exception) {
     repairAssertSame(0, count(TestTransport::$responses), 'A policy hard stop should make no retry request.');
+    repairAssertSame('policy_blocked', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Policy hard stops should emit a terminal policy-blocked outcome.');
 }
 SqlBuilderService::$blockPolicy = false;
 
@@ -358,6 +396,7 @@ foreach ([
     'SQLSTATE[57014]: Query canceled: canceling statement due to statement timeout',
 ] as $cancellationError) {
     TestTransport::$responses = [];
+    Yii::$logs = [];
     $requestCount = count(TestTransport::$requests);
     try {
         GeminiService::repairExploratorySqlAfterPreflight(
@@ -368,15 +407,16 @@ foreach ([
         );
         fwrite(STDERR, "PostgreSQL cancellation must not be repaired.\n");
         exit(1);
-    } catch (\RuntimeException $exception) {
-        repairAssertContains('57014', $exception->getMessage(), 'PostgreSQL cancellation should propagate to request handling.');
+    } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
         repairAssertSame($requestCount, count(TestTransport::$requests), 'PostgreSQL cancellation should make no repair request.');
+        repairAssertSame('cancelled', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Database cancellation should emit a terminal cancelled outcome.');
     }
 }
 
 TestTransport::$responses = [];
 $requestCount = count(TestTransport::$requests);
 try {
+    Yii::$logs = [];
     GeminiService::repairExploratorySqlAfterPreflight(
         'Show items',
         null,
@@ -407,6 +447,7 @@ $preflightPayload = json_encode(TestTransport::$requests[count(TestTransport::$r
 repairAssertContains('unknown_column', $preflightPayload, 'Preflight errors should be reduced to a safe category.');
 repairAssertSame(false, strpos($preflightPayload, 'at character 15') !== false, 'Raw PostgreSQL error detail must not enter repair prompts.');
 
+Yii::$logs = [];
 try {
     GeminiService::repairExploratorySqlAfterPreflight(
         'Show items',
@@ -418,6 +459,17 @@ try {
     exit(1);
 } catch (\RuntimeException $exception) {
     repairAssertContains('08006', $exception->getMessage(), 'Connectivity failures should propagate to infrastructure handling.');
+    repairAssertSame('connectivity_failure', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Database connectivity should emit its own terminal outcome.');
+}
+
+TestTransport::$responses = [];
+Yii::$logs = [];
+try {
+    GeminiService::generateSqlWithShadow('Show unsupported provider failure telemetry.', null, null, true);
+    fwrite(STDERR, "Provider failures must propagate.\n");
+    exit(1);
+} catch (\RuntimeException $exception) {
+    repairAssertSame('provider_failure', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Provider failures should emit their own terminal outcome.');
 }
 
 fwrite(STDOUT, "GeminiService exploratory repair test passed\n");

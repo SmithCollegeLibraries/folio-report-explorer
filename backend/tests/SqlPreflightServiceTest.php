@@ -148,15 +148,20 @@ $timeoutDb = new FakeSqlPreflightDb(
     new RuntimeException('ERROR: canceling statement due to statement timeout')
 );
 
-$timeoutEstimate = $serviceClass::estimateQueryComplexity(
-    $timeoutDb,
-    'SELECT maybe_expensive_sql',
-    1800000
-);
-
-assertNullValue(
-    $timeoutEstimate,
-    'Preflight should treat EXPLAIN timeouts as unavailable estimates rather than invalid SQL.'
-);
+try {
+    $serviceClass::estimateQueryComplexity(
+        $timeoutDb,
+        'SELECT maybe_expensive_sql',
+        1800000
+    );
+    fwrite(STDERR, "Preflight statement cancellation must remain a typed hard stop.\n");
+    exit(1);
+} catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
+    assertSameValue(
+        'Database query validation was cancelled.',
+        $exception->getMessage(),
+        'Preflight cancellation should expose only a stable typed message.'
+    );
+}
 
 fwrite(STDOUT, "SqlPreflightService test passed\n");

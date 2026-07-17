@@ -26,6 +26,8 @@ use app\models\User;
 use app\models\DummyIdentity;
 use Firebase\JWT\JWT;
 
+require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
+
 /**
  * FolioQueryController — REST API for the FOLIO Report Explorer.
  *
@@ -312,7 +314,6 @@ class FolioQueryController extends Controller
             'source' => strtolower(trim((string) $source)),
             'dataSource' => $this->normalizeDataSource($dataSource),
             'errorFamily' => $this->classifyPreflightErrorFamily($error),
-            'error' => trim((string) $error),
             'sqlHash' => substr(hash('sha256', $this->normalizeSqlForTelemetry($sql)), 0, 16),
             'sqlLength' => strlen((string) $sql),
         ], $context);
@@ -403,15 +404,30 @@ class FolioQueryController extends Controller
             );
 
             if ($this->isAskPostgresConnectivityFailure($error)) {
+                $this->logExploratoryTerminalOutcome($result, $prompt, 'connectivity_failure', 'database_connectivity');
                 return $this->buildAskPostgresConnectivityRecovery(
                     $prompt,
                     $campus,
                     'ask_sql_preflight_recovery'
                 );
             }
+            if ($this->isAskPreflightCancellationFailure($error)) {
+                $this->logExploratoryTerminalOutcome($result, $prompt, 'cancelled', 'database_cancelled');
+                throw new \app\exceptions\DatabaseQueryCancelledException();
+            }
             if ($this->isAskPreflightPolicyFailure($error)) {
+                $this->logExploratoryTerminalOutcome($result, $prompt, 'policy_blocked', 'policy_blocked');
                 return $this->buildAskContinuationFromFailure(
-                    new \app\exceptions\PolicyViolationException($error),
+                    new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.'),
+                    $prompt,
+                    $campus,
+                    'ask_sql_preflight_recovery'
+                );
+            }
+
+            if (!$this->isExploratoryRepairEligible($result)) {
+                return $this->buildAskContinuationFromFailure(
+                    new \RuntimeException('Generated query failed database validation.'),
                     $prompt,
                     $campus,
                     'ask_sql_preflight_recovery'
@@ -420,6 +436,12 @@ class FolioQueryController extends Controller
 
             $repairAttempts = (int)($result['repairAttempts'] ?? 0);
             if ($repairAttempts >= 2) {
+                $this->logExploratoryTerminalOutcome(
+                    $result,
+                    $prompt,
+                    'exhausted',
+                    $this->classifyPreflightErrorFamily($error)
+                );
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
                     $prompt,
@@ -448,12 +470,14 @@ class FolioQueryController extends Controller
             $result['route'] = 'exploratory';
 
             if (!isset($result['sql'])) {
+                $failureCategory = (string)($result['validationSummary']['failureCategory']
+                    ?? $this->classifyPreflightErrorFamily($error));
+                $this->logExploratoryTerminalOutcome($result, $prompt, 'exhausted', $failureCategory);
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
                     $prompt,
                     $campus,
-                    (string)($result['validationSummary']['failureCategory']
-                        ?? $this->classifyPreflightErrorFamily($error))
+                    $failureCategory
                 );
             }
         }
@@ -485,6 +509,61 @@ class FolioQueryController extends Controller
             '/SQLSTATE\[42501\]|permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
             $message
         ) === 1;
+    }
+
+    private function isAskPreflightCancellationFailure(string $message): bool
+    {
+        return preg_match(
+            '/SQLSTATE\[57014\]|statement timeout|cancel(?:ing|ling)? statement|query (?:canceled|cancelled)/i',
+            $message
+        ) === 1;
+    }
+
+    private function isExploratoryRepairEligible(array $result): bool
+    {
+        $mode = strtolower(trim((string)($result['mode'] ?? '')));
+        $route = strtolower(trim((string)($result['route'] ?? '')));
+        $routeReason = strtolower(trim((string)($result['routeReason'] ?? '')));
+
+        return $mode === 'exploratory'
+            || !empty($result['exploratory'])
+            || strpos($route, 'exploratory') !== false
+            || strpos($routeReason, 'unsupported_query_family') !== false;
+    }
+
+    private function logExploratoryTerminalOutcome(
+        array $result,
+        string $prompt,
+        string $outcome,
+        string $category
+    ): void {
+        if (!$this->isExploratoryRepairEligible($result)) {
+            return;
+        }
+        $allowedOutcomes = ['exhausted', 'policy_blocked', 'connectivity_failure', 'provider_failure', 'cancelled', 'validated'];
+        $safeOutcome = in_array($outcome, $allowedOutcomes, true) ? $outcome : 'provider_failure';
+        $payload = [
+            'event' => 'nl2sql.exploratory_terminal_outcome',
+            'timestamp' => gmdate('c'),
+            'promptFingerprint' => $this->fingerprintPrompt($prompt),
+            'route' => $this->sanitizeTelemetryLabel($result['route'] ?? null, 'exploratory'),
+            'routeReason' => $this->sanitizeTelemetryLabel($result['routeReason'] ?? null, 'preflight_validation_failed'),
+            'outcome' => $safeOutcome,
+            'category' => $this->sanitizeExploratoryFailureCategory($category),
+            'repairAttempts' => $this->clampExploratoryRepairAttempts($result['repairAttempts'] ?? 0),
+        ];
+        Yii::warning(
+            'NL2SQL telemetry: ' . json_encode($payload),
+            GeminiService::NL2SQL_TELEMETRY_CATEGORY
+        );
+    }
+
+    private function sanitizeTelemetryLabel($value, string $fallback): string
+    {
+        $value = strtolower(trim((string)$value));
+        return $value !== '' && preg_match('/^[a-z0-9_.:-]{1,120}$/', $value) === 1
+            ? $value
+            : $fallback;
     }
 
     private function buildExploratoryRepairExhaustedResponse(
@@ -527,6 +606,8 @@ class FolioQueryController extends Controller
         $category = strtolower(trim($category));
         $allowedCategories = [
             'ambiguous_column',
+            'database_cancelled',
+            'database_connectivity',
             'database_validation',
             'function_error',
             'grouping_error',
@@ -536,6 +617,8 @@ class FolioQueryController extends Controller
             'missing_type',
             'non_select',
             'operator_error',
+            'policy_blocked',
+            'provider_failure',
             'query_too_complex',
             'syntax_error',
             'unknown_column',
@@ -872,7 +955,7 @@ class FolioQueryController extends Controller
             SqlBuilderService::validateTablePolicy($sql);
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
-            return ['error' => $e->getMessage()];
+            return ['error' => 'This query is blocked by reporting data policy.'];
         }
 
         if ($this->shouldPreflightExecuteSql($dataSource, $source)) {
@@ -880,7 +963,7 @@ class FolioQueryController extends Controller
             if (isset($estimate['error'])) {
                 $this->logPreflightValidationFailure('api.execute', (string) $estimate['error'], $dataSource, $source, $sql);
                 Yii::$app->response->statusCode = 422;
-                return ['error' => $estimate['error']];
+                return ['error' => 'Query validation failed before execution.'];
             }
         }
 
@@ -1021,7 +1104,7 @@ class FolioQueryController extends Controller
             SqlBuilderService::validateTablePolicy($sql);
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
-            return ['error' => $e->getMessage()];
+            return ['error' => 'This query is blocked by reporting data policy.'];
         }
 
         $estimate = null;
@@ -1031,7 +1114,7 @@ class FolioQueryController extends Controller
             if (isset($estimate['error'])) {
                 $this->logPreflightValidationFailure('api.query_submit', (string) $estimate['error'], $dataSource, $source, $sql);
                 Yii::$app->response->statusCode = 422;
-                return ['error' => $estimate['error']];
+                return ['error' => 'Query validation failed before execution.'];
             }
             // Auto-route large queries to file export so the user gets all rows without a truncated table.
             if ($outputMode !== 'file' && $estimate !== null) {
@@ -1498,6 +1581,9 @@ class FolioQueryController extends Controller
         } catch (\InvalidArgumentException $e) {
             return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
         } catch (\RuntimeException $e) {
+            if ($e instanceof \app\exceptions\DatabaseQueryCancelledException) {
+                return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
+            }
             if (GeminiService::isAiTimeoutMessage($e->getMessage())) {
                 Yii::warning(
                     'NL2SQL AI timeout: ' . $e->getMessage(),
@@ -1520,6 +1606,15 @@ class FolioQueryController extends Controller
         string $routeReason = 'ask_generation_recovery'
     ): array {
         $message = trim($error->getMessage());
+        if ($error instanceof \app\exceptions\DatabaseQueryCancelledException) {
+            Yii::$app->response->statusCode = 503;
+            return [
+                'errorType' => 'database_cancelled',
+                'error' => 'Database validation was cancelled before the query could run. Please retry the request.',
+                'route' => 'database_cancelled',
+                'routeReason' => 'database_query_cancelled',
+            ];
+        }
         // Prefer the typed policy violation; fall back to message matching for
         // policy errors that bubble up from elsewhere as plain exceptions.
         if ($error instanceof \app\exceptions\PolicyViolationException || $this->isAskSecurityPolicyFailure($message)) {
@@ -1537,7 +1632,7 @@ class FolioQueryController extends Controller
 
         Yii::$app->response->statusCode = 200;
         Yii::warning(
-            'Ask generation recovered with continuation response: ' . $message,
+            'Ask generation recovered with continuation response category: generation_failure',
             'nl2sql.ask_recovery'
         );
 
@@ -1628,13 +1723,8 @@ class FolioQueryController extends Controller
 
     private function buildAskPolicyBlockMessage(string $message): string
     {
-        $message = trim($message);
-        if ($message === '') {
-            $message = 'This request is blocked by reporting data policy.';
-        }
-
-        return $message
-            . ' Try an aggregate operational report instead, such as counts, totals, trends, or grouped activity that does not identify individual patrons.';
+        return 'This request is blocked by reporting data policy. '
+            . 'Try an aggregate operational report instead, such as counts, totals, trends, or grouped activity that does not identify individual patrons.';
     }
 
     /**

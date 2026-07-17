@@ -4,12 +4,14 @@ namespace app\services;
 
 use Yii;
 use yii\httpclient\Client;
+use app\exceptions\DatabaseQueryCancelledException;
 use app\exceptions\ExploratorySqlValidationException;
 
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
 require_once __DIR__ . '/ExploratorySqlRepairService.php';
 require_once __DIR__ . '/../exceptions/ExploratorySqlValidationException.php';
+require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
 
 /**
@@ -265,31 +267,55 @@ class GeminiService
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
+            'route' => 'exploratory_legacy_freeform',
+            'routeReason' => $reason,
         ];
 
-        $outcome = ExploratorySqlRepairService::run(
-            function (array $attemptContext) use ($prompt, $campus, $attemptedPlan): array {
-                return self::runExploratorySqlAttempt(
-                    $attemptContext,
-                    function () use ($attemptContext, $prompt, $campus, $attemptedPlan): array {
-                        if ((int)($attemptContext['repairNumber'] ?? 0) === 0) {
-                            $guidedPrompt = $prompt;
-                            if ($attemptedPlan !== '') {
-                                $guidedPrompt .= "\n\n" . $attemptedPlan;
+        try {
+            $outcome = ExploratorySqlRepairService::run(
+                function (array $attemptContext) use ($prompt, $campus, $attemptedPlan, $reason): array {
+                    return self::runExploratorySqlAttempt(
+                        $attemptContext + [
+                            'route' => 'exploratory_legacy_freeform',
+                            'routeReason' => $reason,
+                        ],
+                        function () use ($attemptContext, $prompt, $campus, $attemptedPlan): array {
+                            if ((int)($attemptContext['repairNumber'] ?? 0) === 0) {
+                                $guidedPrompt = $prompt;
+                                if ($attemptedPlan !== '') {
+                                    $guidedPrompt .= "\n\n" . $attemptedPlan;
+                                }
+                                return self::generateSql($guidedPrompt, $campus, true, false);
                             }
-                            return self::generateSql($guidedPrompt, $campus, true, false);
-                        }
 
-                        return self::generateExploratoryRepairCandidate($attemptContext);
-                    }
-                );
-            },
-            $context
-        );
+                            return self::generateExploratoryRepairCandidate($attemptContext);
+                        }
+                    );
+                },
+                $context
+            );
+        } catch (\app\exceptions\PolicyViolationException $exception) {
+            self::logExploratoryTerminalOutcome($context, 'policy_blocked', 'policy_blocked');
+            throw $exception;
+        } catch (DatabaseQueryCancelledException $exception) {
+            self::logExploratoryTerminalOutcome($context, 'cancelled', 'database_cancelled');
+            throw $exception;
+        } catch (\Throwable $exception) {
+            self::logExploratoryTerminalOutcome($context, 'provider_failure', 'provider_failure');
+            throw $exception;
+        }
 
         if (($outcome['status'] ?? null) !== 'validated') {
+            self::logExploratoryTerminalOutcome(
+                $context,
+                'exhausted',
+                (string)($outcome['failureCategory'] ?? 'validation_failure'),
+                (int)($outcome['repairAttempts'] ?? 0)
+            );
             return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
         }
+
+        self::logExploratoryTerminalOutcome($context, 'validated', null, (int)($outcome['repairAttempts'] ?? 0));
 
         $primary = self::decorateExploratoryResponse($outcome['result'], $reason);
         $primary = self::decorateValidatedExploratoryResult(
@@ -1845,9 +1871,85 @@ GUIDANCE;
      */
     private static function logValidationFailure($stage, array $payload)
     {
+        $rawError = (string)($payload['error'] ?? $payload['exception'] ?? '');
+        unset($payload['error'], $payload['exception'], $payload['message']);
+        $payload['failureCategory'] = self::sanitizeTelemetryFailureCategory((string)$stage, $rawError, $payload);
         self::logNlTelemetry('nl2sql.validation_failure', array_merge([
             'stage' => (string)$stage,
         ], $payload), true);
+    }
+
+    private static function sanitizeTelemetryFailureCategory(string $stage, string $error, array $payload = []): string
+    {
+        $existing = strtolower(trim((string)($payload['issueFamily'] ?? $payload['failureCategory'] ?? '')));
+        if ($existing !== '' && preg_match('/^[a-z0-9_]{1,80}$/', $existing) === 1) {
+            return $existing;
+        }
+        if (strpos(strtolower($stage), 'parse') !== false) {
+            return 'parser_failure';
+        }
+        if (self::isPreflightPolicyFailure($error)) {
+            return 'policy_blocked';
+        }
+        return self::sanitizePreflightFailureCategory($error);
+    }
+
+    private static function logExploratoryTerminalOutcome(
+        array $context,
+        string $outcome,
+        ?string $category = null,
+        int $repairAttempts = 0
+    ): void {
+        $allowedOutcomes = [
+            'validated',
+            'exhausted',
+            'policy_blocked',
+            'connectivity_failure',
+            'provider_failure',
+            'cancelled',
+        ];
+        $safeOutcome = in_array($outcome, $allowedOutcomes, true) ? $outcome : 'provider_failure';
+        self::logNlTelemetry('nl2sql.exploratory_terminal_outcome', [
+            'promptFingerprint' => self::fingerprintPrompt((string)($context['originalQuestion'] ?? '')),
+            'route' => self::sanitizeTelemetryLabel($context['route'] ?? null, 'exploratory'),
+            'routeReason' => self::sanitizeTelemetryLabel($context['routeReason'] ?? null, 'exploratory_processing'),
+            'outcome' => $safeOutcome,
+            'category' => $category === null ? null : self::sanitizeExploratoryTelemetryCategory($category),
+            'repairAttempts' => max(0, min(ExploratorySqlRepairService::MAX_REPAIR_ATTEMPTS, $repairAttempts)),
+            'provider' => self::getAiProvider(),
+        ], $safeOutcome !== 'validated');
+    }
+
+    private static function sanitizeTelemetryLabel($value, string $fallback): string
+    {
+        $value = strtolower(trim((string)$value));
+        return $value !== '' && preg_match('/^[a-z0-9_.:-]{1,120}$/', $value) === 1
+            ? $value
+            : $fallback;
+    }
+
+    private static function sanitizeExploratoryTelemetryCategory(string $category): string
+    {
+        $normalized = strtolower(trim($category));
+        $allowed = [
+            'ambiguous_column',
+            'database_cancelled',
+            'database_connectivity',
+            'database_validation',
+            'grouping_error',
+            'invalid_operator',
+            'missing_select',
+            'policy_blocked',
+            'provider_failure',
+            'query_too_complex',
+            'syntax_error',
+            'unknown_column',
+            'unknown_table',
+            'validation_failure',
+        ];
+        return in_array($normalized, $allowed, true)
+            ? $normalized
+            : self::sanitizePreflightFailureCategory($category);
     }
 
     private static function logReferenceResolverTelemetry(array $referenceResolution, string $promptFingerprint): void
@@ -5216,13 +5318,22 @@ PROMPT;
         array $currentResult,
         string $preflightError
     ): array {
-        if (self::isPreflightConnectivityFailure($preflightError)
-            || self::isPreflightCancellationFailure($preflightError)
-        ) {
+        $terminalContext = [
+            'originalQuestion' => $prompt,
+            'route' => $currentResult['route'] ?? 'exploratory',
+            'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
+        ];
+        if (self::isPreflightConnectivityFailure($preflightError)) {
+            self::logExploratoryTerminalOutcome($terminalContext, 'connectivity_failure', 'database_connectivity');
             throw new \RuntimeException($preflightError);
         }
+        if (self::isPreflightCancellationFailure($preflightError)) {
+            self::logExploratoryTerminalOutcome($terminalContext, 'cancelled', 'database_cancelled');
+            throw new DatabaseQueryCancelledException();
+        }
         if (self::isPreflightPolicyFailure($preflightError)) {
-            throw new \app\exceptions\PolicyViolationException($preflightError);
+            self::logExploratoryTerminalOutcome($terminalContext, 'policy_blocked', 'policy_blocked');
+            throw new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.');
         }
 
         $candidateSql = (string)($currentResult['sql'] ?? '');
@@ -5240,6 +5351,8 @@ PROMPT;
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
+            'route' => $currentResult['route'] ?? 'exploratory',
+            'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
         ];
         $failure = new ExploratorySqlValidationException(
             'database_preflight',
@@ -5249,24 +5362,46 @@ PROMPT;
             'PostgreSQL preflight rejected the exploratory SQL candidate.'
         );
 
-        $outcome = ExploratorySqlRepairService::run(
-            function (array $attemptContext): array {
-                return self::runExploratorySqlAttempt(
-                    $attemptContext,
-                    function () use ($attemptContext): array {
-                        return self::generateExploratoryRepairCandidate($attemptContext);
-                    }
-                );
-            },
-            $context,
-            $repairAttemptsUsed,
-            $failure
-        );
+        try {
+            $outcome = ExploratorySqlRepairService::run(
+                function (array $attemptContext) use ($context): array {
+                    return self::runExploratorySqlAttempt(
+                        $attemptContext + [
+                            'route' => $context['route'],
+                            'routeReason' => $context['routeReason'],
+                        ],
+                        function () use ($attemptContext): array {
+                            return self::generateExploratoryRepairCandidate($attemptContext);
+                        }
+                    );
+                },
+                $context,
+                $repairAttemptsUsed,
+                $failure
+            );
+        } catch (\app\exceptions\PolicyViolationException $exception) {
+            self::logExploratoryTerminalOutcome($context, 'policy_blocked', 'policy_blocked', $repairAttemptsUsed);
+            throw $exception;
+        } catch (DatabaseQueryCancelledException $exception) {
+            self::logExploratoryTerminalOutcome($context, 'cancelled', 'database_cancelled', $repairAttemptsUsed);
+            throw $exception;
+        } catch (\Throwable $exception) {
+            self::logExploratoryTerminalOutcome($context, 'provider_failure', 'provider_failure', $repairAttemptsUsed);
+            throw $exception;
+        }
 
         $reason = (string)($currentResult['routeReason'] ?? 'preflight_validation_failed');
         if (($outcome['status'] ?? null) !== 'validated') {
+            self::logExploratoryTerminalOutcome(
+                $context,
+                'exhausted',
+                (string)($outcome['failureCategory'] ?? 'validation_failure'),
+                (int)($outcome['repairAttempts'] ?? 0)
+            );
             return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
         }
+
+        self::logExploratoryTerminalOutcome($context, 'validated', null, (int)($outcome['repairAttempts'] ?? 0));
 
         $result = self::decorateExploratoryResponse($outcome['result'], $reason);
         return self::decorateValidatedExploratoryResult(
@@ -5343,6 +5478,8 @@ PROMPT;
         sort($assumptionKeys);
         $telemetry = [
             'promptFingerprint' => self::fingerprintPrompt((string)($context['originalQuestion'] ?? '')),
+            'route' => self::sanitizeTelemetryLabel($context['route'] ?? null, 'exploratory'),
+            'routeReason' => self::sanitizeTelemetryLabel($context['routeReason'] ?? null, 'exploratory_processing'),
             'phase' => $repairNumber === 0 ? 'initial_generation' : 'automatic_repair',
             'repairNumber' => $repairNumber,
             'maximumRepairs' => ExploratorySqlRepairService::MAX_REPAIR_ATTEMPTS,

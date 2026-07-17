@@ -2,6 +2,10 @@
 
 namespace app\services;
 
+use app\exceptions\DatabaseQueryCancelledException;
+
+require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
+
 class SqlPreflightService
 {
     /**
@@ -74,8 +78,8 @@ class SqlPreflightService
             ];
         } catch (\Throwable $e) {
             $msg = $e->getMessage();
-            if (stripos($msg, 'statement timeout') !== false || stripos($msg, 'canceling statement') !== false) {
-                return null;
+            if (preg_match('/SQLSTATE\[57014\]|statement timeout|cancel(?:ing|ling)? statement|query (?:canceled|cancelled)/i', $msg) === 1) {
+                throw new DatabaseQueryCancelledException($e);
             }
             if (preg_match('/ERROR:\s*(.+?)(?:\n|HINT:|DETAIL:|$)/s', $msg, $matches) === 1) {
                 return ['error' => trim((string) ($matches[1] ?? ''))];

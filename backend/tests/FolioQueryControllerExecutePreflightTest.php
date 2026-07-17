@@ -70,6 +70,7 @@ namespace app\services {
     class SqlBuilderService
     {
         public static $buildCalls = [];
+        public static $policyException;
 
         public static function build($queryDefinition)
         {
@@ -91,6 +92,9 @@ namespace app\services {
 
         public static function validateTablePolicy($sql)
         {
+            if (self::$policyException instanceof \Throwable) {
+                throw self::$policyException;
+            }
         }
     }
 
@@ -299,7 +303,7 @@ namespace {
     $generatedResult = $controller->actionExecute();
 
     assertSameValue(422, Yii::$app->response->statusCode, 'Generated execute requests should fail fast when PostgreSQL preflight rejects the SQL.');
-    assertSameValue('operator does not exist: jsonb !~~* unknown', $generatedResult['error'] ?? null, 'Generated execute requests should surface the PostgreSQL preflight error directly.');
+    assertSameValue('Query validation failed before execution.', $generatedResult['error'] ?? null, 'Generated execute responses should not expose raw PostgreSQL validation detail.');
     assertCountValue(1, \app\services\SqlPreflightService::$calls, 'Generated execute requests should invoke PostgreSQL preflight exactly once.');
     assertSameValue([':campus_id' => 'ku'], \app\services\SqlPreflightService::$calls[0]['params'] ?? null, 'Generated execute requests should pass execution parameters to PostgreSQL preflight.');
     assertCountValue(0, $folioDb->queriedSql, 'Generated execute requests should not reach query execution when preflight fails.');
@@ -313,8 +317,31 @@ namespace {
     assertSameValue('nl', $telemetryRecord['source'] ?? null, 'Generated execute requests should preserve the request source in telemetry.');
     assertSameValue('folio', $telemetryRecord['dataSource'] ?? null, 'Generated execute requests should preserve the data source in telemetry.');
     assertSameValue('operator_error', $telemetryRecord['errorFamily'] ?? null, 'Generated execute requests should classify operator errors for telemetry.');
-    assertSameValue('operator does not exist: jsonb !~~* unknown', $telemetryRecord['error'] ?? null, 'Generated execute requests should include the PostgreSQL error text in telemetry.');
+    assertSameValue(false, array_key_exists('error', $telemetryRecord), 'Preflight telemetry must not include raw PostgreSQL error text.');
     assertTrueValue(!empty($telemetryRecord['sqlHash'] ?? null), 'Generated execute requests should include a stable SQL hash in telemetry.');
+
+    \app\services\SqlBuilderService::$policyException = new \InvalidArgumentException(
+        'SQLSTATE[42501]: permission denied for table users.users__t; PDO driver detail'
+    );
+    Yii::$app = (object) [
+        'request' => new FakeExecuteRequest([
+            'sql' => 'SELECT * FROM users.users__t',
+            'source' => 'nl',
+            'dataSource' => 'folio',
+        ]),
+        'response' => new FakeExecuteResponse(),
+        'folioDb' => $folioDb,
+        'user' => (object) ['isGuest' => true, 'id' => null],
+        'params' => ['maxQueryRows' => 100, 'queryTimeoutMs' => 1800000],
+    ];
+    $policyResult = (new \app\controllers\FolioQueryController('folio-query', null))->actionExecute();
+    assertSameValue(403, Yii::$app->response->statusCode, 'Permission policy failures should remain blocked.');
+    assertSameValue(
+        'This query is blocked by reporting data policy.',
+        $policyResult['error'] ?? null,
+        'Permission policy responses must not expose SQLSTATE, schema, table, or driver detail.'
+    );
+    \app\services\SqlBuilderService::$policyException = null;
 
     \app\services\SqlPreflightService::$calls = [];
     \app\services\SqlPreflightService::$nextResult = ['error' => 'syntax error at end of input'];
@@ -368,7 +395,7 @@ namespace {
     $submitResult = $submitController->actionQuerySubmit();
 
     assertSameValue(422, Yii::$app->response->statusCode, 'Query submit requests should fail fast when PostgreSQL preflight rejects parameterized SQL.');
-    assertSameValue('invalid input syntax for type uuid', $submitResult['error'] ?? null, 'Query submit requests should surface the PostgreSQL preflight error directly.');
+    assertSameValue('Query validation failed before execution.', $submitResult['error'] ?? null, 'Query submit responses should not expose raw PostgreSQL validation detail.');
     assertCountValue(1, \app\services\SqlBuilderService::$buildCalls, 'Query submit requests should build queryDefinition input exactly once.');
     assertCountValue(1, \app\services\SqlPreflightService::$calls, 'Query submit requests should invoke PostgreSQL preflight exactly once.');
     assertSameValue('SELECT * FROM inventory.items WHERE holdings_record_id = :holdings_id', \app\services\SqlPreflightService::$calls[0]['sql'] ?? null, 'Query submit requests should preflight the SQL returned by the builder.');

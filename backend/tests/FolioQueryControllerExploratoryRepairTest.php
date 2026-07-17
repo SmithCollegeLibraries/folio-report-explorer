@@ -174,6 +174,61 @@ namespace {
     repairAssertSame('postgres_connectivity', $connectivity['errorType'] ?? null, 'Connectivity failures should remain distinct.');
     repairAssertSame(true, strpos($connectivity['message'] ?? '', 'VPN') !== false, 'Connectivity recovery should continue to mention VPN.');
 
+    $canonicalRepairCalls = 0;
+    $canonicalFailure = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT broken_column FROM inventory.instance__t',
+            'mode' => 'canonical',
+            'route' => 'builder_intent',
+            'routeReason' => 'family_contract_supported:inventory_listing',
+        ],
+        'Show titles',
+        'Smith College',
+        function (): array { return ['error' => 'column "broken_column" does not exist']; },
+        function () use (&$canonicalRepairCalls): array {
+            $canonicalRepairCalls++;
+            return ['sql' => 'SELECT title FROM inventory.instance__t'];
+        }
+    );
+    repairAssertSame(0, $canonicalRepairCalls, 'Verified-family preflight failures must retain legacy recovery without Gemini repair.');
+    repairAssertSame('exploratory_recovery', $canonicalFailure['route'] ?? null, 'Verified-family preflight failures should retain the legacy continuation route.');
+    repairAssertSame(null, $canonicalFailure['validationSummary'] ?? null, 'Verified-family preflight failures must not be mislabeled as exploratory repair exhaustion.');
+
+    $cancelRepairCalls = 0;
+    try {
+        $validateAndRepair->invoke(
+            $controller,
+            ['sql' => 'SELECT title FROM inventory.instance__t', 'mode' => 'exploratory', 'route' => 'exploratory'],
+            'Show titles',
+            'Smith College',
+            function (): array { return ['error' => 'SQLSTATE[57014]: canceling statement due to statement timeout on inventory.instance__t']; },
+            function () use (&$cancelRepairCalls): array {
+                $cancelRepairCalls++;
+                return [];
+            }
+        );
+        fwrite(STDERR, "Database cancellation must remain a typed hard stop.\n");
+        exit(1);
+    } catch (\ReflectionException $exception) {
+        throw $exception;
+    } catch (\Throwable $exception) {
+        $typedCancellation = $exception instanceof \app\exceptions\DatabaseQueryCancelledException
+            || $exception->getPrevious() instanceof \app\exceptions\DatabaseQueryCancelledException;
+        repairAssertSame(true, $typedCancellation, 'SQLSTATE 57014 should become a typed database cancellation.');
+    }
+    repairAssertSame(0, $cancelRepairCalls, 'Database cancellation must never call Gemini repair.');
+
+    $continuation = new ReflectionMethod($controller, 'buildAskContinuationFromFailure');
+    $cancelResponse = $continuation->invoke(
+        $controller,
+        new \app\exceptions\DatabaseQueryCancelledException(),
+        'Show titles',
+        'Smith College'
+    );
+    repairAssertSame('database_cancelled', $cancelResponse['errorType'] ?? null, 'Controller handling should preserve database cancellation as a distinct hard stop.');
+    repairAssertSame(false, strpos(strtolower((string)($cancelResponse['error'] ?? '')), 'ai') !== false, 'Database cancellation copy must not mention an AI/model timeout.');
+
     $unsafeRepairCalls = 0;
     $unsafe = $validateAndRepair->invoke(
         $controller,
@@ -198,7 +253,7 @@ namespace {
 
     $unsafeCategory = $validateAndRepair->invoke(
         $controller,
-        ['sql' => 'SELECT broken FROM inventory.instance__t', 'repairAttempts' => 0],
+        ['sql' => 'SELECT broken FROM inventory.instance__t', 'mode' => 'exploratory', 'repairAttempts' => 0],
         'Show titles',
         'Smith College',
         function (): array { return ['error' => 'syntax error at or near "broken"']; },
@@ -220,7 +275,7 @@ namespace {
     $negativeRepairCalls = 0;
     $negativeAttempts = $validateAndRepair->invoke(
         $controller,
-        ['sql' => 'SELECT broken FROM inventory.instance__t', 'repairAttempts' => -50],
+        ['sql' => 'SELECT broken FROM inventory.instance__t', 'mode' => 'exploratory', 'repairAttempts' => -50],
         'Show titles',
         'Smith College',
         function (): array { return ['error' => 'syntax error at or near "broken"']; },
@@ -238,7 +293,7 @@ namespace {
     $excessiveRepairCalls = 0;
     $excessiveAttempts = $validateAndRepair->invoke(
         $controller,
-        ['sql' => 'SELECT broken FROM inventory.instance__t', 'repairAttempts' => 500],
+        ['sql' => 'SELECT broken FROM inventory.instance__t', 'mode' => 'exploratory', 'repairAttempts' => 500],
         'Show titles',
         'Smith College',
         function (): array { return ['error' => 'syntax error at or near "broken"']; },

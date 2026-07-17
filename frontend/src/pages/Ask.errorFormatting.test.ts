@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import * as AskPage from './Ask';
 
 describe('Ask error formatting', () => {
+  it('routes both exhausted and rejected validation summaries through the no-SQL hard stop', () => {
+    expect(typeof AskPage.isExploratoryValidationHardStop).toBe('function');
+    expect(AskPage.isExploratoryValidationHardStop?.({ status: 'exhausted', repairAttempts: 2 })).toBe(true);
+    expect(AskPage.isExploratoryValidationHardStop?.({ status: 'rejected', repairAttempts: 0 })).toBe(true);
+    expect(AskPage.isExploratoryValidationHardStop?.({ status: 'validated', repairAttempts: 0 })).toBe(false);
+  });
+
   it('surfaces postgres preflight failures as query validation errors instead of generic AI errors', () => {
     expect(typeof AskPage.formatNlError).toBe('function');
 
@@ -33,6 +40,23 @@ describe('Ask error formatting', () => {
     });
 
     expect(message).toBe('The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.');
+  });
+
+  it('keeps database cancellation distinct from AI timeout messaging', () => {
+    const message = AskPage.formatNlError?.({
+      isAxiosError: true,
+      response: {
+        status: 503,
+        data: {
+          errorType: 'database_cancelled',
+          error: 'Database validation was cancelled before the query could run. Please retry the request.',
+        },
+      },
+      message: 'Request failed with status code 503',
+    });
+
+    expect(message).toBe('Database validation was cancelled before the query could run. Please retry the request.');
+    expect(message).not.toMatch(/AI|model|network/i);
   });
 
   it('surfaces client-side Axios timeouts as transient AI service issues', () => {

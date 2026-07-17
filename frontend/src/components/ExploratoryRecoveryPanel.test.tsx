@@ -55,4 +55,22 @@ describe('ExploratoryRecoveryPanel', () => {
       'Use cost per checkout as ROI.',
     );
   });
+
+  it('renders rejected unsafe SQL as a hard stop without SQL or run controls', () => {
+    render(
+      <ExploratoryRecoveryPanel
+        response={{
+          ...response,
+          errorType: 'unsafe_generated_sql',
+          validationSummary: { status: 'rejected', repairAttempts: 0, failureCategory: 'non_select' },
+        }}
+        onRetry={() => undefined}
+        onRefine={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText(/unsafe query was rejected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Generated SQL/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run/i })).not.toBeInTheDocument();
+  });
 });

@@ -246,7 +246,7 @@ export interface ExploratoryAssumption {
 }
 
 export interface ValidationSummary {
-  status: 'validated' | 'exhausted';
+  status: 'validated' | 'exhausted' | 'rejected';
   repairAttempts: number;
   validatorStage?: string;
   failureCategory?: string;
@@ -264,6 +264,7 @@ export interface RecoveryContext {
 }
 
 export interface NlResponse {
+  errorType?: string;
   sql?: string;
   explanation?: string;
   dataSource?: 'folio' | 'local';

@@ -147,6 +147,9 @@ export function formatNlError(error: unknown): string {
   const message = getApiErrorMessage(error);
   if (isAxiosError(error)) {
     const data = error.response?.data as { errorType?: unknown } | undefined;
+    if (data?.errorType === 'database_cancelled') {
+      return message;
+    }
     if (data?.errorType === 'ai_timeout') {
       return message;
     }
@@ -227,6 +230,12 @@ export function getExploratoryNoticeCopy(
 
 export function shouldShowBlockingClarification(result: NlResponse | null | undefined): boolean {
   return result?.needsClarification === true;
+}
+
+export function isExploratoryValidationHardStop(
+  summary: NlResponse['validationSummary'] | null | undefined,
+): boolean {
+  return summary?.status === 'exhausted' || summary?.status === 'rejected';
 }
 
 function ExploratoryNoticePanel({ result }: { result: NlResponse | null }) {
@@ -2113,7 +2122,7 @@ export default function Ask() {
           </div>
         )}
 
-        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && nlResult.validationSummary?.status === 'exhausted' && (
+        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && isExploratoryValidationHardStop(nlResult.validationSummary) && (
           <div className="mx-auto w-full max-w-4xl p-3">
             <ExploratoryRecoveryPanel
               response={nlResult}
@@ -2123,7 +2132,7 @@ export default function Ask() {
           </div>
         )}
 
-        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && nlResult.validationSummary?.status !== 'exhausted' && (
+        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && !isExploratoryValidationHardStop(nlResult.validationSummary) && (
           <div className="mx-auto w-full max-w-6xl p-3 space-y-3">
             <ExploratoryNoticePanel result={nlResult} />
             {nlResult.mode === 'exploratory' && nlResult.assumptions && nlResult.assumptions.length > 0 && (

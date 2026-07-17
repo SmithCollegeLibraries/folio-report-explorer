@@ -16,6 +16,7 @@ function formatFailureCategory(category?: string): string {
 
 export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: ExploratoryRecoveryPanelProps) {
   const originalQuestion = response.recoveryContext?.originalQuestion?.trim() || '';
+  const isRejected = response.validationSummary?.status === 'rejected';
   const suggestions = response.suggestions?.length
     ? response.suggestions
     : response.exploratoryPlan?.suggestions || [];
@@ -26,7 +27,9 @@ export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: Explor
         The request is preserved
       </h2>
       <p className="mt-1 text-sm text-amber-900">
-        No query survived validation. Retry the preserved request or refine one part of it below.
+        {isRejected
+          ? 'The unsafe query was rejected before execution. Retry the preserved request or refine one part of it below.'
+          : 'No query survived validation. Retry the preserved request or refine one part of it below.'}
       </p>
 
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
