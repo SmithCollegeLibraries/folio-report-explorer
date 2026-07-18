@@ -111,20 +111,44 @@ semanticAssertSame(array_column($contract['requirements'], 'key'), array_column(
 
 $estimatedQuestion = $question . ' Use estimated PO line price.';
 $estimatedContract = ExploratorySemanticContractService::build($estimatedQuestion, null, ExploratoryQueryDefaultsService::resolve($estimatedQuestion), 'unsupported_query_family');
+$estimatedBaseSql = str_replace("    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql);
 $estimatedSql = str_replace(
     [
+        'WITH spend_by_instance AS (',
         'SUM(fd.total * fd.fund_distributions__value * 0.01)',
         "    FROM invoice.invoice_lines__t__fund_distributions fd\n    JOIN invoice.invoice_lines__t invoice_line ON invoice_line.id = fd.id\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id\n    JOIN orders.po_line__t pol ON pol.id = fd.po_line_id",
     ],
     [
+        "WITH eligible_po_lines AS (\n    SELECT invoice_line.po_line_id AS po_line_id\n    FROM invoice.invoice_lines__t invoice_line\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id\n    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'\n    GROUP BY invoice_line.po_line_id\n), spend_by_instance AS (",
         'SUM(pol.cost__po_line_estimated_price)',
-        "    FROM orders.po_line__t pol\n    JOIN invoice.invoice_lines__t invoice_line ON invoice_line.po_line_id = pol.id\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id",
+        "    FROM orders.po_line__t pol\n    JOIN eligible_po_lines eligible ON eligible.po_line_id = pol.id",
     ],
-    $correctedSql
+    $estimatedBaseSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($estimatedSql, $estimatedContract)['status'], 'The advertised estimated PO-line price alternative must validate.');
 semanticAssertRejectedFor(str_replace('pol.cost__po_line_estimated_price', 'invoice_line.total', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated price must resolve to the PO-line estimated-price column.');
 semanticAssertRejectedFor($correctedSql, $estimatedContract, 'investment_cost_basis', 'Paid fund distributions must not satisfy the estimated-price alternative.');
+$directEstimatedSql = str_replace(
+    ['SUM(fd.total * fd.fund_distributions__value * 0.01)', 'JOIN orders.po_line__t pol ON pol.id = fd.po_line_id'],
+    ['SUM(pol.cost__po_line_estimated_price)', 'JOIN orders.po_line__t pol ON pol.id = fd.po_line_id'],
+    $correctedSql
+);
+semanticAssertRejectedFor($directEstimatedSql, $estimatedContract, 'investment_cost_basis', 'Direct invoice-line grain must not multiply PO-line estimated prices.');
+semanticAssertRejectedFor(str_replace("    GROUP BY invoice_line.po_line_id\n), spend_by_instance", '), spend_by_instance', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated eligibility must deduplicate to one row per PO line.');
+semanticAssertRejectedFor(str_replace('GROUP BY invoice_line.po_line_id', 'GROUP BY invoice_line.id', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated eligibility must group by the selected PO-line id.');
+semanticAssertRejectedFor(str_replace('invoice_line.po_line_id AS po_line_id', 'invoice_line.id AS po_line_id', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated eligibility must select the invoice-line PO-line id.');
+semanticAssertRejectedFor(str_replace('eligible.po_line_id = pol.id', 'eligible.po_line_id = pol.instance_id', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated spending must join eligibility PO-line id to PO-line id.');
+$estimatedDecoySql = str_replace(
+    'WITH eligible_po_lines AS (',
+    'WITH eligibility_decoy AS (SELECT 1 AS po_line_id), eligible_po_lines AS (',
+    $estimatedSql
+);
+$estimatedDecoySql = str_replace('JOIN eligible_po_lines eligible ON', 'JOIN eligibility_decoy eligible ON', $estimatedDecoySql);
+semanticAssertRejectedFor($estimatedDecoySql, $estimatedContract, 'investment_cost_basis', 'An unused correct eligibility CTE must not lend trust to the joined decoy.');
+$estimatedInvoiceQuestion = $estimatedQuestion . ' Use invoice date.';
+$estimatedInvoiceContract = ExploratorySemanticContractService::build($estimatedInvoiceQuestion, null, ExploratoryQueryDefaultsService::resolve($estimatedInvoiceQuestion), 'unsupported_query_family');
+$estimatedInvoiceSql = str_replace('invoice.payment_date', 'invoice.invoice_date', $estimatedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($estimatedInvoiceSql, $estimatedInvoiceContract)['status'], 'Estimated PO-line eligibility must support the advertised invoice-date basis.');
 
 $lifetimeQuestion = $question . ' Use lifetime circulation.';
 $lifetimeContract = ExploratorySemanticContractService::build($lifetimeQuestion, null, ExploratoryQueryDefaultsService::resolve($lifetimeQuestion), 'unsupported_query_family');
@@ -145,6 +169,14 @@ $costOnlyContract = ExploratorySemanticContractService::build($costOnlyQuestion,
 $costOnlySql = str_replace("       SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0) AS checkouts_per_dollar,\n", '', $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($costOnlySql, $costOnlyContract)['status'], 'The advertised cost-per-checkout-only alternative must validate without checkouts per dollar.');
 semanticAssertRejectedFor(str_replace('SUM(spend_by_instance.spend) / NULLIF(SUM(circulation_by_instance.circulation), 0)', 'SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0)', $costOnlySql), $costOnlyContract, 'roi_formula', 'Cost per checkout must remain spend over circulation.');
+$formattedOptionalRoiSql = str_replace(
+    '       SUM(spend_by_instance.spend) / NULLIF',
+    "       TO_CHAR(SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0), 'FM999.00') AS checkouts_per_dollar,\n       SUM(spend_by_instance.spend) / NULLIF",
+    $costOnlySql
+);
+semanticAssertRejectedFor($formattedOptionalRoiSql, $costOnlyContract, 'numeric_output_types', 'A returned optional analytical measure must remain numeric.');
+$descriptiveOutputSql = str_replace('SELECT class_by_instance.call_number_class,', "SELECT class_by_instance.call_number_class,\n       CONCAT('ROI') AS note,", $costOnlySql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($descriptiveOutputSql, $costOnlyContract)['status'], 'Unknown descriptive outputs need not be numeric.');
 
 $aliasedFinalSql = str_replace(
     [

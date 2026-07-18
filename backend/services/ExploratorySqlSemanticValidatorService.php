@@ -94,6 +94,10 @@ class ExploratorySqlSemanticValidatorService
         if (!in_array($expected, ['payment_date', 'invoice_date'], true)) {
             return self::GUIDANCE['purchase_date_basis'];
         }
+        if (self::investmentCostBasis($contract) === 'estimated_po_line_price') {
+            return self::estimatedEligibilityCte($analysis, $expected) !== null
+                ? null : self::GUIDANCE['purchase_date_basis'];
+        }
         return $spend !== null && self::qualifyingWindow($spend, $expected) !== null
             ? null : self::GUIDANCE['purchase_date_basis'];
     }
@@ -108,6 +112,7 @@ class ExploratorySqlSemanticValidatorService
             return ($aggregate['function'] ?? null) === 'sum'
                 && self::columnLeaf((string)($aggregate['column'] ?? '')) === 'cost__po_line_estimated_price'
                 && self::columnSource($spend, (string)$aggregate['column']) === 'orders.po_line__t'
+                && self::estimatedEligibilityCte($analysis, self::purchaseDateBasis($contract)) !== null
                 ? null : self::GUIDANCE['investment_cost_basis'];
         }
         if ($basis !== 'actual_paid_fund_distribution') {
@@ -170,7 +175,11 @@ class ExploratorySqlSemanticValidatorService
             return self::GUIDANCE['circulation_window'];
         }
         $purchaseBasis = self::purchaseDateBasis($contract);
-        $purchaseWindow = $purchaseBasis === null ? null : self::qualifyingWindow($spend, $purchaseBasis);
+        $purchaseScope = self::investmentCostBasis($contract) === 'estimated_po_line_price'
+            ? self::estimatedEligibilityCte($analysis, $purchaseBasis)
+            : $spend;
+        $purchaseWindow = $purchaseBasis === null || $purchaseScope === null
+            ? null : self::qualifyingWindow($purchaseScope, $purchaseBasis);
         $circulationWindow = self::qualifyingWindow($circulation, 'created_date');
         return $purchaseWindow !== null && $circulationWindow !== null
             && $purchaseWindow['operator'] === $circulationWindow['operator']
@@ -359,7 +368,9 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateNumericOutputTypes(array $analysis, array $requirement, array $contract): ?string
     {
-        $measures = self::requiredMeasures($contract);
+        $recognized = ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'];
+        $returned = array_column($analysis['selectItems'] ?? [], 'alias');
+        $measures = array_values(array_intersect($recognized, $returned));
         if (array_intersect($measures, $analysis['formattedAliases'] ?? []) !== []) {
             return self::GUIDANCE['numeric_output_types'];
         }
@@ -372,14 +383,39 @@ class ExploratorySqlSemanticValidatorService
         return null;
     }
 
-    private static function requiredMeasures(array $contract): array
+    private static function estimatedEligibilityCte(array $analysis, ?string $dateBasis): ?array
     {
-        foreach (($contract['requirements'] ?? []) as $requirement) {
-            if (($requirement['key'] ?? null) === 'required_measures') {
-                return $requirement['parameters']['values'] ?? [];
-            }
+        if (!in_array($dateBasis, ['payment_date', 'invoice_date'], true)) {
+            return null;
         }
-        return [];
+        $spend = self::spendCte($analysis);
+        $poLine = self::aliasForSource($spend ?? [], 'orders.po_line__t');
+        if ($spend === null || $poLine === null || ($spend['tables'] ?? []) !== ['orders.po_line__t']) {
+            return null;
+        }
+        $candidates = [];
+        foreach (($spend['sourceAliases'] ?? []) as $alias => $binding) {
+            if (($binding['kind'] ?? null) !== 'cte') {
+                continue;
+            }
+            $name = (string)($binding['source'] ?? '');
+            $eligibility = $analysis['ctes'][$name] ?? null;
+            if ($eligibility === null
+                || !self::hasExactColumnEquality($spend, $alias . '.po_line_id', $poLine . '.id')) {
+                continue;
+            }
+            $invoiceLine = self::aliasForSource($eligibility, 'invoice.invoice_lines__t');
+            $invoice = self::aliasForSource($eligibility, 'invoice.invoices__t');
+            if ($invoiceLine === null || $invoice === null
+                || self::expressionForAlias($eligibility['selectItems'] ?? [], 'po_line_id') !== $invoiceLine . '.po_line_id'
+                || ($eligibility['groupBy'] ?? []) !== [$invoiceLine . '.po_line_id']
+                || !self::hasExactColumnEquality($eligibility, $invoice . '.id', $invoiceLine . '.invoice_id')
+                || self::qualifyingWindow($eligibility, $dateBasis) === null) {
+                continue;
+            }
+            $candidates[] = $eligibility;
+        }
+        return count($candidates) === 1 ? $candidates[0] : null;
     }
 
     private static function spendCte(array $analysis): ?array
@@ -753,6 +789,18 @@ class ExploratorySqlSemanticValidatorService
             if (($requirement['key'] ?? null) === 'purchase_date_basis') {
                 $basis = $requirement['parameters']['value'] ?? null;
                 return in_array($basis, ['payment_date', 'invoice_date'], true) ? $basis : null;
+            }
+        }
+        return null;
+    }
+
+    private static function investmentCostBasis(array $contract): ?string
+    {
+        foreach (($contract['requirements'] ?? []) as $requirement) {
+            if (($requirement['key'] ?? null) === 'investment_cost_basis') {
+                $basis = $requirement['parameters']['value'] ?? null;
+                return in_array($basis, ['actual_paid_fund_distribution', 'estimated_po_line_price'], true)
+                    ? $basis : null;
             }
         }
         return null;
