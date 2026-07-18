@@ -85,6 +85,24 @@ expectBuilderSchema(
     'Default relationship lookup must be deterministic.'
 );
 
+$childDetail = BuilderSchemaService::projectTable([
+    'name' => 'inventory_locations',
+    'sql_name' => 'inventory.location__t',
+    'alias_name' => 'inventory_locations',
+    'table' => ['columns' => [['name' => 'id']]],
+], $catalog);
+$childRelationship = $childDetail['relationships']['children'][0];
+expectBuilderSchema(
+    $childRelationship['local_column'] === 'id'
+        && $childRelationship['child_column'] === 'effective_location_id',
+    'Child projection must retain its table-relative endpoint fields.'
+);
+expectBuilderSchema(
+    $childRelationship['from_column'] === 'effective_location_id'
+        && $childRelationship['to_column'] === 'id',
+    'Child projection must also retain canonical endpoints for order-independent display.'
+);
+
 $pairId = BuilderRelationshipCatalogService::pairId('inventory.item__t', 'inventory.location__t');
 $relationshipIds = [
     'inventory.item__t.effective_location_id->inventory.location__t.id',
@@ -192,6 +210,21 @@ expectBuilderSchema($snapshot['columns_by_physical_table'] === $columns, 'Builde
 
 $tables = BuilderSchemaService::getTables(['inventory.item__t']);
 expectBuilderSchema(array_keys($tables) === ['inventory.item__t'], 'Facade table filters must use physical names.');
+$aliasTables = BuilderSchemaService::getTables(['inventory_items']);
+expectBuilderSchema(
+    array_keys($aliasTables) === ['inventory.item__t'],
+    'Facade table filters must resolve legacy aliases to physical names.'
+);
+$mixedTables = BuilderSchemaService::getTables([
+    'inventory_items',
+    'inventory.location__t',
+    'query_jobs',
+    'unknown_table',
+]);
+expectBuilderSchema(
+    array_keys($mixedTables) === ['inventory.item__t', 'inventory.location__t'],
+    'Facade table filters must mix aliases and physical names while omitting unknown names.'
+);
 expectBuilderSchema(BuilderSchemaService::physicalNameFor('inventory_items') === 'inventory.item__t', 'Legacy aliases must resolve to physical names.');
 expectBuilderSchema(BuilderSchemaService::physicalNameFor('inventory.item__t') === 'inventory.item__t', 'Physical names must resolve to themselves.');
 expectBuilderSchema(BuilderSchemaService::legacyNameFor('inventory.item__t') === 'inventory_items', 'Physical names must resolve to their legacy aliases.');

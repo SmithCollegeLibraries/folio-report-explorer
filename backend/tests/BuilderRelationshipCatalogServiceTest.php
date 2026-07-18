@@ -76,4 +76,80 @@ expectCatalog(isset($catalog['relationships_by_id'][$permanentId]), 'Permanent l
 expectCatalog($catalog['relationships_by_id'][$defaultId]['source'] === 'overlay', 'Overlay must enrich the generated relationship.');
 expectCatalog(count($catalog['warnings']) === 1, 'Invalid overlay columns must produce one isolated warning.');
 
+$missingOverlay = BuilderRelationshipCatalogService::loadOverlay(__DIR__ . '/missing-builder-overlay.json');
+$missingCatalog = BuilderRelationshipCatalogService::build($legacy, $mapping, $columns, $missingOverlay);
+expectCatalog(
+    count($missingCatalog['relationships_by_id']) === 1,
+    'A missing overlay must preserve generated relationships.'
+);
+expectCatalog(
+    count($missingCatalog['warnings']) === 1
+        && strpos($missingCatalog['warnings'][0], 'could not be read') !== false,
+    'A missing overlay must surface a safe catalog warning.'
+);
+
+$invalidJsonPath = tempnam(sys_get_temp_dir(), 'builder-overlay-invalid-json-');
+file_put_contents($invalidJsonPath, '{invalid');
+$invalidJsonCatalog = BuilderRelationshipCatalogService::build(
+    $legacy,
+    $mapping,
+    $columns,
+    BuilderRelationshipCatalogService::loadOverlay($invalidJsonPath)
+);
+unlink($invalidJsonPath);
+expectCatalog(
+    count($invalidJsonCatalog['relationships_by_id']) === 1,
+    'Malformed overlay JSON must preserve generated relationships.'
+);
+expectCatalog(
+    count($invalidJsonCatalog['warnings']) === 1
+        && strpos($invalidJsonCatalog['warnings'][0], 'valid JSON') !== false,
+    'Malformed overlay JSON must surface a safe catalog warning.'
+);
+
+$invalidShapePath = tempnam(sys_get_temp_dir(), 'builder-overlay-invalid-shape-');
+file_put_contents($invalidShapePath, json_encode(['relationships' => [
+    'named-entry' => [
+        'fromTable' => 'inventory.item__t',
+        'fromColumn' => 'permanent_location_id',
+        'toTable' => 'inventory.location__t',
+        'toColumn' => 'id',
+    ],
+]]));
+$invalidShapeCatalog = BuilderRelationshipCatalogService::build(
+    $legacy,
+    $mapping,
+    $columns,
+    BuilderRelationshipCatalogService::loadOverlay($invalidShapePath)
+);
+unlink($invalidShapePath);
+expectCatalog(
+    count($invalidShapeCatalog['relationships_by_id']) === 1,
+    'A structurally invalid overlay must preserve generated relationships.'
+);
+expectCatalog(
+    count($invalidShapeCatalog['warnings']) === 1
+        && strpos($invalidShapeCatalog['warnings'][0], 'relationships list') !== false,
+    'A structurally invalid overlay must surface a safe catalog warning.'
+);
+
+$invalidEntryPath = tempnam(sys_get_temp_dir(), 'builder-overlay-invalid-entry-');
+file_put_contents($invalidEntryPath, json_encode(['version' => 1, 'relationships' => ['not-an-object']]));
+$invalidEntryCatalog = BuilderRelationshipCatalogService::build(
+    $legacy,
+    $mapping,
+    $columns,
+    BuilderRelationshipCatalogService::loadOverlay($invalidEntryPath)
+);
+unlink($invalidEntryPath);
+expectCatalog(
+    count($invalidEntryCatalog['relationships_by_id']) === 1,
+    'An invalid overlay entry must not remove generated relationships.'
+);
+expectCatalog(
+    count($invalidEntryCatalog['warnings']) === 1
+        && strpos($invalidEntryCatalog['warnings'][0], 'entry 0') !== false,
+    'An invalid overlay entry must surface a safe catalog warning.'
+);
+
 fwrite(STDOUT, "Builder relationship catalog test passed\n");

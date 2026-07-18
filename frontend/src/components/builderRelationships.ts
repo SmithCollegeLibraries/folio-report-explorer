@@ -33,7 +33,18 @@ function endpoints(
     candidate.from_table && candidate.from_column
     && candidate.to_table && candidate.to_column
   ) {
-    return candidate as RelationshipEndpoints;
+    return {
+      ...relationship,
+      from_table: candidate.from_table,
+      from_column: candidate.from_column,
+      to_table: candidate.to_table,
+      to_column: candidate.to_column,
+      parent_table: candidate.to_table,
+      parent_column: candidate.to_column,
+      child_table: candidate.from_table,
+      child_column: candidate.from_column,
+      local_column: candidate.from_column,
+    } as RelationshipEndpoints;
   }
 
   if (direction === 'parents' && relationship.parent_table && relationship.parent_column) {

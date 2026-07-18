@@ -54,8 +54,17 @@ const tableDetails: Record<string, CanonicalTableDetail> = {
     table: {
       type: 'table', schema: 'inventory', remarks: null, primary_key: 'id', columns: [], indexes: [],
     },
-    // Duplicate copies returned by the other table must not duplicate options.
-    relationships: { parents: [], children: relationships },
+    // This mirrors the backend child projection: the canonical endpoints remain,
+    // while local_column belongs to the location table and parent_column is absent.
+    relationships: {
+      parents: [],
+      children: relationships.map(({ parent_table: _parentTable, parent_column: _parentColumn, ...item }) => ({
+        ...item,
+        child_table: item.from_table,
+        child_column: item.from_column,
+        local_column: item.to_column,
+      })),
+    },
   },
 };
 
@@ -83,6 +92,11 @@ describe('builder relationship state', () => {
       effectiveId,
       permanentId,
       temporaryId,
+    ]);
+    expect(pair.relationships.map((item) => [item.from_column, item.to_column])).toEqual([
+      ['effective_location_id', 'id'],
+      ['permanent_location_id', 'id'],
+      ['temporary_location_id', 'id'],
     ]);
     expect(activeRelationship(pair, {})).toMatchObject({ from_column: 'effective_location_id' });
     expect(activeRelationship(pair, { [pair.pairId]: permanentId })).toMatchObject({

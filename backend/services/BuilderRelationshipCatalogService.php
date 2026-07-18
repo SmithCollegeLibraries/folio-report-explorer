@@ -19,16 +19,48 @@ final class BuilderRelationshipCatalogService
     public static function loadOverlay(string $path): array
     {
         if (!is_file($path)) {
-            return ['version' => 1, 'relationships' => []];
+            return self::emptyOverlay('Builder relationship overlay could not be read.');
         }
-        $decoded = json_decode((string)file_get_contents($path), true);
-        return is_array($decoded) ? $decoded : ['version' => 1, 'relationships' => []];
+        $contents = @file_get_contents($path);
+        if ($contents === false) {
+            return self::emptyOverlay('Builder relationship overlay could not be read.');
+        }
+
+        $decoded = json_decode($contents, true);
+        if (!is_array($decoded) || json_last_error() !== JSON_ERROR_NONE) {
+            return self::emptyOverlay('Builder relationship overlay does not contain valid JSON.');
+        }
+        if (
+            !isset($decoded['relationships'])
+            || !is_array($decoded['relationships'])
+            || !self::isList($decoded['relationships'])
+        ) {
+            return self::emptyOverlay('Builder relationship overlay must contain a relationships list.');
+        }
+
+        $relationships = [];
+        $warnings = [];
+        foreach ($decoded['relationships'] as $index => $entry) {
+            if (!is_array($entry)) {
+                $warnings[] = 'Builder relationship overlay entry ' . $index . ' must be an object.';
+                continue;
+            }
+            $relationships[] = $entry;
+        }
+
+        return [
+            'version' => $decoded['version'] ?? 1,
+            'relationships' => $relationships,
+            '_catalog_warnings' => $warnings,
+        ];
     }
 
     public static function build(array $legacyRelationships, array $mapping, array $columnsByTable, array $overlay): array
     {
         $relationshipsById = [];
-        $warnings = [];
+        $warnings = is_array($overlay['_catalog_warnings'] ?? null)
+            ? $overlay['_catalog_warnings']
+            : [];
 
         foreach ($legacyRelationships as $legacyFrom => $relationshipSet) {
             $fromTable = $mapping[$legacyFrom] ?? (isset($columnsByTable[$legacyFrom]) ? $legacyFrom : null);
@@ -159,5 +191,19 @@ final class BuilderRelationshipCatalogService
             }
         }
         return false;
+    }
+
+    private static function emptyOverlay(string $warning): array
+    {
+        return [
+            'version' => 1,
+            'relationships' => [],
+            '_catalog_warnings' => [$warning],
+        ];
+    }
+
+    private static function isList(array $value): bool
+    {
+        return $value === [] || array_keys($value) === range(0, count($value) - 1);
     }
 }

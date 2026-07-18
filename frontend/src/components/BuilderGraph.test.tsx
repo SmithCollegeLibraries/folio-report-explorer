@@ -248,6 +248,25 @@ const canonicalGroups: RelationshipGroups = {
   },
 };
 
+const childProjectedGroups: RelationshipGroups = {
+  [pairId]: {
+    ...canonicalGroups[pairId],
+    relationships: canonicalGroups[pairId].relationships.map((relationship) => {
+      const {
+        parent_table: _parentTable,
+        parent_column: _parentColumn,
+        ...canonical
+      } = relationship;
+      return {
+        ...canonical,
+        child_table: relationship.from_table,
+        child_column: relationship.from_column,
+        local_column: relationship.to_column,
+      } as CanonicalRelationship;
+    }),
+  },
+};
+
 function canonicalGraph(
   overrides: RelationshipOverrides,
   onRelationshipChange: (nextPairId: string, relationshipId: string) => void,
@@ -351,6 +370,22 @@ afterEach(() => {
 });
 
 describe('BuilderGraph layout behavior', () => {
+  it('displays canonical endpoints for backend child-projected relationship alternatives', async () => {
+    const user = userEvent.setup();
+    render(canonicalGraph({}, vi.fn(), childProjectedGroups));
+
+    await user.click(await screen.findByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    }));
+
+    expect(screen.getByRole('button', { name: /^Effective location/ }))
+      .toHaveTextContent('effective_location_id → id');
+    expect(screen.getByRole('button', { name: /^Permanent location/ }))
+      .toHaveTextContent('permanent_location_id → id');
+    expect(screen.getByRole('button', { name: /^Temporary location/ }))
+      .toHaveTextContent('temporary_location_id → id');
+  });
+
   it('keeps the relationship selector after production-shaped initial and explicit layouts', async () => {
     const user = userEvent.setup();
     vi.mocked(layoutRelationshipGraph).mockImplementation(async ({ nodes, edges }) => ({

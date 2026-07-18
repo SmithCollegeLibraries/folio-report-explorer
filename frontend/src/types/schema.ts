@@ -78,6 +78,10 @@ export type SchemaIdentity = 'ldlite';
 export interface CanonicalRelationship extends Relationship {
   relationship_id: string;
   pair_id: string;
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
   label: string;
   is_default: boolean;
   source: 'metadb' | 'overlay';

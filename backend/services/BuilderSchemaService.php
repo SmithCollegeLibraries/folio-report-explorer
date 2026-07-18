@@ -24,6 +24,13 @@ final class BuilderSchemaService
             }
         }
 
+        if ($filter !== null) {
+            $mapping = FolioSchemaService::getBuilderSchemaInputs()['mapping'];
+            $filter = array_values(array_unique(array_map(function (string $name) use ($mapping): string {
+                return (string)($mapping[$name] ?? $name);
+            }, $filter)));
+        }
+
         return self::projectTables($legacyTables, $filter);
     }
 

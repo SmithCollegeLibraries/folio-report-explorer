@@ -594,7 +594,7 @@ function BuilderGraphCanvas({
                       <span>
                         <span className="block font-medium">{relationship.label}</span>
                         <span className="block font-mono text-[10px] text-gray-500">
-                          {relationship.local_column} → {relationship.parent_column ?? 'id'}
+                          {relationship.from_column} → {relationship.to_column}
                         </span>
                       </span>
                       {isDefault && (
