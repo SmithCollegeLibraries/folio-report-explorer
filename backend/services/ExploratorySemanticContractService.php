@@ -2,6 +2,8 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
+
 class ExploratorySemanticContractService
 {
     private const CONTRACT_VERSION = 1;
@@ -25,25 +27,6 @@ class ExploratorySemanticContractService
         'campus_scope' => 'campus_scope',
         'governed_filters' => 'governed_filters',
         'numeric_output_types' => 'numeric_output_types',
-    ];
-
-    /**
-     * Temporary coverage registry. The semantic validator replaces this registry
-     * when its rule implementations are introduced.
-     */
-    private const SUPPORTED_RULE_KEYS = [
-        'purchase_date_basis',
-        'investment_cost_basis',
-        'spend_before_item_join',
-        'circulation_window',
-        'circulation_item_grain',
-        'call_number_grouping',
-        'required_output_measures',
-        'roi_formula',
-        'descending_purchase_ranking',
-        'campus_scope',
-        'governed_filters',
-        'numeric_output_types',
     ];
 
     public static function build(
@@ -107,7 +90,7 @@ class ExploratorySemanticContractService
             self::requirement('numeric_output_types', 'Keep analytical measures numeric.'),
         ];
 
-        $coverage = self::auditCoverage($requirements, self::SUPPORTED_RULE_KEYS);
+        $coverage = self::auditCoverage($requirements, ExploratorySqlSemanticValidatorService::supportedRuleKeys());
 
         return [
             'contractVersion' => self::CONTRACT_VERSION,

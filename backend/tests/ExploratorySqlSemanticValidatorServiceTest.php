@@ -1,0 +1,206 @@
+<?php
+
+require_once __DIR__ . '/../services/ExploratoryQueryDefaultsService.php';
+require_once __DIR__ . '/../services/ExploratorySemanticContractService.php';
+require_once __DIR__ . '/../services/ExploratorySqlSemanticValidatorService.php';
+
+use app\services\ExploratoryQueryDefaultsService;
+use app\services\ExploratorySemanticContractService;
+use app\services\ExploratorySqlSemanticValidatorService;
+
+function semanticAssertSame($expected, $actual, string $message): void
+{
+    if ($expected !== $actual) {
+        fwrite(STDERR, $message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true) . "\n");
+        exit(1);
+    }
+}
+
+function semanticAssertContainsAll(array $expected, array $actual, string $message): void
+{
+    $missing = array_values(array_diff($expected, $actual));
+    if ($missing !== []) {
+        fwrite(STDERR, $message . "\nMissing: " . var_export($missing, true) . "\nActual: " . var_export($actual, true) . "\n");
+        exit(1);
+    }
+}
+
+function semanticAssertRejectedFor(string $sql, array $contract, string $key, string $message): void
+{
+    $result = ExploratorySqlSemanticValidatorService::validate($sql, $contract);
+    semanticAssertSame('rejected', $result['status'], $message);
+    semanticAssertContainsAll([$key], array_column($result['violations'], 'key'), $message);
+}
+
+$question = 'Show me which call numbers we have purchased the most from the last 5 years. Compare circulation data to those call numbers and show the return on investment.';
+$contract = ExploratorySemanticContractService::build(
+    $question,
+    null,
+    ExploratoryQueryDefaultsService::resolve($question),
+    'unsupported_query_family'
+);
+
+$correctedSql = <<<'SQL'
+WITH spend_by_instance AS (
+    SELECT pol.instance_id,
+           COUNT(DISTINCT pol.id) AS purchase_count,
+           SUM(fd.total * fd.fund_distributions__value * 0.01) AS spend
+    FROM invoice.invoice_lines__t__fund_distributions fd
+    JOIN invoice.invoice_lines__t invoice_line ON invoice_line.id = fd.id
+    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id
+    JOIN orders.po_line__t pol ON pol.id = fd.po_line_id
+    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'
+    GROUP BY pol.instance_id
+), circulation_by_item AS (
+    SELECT item.id AS item_id,
+           item.holdings_record_id,
+           COUNT(audit_loan.created_date) AS checkouts
+    FROM inventory.item__t item
+    LEFT JOIN circulation.audit_loan__t audit_loan
+      ON audit_loan.loan__item_id = item.id
+     AND audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')
+     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'
+    GROUP BY item.id, item.holdings_record_id
+), circulation_by_instance AS (
+    SELECT holdings.instance_id,
+           SUM(circulation_by_item.checkouts) AS circulation
+    FROM circulation_by_item
+    JOIN inventory.holdings_record__t holdings ON holdings.id = circulation_by_item.holdings_record_id
+    GROUP BY holdings.instance_id
+), class_by_instance AS (
+    SELECT instance.id AS instance_id,
+           MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM '^[A-Za-z]+')) AS call_number_class
+    FROM inventory.instance__t instance
+    JOIN inventory.holdings_record__t holdings ON holdings.instance_id = instance.id
+    GROUP BY instance.id
+)
+SELECT class_by_instance.call_number_class,
+       SUM(spend_by_instance.purchase_count) AS purchase_count,
+       SUM(spend_by_instance.spend) AS spend,
+       SUM(circulation_by_instance.circulation) AS circulation,
+       SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0) AS checkouts_per_dollar,
+       SUM(spend_by_instance.spend) / NULLIF(SUM(circulation_by_instance.circulation), 0) AS cost_per_checkout
+FROM spend_by_instance
+JOIN class_by_instance ON class_by_instance.instance_id = spend_by_instance.instance_id
+LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id
+GROUP BY class_by_instance.call_number_class
+ORDER BY purchase_count DESC
+SQL;
+
+$capturedProductionSql = <<<'SQL'
+SELECT pc.call_number_class,
+       TO_CHAR(SUM(ilt.total), 'FM$999,999,990.00') AS total_spent,
+       COUNT(DISTINCT pol.id) AS purchase_count,
+       TO_CHAR(SUM(ilt.total) / NULLIF(COUNT(al.id), 0), 'FM$999,999,990.00') AS cost_per_checkout
+FROM orders.po_line__t pol
+JOIN orders.purchase_order__t pot ON pot.id = pol.purchase_order_id
+JOIN invoice.invoice_lines__t ilt ON ilt.po_line_id = pol.id
+JOIN inventory.item__t item ON item.material_type_id = 'book'
+LEFT JOIN circulation.audit_loan__t al ON al.loan__item_id = item.id
+JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id
+JOIN inventory.instance__t instance ON instance.id = holdings.instance_id
+JOIN classification.classification__t pc ON pc.instance_id = instance.id
+WHERE pot.date_ordered >= CURRENT_DATE - INTERVAL '5 years'
+  AND item.material_type_id = 'book'
+GROUP BY pc.call_number_class
+SQL;
+
+$valid = ExploratorySqlSemanticValidatorService::validate($correctedSql, $contract);
+semanticAssertSame('validated', $valid['status'], 'Corrected ROI SQL must pass every rule.');
+semanticAssertSame(array_column($contract['requirements'], 'key'), array_column($valid['checkedRequirements'], 'key'), 'Every contract requirement must be checked before validation.');
+
+$captured = ExploratorySqlSemanticValidatorService::validate($capturedProductionSql, $contract);
+semanticAssertSame('rejected', $captured['status'], 'Captured flawed production SQL must be blocked.');
+semanticAssertContainsAll(
+    ['purchase_date_basis', 'spend_grain', 'purchase_ranking', 'governed_filters', 'numeric_output_types'],
+    array_column($captured['violations'], 'key'),
+    'Known production defects must be detected together.'
+);
+
+$invoiceContract = $contract;
+$invoiceContract['requirements'][0]['parameters']['value'] = 'invoice_date';
+semanticAssertRejectedFor($correctedSql, $invoiceContract, 'purchase_date_basis', 'Payment date must not satisfy an invoice-date assumption.');
+$invoiceSql = str_replace('invoice.payment_date', 'invoice.invoice_date', $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($invoiceSql, $invoiceContract)['status'], 'Invoice date must satisfy the explicit invoice-date assumption.');
+semanticAssertRejectedFor(str_replace('invoice.payment_date', 'pot.date_ordered', $correctedSql), $contract, 'purchase_date_basis', 'PO order date must not satisfy purchase-date basis.');
+$unknownDateContract = $contract;
+$unknownDateContract['requirements'][0]['parameters']['value'] = 'future_date_basis';
+semanticAssertRejectedFor($correctedSql, $unknownDateContract, 'purchase_date_basis', 'Unknown date assumptions must fail closed.');
+
+semanticAssertRejectedFor(str_replace('fd.total * fd.fund_distributions__value * 0.01', 'fd.total', $correctedSql), $contract, 'investment_cost_basis', 'Paid fund distribution amount must include its percentage.');
+semanticAssertRejectedFor(str_replace('fd.total * fd.fund_distributions__value * 0.01', 'fd.total * fd.fund_distributions__value * fd.fund_distributions__value * 0.0001', $correctedSql), $contract, 'investment_cost_basis', 'Fund distribution percentage must be applied exactly once.');
+$unknownCostContract = $contract;
+$unknownCostContract['requirements'][1]['parameters']['value'] = 'future_cost_basis';
+semanticAssertRejectedFor($correctedSql, $unknownCostContract, 'investment_cost_basis', 'Unknown cost assumptions must fail closed.');
+
+$itemSpendSql = str_replace('JOIN orders.po_line__t pol ON pol.id = fd.po_line_id', "JOIN orders.po_line__t pol ON pol.id = fd.po_line_id\n    JOIN inventory.item__t spend_item ON spend_item.id = pol.id", $correctedSql);
+semanticAssertRejectedFor($itemSpendSql, $contract, 'spend_grain', 'Spending must aggregate before item dependencies.');
+semanticAssertRejectedFor(str_replace('SUM(fd.total * fd.fund_distributions__value * 0.01)', 'fd.total * fd.fund_distributions__value * 0.01', $correctedSql), $contract, 'spend_grain', 'Spending must be aggregated in its isolated CTE.');
+semanticAssertRejectedFor(str_replace("     AND audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')\n", '', $correctedSql), $contract, 'circulation_grain', 'Checkout action must be enforced in the item-grain circulation CTE.');
+semanticAssertRejectedFor(str_replace("     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql), $contract, 'circulation_window', 'Circulation date window must be enforced in the item-grain circulation CTE.');
+semanticAssertRejectedFor(str_replace("audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'", "audit_loan.created_date >= CURRENT_DATE - INTERVAL '3 years'", $correctedSql), $contract, 'circulation_window', 'Circulation must use the same date window as purchases.');
+$unknownWindowContract = $contract;
+$unknownWindowContract['requirements'][3]['parameters']['value'] = 'future_window';
+semanticAssertRejectedFor($correctedSql, $unknownWindowContract, 'circulation_window', 'Unknown circulation windows must fail closed.');
+semanticAssertRejectedFor(str_replace('GROUP BY item.id, item.holdings_record_id', 'GROUP BY item.holdings_record_id', $correctedSql), $contract, 'circulation_grain', 'Circulation must aggregate at item grain.');
+semanticAssertRejectedFor(str_replace('GROUP BY class_by_instance.call_number_class', 'GROUP BY class_by_instance.instance_id', $correctedSql), $contract, 'call_number_grouping', 'Call-number class must be the final grouping dimension.');
+$unknownGroupingContract = $contract;
+$unknownGroupingContract['requirements'][5]['parameters']['value'] = 'future_grouping';
+semanticAssertRejectedFor($correctedSql, $unknownGroupingContract, 'call_number_grouping', 'Unknown call-number grouping assumptions must fail closed.');
+
+$missingMeasureSql = str_replace("       SUM(circulation_by_instance.circulation) AS circulation,\n", '', $correctedSql);
+semanticAssertRejectedFor($missingMeasureSql, $contract, 'required_measures', 'Every required numeric alias must exist.');
+semanticAssertRejectedFor(str_replace('SUM(spend_by_instance.spend) AS spend', "TO_CHAR(SUM(spend_by_instance.spend), 'FM999') AS spend", $correctedSql), $contract, 'numeric_output_types', 'TO_CHAR measures must be rejected.');
+semanticAssertRejectedFor(str_replace('SUM(spend_by_instance.spend) AS spend', "'$' || SUM(spend_by_instance.spend) AS spend", $correctedSql), $contract, 'numeric_output_types', 'Concatenated currency measures must be rejected.');
+semanticAssertRejectedFor(str_replace('NULLIF(SUM(spend_by_instance.spend), 0)', 'SUM(spend_by_instance.spend)', $correctedSql), $contract, 'roi_formula', 'Checkouts per dollar must be zero-safe.');
+semanticAssertRejectedFor(str_replace('NULLIF(SUM(circulation_by_instance.circulation), 0)', 'SUM(circulation_by_instance.circulation)', $correctedSql), $contract, 'roi_formula', 'Cost per checkout must be zero-safe.');
+semanticAssertRejectedFor(str_replace('SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0) AS checkouts_per_dollar', 'SUM(spend_by_instance.spend) / NULLIF(SUM(circulation_by_instance.circulation), 0) AS checkouts_per_dollar', $correctedSql), $contract, 'roi_formula', 'Checkouts per dollar must use circulation over spend.');
+$caseSafeSql = str_replace('NULLIF(SUM(spend_by_instance.spend), 0)', 'CASE WHEN SUM(spend_by_instance.spend) = 0 THEN NULL ELSE SUM(spend_by_instance.spend) END', $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($caseSafeSql, $contract)['status'], 'An equivalent zero-safe CASE must be accepted.');
+$unknownRoiContract = $contract;
+$unknownRoiContract['requirements'][7]['parameters']['value'] = 'future_roi';
+semanticAssertRejectedFor($correctedSql, $unknownRoiContract, 'roi_formula', 'Unknown ROI assumptions must fail closed.');
+semanticAssertRejectedFor(str_replace('ORDER BY purchase_count DESC', 'ORDER BY purchase_count ASC', $correctedSql), $contract, 'purchase_ranking', 'Purchase count must rank descending before LIMIT.');
+semanticAssertRejectedFor(str_replace('ORDER BY purchase_count DESC', 'LIMIT 10', $correctedSql), $contract, 'purchase_ranking', 'LIMIT without descending purchase ranking must be rejected.');
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate(str_replace('ORDER BY purchase_count DESC', "ORDER BY purchase_count DESC\nLIMIT 10", $correctedSql), $contract)['status'], 'Descending purchase ranking before LIMIT must be accepted.');
+
+$campusContract = $contract;
+$campusIndex = array_search('campus_scope', array_column($campusContract['requirements'], 'key'), true);
+$campusContract['requirements'][$campusIndex]['parameters'] = ['required' => true, 'value' => 'Smith College'];
+$campusContract['permittedFilters']['campus'] = ['value' => 'Smith College', 'provenance' => 'selected_scope'];
+semanticAssertRejectedFor($correctedSql, $campusContract, 'campus_scope', 'A supplied campus must be enforced.');
+$campusSql = str_replace("WHERE invoice.payment_date", "WHERE invoice.campus = 'Smith College' AND invoice.payment_date", $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusSql, $campusContract)['status'], 'The selected campus filter must satisfy campus scope.');
+$campusWithoutProvenance = $campusContract;
+$campusWithoutProvenance['permittedFilters']['campus'] = ['value' => 'Smith College'];
+semanticAssertRejectedFor($campusSql, $campusWithoutProvenance, 'campus_scope', 'Campus scope without selected-scope provenance must fail closed.');
+
+semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.acquisition_unit_id = 'unit' AND invoice.payment_date", $correctedSql), $contract, 'governed_filters', 'Unrequested acquisition unit must be rejected.');
+semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.material_type_id = 'book' AND invoice.payment_date", $correctedSql), $contract, 'governed_filters', 'Unrequested material type must be rejected.');
+$permittedContract = $contract;
+$permittedContract['permittedFilters']['material_type'] = ['provenance' => 'explicit_prompt'];
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate(str_replace("WHERE invoice.payment_date", "WHERE pol.material_type_id = 'book' AND invoice.payment_date", $correctedSql), $permittedContract)['status'], 'Explicit provenance must permit material type.');
+$unprovenContract = $contract;
+$unprovenContract['permittedFilters']['material_type'] = [];
+semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.material_type_id = 'book' AND invoice.payment_date", $correctedSql), $unprovenContract, 'governed_filters', 'A filter permission without provenance must fail closed.');
+
+$ambiguous = ExploratorySqlSemanticValidatorService::validate('SELECT 1 UNION SELECT 2', $contract);
+semanticAssertSame('rejected', $ambiguous['status'], 'Ambiguous SQL must fail closed.');
+semanticAssertSame(['semantic_coverage_gap'], array_values(array_unique(array_column($ambiguous['violations'], 'category'))), 'Ambiguity must produce only coverage-gap violations.');
+
+$unsupported = ['key' => 'future_requirement', 'rule' => 'future_rule', 'label' => 'Future requirement.', 'parameters' => []];
+$gapContract = $contract;
+$gapContract['requirements'] = [$unsupported];
+$gapContract = array_merge($gapContract, ExploratorySemanticContractService::auditCoverage([$unsupported], ExploratorySqlSemanticValidatorService::supportedRuleKeys()));
+$gap = ExploratorySqlSemanticValidatorService::validate($correctedSql, $gapContract);
+semanticAssertSame(['semantic_coverage_gap'], array_column($gap['violations'], 'category'), 'Unsupported audited rules must fail closed before rule dispatch.');
+
+foreach ($captured['violations'] as $violation) {
+    semanticAssertSame(['key', 'category', 'label', 'guidance'], array_keys($violation), 'Violation payloads must contain only stable safe fields.');
+}
+
+$notApplicable = $contract;
+$notApplicable['applicable'] = false;
+semanticAssertSame('not_applicable', ExploratorySqlSemanticValidatorService::validate('not sql', $notApplicable)['status'], 'Non-applicable contracts must bypass analysis.');
+
+fwrite(STDOUT, "Exploratory SQL semantic validator service test passed\n");
