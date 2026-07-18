@@ -28,6 +28,16 @@ namespace app\services {
         {
             return trim((string)$sql);
         }
+
+        public static function validateSafety($sql): void
+        {
+            $trimmed = ltrim((string)$sql);
+            if (preg_match('/^(?:SELECT|WITH)\b/i', $trimmed) !== 1
+                || preg_match('/^DELETE\b/i', $trimmed) === 1
+            ) {
+                throw new \InvalidArgumentException('Only SELECT queries are allowed.');
+            }
+        }
     }
     class GeminiService
     {
@@ -300,6 +310,34 @@ namespace {
     );
     repairAssertSame('database_cancelled', $typedCancelResponse['errorType'] ?? null, 'Direct typed cancellation should return the sanitized database response.');
 
+    $safePreflightCalls = 0;
+    $safeWithDoValue = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => "SELECT 'DO' AS action_word FROM inventory.instance__t",
+            'mode' => 'exploratory',
+            'route' => 'exploratory',
+            'routeReason' => 'unsupported_query_family',
+            'repairAttempts' => 0,
+        ],
+        'Show reporting rows with their action label',
+        'Smith College',
+        function () use (&$safePreflightCalls): array {
+            $safePreflightCalls++;
+            return ['rows' => 1, 'cost' => 1.0];
+        },
+        function (): array {
+            fwrite(STDERR, "A valid SELECT must not enter repair.\n");
+            exit(1);
+        }
+    );
+    repairAssertSame(1, $safePreflightCalls, 'The shared safety validator should allow the SELECT to reach preflight.');
+    repairAssertSame(
+        "SELECT 'DO' AS action_word FROM inventory.instance__t",
+        $safeWithDoValue['sql'] ?? null,
+        'A valid SELECT containing a harmless standalone value should return results instead of unsafe recovery.'
+    );
+
     $unsafeRepairCalls = 0;
     $unsafe = $validateAndRepair->invoke(
         $controller,
@@ -320,7 +358,11 @@ namespace {
     repairAssertSame('unsafe_generated_sql', $unsafe['errorType'] ?? null, 'Unsafe generated SQL should expose a distinct error type.');
     repairAssertSame(0, $unsafe['validationSummary']['repairAttempts'] ?? null, 'Unsafe generated SQL should report zero repairs.');
     repairAssertSame(false, array_key_exists('sql', $unsafe), 'Unsafe recovery must not include SQL.');
-    repairAssertSame(true, strpos($unsafe['message'] ?? '', 'no unsafe SQL ran') !== false, 'Unsafe recovery should state that no unsafe SQL ran.');
+    repairAssertSame(
+        "I couldn't safely turn this request into a report. Nothing ran or changed. Retry the request or refine one part of it.",
+        $unsafe['message'] ?? null,
+        'Unsafe recovery should use the safe rejected-response copy.'
+    );
 
     $unsafeCategory = $validateAndRepair->invoke(
         $controller,

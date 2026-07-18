@@ -381,7 +381,7 @@ class FolioQueryController extends Controller
 
         while (isset($result['sql'])) {
             $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
-            if (!$this->isSelectOnlyNlSql((string)$result['sql'])) {
+            if (!$this->isSafeSelectNlSql((string)$result['sql'])) {
                 return $this->buildUnsafeGeneratedSqlResponse($result, $prompt, $campus);
             }
 
@@ -498,17 +498,14 @@ class FolioQueryController extends Controller
         return max(0, min(2, (int)$repairAttempts));
     }
 
-    private function isSelectOnlyNlSql(string $sql): bool
+    private function isSafeSelectNlSql(string $sql): bool
     {
-        $trimmed = ltrim($sql);
-        if (preg_match('/^(?:SELECT|WITH)\b/i', $trimmed) !== 1) {
+        try {
+            SqlBuilderService::validateSafety($sql);
+            return true;
+        } catch (\InvalidArgumentException $exception) {
             return false;
         }
-
-        return preg_match(
-            '/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|COPY|CALL|DO|MERGE)\b/i',
-            $trimmed
-        ) !== 1;
     }
 
     private function isAskPreflightPolicyFailure(string $message): bool
@@ -650,7 +647,7 @@ class FolioQueryController extends Controller
             'non_select'
         );
         $response['errorType'] = 'unsafe_generated_sql';
-        $response['message'] = 'The generated query was not a safe SELECT statement, so no unsafe SQL ran. Your request and assumptions are preserved below so you can adjust and retry.';
+        $response['message'] = "I couldn't safely turn this request into a report. Nothing ran or changed. Retry the request or refine one part of it.";
         $response['routeReason'] = 'unsafe_generated_sql';
         $response['validationSummary']['status'] = 'rejected';
         unset($response['sql']);
