@@ -159,7 +159,7 @@ $multiHopCatalog = [
 ];
 $multiHopDefinition = [
     'schemaIdentity' => 'ldlite',
-    'tables' => ['c', 'a', 'b'],
+    'tables' => ['c', 'a'],
     'columns' => [],
     'joins' => [
         ['relationship_id' => 'a.id->b.a_id'],
@@ -172,11 +172,97 @@ $multiHopNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCata
     $multiHopCatalog
 );
 expectNormalizer(
+    $multiHopNormalized['tables'] === ['c_legacy', 'a_legacy', 'b_legacy'],
+    'A trusted intermediary must be added to the internal table list without being client-selected.'
+);
+expectNormalizer(
     $multiHopNormalized['joins'][0]['from_table'] === 'c_legacy'
         && $multiHopNormalized['joins'][0]['to_table'] === 'b_legacy'
         && $multiHopNormalized['joins'][1]['from_table'] === 'b_legacy'
         && $multiHopNormalized['joins'][1]['to_table'] === 'a_legacy',
     'Explicit multi-hop joins must be reordered and oriented from the already-joined table set.'
+);
+
+$autoMultiHopDefinition = $multiHopDefinition;
+$autoMultiHopDefinition['joins'] = 'auto';
+$autoMultiHopNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $autoMultiHopDefinition,
+    ['a' => 'a_legacy', 'b' => 'b_legacy', 'c' => 'c_legacy'],
+    $multiHopCatalog
+);
+expectNormalizer(
+    $autoMultiHopNormalized['tables'] === ['c_legacy', 'a_legacy', 'b_legacy']
+        && count($autoMultiHopNormalized['joins']) === 2,
+    'Automatic relationship selection must derive a reviewed default path through an unselected intermediary.'
+);
+
+$forwardMultiHopDefinition = $multiHopDefinition;
+$forwardMultiHopDefinition['tables'] = ['a', 'c'];
+$forwardMultiHopNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $forwardMultiHopDefinition,
+    ['a' => 'a_legacy', 'b' => 'b_legacy', 'c' => 'c_legacy'],
+    $multiHopCatalog
+);
+expectNormalizer(
+    $forwardMultiHopNormalized['joins'][0]['from_table'] === 'a_legacy'
+        && $forwardMultiHopNormalized['joins'][0]['to_table'] === 'b_legacy'
+        && $forwardMultiHopNormalized['joins'][1]['from_table'] === 'b_legacy'
+        && $forwardMultiHopNormalized['joins'][1]['to_table'] === 'c_legacy',
+    'Multi-hop relationships must orient deterministically from the first selected table.'
+);
+
+$danglingDefinition = $multiHopDefinition;
+$danglingDefinition['joins'] = [
+    ['relationship_id' => 'a.id->b.a_id'],
+    ['relationship_id' => 'b.id->d.b_id'],
+];
+$catalogWithBranch = $multiHopCatalog;
+$catalogWithBranch['relationships_by_id']['b.id->d.b_id'] = [
+    'relationship_id' => 'b.id->d.b_id',
+    'pair_id' => 'b<->d',
+    'from_table' => 'b',
+    'from_column' => 'id',
+    'to_table' => 'd',
+    'to_column' => 'b_id',
+    'is_default' => true,
+];
+$catalogWithBranch['defaults_by_pair']['b<->d'] = 'b.id->d.b_id';
+expectNormalizerInvalidArgument(
+    function () use ($danglingDefinition, $catalogWithBranch): void {
+        BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+            $danglingDefinition,
+            ['a' => 'a_legacy', 'b' => 'b_legacy', 'c' => 'c_legacy', 'd' => 'd_legacy'],
+            $catalogWithBranch
+        );
+    },
+    'Cannot resolve reviewed Builder relationships'
+);
+
+$branchedDefinition = $multiHopDefinition;
+$branchedDefinition['joins'][] = ['relationship_id' => 'b.id->d.b_id'];
+expectNormalizerInvalidArgument(
+    function () use ($branchedDefinition, $catalogWithBranch): void {
+        BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+            $branchedDefinition,
+            ['a' => 'a_legacy', 'b' => 'b_legacy', 'c' => 'c_legacy', 'd' => 'd_legacy'],
+            $catalogWithBranch
+        );
+    },
+    'Unselected Builder relationship endpoint'
+);
+
+$singleWithJoin = $multiHopDefinition;
+$singleWithJoin['tables'] = ['a'];
+$singleWithJoin['joins'] = [['relationship_id' => 'a.id->b.a_id']];
+expectNormalizerInvalidArgument(
+    function () use ($singleWithJoin, $multiHopCatalog): void {
+        BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+            $singleWithJoin,
+            ['a' => 'a_legacy', 'b' => 'b_legacy', 'c' => 'c_legacy'],
+            $multiHopCatalog
+        );
+    },
+    'Single-table canonical definitions cannot include relationships'
 );
 
 $unknownRelationship = $definition;
@@ -208,6 +294,20 @@ expectNormalizerInvalidArgument(
     'relationship_id'
 );
 
+$rawEndpointJoin = $definition;
+$rawEndpointJoin['joins'] = [[
+    'from_table' => 'inventory.item__t',
+    'from_column' => 'permanent_location_id',
+    'to_table' => 'inventory.location__t',
+    'to_column' => 'id',
+]];
+expectNormalizerInvalidArgument(
+    function () use ($rawEndpointJoin, $mapping, $catalog): void {
+        BuilderQueryDefinitionNormalizerService::normalizeWithCatalog($rawEndpointJoin, $mapping, $catalog);
+    },
+    'relationship_id'
+);
+
 $disconnectedCatalog = $catalog;
 $disconnectedDefinition = $definition;
 $disconnectedDefinition['tables'][] = 'inventory.campus__t';
@@ -221,15 +321,6 @@ expectNormalizerInvalidArgument(
         );
     },
     'Cannot resolve reviewed Builder relationships'
-);
-
-$missingEndpoint = $definition;
-$missingEndpoint['tables'] = ['inventory.item__t'];
-expectNormalizerInvalidArgument(
-    function () use ($missingEndpoint, $mapping, $catalog): void {
-        BuilderQueryDefinitionNormalizerService::normalizeWithCatalog($missingEndpoint, $mapping, $catalog);
-    },
-    'must be included in tables'
 );
 
 $unsupportedJoinType = $definition;

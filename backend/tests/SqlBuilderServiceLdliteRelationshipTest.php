@@ -8,6 +8,8 @@ foreach (['table_mapping_cache.json', 'subtable_cache.json', 'column_cache.json'
     if ($cacheFile === 'table_mapping_cache.json') {
         $cache['mapping']['inventory_items'] = 'inventory.item__t';
         $cache['mapping']['inventory_locations'] = 'inventory.location__t';
+        $cache['mapping']['inventory_holdings'] = 'inventory.holdings_record__t';
+        $cache['mapping']['inventory_instances'] = 'inventory.instance__t';
     }
     file_put_contents(
         $builderSqlCacheDir . '/' . $cacheFile,
@@ -86,6 +88,8 @@ function expectSqlContains(string $sql, string $fragment): void
 $mapping = [
     'inventory.item__t' => 'inventory_items',
     'inventory.location__t' => 'inventory_locations',
+    'inventory.holdings_record__t' => 'inventory_holdings',
+    'inventory.instance__t' => 'inventory_instances',
 ];
 
 $relationships = [];
@@ -164,5 +168,74 @@ $defaultNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatal
 );
 $defaultResult = SqlBuilderService::build($defaultNormalized);
 expectSqlContains($defaultResult['sql'], 'ON il.id = ii.effective_location_id');
+
+$itemHoldingsId = 'inventory.item__t.holdings_record_id->inventory.holdings_record__t.id';
+$holdingsInstanceId = 'inventory.holdings_record__t.instance_id->inventory.instance__t.id';
+$multiHopCatalog = [
+    'relationships_by_id' => [
+        $itemHoldingsId => [
+            'relationship_id' => $itemHoldingsId,
+            'pair_id' => 'inventory.holdings_record__t<->inventory.item__t',
+            'from_table' => 'inventory.item__t',
+            'from_column' => 'holdings_record_id',
+            'to_table' => 'inventory.holdings_record__t',
+            'to_column' => 'id',
+            'is_default' => true,
+        ],
+        $holdingsInstanceId => [
+            'relationship_id' => $holdingsInstanceId,
+            'pair_id' => 'inventory.holdings_record__t<->inventory.instance__t',
+            'from_table' => 'inventory.holdings_record__t',
+            'from_column' => 'instance_id',
+            'to_table' => 'inventory.instance__t',
+            'to_column' => 'id',
+            'is_default' => true,
+        ],
+    ],
+    'defaults_by_pair' => [
+        'inventory.holdings_record__t<->inventory.item__t' => $itemHoldingsId,
+        'inventory.holdings_record__t<->inventory.instance__t' => $holdingsInstanceId,
+    ],
+];
+$multiHopDefinition = [
+    'schemaIdentity' => 'ldlite',
+    'tables' => ['inventory.item__t', 'inventory.instance__t'],
+    'columns' => [
+        ['table' => 'inventory.item__t', 'column' => 'barcode'],
+        ['table' => 'inventory.instance__t', 'column' => 'title'],
+    ],
+    'joins' => [
+        ['relationship_id' => $itemHoldingsId],
+        ['relationship_id' => $holdingsInstanceId],
+    ],
+    'limit' => 100,
+];
+$multiHopNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $multiHopDefinition,
+    $mapping,
+    $multiHopCatalog
+);
+$multiHopResult = SqlBuilderService::build($multiHopNormalized);
+expectSqlContains($multiHopResult['sql'], 'JOIN inventory.holdings_record__t ih');
+expectSqlContains($multiHopResult['sql'], 'ON ih.id = ii.holdings_record_id');
+expectSqlContains($multiHopResult['sql'], 'JOIN inventory.instance__t ii1');
+expectSqlContains($multiHopResult['sql'], 'ON ii1.id = ih.instance_id');
+if (substr_count($multiHopResult['sql'], "\nJOIN ") !== 2) {
+    fwrite(STDERR, "Expected exactly two trusted JOIN clauses:\n{$multiHopResult['sql']}\n");
+    exit(1);
+}
+
+$autoMultiHopDefinition = $multiHopDefinition;
+$autoMultiHopDefinition['joins'] = 'auto';
+$autoMultiHopNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithCatalog(
+    $autoMultiHopDefinition,
+    $mapping,
+    $multiHopCatalog
+);
+$autoMultiHopResult = SqlBuilderService::build($autoMultiHopNormalized);
+if ($autoMultiHopResult['sql'] !== $multiHopResult['sql']) {
+    fwrite(STDERR, "Automatic multi-hop SQL must match the explicit reviewed path.\n");
+    exit(1);
+}
 
 fwrite(STDOUT, "SqlBuilderService LDLite relationship test passed\n");

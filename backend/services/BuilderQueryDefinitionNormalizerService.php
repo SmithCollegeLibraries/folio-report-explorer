@@ -68,11 +68,25 @@ final class BuilderQueryDefinitionNormalizerService
         $relationships = $useDefaults
             ? self::defaultRelationships($catalog, $canonicalTables)
             : self::selectedRelationships($joinInput, $catalog, $canonicalTables);
-        $normalized['joins'] = self::orientRelationships(
+        self::assertNecessaryRelationshipTree($relationships, $canonicalTables);
+        $oriented = self::orientRelationships(
             $relationships,
             $canonicalTables,
             $physicalToLegacyMap
         );
+        $internalTables = $canonicalTables;
+        foreach ($oriented['intermediary_tables'] as $table) {
+            if (!in_array($table, $internalTables, true)) {
+                $internalTables[] = $table;
+            }
+        }
+        $normalized['tables'] = array_map(
+            function ($table) use ($physicalToLegacyMap): string {
+                return self::normalizeTable((string)$table, $physicalToLegacyMap);
+            },
+            $internalTables
+        );
+        $normalized['joins'] = $oriented['joins'];
 
         unset($normalized['schemaIdentity']);
         return $normalized;
@@ -104,7 +118,7 @@ final class BuilderQueryDefinitionNormalizerService
                     "Unknown Builder relationship: {$relationshipId}"
                 );
             }
-            self::assertSelectedEndpoints($relationship, $relationshipId, $canonicalTables);
+            $relationship['relationship_id'] = (string)($relationship['relationship_id'] ?? $relationshipId);
             $relationship['join_type'] = strtoupper(trim((string)($join['join_type'] ?? 'JOIN')))
                 === 'LEFT JOIN' ? 'LEFT JOIN' : 'JOIN';
             $relationships[] = $relationship;
@@ -125,8 +139,7 @@ final class BuilderQueryDefinitionNormalizerService
             }
             $fromTable = (string)($relationship['from_table'] ?? '');
             $toTable = (string)($relationship['to_table'] ?? '');
-            if (!in_array($fromTable, $canonicalTables, true)
-                || !in_array($toTable, $canonicalTables, true)) {
+            if ($fromTable === '' || $toTable === '') {
                 continue;
             }
             $pairId = (string)($relationship['pair_id'] ?? self::pairId($fromTable, $toTable));
@@ -134,7 +147,7 @@ final class BuilderQueryDefinitionNormalizerService
             $relationshipsByPair[$pairId][] = $relationship;
         }
 
-        $defaults = [];
+        $defaultsById = [];
         foreach ($relationshipsByPair as $pairId => $relationships) {
             usort($relationships, function (array $left, array $right): int {
                 if (!empty($left['is_default']) !== !empty($right['is_default'])) {
@@ -152,10 +165,32 @@ final class BuilderQueryDefinitionNormalizerService
             }
             $selected = $selected ?? $relationships[0];
             $selected['join_type'] = 'JOIN';
-            $defaults[] = $selected;
+            $defaultsById[$selected['relationship_id']] = $selected;
         }
 
-        return $defaults;
+        $adjacency = self::buildAdjacency($defaultsById);
+        $treeNodes = [(string)$canonicalTables[0] => true];
+        $treeRelationships = [];
+        foreach (array_slice($canonicalTables, 1) as $target) {
+            $target = (string)$target;
+            if (isset($treeNodes[$target])) {
+                continue;
+            }
+            $path = self::findPathToTree($target, $treeNodes, $adjacency);
+            if ($path === null) {
+                throw new \InvalidArgumentException(
+                    'Cannot resolve reviewed Builder relationships for all selected canonical tables.'
+                );
+            }
+            foreach ($path as $relationship) {
+                $relationshipId = (string)$relationship['relationship_id'];
+                $treeRelationships[$relationshipId] = $relationship;
+                $treeNodes[(string)$relationship['from_table']] = true;
+                $treeNodes[(string)$relationship['to_table']] = true;
+            }
+        }
+
+        return array_values($treeRelationships);
     }
 
     private static function orientRelationships(
@@ -164,14 +199,21 @@ final class BuilderQueryDefinitionNormalizerService
         array $physicalToLegacyMap
     ): array {
         if (count($canonicalTables) <= 1) {
-            return [];
+            return ['joins' => [], 'intermediary_tables' => []];
         }
 
         $joined = [$canonicalTables[0] => true];
         $remaining = array_values($relationships);
+        usort($remaining, function (array $left, array $right): int {
+            return strcmp(
+                (string)($left['relationship_id'] ?? ''),
+                (string)($right['relationship_id'] ?? '')
+            );
+        });
         $normalized = [];
+        $intermediaryTables = [];
 
-        while (count($joined) < count(array_unique($canonicalTables))) {
+        while (!empty($remaining)) {
             $progress = false;
             foreach ($remaining as $index => $relationship) {
                 $fromTable = (string)($relationship['from_table'] ?? '');
@@ -190,6 +232,7 @@ final class BuilderQueryDefinitionNormalizerService
                         'to_column' => (string)($relationship['to_column'] ?? ''),
                     ];
                     $joined[$toTable] = true;
+                    $newTable = $toTable;
                 } else {
                     $oriented = [
                         'from_table' => $toTable,
@@ -198,6 +241,12 @@ final class BuilderQueryDefinitionNormalizerService
                         'to_column' => (string)($relationship['from_column'] ?? ''),
                     ];
                     $joined[$fromTable] = true;
+                    $newTable = $fromTable;
+                }
+
+                if (!in_array($newTable, $canonicalTables, true)
+                    && !in_array($newTable, $intermediaryTables, true)) {
+                    $intermediaryTables[] = $newTable;
                 }
 
                 $oriented['from_table'] = self::normalizeTable(
@@ -222,22 +271,123 @@ final class BuilderQueryDefinitionNormalizerService
             }
         }
 
-        return $normalized;
+        return ['joins' => $normalized, 'intermediary_tables' => $intermediaryTables];
     }
 
-    private static function assertSelectedEndpoints(
-        array $relationship,
-        string $relationshipId,
+    private static function assertNecessaryRelationshipTree(
+        array $relationships,
         array $canonicalTables
     ): void {
-        $fromTable = (string)($relationship['from_table'] ?? '');
-        $toTable = (string)($relationship['to_table'] ?? '');
-        if (!in_array($fromTable, $canonicalTables, true)
-            || !in_array($toTable, $canonicalTables, true)) {
+        $selectedTables = array_values(array_unique(array_map('strval', $canonicalTables)));
+        if (count($selectedTables) <= 1) {
+            if (!empty($relationships)) {
+                throw new \InvalidArgumentException(
+                    'Single-table canonical definitions cannot include relationships.'
+                );
+            }
+            return;
+        }
+
+        $adjacency = [];
+        $nodes = [];
+        foreach ($relationships as $relationship) {
+            $fromTable = (string)($relationship['from_table'] ?? '');
+            $toTable = (string)($relationship['to_table'] ?? '');
+            if ($fromTable === '' || $toTable === '') {
+                throw new \InvalidArgumentException(
+                    'Reviewed Builder relationships must contain catalog table endpoints.'
+                );
+            }
+            $nodes[$fromTable] = true;
+            $nodes[$toTable] = true;
+            $adjacency[$fromTable][] = $toTable;
+            $adjacency[$toTable][] = $fromTable;
+        }
+
+        foreach ($selectedTables as $table) {
+            if (!isset($nodes[$table])) {
+                throw new \InvalidArgumentException(
+                    'Cannot resolve reviewed Builder relationships for all selected canonical tables.'
+                );
+            }
+        }
+
+        $visited = [];
+        $queue = [$selectedTables[0]];
+        while (!empty($queue)) {
+            $table = array_shift($queue);
+            if (isset($visited[$table])) {
+                continue;
+            }
+            $visited[$table] = true;
+            foreach (($adjacency[$table] ?? []) as $neighbour) {
+                if (!isset($visited[$neighbour])) {
+                    $queue[] = $neighbour;
+                }
+            }
+        }
+        if (count($visited) !== count($nodes)
+            || count($relationships) !== count($nodes) - 1) {
             throw new \InvalidArgumentException(
-                "Both endpoints for Builder relationship {$relationshipId} must be included in tables."
+                'Cannot resolve reviewed Builder relationships as one necessary connected path tree.'
             );
         }
+
+        $selectedLookup = array_fill_keys($selectedTables, true);
+        foreach ($nodes as $table => $_unused) {
+            if (!isset($selectedLookup[$table]) && count($adjacency[$table] ?? []) < 2) {
+                throw new \InvalidArgumentException(
+                    "Unselected Builder relationship endpoint {$table} is not necessary to connect selected tables."
+                );
+            }
+        }
+    }
+
+    private static function buildAdjacency(array $relationshipsById): array
+    {
+        $adjacency = [];
+        foreach ($relationshipsById as $relationship) {
+            $fromTable = (string)$relationship['from_table'];
+            $toTable = (string)$relationship['to_table'];
+            $adjacency[$fromTable][] = ['table' => $toTable, 'relationship' => $relationship];
+            $adjacency[$toTable][] = ['table' => $fromTable, 'relationship' => $relationship];
+        }
+        foreach ($adjacency as &$edges) {
+            usort($edges, function (array $left, array $right): int {
+                $tableComparison = strcmp($left['table'], $right['table']);
+                return $tableComparison !== 0 ? $tableComparison : strcmp(
+                    $left['relationship']['relationship_id'],
+                    $right['relationship']['relationship_id']
+                );
+            });
+        }
+        unset($edges);
+        return $adjacency;
+    }
+
+    private static function findPathToTree(
+        string $target,
+        array $treeNodes,
+        array $adjacency
+    ): ?array {
+        $queue = [[$target, []]];
+        $visited = [$target => true];
+        while (!empty($queue)) {
+            list($table, $path) = array_shift($queue);
+            foreach (($adjacency[$table] ?? []) as $edge) {
+                $neighbour = $edge['table'];
+                if (isset($visited[$neighbour])) {
+                    continue;
+                }
+                $nextPath = array_merge($path, [$edge['relationship']]);
+                if (isset($treeNodes[$neighbour])) {
+                    return $nextPath;
+                }
+                $visited[$neighbour] = true;
+                $queue[] = [$neighbour, $nextPath];
+            }
+        }
+        return null;
     }
 
     private static function pairId(string $leftTable, string $rightTable): string
