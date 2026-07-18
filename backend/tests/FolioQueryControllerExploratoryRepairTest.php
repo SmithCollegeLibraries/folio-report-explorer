@@ -421,6 +421,93 @@ namespace {
         'A valid SELECT containing a harmless standalone value should return results instead of unsafe recovery.'
     );
 
+    $roiQuestion = 'Rank purchase activity by purchase count';
+    $semanticPreflightCalls = 0;
+    $missingSemantic = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT purchase_count FROM purchase_data ORDER BY purchase_count DESC',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'semanticContractApplicable' => true,
+            'repairAttempts' => 2,
+        ],
+        $roiQuestion,
+        'Smith College',
+        function () use (&$semanticPreflightCalls): array {
+            $semanticPreflightCalls++;
+            return ['rows' => 1];
+        }
+    );
+    repairAssertSame(0, $semanticPreflightCalls, 'Applicable exploratory SQL without semantic validation must never reach preflight.');
+    repairAssertSame(false, isset($missingSemantic['sql']), 'Unverified SQL must not be returned.');
+
+    $validatedPreflightCalls = 0;
+    $validatedResult = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT purchase_count FROM purchase_data ORDER BY purchase_count DESC',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'semanticContractApplicable' => true,
+            'semanticValidation' => [
+                'status' => 'validated',
+                'contractVersion' => 1,
+                'checkedRequirements' => [[
+                    'key' => 'purchase_ranking',
+                    'label' => 'Results are ranked by purchases.',
+                ]],
+            ],
+            'repairAttempts' => 0,
+        ],
+        $roiQuestion,
+        'Smith College',
+        function () use (&$validatedPreflightCalls): array {
+            $validatedPreflightCalls++;
+            return ['rows' => 1];
+        }
+    );
+    repairAssertSame(1, $validatedPreflightCalls, 'Semantically validated SQL should reach database preflight.');
+    repairAssertSame('SELECT purchase_count FROM purchase_data ORDER BY purchase_count DESC', $validatedResult['sql'] ?? null, 'Validated applicable SQL should be returned after preflight.');
+
+    $freshSemanticPreflightCalls = 0;
+    $staleSemanticRepairCalls = 0;
+    $staleSemantic = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT broken_count FROM purchase_data',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'semanticContractApplicable' => true,
+            'semanticValidation' => [
+                'status' => 'validated',
+                'contractVersion' => 1,
+                'checkedRequirements' => [['key' => 'purchase_count', 'label' => 'Count purchases.']],
+            ],
+            'repairAttempts' => 1,
+        ],
+        $roiQuestion,
+        'Smith College',
+        function () use (&$freshSemanticPreflightCalls): array {
+            $freshSemanticPreflightCalls++;
+            return $freshSemanticPreflightCalls === 1
+                ? ['error' => 'column "broken_count" does not exist']
+                : ['rows' => 1];
+        },
+        function () use (&$staleSemanticRepairCalls): array {
+            $staleSemanticRepairCalls++;
+            return [
+                'sql' => 'SELECT purchase_count FROM purchase_data',
+                'semanticContractApplicable' => true,
+                'repairAttempts' => 2,
+            ];
+        }
+    );
+    repairAssertSame(1, $staleSemanticRepairCalls, 'A database-rejected candidate should use the one remaining repair attempt.');
+    repairAssertSame(1, $freshSemanticPreflightCalls, 'Repaired SQL without fresh semantic validation must not reach preflight.');
+    repairAssertSame(false, isset($staleSemantic['sql']), 'Repaired SQL must not inherit an earlier candidate semantic checklist.');
+    repairAssertSame(2, $staleSemantic['validationSummary']['repairAttempts'] ?? null, 'Semantic boundary recovery must preserve the exact shared repair count.');
+
     $unsafeRepairCalls = 0;
     $unsafe = $validateAndRepair->invoke(
         $controller,

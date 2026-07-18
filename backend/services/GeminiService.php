@@ -5526,6 +5526,7 @@ PROMPT;
             $contract = is_array($context['semanticContract'] ?? null)
                 ? $context['semanticContract']
                 : [];
+            $result['semanticContractApplicable'] = !empty($contract['applicable']);
             $semanticValidation = ExploratorySqlSemanticValidatorService::validate(
                 (string)($result['sql'] ?? ''),
                 $contract

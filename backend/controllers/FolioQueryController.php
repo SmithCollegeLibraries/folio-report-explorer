@@ -385,6 +385,17 @@ class FolioQueryController extends Controller
                 return $this->buildUnsafeGeneratedSqlResponse($result, $prompt, $campus);
             }
 
+            if (!empty($result['semanticContractApplicable'])
+                && (($result['semanticValidation']['status'] ?? null) !== 'validated')
+            ) {
+                return $this->buildExploratoryRepairExhaustedResponse(
+                    $result,
+                    $prompt,
+                    $campus,
+                    'semantic_coverage_gap'
+                );
+            }
+
             $dataSource = (string)($result['dataSource'] ?? 'folio');
             try {
                 $estimate = $preflight((string)$result['sql'], $dataSource);
@@ -464,6 +475,7 @@ class FolioQueryController extends Controller
             if (!is_array($repairResult)) {
                 $repairResult = [];
             }
+            unset($previousResult['semanticValidation']);
             $result = array_replace($previousResult, $repairResult);
             if (!array_key_exists('sql', $repairResult)) {
                 unset($result['sql']);
