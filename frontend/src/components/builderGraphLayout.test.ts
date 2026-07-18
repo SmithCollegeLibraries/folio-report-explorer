@@ -46,6 +46,33 @@ describe('layoutRelationshipGraph', () => {
     expect(result.nodes.find((entry) => entry.id === 'items')?.data).toEqual({ label: 'items' });
   });
 
+  it('preserves canonical relationship edge rendering while smoothing legacy edges', async () => {
+    const layout = vi.fn(async (graph) => graph);
+    const layoutGraph = createRelationshipGraphLayout(async () => ({ layout }));
+    const edges: Edge[] = [
+      {
+        id: 'canonical-pair',
+        source: 'items',
+        target: 'locations',
+        type: 'builderRelationship',
+        data: { pairId: 'canonical-pair' },
+      },
+      { id: 'legacy-pair', source: 'items', target: 'holdings' },
+    ];
+
+    const result = await layoutGraph({
+      nodes: [node('items'), node('locations'), node('holdings')],
+      edges,
+      direction: 'RIGHT',
+    });
+
+    expect(result.edges.find((edge) => edge.id === 'canonical-pair')).toMatchObject({
+      type: 'builderRelationship',
+      data: { pairId: 'canonical-pair' },
+    });
+    expect(result.edges.find((edge) => edge.id === 'legacy-pair')?.type).toBe('smoothstep');
+  });
+
   it('separates disconnected nodes', async () => {
     const result = await layoutRelationshipGraph({
       nodes: [node('items'), node('funds')],

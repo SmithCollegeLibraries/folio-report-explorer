@@ -7,6 +7,7 @@ use Yii;
 // Ensure the policy-violation exception type is available even in standalone
 // (non-autoloaded) test harnesses; require_once is a no-op once Yii has loaded it.
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
+require_once __DIR__ . '/SqlSelectStructureService.php';
 
 /**
  * SqlBuilderService — translates a structured query definition into
@@ -823,10 +824,9 @@ class SqlBuilderService
         $blockedTables = array_map('strtolower', FolioSchemaService::EXCLUDED_TABLES);
         $blockedSchemas = array_map('strtolower', FolioSchemaService::EXCLUDED_SCHEMAS);
 
-        // Extract schema-qualified table references from FROM/JOIN clauses.
-        preg_match_all('/(?:FROM|JOIN)\s+([\w-]+(?:\.[\w-]+)?)/i', $sql, $matches);
-
-        foreach (($matches[1] ?? []) as $ref) {
+        // Use the shared structural tokenizer so implicit comma joins cannot
+        // hide a table from policy enforcement.
+        foreach (SqlSelectStructureService::extractTableReferences($sql) as $ref) {
             $tableRef = strtolower(trim($ref));
             if ($tableRef === '' || $tableRef === 'select' || $tableRef === 'lateral' || $tableRef === 'unnest') {
                 continue;

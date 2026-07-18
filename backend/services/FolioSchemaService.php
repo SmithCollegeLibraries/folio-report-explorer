@@ -198,6 +198,19 @@ class FolioSchemaService
     }
 
     /**
+     * Return the read-only inputs used to build the canonical Query Builder schema.
+     */
+    public static function getBuilderSchemaInputs(): array
+    {
+        $schema = self::loadSchema();
+        return [
+            'legacy_relationships' => $schema['relationships'] ?? [],
+            'mapping' => self::discoverTableMapping(),
+            'columns_by_physical_table' => self::discoverAllColumns(),
+        ];
+    }
+
+    /**
      * Load and cache the derived tables JSON.
      * @return array
      */

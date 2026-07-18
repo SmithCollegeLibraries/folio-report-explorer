@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { findPath } from '../api/client';
-import type { JoinEdge, JoinType, TableDetail } from '../types';
+import type { CanonicalJoinEdge, JoinEdge, JoinType } from '../types';
+import type { RelationshipGroups, RelationshipOverrides } from './builderRelationships';
+import { activeRelationship, applyRelationshipOverrides } from './builderRelationships';
 import {
   Link2,
   ArrowRight,
@@ -12,9 +12,15 @@ import {
 
 interface Props {
   selectedTables: string[];
-  tableDetails: Record<string, TableDetail>;
   joinMode: 'auto' | 'manual';
   customJoins: JoinEdge[];
+  relationshipGroups: RelationshipGroups;
+  activeRelationshipOverrides: RelationshipOverrides;
+  onRelationshipChange: (pairId: string, relationshipId: string) => void;
+  onResetRelationships: () => void;
+  defaultJoins: CanonicalJoinEdge[];
+  discoveryLoading: boolean;
+  discoveryError: string | null;
   onJoinModeChange: (mode: 'auto' | 'manual') => void;
   onCustomJoinsChange: (joins: JoinEdge[]) => void;
 }
@@ -23,98 +29,32 @@ export default function JoinPanel({
   selectedTables,
   joinMode,
   customJoins,
+  relationshipGroups,
+  activeRelationshipOverrides,
+  onRelationshipChange,
+  onResetRelationships,
   onJoinModeChange,
   onCustomJoinsChange,
+  defaultJoins,
+  discoveryLoading,
+  discoveryError,
 }: Props) {
-  const [discoveredJoins, setDiscoveredJoins] = useState<JoinEdge[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Auto-discover joins between selected tables using BFS path finder
-  useEffect(() => {
-    if (selectedTables.length < 2) {
-      setDiscoveredJoins([]);
-      setError(null);
-      return;
-    }
-
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    async function discover() {
-      const joins: JoinEdge[] = [];
-      const joined = new Set<string>([selectedTables[0]]);
-
-      for (let i = 1; i < selectedTables.length; i++) {
-        const target = selectedTables[i];
-        if (joined.has(target)) continue;
-
-        let bestPath: JoinEdge[] | null = null;
-        for (const source of joined) {
-          try {
-            const resp = await findPath(source, target);
-            if (resp.path && resp.path.joins.length > 0) {
-              if (!bestPath || resp.path.joins.length < bestPath.length) {
-                bestPath = resp.path.joins;
-              }
-            }
-          } catch {
-            // try next source
-          }
-        }
-
-        if (bestPath) {
-          for (const edge of bestPath) {
-            const exists = joins.some(
-              (j) =>
-                j.from_table === edge.from_table &&
-                j.to_table === edge.to_table &&
-                j.from_column === edge.from_column &&
-                j.to_column === edge.to_column,
-            );
-            if (!exists) {
-              joins.push({ ...edge, join_type: 'JOIN' });
-            }
-          }
-          // Mark all intermediate tables as joined
-          for (const edge of bestPath) {
-            joined.add(edge.to_table);
-            joined.add(edge.from_table);
-          }
-        } else {
-          if (!cancelled) {
-            setError(`Cannot find FK path to "${target}"`);
-          }
-        }
-
-        joined.add(target);
-      }
-
-      if (!cancelled) {
-        setDiscoveredJoins(joins);
-        // If switching to auto mode and custom joins are empty, populate them
-        if (customJoins.length === 0 && joins.length > 0) {
-          onCustomJoinsChange(joins.map((j) => ({ ...j })));
-        }
-        setLoading(false);
-      }
-    }
-
-    discover();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedTables.join(',')]);
-
   // The joins to display — in auto mode show discovered, in manual show custom
-  const displayJoins = joinMode === 'auto' ? discoveredJoins : customJoins;
+  const baseDisplayJoins = joinMode === 'auto'
+    ? defaultJoins
+    : customJoins.filter((join): join is CanonicalJoinEdge => (
+      typeof join.relationship_id === 'string' && typeof join.pair_id === 'string'
+    ));
+  const displayJoins = applyRelationshipOverrides(
+    baseDisplayJoins,
+    relationshipGroups,
+    activeRelationshipOverrides,
+  );
 
   const updateJoinType = (index: number, type: JoinType) => {
     if (joinMode === 'auto') {
       // Switch to manual mode to allow customization
-      const newJoins = discoveredJoins.map((j, i) =>
+      const newJoins = defaultJoins.map((j, i) =>
         i === index ? { ...j, join_type: type } : { ...j },
       );
       onCustomJoinsChange(newJoins);
@@ -128,8 +68,19 @@ export default function JoinPanel({
   };
 
   const resetToAuto = () => {
+    onResetRelationships();
     onJoinModeChange('auto');
-    onCustomJoinsChange(discoveredJoins.map((j) => ({ ...j, join_type: 'JOIN' })));
+    onCustomJoinsChange(defaultJoins.map((j) => ({ ...j, join_type: 'JOIN' })));
+  };
+
+  const enterManualMode = () => {
+    if (customJoins.length === 0 && defaultJoins.length > 0) {
+      onCustomJoinsChange(defaultJoins.map((join) => ({
+        ...join,
+        join_type: join.join_type || 'JOIN',
+      })));
+    }
+    onJoinModeChange('manual');
   };
 
   if (selectedTables.length < 2) {
@@ -151,7 +102,7 @@ export default function JoinPanel({
         <div className="flex items-center gap-3">
           <button
             onClick={() =>
-              joinMode === 'auto' ? onJoinModeChange('manual') : resetToAuto()
+              joinMode === 'auto' ? enterManualMode() : resetToAuto()
             }
             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border transition-colors ${
               joinMode === 'auto'
@@ -185,7 +136,7 @@ export default function JoinPanel({
       </p>
 
       {/* Loading */}
-      {loading && (
+      {discoveryLoading && (
         <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
           <Loader2 size={16} className="animate-spin" />
           Discovering join paths…
@@ -193,32 +144,44 @@ export default function JoinPanel({
       )}
 
       {/* Error */}
-      {error && (
+      {discoveryError && (
         <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2">
           <AlertCircle size={14} />
-          {error}
+          {discoveryError}
         </div>
       )}
 
       {/* Join list */}
-      {!loading && displayJoins.length > 0 && (
+      {!discoveryLoading && displayJoins.length > 0 && (
         <div className="space-y-2">
-          {displayJoins.map((j, i) => (
+          {displayJoins.map((j, i) => {
+            const group = relationshipGroups[j.pair_id];
+            const selectedRelationship = group
+              ? activeRelationship(group, activeRelationshipOverrides)
+              : null;
+            return (
             <div
-              key={i}
-              className="flex items-center gap-3 bg-gray-50 rounded-lg px-4 py-3 border"
+              key={j.relationship_id || i}
+              className="flex flex-wrap items-center gap-3 bg-gray-50 rounded-lg px-4 py-3 border"
             >
               {/* From */}
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-xs font-mono font-semibold text-gray-700 truncate">
                   {j.from_table}
                 </span>
-                <span className="text-xs text-gray-400">.{j.from_column}</span>
+                <span className="text-xs text-gray-400">.</span>
+                <span
+                  className="text-xs text-gray-400"
+                  data-testid={`join-from-column-${j.pair_id}`}
+                >
+                  {j.from_column}
+                </span>
               </div>
 
               {/* Join type selector */}
               <div className="flex-shrink-0">
                 <select
+                  aria-label={`Join type for ${j.from_table} and ${j.to_table}`}
                   value={j.join_type || 'JOIN'}
                   onChange={(e) => updateJoinType(i, e.target.value as JoinType)}
                   className={`text-xs font-semibold px-2 py-1 rounded border cursor-pointer ${
@@ -240,7 +203,13 @@ export default function JoinPanel({
                 <span className="text-xs font-mono font-semibold text-gray-700 truncate">
                   {j.to_table}
                 </span>
-                <span className="text-xs text-gray-400">.{j.to_column}</span>
+                <span className="text-xs text-gray-400">.</span>
+                <span
+                  className="text-xs text-gray-400"
+                  data-testid={`join-to-column-${j.pair_id}`}
+                >
+                  {j.to_column}
+                </span>
               </div>
 
               {/* FK name */}
@@ -249,13 +218,35 @@ export default function JoinPanel({
                   {j.foreign_key}
                 </span>
               )}
+
+              {group && group.relationships.length > 1 && selectedRelationship && (
+                <label className="basis-full flex items-center gap-2 text-xs text-gray-600">
+                  <span>Relationship</span>
+                  <select
+                    aria-label={`Relationship for ${group.leftTable} and ${group.rightTable}`}
+                    value={selectedRelationship.relationship_id}
+                    onChange={(event) => onRelationshipChange(group.pairId, event.target.value)}
+                    className="min-w-0 flex-1 rounded border border-gray-300 bg-white px-2 py-1 font-mono text-xs text-gray-700"
+                  >
+                    {group.relationships.map((relationship) => (
+                      <option
+                        key={relationship.relationship_id}
+                        value={relationship.relationship_id}
+                      >
+                        {relationship.label}{relationship.is_default ? ' — Default' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {/* No joins discovered */}
-      {!loading && displayJoins.length === 0 && selectedTables.length >= 2 && !error && (
+      {!discoveryLoading && displayJoins.length === 0 && selectedTables.length >= 2 && !discoveryError && (
         <div className="text-center text-gray-400 text-sm py-4">
           No join paths discovered between selected tables.
         </div>

@@ -4,6 +4,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import {
   fetchSchema,
   fetchTableDetail,
+  findPath,
   buildQuery,
   submitQuery,
   saveQuery,
@@ -19,13 +20,20 @@ import SortPanel from '../components/SortPanel';
 import JoinPanel from '../components/JoinPanel';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
+import {
+  currentRelationshipSelections,
+  groupDirectRelationships,
+  pruneRelationshipOverrides,
+  type RelationshipOverrides,
+} from '../components/builderRelationships';
 import type {
-  QueryDefinition,
+  CanonicalQueryDefinition,
+  CanonicalJoinEdge,
+  RelationshipSelection,
   SelectedColumn,
   FilterCondition,
   SortSpec,
   JoinEdge,
-  GroupBySpec,
   BuildResponse,
   TableDetail,
 } from '../types';
@@ -45,6 +53,39 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 const LIMIT_PRESETS = [10, 100, 500, 1000];
+const schemaIdentity = 'ldlite' as const;
+
+function isCanonicalJoinEdge(edge: JoinEdge): edge is CanonicalJoinEdge {
+  return typeof edge.relationship_id === 'string' && typeof edge.pair_id === 'string';
+}
+
+function buildDefaultSaveJoins(
+  joinMode: 'auto' | 'manual',
+  defaultJoins: CanonicalJoinEdge[],
+  customJoins: CanonicalJoinEdge[],
+): 'auto' | RelationshipSelection[] {
+  if (joinMode === 'auto') return 'auto';
+
+  const typeByPair = new Map(
+    customJoins.map((join) => [join.pair_id, join.join_type]),
+  );
+
+  return defaultJoins.map((join) => {
+    const joinType = typeByPair.get(join.pair_id) ?? join.join_type;
+    return {
+      relationship_id: join.relationship_id,
+      ...(joinType ? { join_type: joinType } : {}),
+    };
+  });
+}
+
+export function resolvedJoinsForTopology(
+  joins: CanonicalJoinEdge[],
+  resolvedTopologySignature: string | null,
+  currentTopologySignature: string,
+): CanonicalJoinEdge[] {
+  return resolvedTopologySignature === currentTopologySignature ? joins : [];
+}
 
 export default function Builder() {
   // --- state ---
@@ -63,70 +104,281 @@ export default function Builder() {
   const [saveDesc, setSaveDesc] = useState('');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [joinMode, setJoinMode] = useState<'auto' | 'manual'>('auto');
-  const [customJoins, setCustomJoins] = useState<JoinEdge[]>([]);
+  const [customJoins, setCustomJoins] = useState<CanonicalJoinEdge[]>([]);
+  const [defaultJoins, setDefaultJoins] = useState<CanonicalJoinEdge[]>([]);
+  const [resolvedJoinTopologySignature, setResolvedJoinTopologySignature] = useState<string | null>(null);
+  const [joinDiscoveryLoading, setJoinDiscoveryLoading] = useState(false);
+  const [joinDiscoveryError, setJoinDiscoveryError] = useState<string | null>(null);
+  const [activeRelationshipOverrides, setActiveRelationshipOverrides] = useState<RelationshipOverrides>({});
+  const [relationshipNotice, setRelationshipNotice] = useState<string | null>(null);
   const [leftPanel, setLeftPanel] = useState<'browse' | 'relationships'>('browse');
   const [graphOpen, setGraphOpen] = useState(false);
+  const queryVersionRef = useRef(0);
+  const discoveryRequestRef = useRef(0);
+  const buildRequestRef = useRef(0);
+  const saveInFlightRef = useRef(false);
+
+  const invalidateQueryResult = useCallback(() => {
+    queryVersionRef.current += 1;
+    setBuilt(null);
+    setEditedSql(null);
+  }, []);
 
   // --- async job polling ---
   const { job, results, isRunning, error: jobError, cancel: cancelJob, reset: resetJob, elapsedSeconds } = useJobPolling(activeJobId);
 
   // --- data fetching ---
   const { data: schemaData, isLoading: schemaLoading } = useQuery({
-    queryKey: ['schema'],
-    queryFn: () => fetchSchema(),
+    queryKey: ['schema', schemaIdentity],
+    queryFn: () => fetchSchema(undefined, schemaIdentity),
   });
 
   // Fetch table details
   const [tableDetails, setTableDetails] = useState<Record<string, TableDetail>>({});
+  const [tableDetailErrors, setTableDetailErrors] = useState<Record<string, string>>({});
   const fetchedRef = useRef<Set<string>>(new Set());
+  const detailRequestVersionsRef = useRef<Record<string, number>>({});
+  const selectedTablesRef = useRef(selectedTables);
+  selectedTablesRef.current = selectedTables;
+
+  const loadTableDetail = useCallback((table: string) => {
+    if (fetchedRef.current.has(table)) return;
+
+    fetchedRef.current.add(table);
+    const requestVersion = (detailRequestVersionsRef.current[table] ?? 0) + 1;
+    detailRequestVersionsRef.current[table] = requestVersion;
+    setTableDetailErrors((previous) => {
+      if (!(table in previous)) return previous;
+      const next = { ...previous };
+      delete next[table];
+      return next;
+    });
+
+    fetchTableDetail(table, schemaIdentity).then((detail) => {
+      if (detailRequestVersionsRef.current[table] !== requestVersion
+          || !selectedTablesRef.current.includes(table)) {
+        return;
+      }
+      setTableDetails((previous) => ({ ...previous, [table]: detail }));
+    }).catch(() => {
+      if (detailRequestVersionsRef.current[table] !== requestVersion) return;
+      fetchedRef.current.delete(table);
+      if (!selectedTablesRef.current.includes(table)) return;
+      setTableDetailErrors((previous) => ({
+        ...previous,
+        [table]: `Could not load details for ${table}.`,
+      }));
+    });
+  }, []);
+
+  const forgetTableDetail = useCallback((table: string) => {
+    detailRequestVersionsRef.current[table] =
+      (detailRequestVersionsRef.current[table] ?? 0) + 1;
+    fetchedRef.current.delete(table);
+    setTableDetails((previous) => {
+      if (!(table in previous)) return previous;
+      const next = { ...previous };
+      delete next[table];
+      return next;
+    });
+    setTableDetailErrors((previous) => {
+      if (!(table in previous)) return previous;
+      const next = { ...previous };
+      delete next[table];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     for (const t of selectedTables) {
       if (!tableDetails[t] && !fetchedRef.current.has(t)) {
-        fetchedRef.current.add(t);
-        fetchTableDetail(t).then((detail) => {
-          setTableDetails((prev) => ({ ...prev, [t]: detail }));
-        });
+        loadTableDetail(t);
       }
     }
-  }, [selectedTables]);
+  }, [loadTableDetail, selectedTables, tableDetails]);
+
+  const relationshipGroups = useMemo(
+    () => groupDirectRelationships(tableDetails, selectedTables),
+    [selectedTables, tableDetails],
+  );
+  const selectedTableTopologySignature = selectedTables.join('\u001f');
+  const resolvedDefaultJoins = resolvedJoinsForTopology(
+    defaultJoins,
+    resolvedJoinTopologySignature,
+    selectedTableTopologySignature,
+  );
+
+  useEffect(() => {
+    setDefaultJoins([]);
+    setResolvedJoinTopologySignature(null);
+    setJoinDiscoveryError(null);
+    invalidateQueryResult();
+    const discoveryVersion = ++discoveryRequestRef.current;
+
+    if (selectedTables.length < 2) {
+      setJoinDiscoveryLoading(false);
+      setResolvedJoinTopologySignature(selectedTableTopologySignature);
+      return;
+    }
+
+    let cancelled = false;
+    setJoinDiscoveryLoading(true);
+
+    async function discoverDefaultPath() {
+      const joins: CanonicalJoinEdge[] = [];
+      const joined = new Set<string>([selectedTables[0]]);
+      let missingTarget: string | null = null;
+
+      for (let index = 1; index < selectedTables.length; index += 1) {
+        const target = selectedTables[index];
+        if (joined.has(target)) continue;
+
+        let bestPath: CanonicalJoinEdge[] | null = null;
+        for (const source of Array.from(joined)) {
+          try {
+            const response = await findPath(source, target, false, 6, schemaIdentity);
+            const candidate = response.path?.joins ?? [];
+            if (candidate.length > 0 && (!bestPath || candidate.length < bestPath.length)) {
+              bestPath = candidate;
+            }
+          } catch {
+            // A different already-connected source may still provide a complete path.
+          }
+        }
+
+        if (!bestPath) {
+          missingTarget = target;
+          break;
+        }
+
+        for (const edge of bestPath) {
+          if (!joins.some((join) => join.relationship_id === edge.relationship_id)) {
+            joins.push({ ...edge, join_type: 'JOIN' });
+          }
+          joined.add(edge.from_table);
+          joined.add(edge.to_table);
+        }
+        joined.add(target);
+      }
+
+      if (cancelled || discoveryVersion !== discoveryRequestRef.current) return;
+      invalidateQueryResult();
+      setDefaultJoins(missingTarget ? [] : joins);
+      setResolvedJoinTopologySignature(selectedTableTopologySignature);
+      setJoinDiscoveryError(missingTarget ? `Cannot find FK path to "${missingTarget}"` : null);
+      setJoinDiscoveryLoading(false);
+    }
+
+    void discoverDefaultPath();
+    return () => { cancelled = true; };
+  }, [selectedTableTopologySignature, invalidateQueryResult]);
+
+  const selectRelationship = useCallback((pairId: string, relationshipId: string) => {
+    setActiveRelationshipOverrides((current) => {
+      const group = relationshipGroups[pairId];
+      const next = { ...current };
+      if (!group || relationshipId === group.defaultRelationshipId) {
+        delete next[pairId];
+      } else if (group.relationships.some((item) => item.relationship_id === relationshipId)) {
+        next[pairId] = relationshipId;
+      }
+      return next;
+    });
+    invalidateQueryResult();
+  }, [relationshipGroups]);
+
+  useEffect(() => {
+    const pruned = pruneRelationshipOverrides(
+      activeRelationshipOverrides,
+      selectedTables,
+      relationshipGroups,
+    );
+    if (Object.keys(pruned).length !== Object.keys(activeRelationshipOverrides).length) {
+      setActiveRelationshipOverrides(pruned);
+      setRelationshipNotice('A selected table link is no longer available. Query Builder restored the default link.');
+      invalidateQueryResult();
+    }
+  }, [selectedTables, relationshipGroups, activeRelationshipOverrides, invalidateQueryResult]);
+
+  const activeJoinSelections = useMemo(
+    () => currentRelationshipSelections(
+      resolvedDefaultJoins,
+      relationshipGroups,
+      activeRelationshipOverrides,
+      customJoins,
+    ),
+    [resolvedDefaultJoins, relationshipGroups, activeRelationshipOverrides, customJoins],
+  );
+
+  const joinsForBuild = useMemo<CanonicalQueryDefinition['joins']>(() => {
+    const hasOverride = Object.keys(activeRelationshipOverrides).length > 0;
+    if (resolvedDefaultJoins.length > 0 && (hasOverride || joinMode === 'manual')) {
+      return activeJoinSelections;
+    }
+    return 'auto';
+  }, [activeJoinSelections, activeRelationshipOverrides, customJoins, resolvedDefaultJoins, joinMode]);
+
+  const handleCustomJoinsChange = useCallback((joins: JoinEdge[]) => {
+    const canonical = joins.filter(isCanonicalJoinEdge);
+    setCustomJoins(canonical);
+    invalidateQueryResult();
+  }, [invalidateQueryResult]);
+
+  const resetRelationships = useCallback(() => {
+    setActiveRelationshipOverrides({});
+    invalidateQueryResult();
+  }, [invalidateQueryResult]);
 
   // Clear edited SQL when build changes
   useEffect(() => {
     setEditedSql(null);
   }, [built]);
 
+  const createQueryDefinition = (joins: CanonicalQueryDefinition['joins']): CanonicalQueryDefinition => {
+    const hasAggregates = columns.some((column) => Boolean(column.aggregate));
+    const groupBy = hasAggregates
+      ? columns
+        .filter((column) => !column.aggregate)
+        .map((column) => ({ table: column.table, column: column.column }))
+      : undefined;
+
+    return {
+      schemaIdentity,
+      tables: selectedTables,
+      columns,
+      filters,
+      joins,
+      orderBy,
+      limit,
+      distinct,
+      ...(groupBy && groupBy.length > 0 ? { groupBy } : {}),
+    };
+  };
+
+  const effectiveSql = editedSql ?? built?.sql ?? '';
+
   // --- mutations ---
   const buildMut = useMutation({
-    mutationFn: () => {
-      // Auto-compute GROUP BY: if any column has an aggregate, group by all non-aggregated columns
-      const hasAggregates = columns.some((c) => Boolean(c.aggregate));
-      let groupBy: GroupBySpec[] | undefined;
-      if (hasAggregates) {
-        groupBy = columns
-          .filter((c) => !c.aggregate)
-          .map((c) => ({ table: c.table, column: c.column }));
+    mutationFn: ({ definition }: { definition: CanonicalQueryDefinition; version: number; requestId: number }) => buildQuery(definition),
+    onSuccess: (data: BuildResponse, request) => {
+      if (request.version !== queryVersionRef.current || request.requestId !== buildRequestRef.current) {
+        return;
       }
-
-      const def: QueryDefinition = {
-        tables: selectedTables,
-        columns,
-        filters,
-        joins: joinMode === 'manual' && customJoins.length > 0 ? customJoins : 'auto',
-        orderBy,
-        limit,
-        distinct,
-        ...(groupBy && groupBy.length > 0 ? { groupBy } : {}),
-      };
-      return buildQuery(def);
-    },
-    onSuccess: (data: BuildResponse) => {
       setBuilt(data);
       setActiveTab('sql');
       resetJob();
       setActiveJobId(null);
     },
   });
+
+  const startBuild = useCallback(() => {
+    const requestId = ++buildRequestRef.current;
+    buildMut.mutate({
+      definition: createQueryDefinition(joinsForBuild),
+      version: queryVersionRef.current,
+      requestId,
+    });
+  }, [buildMut, joinsForBuild, selectedTables, columns, filters, orderBy, limit, distinct]);
 
   const execMut = useMutation({
     mutationFn: ({ sql, params, options }: { sql: string; params: Record<string, string>; options?: { confirmed?: boolean; outputMode?: 'table' | 'file' } }) => {
@@ -155,26 +407,68 @@ export default function Builder() {
     },
   });
 
+  type SaveSnapshot = {
+    name: string;
+    description: string;
+    queryDefinition: CanonicalQueryDefinition;
+    generatedSql: string;
+    sqlEdited: boolean;
+    rebuildDefault: boolean;
+  };
+
   const saveMut = useMutation({
-    mutationFn: () =>
-      saveQuery({
-        name: saveName,
-        description: saveDesc,
-        queryDefinition: { tables: selectedTables, columns, filters, joins: joinMode === 'manual' && customJoins.length > 0 ? customJoins : 'auto', orderBy, limit, distinct },
-        generatedSql: effectiveSql,
-      }),
+    mutationFn: async (snapshot: SaveSnapshot) => {
+      let generatedSql = snapshot.generatedSql;
+      if (snapshot.rebuildDefault) {
+        try {
+          generatedSql = (await buildQuery(snapshot.queryDefinition)).sql;
+        } catch {
+          throw new Error('Could not rebuild the default joins. The query was not saved.');
+        }
+      }
+
+      return saveQuery({
+        name: snapshot.name,
+        description: snapshot.description,
+        queryDefinition: snapshot.queryDefinition,
+        generatedSql,
+        sqlEdited: snapshot.sqlEdited,
+      });
+    },
     onSuccess: () => {
       setSaveOpen(false);
       setSaveName('');
       setSaveDesc('');
     },
+    onSettled: () => {
+      saveInFlightRef.current = false;
+    },
   });
+
+  const startSave = useCallback(() => {
+    if (saveInFlightRef.current || !saveName) return;
+    saveInFlightRef.current = true;
+    const rebuildDefault = Object.keys(activeRelationshipOverrides).length > 0;
+    saveMut.mutate({
+      name: saveName,
+      description: saveDesc,
+      queryDefinition: createQueryDefinition(
+        rebuildDefault
+          ? buildDefaultSaveJoins(joinMode, resolvedDefaultJoins, customJoins)
+          : joinsForBuild,
+      ),
+      generatedSql: effectiveSql,
+      sqlEdited: !rebuildDefault && editedSql !== null,
+      rebuildDefault,
+    });
+  }, [saveName, saveDesc, activeRelationshipOverrides, joinMode, resolvedDefaultJoins, customJoins, joinsForBuild, effectiveSql, editedSql, saveMut]);
 
   // --- handlers ---
   const toggleTable = useCallback(
     (table: string) => {
       if (selectedTables.includes(table)) {
         // Remove table + its columns, filters, sorts
+        forgetTableDetail(table);
         setSelectedTables((prev) => prev.filter((t) => t !== table));
         setColumns((prev) => prev.filter((c) => c.table !== table));
         setFilters((prev) => prev.filter((f) => f.table !== table));
@@ -182,24 +476,25 @@ export default function Builder() {
       } else {
         setSelectedTables((prev) => [...prev, table]);
       }
-      setBuilt(null);
+      invalidateQueryResult();
       resetJob();
       setActiveJobId(null);
     },
-    [selectedTables, resetJob],
+    [selectedTables, resetJob, forgetTableDetail],
   );
 
   const removeTable = useCallback(
     (table: string) => {
+      forgetTableDetail(table);
       setSelectedTables((prev) => prev.filter((t) => t !== table));
       setColumns((prev) => prev.filter((c) => c.table !== table));
       setFilters((prev) => prev.filter((f) => f.table !== table));
       setOrderBy((prev) => prev.filter((s) => s.table !== table));
-      setBuilt(null);
+      invalidateQueryResult();
       resetJob();
       setActiveJobId(null);
     },
-    [resetJob],
+    [resetJob, forgetTableDetail],
   );
 
   // --- derived ---
@@ -212,9 +507,12 @@ export default function Builder() {
     return result;
   }, [selectedTables, tableDetails]);
 
-  const effectiveSql = editedSql ?? built?.sql ?? '';
-
-  const canBuild = selectedTables.length > 0 && columns.length > 0;
+  const joinTopologyReady = selectedTables.length < 2
+    || (resolvedJoinTopologySignature === selectedTableTopologySignature
+      && !joinDiscoveryLoading
+      && joinDiscoveryError === null
+      && resolvedDefaultJoins.length > 0);
+  const canBuild = selectedTables.length > 0 && columns.length > 0 && joinTopologyReady;
   const canRun = !!effectiveSql && !isRunning;
 
   if (schemaLoading) {
@@ -269,7 +567,7 @@ export default function Builder() {
 
         {/* DISTINCT toggle */}
         <button
-          onClick={() => { setDistinct((d) => !d); setBuilt(null); }}
+          onClick={() => { setDistinct((d) => !d); invalidateQueryResult(); }}
           className={`flex items-center gap-1 text-xs px-2 py-1 rounded border ${
             distinct
               ? 'bg-folio-50 text-folio-700 border-folio-300'
@@ -288,7 +586,7 @@ export default function Builder() {
             {LIMIT_PRESETS.map((n) => (
               <button
                 key={n}
-                onClick={() => { setLimit(n); setBuilt(null); }}
+                onClick={() => { setLimit(n); invalidateQueryResult(); }}
                 className={`text-xs px-2 py-1 rounded border ${
                   limit === n
                     ? 'bg-folio-600 text-white border-folio-600'
@@ -303,7 +601,7 @@ export default function Builder() {
               min={1}
               max={50000}
               value={limit}
-              onChange={(e) => { setLimit(Number(e.target.value) || 100); setBuilt(null); }}
+              onChange={(e) => { setLimit(Number(e.target.value) || 100); invalidateQueryResult(); }}
               className="w-16 text-xs border rounded px-1.5 py-1 text-center"
             />
           </div>
@@ -312,7 +610,7 @@ export default function Builder() {
         {/* Action buttons */}
         <div className="flex gap-2">
           <button
-            onClick={() => buildMut.mutate()}
+            onClick={startBuild}
             disabled={!canBuild || buildMut.isPending}
             className="flex items-center gap-1 bg-folio-600 text-white px-3 py-1.5 rounded text-sm hover:bg-folio-700 disabled:opacity-50"
           >
@@ -350,6 +648,41 @@ export default function Builder() {
 
       {/* ─── Main area: two-column layout ─── */}
       <div className="flex-1 flex overflow-hidden">
+        {Object.entries(tableDetailErrors).length > 0 && (
+          <div
+            role="alert"
+            className="absolute left-4 top-16 z-20 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 shadow-sm"
+          >
+            {Object.entries(tableDetailErrors).map(([table, message]) => (
+              <div key={table}>
+                {message}{' '}
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={() => loadTableDetail(table)}
+                  aria-label={`Retry ${table} details`}
+                >
+                  Retry
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {relationshipNotice && (
+          <div
+            role="status"
+            className="absolute right-4 top-16 z-20 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 shadow-sm"
+          >
+            {relationshipNotice}
+            <button
+              type="button"
+              className="ml-2 underline"
+              onClick={() => setRelationshipNotice(null)}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         {/* ─── Left column: Table browser / Graph ─── */}
         <div className="w-80 border-r flex flex-col flex-shrink-0">
           {/* Panel toggle */}
@@ -446,31 +779,37 @@ export default function Builder() {
                 <ColumnPicker
                   tableColumns={tableColumnsMap}
                   selectedColumns={columns}
-                  onColumnsChange={(cols) => { setColumns(cols); setBuilt(null); }}
+                  onColumnsChange={(cols) => { setColumns(cols); invalidateQueryResult(); }}
                 />
               )}
               {activeTab === 'filters' && (
                 <FilterPanel
                   tableColumns={tableColumnsMap}
                   filters={filters}
-                  onFiltersChange={(f) => { setFilters(f); setBuilt(null); }}
+                  onFiltersChange={(f) => { setFilters(f); invalidateQueryResult(); }}
                 />
               )}
               {activeTab === 'sort' && (
                 <SortPanel
                   tableColumns={tableColumnsMap}
                   orderBy={orderBy}
-                  onOrderByChange={(s) => { setOrderBy(s); setBuilt(null); }}
+                  onOrderByChange={(s) => { setOrderBy(s); invalidateQueryResult(); }}
                 />
               )}
               {activeTab === 'joins' && (
                 <JoinPanel
                   selectedTables={selectedTables}
-                  tableDetails={tableDetails}
                   joinMode={joinMode}
                   customJoins={customJoins}
-                  onJoinModeChange={(m) => { setJoinMode(m); setBuilt(null); }}
-                  onCustomJoinsChange={(j) => { setCustomJoins(j); setBuilt(null); }}
+                  onJoinModeChange={(m) => { setJoinMode(m); invalidateQueryResult(); }}
+                  onCustomJoinsChange={handleCustomJoinsChange}
+                  defaultJoins={resolvedDefaultJoins}
+                  discoveryLoading={joinDiscoveryLoading}
+                  discoveryError={joinDiscoveryError}
+                  relationshipGroups={relationshipGroups}
+                  activeRelationshipOverrides={activeRelationshipOverrides}
+                  onRelationshipChange={selectRelationship}
+                  onResetRelationships={resetRelationships}
                 />
               )}
               {activeTab === 'sql' && (
@@ -644,6 +983,9 @@ export default function Builder() {
                 tables={schemaData?.tables || {}}
                 onAddTable={toggleTable}
                 onRemoveTable={removeTable}
+                relationshipGroups={relationshipGroups}
+                activeRelationshipOverrides={activeRelationshipOverrides}
+                onRelationshipChange={selectRelationship}
               />
             </div>
           </div>
@@ -653,29 +995,53 @@ export default function Builder() {
       {/* ─── Save dialog ─── */}
       {saveOpen && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-96">
-            <h3 className="font-semibold mb-4">Save Query</h3>
+          <div
+            role="dialog"
+            aria-labelledby="save-query-heading"
+            className="bg-white rounded-lg shadow-xl p-6 w-96"
+          >
+            <h3 id="save-query-heading" className="font-semibold mb-4">Save Query</h3>
+            {Object.keys(activeRelationshipOverrides).length > 0 && (
+              <p className="mb-3 text-sm text-amber-800" role="status">
+                Alternate joins apply to this session only. Saved queries use the default table links.
+              </p>
+            )}
+            {Object.keys(activeRelationshipOverrides).length > 0 && editedSql !== null && (
+              <p className="mb-3 text-sm text-amber-800" role="status">
+                Session SQL edits are not persisted when an alternate table link is active.
+              </p>
+            )}
             <input
               placeholder="Query name"
               value={saveName}
               onChange={(e) => setSaveName(e.target.value)}
+              disabled={saveMut.isPending}
               className="border rounded w-full px-3 py-2 mb-3 text-sm"
             />
             <textarea
               placeholder="Description (optional)"
               value={saveDesc}
               onChange={(e) => setSaveDesc(e.target.value)}
+              disabled={saveMut.isPending}
               className="border rounded w-full px-3 py-2 mb-3 text-sm h-20 resize-none"
             />
+            {saveMut.isError && (
+              <p className="mb-3 text-sm text-red-700" role="alert">
+                {saveMut.error instanceof Error ? saveMut.error.message : String(saveMut.error)}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setSaveOpen(false)}
+                onClick={() => {
+                  if (!saveInFlightRef.current) setSaveOpen(false);
+                }}
+                disabled={saveMut.isPending}
                 className="px-3 py-1.5 text-sm border rounded hover:bg-gray-50"
               >
                 Cancel
               </button>
               <button
-                onClick={() => saveMut.mutate()}
+                onClick={startSave}
                 disabled={!saveName || saveMut.isPending}
                 className="px-3 py-1.5 text-sm bg-folio-600 text-white rounded hover:bg-folio-700 disabled:opacity-50"
               >

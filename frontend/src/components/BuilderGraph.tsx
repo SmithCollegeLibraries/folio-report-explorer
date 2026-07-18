@@ -6,6 +6,7 @@ import {
   Controls,
   type Node,
   type Edge,
+  type EdgeMouseHandler,
   MarkerType,
   useNodesState,
   useEdgesState,
@@ -14,6 +15,14 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { TableDetail, TableSummary } from '../types';
+import {
+  activeRelationship,
+  type RelationshipGroups,
+  type RelationshipOverrides,
+} from './builderRelationships';
+import BuilderRelationshipEdge, {
+  type BuilderRelationshipEdgeData,
+} from './BuilderRelationshipEdge';
 import { layoutRelationshipGraph } from './builderGraphLayout';
 import { reconcileUserArrangedNodes } from './builderGraphPositions';
 
@@ -33,11 +42,18 @@ interface Props {
   tables: Record<string, TableSummary>;
   onAddTable: (name: string) => void;
   onRemoveTable: (name: string) => void;
+  relationshipGroups?: RelationshipGroups;
+  activeRelationshipOverrides?: RelationshipOverrides;
+  onRelationshipChange?: (pairId: string, relationshipId: string) => void;
 }
 
 function shortName(fullName: string): string {
   const dotIdx = fullName.indexOf('.');
   return dotIdx >= 0 ? fullName.substring(dotIdx + 1) : fullName;
+}
+
+function tablePairKey(left: string, right: string): string {
+  return [left, right].sort().join('\u0000');
 }
 
 function graphTopologySignature(nodes: Node[], edges: Edge[]): string {
@@ -49,7 +65,14 @@ function graphTopologySignature(nodes: Node[], edges: Edge[]): string {
   });
 }
 
+function graphNodePresentationSignature(nodes: Node[]): string {
+  return JSON.stringify(nodes.map(({ id, type, data, style }) => ({ id, type, data, style })));
+}
+
 type LayoutMode = 'automatic' | 'user-arranged';
+const emptyRelationshipGroups: RelationshipGroups = {};
+const emptyRelationshipOverrides: RelationshipOverrides = {};
+const ignoreRelationshipChange = () => undefined;
 
 function BuilderGraphCanvas({
   selectedTables,
@@ -57,6 +80,9 @@ function BuilderGraphCanvas({
   tables,
   onAddTable,
   onRemoveTable,
+  relationshipGroups = emptyRelationshipGroups,
+  activeRelationshipOverrides = emptyRelationshipOverrides,
+  onRelationshipChange = ignoreRelationshipChange,
 }: Props) {
   // Compute connected tables
   const connectedTables = useMemo(() => {
@@ -130,12 +156,53 @@ function BuilderGraphCanvas({
 
     // Edges between selected tables (actual FK relationships)
     const edgeSet = new Set<string>();
+    const directGroups = Object.values(relationshipGroups).filter((group) => (
+      selectedSet.has(group.leftTable) && selectedSet.has(group.rightTable)
+    ));
+    const canonicalPairKeys = new Set(
+      directGroups.map((group) => tablePairKey(group.leftTable, group.rightTable)),
+    );
+    for (const group of directGroups) {
+      const active = activeRelationship(group, activeRelationshipOverrides) as typeof group.relationships[number] & {
+        from_table: string;
+        from_column: string;
+        to_table: string;
+        to_column: string;
+      };
+      if (!active.from_table || !active.to_table || !active.from_column || !active.to_column) continue;
+      const label = `${active.from_column} → ${active.to_column}${
+        group.relationships.length > 1 ? ` · ${group.relationships.length} links` : ''
+      }`;
+      edgeSet.add(group.pairId);
+      edges.push({
+        id: group.pairId,
+        source: group.leftTable,
+        target: group.rightTable,
+        label,
+        style: { strokeWidth: 2.5, stroke: '#3b82f6' },
+        markerEnd: { type: MarkerType.ArrowClosed, color: '#3b82f6', width: 16, height: 16 },
+        interactionWidth: 24,
+        type: 'builderRelationship',
+        data: {
+          pairId: group.pairId,
+          relationshipId: active.relationship_id,
+          leftTable: group.leftTable,
+          rightTable: group.rightTable,
+          label,
+          alternativeCount: group.relationships.length,
+          isDefault: active.relationship_id === group.defaultRelationshipId,
+        },
+      });
+    }
+
+    // Retain legacy/local edges for pairs that are not represented by the canonical catalog.
     for (const t of selectedTables) {
       const detail = tableDetails[t];
       if (!detail?.relationships) continue;
 
       for (const rel of detail.relationships.parents || []) {
         if (!rel.parent_table || !selectedSet.has(rel.parent_table)) continue;
+        if (canonicalPairKeys.has(tablePairKey(t, rel.parent_table))) continue;
         const edgeId = `${t}.${rel.local_column}->${rel.parent_table}.${rel.parent_column || 'id'}`;
         if (edgeSet.has(edgeId)) continue;
         edgeSet.add(edgeId);
@@ -197,7 +264,7 @@ function BuilderGraphCanvas({
     });
 
     return { graphNodes: nodes, graphEdges: edges };
-  }, [selectedTables, tableDetails, connectedTables]);
+  }, [activeRelationshipOverrides, connectedTables, relationshipGroups, selectedTables, tableDetails]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graphEdges);
@@ -218,7 +285,82 @@ function BuilderGraphCanvas({
     () => graphTopologySignature(graphNodes, graphEdges),
     [graphEdges, graphNodes],
   );
+  const nodePresentationSignature = useMemo(
+    () => graphNodePresentationSignature(graphNodes),
+    [graphNodes],
+  );
+  const installedNodePresentationSignature = useRef(nodePresentationSignature);
   const { fitView } = useReactFlow();
+  const graphContainerRef = useRef<HTMLDivElement>(null);
+  const selectorRef = useRef<HTMLDivElement>(null);
+  const selectorTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
+
+  const closeRelationshipSelector = useCallback((restoreFocus = true) => {
+    setSelectedPairId(null);
+    if (restoreFocus) {
+      const trigger = selectorTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+    }
+  }, []);
+
+  const openRelationshipSelector = useCallback((
+    pairId: string,
+    trigger?: HTMLButtonElement | null,
+  ) => {
+    const group = relationshipGroups[pairId];
+    if (!group || group.relationships.length <= 1) return;
+    selectorTriggerRef.current = trigger ?? null;
+    setSelectedPairId(pairId);
+  }, [relationshipGroups]);
+
+  const edgeTypes = useMemo(() => ({ builderRelationship: BuilderRelationshipEdge }), []);
+
+  const edgesWithCallbacks = useMemo(() => edges.map((edge) => {
+    if (edge.type !== 'builderRelationship' || !edge.data) return edge;
+    return {
+      ...edge,
+      data: {
+        ...(edge.data as Omit<BuilderRelationshipEdgeData, 'onChoose'>),
+        onChoose: openRelationshipSelector,
+      } as BuilderRelationshipEdgeData,
+    };
+  }), [edges, openRelationshipSelector]);
+
+  const selectedRelationshipGroup = selectedPairId ? relationshipGroups[selectedPairId] : undefined;
+
+  useEffect(() => {
+    if (selectedPairId && (!selectedRelationshipGroup || selectedRelationshipGroup.relationships.length <= 1)) {
+      closeRelationshipSelector();
+    }
+  }, [closeRelationshipSelector, selectedPairId, selectedRelationshipGroup]);
+
+  useEffect(() => {
+    if (!selectedPairId) return;
+    selectorRef.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]')?.focus();
+  }, [selectedPairId]);
+
+  useEffect(() => {
+    if (!selectedPairId) return undefined;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRelationshipSelector();
+      }
+    };
+    const handleOutsideClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (selectorRef.current?.contains(target) || selectorTriggerRef.current?.contains(target)) return;
+      closeRelationshipSelector();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('click', handleOutsideClick);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('click', handleOutsideClick);
+    };
+  }, [closeRelationshipSelector, selectedPairId]);
 
   const cancelScheduledFit = useCallback(() => {
     if (layoutFrame.current === null) return;
@@ -272,7 +414,9 @@ function BuilderGraphCanvas({
       const resultEdgeTypes = new Map(result.edges.map((edge) => [edge.id, edge.type]));
       setEdges(latestGraphEdges.current.map((edge) => ({
         ...edge,
-        type: resultEdgeTypes.get(edge.id) ?? edge.type,
+        type: edge.type === 'builderRelationship'
+          ? edge.type
+          : resultEdgeTypes.get(edge.id) ?? edge.type,
       })));
       if (resetMode) {
         explicitRelayoutPending.current = false;
@@ -306,19 +450,39 @@ function BuilderGraphCanvas({
     if (layoutModeRef.current === 'automatic' || explicitRelayoutPending.current) {
       if (automaticTopologySignature.current !== topologySignature) {
         automaticTopologySignature.current = topologySignature;
+        installedNodePresentationSignature.current = nodePresentationSignature;
         void runAutomaticLayout(graphNodes, graphEdges, explicitRelayoutPending.current);
         return;
       }
-      setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
+      if (installedNodePresentationSignature.current !== nodePresentationSignature) {
+        installedNodePresentationSignature.current = nodePresentationSignature;
+        setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
+      }
       setEdges(graphEdges);
       return;
     }
     layoutSequence.current += 1;
     cancelScheduledFit();
     setLayoutPending(false);
-    setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
+    if (
+      automaticTopologySignature.current !== topologySignature
+      || installedNodePresentationSignature.current !== nodePresentationSignature
+    ) {
+      automaticTopologySignature.current = topologySignature;
+      installedNodePresentationSignature.current = nodePresentationSignature;
+      setNodes((current) => reconcileUserArrangedNodes(graphNodes, current, graphEdges));
+    }
     setEdges(graphEdges);
-  }, [cancelScheduledFit, graphEdges, graphNodes, runAutomaticLayout, setEdges, setNodes, topologySignature]);
+  }, [
+    cancelScheduledFit,
+    graphEdges,
+    graphNodes,
+    nodePresentationSignature,
+    runAutomaticLayout,
+    setEdges,
+    setNodes,
+    topologySignature,
+  ]);
 
   const onNodeDragStop = useCallback(() => {
     layoutSequence.current += 1;
@@ -352,15 +516,26 @@ function BuilderGraphCanvas({
     [onRemoveTable],
   );
 
+  const onEdgeClick = useCallback<EdgeMouseHandler>((_event, edge) => {
+    const pairId = edge.data?.pairId;
+    if (typeof pairId !== 'string') return;
+    const trigger = Array.from(
+      graphContainerRef.current?.querySelectorAll<HTMLButtonElement>('[data-relationship-pair-id]') ?? [],
+    ).find((candidate) => candidate.dataset.relationshipPairId === pairId);
+    openRelationshipSelector(pairId, trigger);
+  }, [openRelationshipSelector]);
+
   return (
-    <div className="builder-relationship-graph h-full w-full relative">
+    <div ref={graphContainerRef} className="builder-relationship-graph h-full w-full relative">
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={edgesWithCallbacks}
+        edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         onNodeDoubleClick={onNodeDoubleClick}
+        onEdgeClick={onEdgeClick}
         onNodeDragStop={onNodeDragStop}
         proOptions={{ hideAttribution: true }}
         minZoom={0.2}
@@ -369,6 +544,71 @@ function BuilderGraphCanvas({
       >
         <Background gap={24} size={1} color="#e5e7eb" />
         <Controls showInteractive={false} />
+
+        {selectedRelationshipGroup && (
+          <Panel position="top-center">
+            <div
+              ref={selectorRef}
+              role="dialog"
+              aria-label="Choose relationship"
+              className="w-80 rounded-lg border border-gray-200 bg-white p-3 shadow-xl"
+            >
+              <div className="mb-2 flex items-start justify-between gap-3">
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-800">Choose relationship</h4>
+                  <p className="mt-0.5 text-[11px] text-gray-500">
+                    {selectedRelationshipGroup.leftTable} ↔ {selectedRelationshipGroup.rightTable}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close relationship selector"
+                  onClick={() => closeRelationshipSelector()}
+                  className="rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100"
+                >
+                  Close
+                </button>
+              </div>
+              <div className="space-y-1">
+                {selectedRelationshipGroup.relationships.map((relationship) => {
+                  const isDefault = relationship.relationship_id === selectedRelationshipGroup.defaultRelationshipId;
+                  const isActive = relationship.relationship_id === activeRelationship(
+                    selectedRelationshipGroup,
+                    activeRelationshipOverrides,
+                  ).relationship_id;
+                  return (
+                    <button
+                      key={relationship.relationship_id}
+                      type="button"
+                      aria-pressed={isActive}
+                      onClick={() => {
+                        onRelationshipChange(selectedRelationshipGroup.pairId, relationship.relationship_id);
+                        closeRelationshipSelector();
+                      }}
+                      className={`flex w-full items-center justify-between rounded border px-3 py-2 text-left text-xs ${
+                        isActive
+                          ? 'border-blue-300 bg-blue-50 text-blue-900'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <span>
+                        <span className="block font-medium">{relationship.label}</span>
+                        <span className="block font-mono text-[10px] text-gray-500">
+                          {relationship.from_column} → {relationship.to_column}
+                        </span>
+                      </span>
+                      {isDefault && (
+                        <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                          Default
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </Panel>
+        )}
 
         <Panel position="top-right">
           <div className="flex flex-col items-end gap-2">

@@ -63,4 +63,54 @@ try {
 }
 assertSameValue('app\\exceptions\\PolicyViolationException', $schemaThrown, 'Blocked-schema policy violations must throw PolicyViolationException.');
 
+$commaThrown = null;
+try {
+    SqlBuilderService::validateTablePolicy('SELECT * FROM inventory.item__t ii, users.users__t u WHERE u.id = ii.id');
+} catch (\Throwable $e) {
+    $commaThrown = get_class($e);
+}
+assertSameValue(
+    'app\\exceptions\\PolicyViolationException',
+    $commaThrown,
+    'Blocked tables introduced through an implicit comma join must not evade table policy.'
+);
+
+$mixedJoinThrown = null;
+try {
+    SqlBuilderService::validateTablePolicy(
+        'SELECT * FROM inventory.item__t ii JOIN inventory.location__t il ON il.id = ii.effective_location_id, users.users__t u'
+    );
+} catch (\Throwable $e) {
+    $mixedJoinThrown = get_class($e);
+}
+assertSameValue(
+    'app\\exceptions\\PolicyViolationException',
+    $mixedJoinThrown,
+    'A blocked comma table after an explicit join must not evade table policy.'
+);
+
+$onlyThrown = null;
+try {
+    SqlBuilderService::validateTablePolicy('SELECT * FROM ONLY users.users__t u');
+} catch (\Throwable $e) {
+    $onlyThrown = get_class($e);
+}
+assertSameValue(
+    'app\\exceptions\\PolicyViolationException',
+    $onlyThrown,
+    'A blocked table introduced through PostgreSQL FROM ONLY must not evade table policy.'
+);
+
+$parenthesizedOnlyThrown = null;
+try {
+    SqlBuilderService::validateTablePolicy('SELECT * FROM ONLY (users.users__t) u');
+} catch (\Throwable $e) {
+    $parenthesizedOnlyThrown = get_class($e);
+}
+assertSameValue(
+    'app\\exceptions\\PolicyViolationException',
+    $parenthesizedOnlyThrown,
+    'A blocked table introduced through parenthesized PostgreSQL ONLY must not evade table policy.'
+);
+
 fwrite(STDOUT, "SqlBuilderService policy violation test passed\n");

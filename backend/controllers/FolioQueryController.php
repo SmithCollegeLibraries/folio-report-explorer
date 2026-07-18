@@ -5,6 +5,8 @@ namespace app\controllers;
 use Yii;
 use yii\web\Controller;
 use yii\web\Response;
+use app\services\BuilderQueryDefinitionNormalizerService;
+use app\services\BuilderSchemaService;
 use app\services\FolioSchemaService;
 use app\services\SqlBuilderService;
 use app\services\GeminiService;
@@ -16,6 +18,7 @@ use app\services\PreviousSuccessfulQueryReuseService;
 use app\services\ReferenceCacheRefreshService;
 use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
+use app\services\SqlSelectStructureService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -814,7 +817,9 @@ class FolioQueryController extends Controller
         $filter = Yii::$app->request->get('tables');
         $filterArray = $filter ? array_map('trim', explode(',', $filter)) : null;
 
-        $tables = FolioSchemaService::getTables($filterArray);
+        $tables = $this->usesLdliteBuilderIdentity()
+            ? BuilderSchemaService::getTables($filterArray)
+            : FolioSchemaService::getTables($filterArray);
         $meta = FolioSchemaService::getMetadata();
 
         return [
@@ -828,7 +833,9 @@ class FolioQueryController extends Controller
      */
     public function actionSchemaDetail($table)
     {
-        $data = FolioSchemaService::getTable($table);
+        $data = $this->usesLdliteBuilderIdentity()
+            ? BuilderSchemaService::getTable($table)
+            : FolioSchemaService::getTable($table);
         if ($data === null) {
             Yii::$app->response->statusCode = 404;
             return ['error' => "Table '$table' not found"];
@@ -850,6 +857,29 @@ class FolioQueryController extends Controller
         if (!$from || !$to) {
             Yii::$app->response->statusCode = 400;
             return ['error' => 'Both "from" and "to" parameters are required'];
+        }
+
+        if ($this->usesLdliteBuilderIdentity()) {
+            if ($all) {
+                $paths = BuilderSchemaService::findAllPaths($from, $to, $maxDepth);
+                return [
+                    'from' => $from,
+                    'to' => $to,
+                    'total_paths' => count($paths),
+                    'paths' => $paths,
+                ];
+            }
+
+            $path = BuilderSchemaService::findShortestPath($from, $to);
+            if ($path === null) {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => "No FK path found between '$from' and '$to'"];
+            }
+            return [
+                'from' => $from,
+                'to' => $to,
+                'path' => $path,
+            ];
         }
 
         $resolvedFrom = FolioSchemaService::fuzzyMatch($from);
@@ -890,6 +920,11 @@ class FolioQueryController extends Controller
         }
     }
 
+    private function usesLdliteBuilderIdentity(): bool
+    {
+        return strtolower(trim((string)Yii::$app->request->get('identity', ''))) === 'ldlite';
+    }
+
     /**
      * GET /api/derived — get derived table metadata.
      */
@@ -909,7 +944,8 @@ class FolioQueryController extends Controller
         $body = Yii::$app->request->getBodyParams();
 
         try {
-            $result = SqlBuilderService::build($body);
+            $definition = BuilderQueryDefinitionNormalizerService::normalize($body);
+            $result = SqlBuilderService::build($definition);
             return $result;
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 400;
@@ -1987,13 +2023,52 @@ class FolioQueryController extends Controller
     public function actionSave()
     {
         $body = Yii::$app->request->getBodyParams();
+        $queryDefinition = $body['queryDefinition'] ?? [];
+        $generatedSql = $body['generatedSql'] ?? null;
+
+        if (($queryDefinition['schemaIdentity'] ?? null) === 'ldlite') {
+            try {
+                $queryDefinition = BuilderQueryDefinitionNormalizerService::canonicalizeDefaultsForSave(
+                    $queryDefinition
+                );
+                $normalizedDefinition = BuilderQueryDefinitionNormalizerService::normalize($queryDefinition);
+            } catch (\InvalidArgumentException $e) {
+                Yii::$app->response->statusCode = 400;
+                return ['error' => $e->getMessage()];
+            }
+
+            try {
+                $trustedBuild = SqlBuilderService::build($normalizedDefinition);
+            } catch (\Throwable $e) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Could not rebuild the canonical query. The query was not saved.'];
+            }
+
+            $trustedSql = trim((string)($trustedBuild['sql'] ?? ''));
+            $submittedSql = !empty($body['sqlEdited'])
+                ? trim((string)$generatedSql)
+                : $trustedSql;
+
+            try {
+                if (!empty($body['sqlEdited'])) {
+                    SqlBuilderService::validateSafety($submittedSql);
+                    SqlBuilderService::validateTablePolicy($submittedSql);
+                    $this->assertEditedCanonicalSqlBinding($trustedSql, $submittedSql);
+                }
+            } catch (\InvalidArgumentException $e) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => $e->getMessage()];
+            }
+
+            $generatedSql = $submittedSql;
+        }
 
         $model = new SavedQuery();
         $model->name = $body['name'] ?? 'Untitled Query';
         $model->user_id = $this->getCurrentUserId();
         $model->description = $body['description'] ?? null;
-        $model->query_definition = json_encode($body['queryDefinition'] ?? []);
-        $model->generated_sql = $body['generatedSql'] ?? null;
+        $model->query_definition = json_encode($queryDefinition);
+        $model->generated_sql = $generatedSql;
         $model->source = $body['source'] ?? 'builder';
         $model->nl_prompt = $body['nlPrompt'] ?? null;
         $model->is_pinned = !empty($body['isPinned']) ? 1 : 0;
@@ -2005,6 +2080,23 @@ class FolioQueryController extends Controller
 
         Yii::$app->response->statusCode = 201;
         return $this->formatSaved($model);
+    }
+
+    private function assertEditedCanonicalSqlBinding(string $trustedSql, string $editedSql): void
+    {
+        $trusted = SqlSelectStructureService::analyzeCanonical($trustedSql);
+        $edited = SqlSelectStructureService::analyzeCanonical($editedSql);
+
+        if ($trusted['tables'] !== $edited['tables']) {
+            throw new \InvalidArgumentException(
+                'Edited canonical SQL must retain exactly the tables in the query definition.'
+            );
+        }
+        if ($trusted['joins'] !== $edited['joins']) {
+            throw new \InvalidArgumentException(
+                'Edited canonical SQL must retain the server-approved table links.'
+            );
+        }
     }
 
     /**

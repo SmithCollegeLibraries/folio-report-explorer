@@ -3,10 +3,11 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
-import type { TableDetail, TableSummary } from '../types';
+import type { CanonicalRelationship, TableDetail, TableSummary } from '../types';
 import BuilderGraph from './BuilderGraph';
 import { layoutRelationshipGraph } from './builderGraphLayout';
 import { reconcileUserArrangedNodes } from './builderGraphPositions';
+import type { RelationshipGroups, RelationshipOverrides } from './builderRelationships';
 
 const flowHarness = vi.hoisted(() => ({
   fitView: vi.fn(),
@@ -20,11 +21,31 @@ vi.mock('@xyflow/react', async () => {
   const ReactModule = await import('react');
   return {
     ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    ReactFlow: (props: Record<string, unknown> & { nodes: Node[]; children?: React.ReactNode }) => {
+    ReactFlow: (props: Record<string, unknown> & {
+      nodes: Node[];
+      edges: Edge[];
+      edgeTypes?: Record<string, React.ComponentType<Record<string, unknown>>>;
+      children?: React.ReactNode;
+    }) => {
       flowHarness.latestProps = props;
       return (
         <div data-testid="react-flow">
           {props.nodes.map((node) => <div key={node.id} data-testid={`node-${node.id}`} />)}
+          {props.edges.map((edge) => {
+            const EdgeComponent = edge.type ? props.edgeTypes?.[edge.type] : undefined;
+            return EdgeComponent ? (
+              <EdgeComponent
+                key={edge.id}
+                {...edge}
+                sourceX={0}
+                sourceY={0}
+                targetX={100}
+                targetY={100}
+                sourcePosition="right"
+                targetPosition="left"
+              />
+            ) : null;
+          })}
           {props.children}
         </div>
       );
@@ -32,6 +53,14 @@ vi.mock('@xyflow/react', async () => {
     Background: () => null,
     Controls: () => null,
     Panel: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    BaseEdge: ({ id, interactionWidth }: { id: string; interactionWidth?: number }) => (
+      <span
+        data-testid={`edge-path-${id}`}
+        data-interaction-width={interactionWidth}
+      />
+    ),
+    EdgeLabelRenderer: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+    getSmoothStepPath: () => ['M 0 0 L 100 100', 50, 50],
     MarkerType: { ArrowClosed: 'arrowclosed' },
     useReactFlow: () => ({ fitView: flowHarness.fitView }),
     useNodesState: (initial: Node[]) => {
@@ -103,6 +132,160 @@ const graphElementWithData = (
     onRemoveTable={vi.fn()}
   />
 );
+
+const pairId = 'inventory.item__t<->inventory.location__t';
+const effectiveId = 'inventory.item__t.effective_location_id->inventory.location__t.id';
+const permanentId = 'inventory.item__t.permanent_location_id->inventory.location__t.id';
+const temporaryId = 'inventory.item__t.temporary_location_id->inventory.location__t.id';
+const holdingsPairId = 'inventory.holdings_record__t<->inventory.location__t';
+const holdingsPermanentId = 'inventory.holdings_record__t.permanent_location_id->inventory.location__t.id';
+const holdingsTemporaryId = 'inventory.holdings_record__t.temporary_location_id->inventory.location__t.id';
+
+function canonicalRelationship(
+  nextPairId: string,
+  relationshipId: string,
+  fromTable: string,
+  fromColumn: string,
+  isDefault = false,
+): CanonicalRelationship {
+  return {
+    from_table: fromTable,
+    from_column: fromColumn,
+    to_table: 'inventory.location__t',
+    to_column: 'id',
+    parent_table: 'inventory.location__t',
+    parent_column: 'id',
+    local_column: fromColumn,
+    foreign_key: `${fromTable}_${fromColumn}_fk`,
+    relationship_id: relationshipId,
+    pair_id: nextPairId,
+    label: fromColumn
+      .split('_').join(' ')
+      .replace(/\bid\b/, '')
+      .trim()
+      .replace(/^./, (letter: string) => letter.toUpperCase()),
+    is_default: isDefault,
+    source: 'overlay',
+  } as CanonicalRelationship;
+}
+
+const effective = canonicalRelationship(
+  pairId,
+  effectiveId,
+  'inventory.item__t',
+  'effective_location_id',
+  true,
+);
+const permanent = canonicalRelationship(
+  pairId,
+  permanentId,
+  'inventory.item__t',
+  'permanent_location_id',
+);
+const temporary = canonicalRelationship(
+  pairId,
+  temporaryId,
+  'inventory.item__t',
+  'temporary_location_id',
+);
+const reversedPermanent = {
+  ...permanent,
+  from_table: 'inventory.location__t',
+  from_column: 'id',
+  to_table: 'inventory.item__t',
+  to_column: 'permanent_location_id',
+  label: 'Permanent location (reversed)',
+} as CanonicalRelationship;
+const holdingsPermanent = canonicalRelationship(
+  holdingsPairId,
+  holdingsPermanentId,
+  'inventory.holdings_record__t',
+  'permanent_location_id',
+  true,
+);
+const holdingsTemporary = canonicalRelationship(
+  holdingsPairId,
+  holdingsTemporaryId,
+  'inventory.holdings_record__t',
+  'temporary_location_id',
+);
+
+const canonicalTables = {
+  'inventory.item__t': { name: 'inventory.item__t' },
+  'inventory.location__t': { name: 'inventory.location__t' },
+  'inventory.holdings_record__t': { name: 'inventory.holdings_record__t' },
+} as unknown as Record<string, TableSummary>;
+
+const canonicalDetails = {
+  'inventory.item__t': {
+    relationships: { parents: [effective, permanent, temporary], children: [] },
+  },
+  'inventory.location__t': {
+    relationships: {
+      parents: [],
+      children: [effective, permanent, temporary, holdingsPermanent, holdingsTemporary],
+    },
+  },
+  'inventory.holdings_record__t': {
+    relationships: { parents: [holdingsPermanent, holdingsTemporary], children: [] },
+  },
+} as unknown as Record<string, TableDetail>;
+
+const canonicalGroups: RelationshipGroups = {
+  [pairId]: {
+    pairId,
+    leftTable: 'inventory.item__t',
+    rightTable: 'inventory.location__t',
+    defaultRelationshipId: effectiveId,
+    relationships: [effective, permanent, temporary],
+  },
+  [holdingsPairId]: {
+    pairId: holdingsPairId,
+    leftTable: 'inventory.holdings_record__t',
+    rightTable: 'inventory.location__t',
+    defaultRelationshipId: holdingsPermanentId,
+    relationships: [holdingsPermanent, holdingsTemporary],
+  },
+};
+
+const childProjectedGroups: RelationshipGroups = {
+  [pairId]: {
+    ...canonicalGroups[pairId],
+    relationships: canonicalGroups[pairId].relationships.map((relationship) => {
+      const {
+        parent_table: _parentTable,
+        parent_column: _parentColumn,
+        ...canonical
+      } = relationship;
+      return {
+        ...canonical,
+        child_table: relationship.from_table,
+        child_column: relationship.from_column,
+        local_column: relationship.to_column,
+      } as CanonicalRelationship;
+    }),
+  },
+};
+
+function canonicalGraph(
+  overrides: RelationshipOverrides,
+  onRelationshipChange: (nextPairId: string, relationshipId: string) => void,
+  relationshipGroups: RelationshipGroups = canonicalGroups,
+  selectedTables = ['inventory.item__t', 'inventory.location__t'],
+) {
+  return (
+    <BuilderGraph
+      selectedTables={selectedTables}
+      tableDetails={canonicalDetails}
+      tables={canonicalTables}
+      onAddTable={vi.fn()}
+      onRemoveTable={vi.fn()}
+      relationshipGroups={relationshipGroups}
+      activeRelationshipOverrides={overrides}
+      onRelationshipChange={onRelationshipChange}
+    />
+  );
+}
 
 const renderGraph = (selectedTables: string[]) => render(graphElement(selectedTables));
 
@@ -187,6 +370,207 @@ afterEach(() => {
 });
 
 describe('BuilderGraph layout behavior', () => {
+  it('displays canonical endpoints for backend child-projected relationship alternatives', async () => {
+    const user = userEvent.setup();
+    render(canonicalGraph({}, vi.fn(), childProjectedGroups));
+
+    await user.click(await screen.findByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    }));
+
+    expect(screen.getByRole('button', { name: /^Effective location/ }))
+      .toHaveTextContent('effective_location_id → id');
+    expect(screen.getByRole('button', { name: /^Permanent location/ }))
+      .toHaveTextContent('permanent_location_id → id');
+    expect(screen.getByRole('button', { name: /^Temporary location/ }))
+      .toHaveTextContent('temporary_location_id → id');
+  });
+
+  it('keeps the relationship selector after production-shaped initial and explicit layouts', async () => {
+    const user = userEvent.setup();
+    vi.mocked(layoutRelationshipGraph).mockImplementation(async ({ nodes, edges }) => ({
+      nodes: nodes.map((node, index) => ({ ...node, position: { x: index * 250, y: 0 } })),
+      edges: edges.map((edge) => ({ ...edge, type: 'smoothstep' })),
+    }));
+    render(canonicalGraph({}, vi.fn()));
+
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    })).toBeInTheDocument();
+
+    dragNode({
+      id: 'inventory.item__t',
+      position: { x: 480, y: 220 },
+      data: { tableName: 'inventory.item__t', isSelected: true },
+    });
+    await user.click(screen.getByRole('button', { name: 'Re-layout relationship graph' }));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    })).toBeInTheDocument();
+    expect((flowHarness.latestProps?.edges as Edge[]).find((edge) => edge.id === pairId)?.type)
+      .toBe('builderRelationship');
+  });
+
+  it('selects a relationship from a pair-stable edge without moving nodes or the viewport', async () => {
+    const user = userEvent.setup();
+    const onRelationshipChange = vi.fn();
+    const view = render(canonicalGraph({}, onRelationshipChange));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(flowHarness.animationFrames).toHaveLength(1));
+    flushAnimationFrames();
+    const positionBeforeSelection = currentNode('inventory.item__t')?.position;
+    const edgeBeforeSelection = (flowHarness.latestProps?.edges as Edge[])
+      .find((edge) => edge.id === pairId);
+    vi.mocked(reconcileUserArrangedNodes).mockClear();
+
+    const trigger = screen.getByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    });
+    trigger.focus();
+    await user.click(trigger);
+    expect(screen.getByRole('dialog', { name: 'Choose relationship' })).toBeInTheDocument();
+    expect(screen.getByText('Default')).toBeInTheDocument();
+    const effectiveChoice = screen.getByRole('button', { name: /Effective location/ });
+    expect(effectiveChoice).toHaveAttribute('aria-pressed', 'true');
+    expect(effectiveChoice).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: /^Permanent location/ }));
+
+    expect(onRelationshipChange).toHaveBeenCalledWith(pairId, permanentId);
+    expect(trigger).toHaveFocus();
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
+    expect(flowHarness.fitView).toHaveBeenCalledTimes(1);
+    expect(currentNode('inventory.item__t')?.position).toEqual(positionBeforeSelection);
+
+    view.rerender(canonicalGraph({ [pairId]: permanentId }, onRelationshipChange));
+    await waitFor(() => expect(screen.getByText(/permanent_location_id → id/)).toBeInTheDocument());
+    const edgeAfterSelection = (flowHarness.latestProps?.edges as Edge[])
+      .find((edge) => edge.id === pairId);
+    expect(edgeAfterSelection).toMatchObject({
+      id: edgeBeforeSelection?.id,
+      source: edgeBeforeSelection?.source,
+      target: edgeBeforeSelection?.target,
+    });
+    expect(edgeAfterSelection?.data).toMatchObject({ relationshipId: permanentId });
+    expect(reconcileUserArrangedNodes).not.toHaveBeenCalled();
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
+    expect(flowHarness.fitView).toHaveBeenCalledTimes(1);
+    expect(currentNode('inventory.item__t')?.position).toEqual(positionBeforeSelection);
+  });
+
+  it('keeps pair topology and manual intent when an alternate relationship is reversed', async () => {
+    const user = userEvent.setup();
+    const onRelationshipChange = vi.fn();
+    const reversedGroups: RelationshipGroups = {
+      [pairId]: {
+        ...canonicalGroups[pairId],
+        relationships: [effective, reversedPermanent],
+      },
+    };
+    const view = render(canonicalGraph({}, onRelationshipChange, reversedGroups));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(flowHarness.animationFrames).toHaveLength(1));
+    flushAnimationFrames();
+    const edgeBeforeSelection = (flowHarness.latestProps?.edges as Edge[])
+      .find((edge) => edge.id === pairId);
+    const positionsBeforeSelection = currentNodes().map(({ id, position }) => ({ id, position }));
+    vi.mocked(reconcileUserArrangedNodes).mockClear();
+
+    await user.click(screen.getByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    }));
+    await user.click(screen.getByRole('button', { name: /^Permanent location \(reversed\)/ }));
+    expect(onRelationshipChange).toHaveBeenCalledWith(pairId, permanentId);
+
+    view.rerender(canonicalGraph({ [pairId]: permanentId }, onRelationshipChange, reversedGroups));
+    await waitFor(() => expect(screen.getByText(/id → permanent_location_id/)).toBeInTheDocument());
+    const edgeAfterSelection = (flowHarness.latestProps?.edges as Edge[])
+      .find((edge) => edge.id === pairId);
+
+    expect(edgeAfterSelection).toMatchObject({
+      id: edgeBeforeSelection?.id,
+      source: edgeBeforeSelection?.source,
+      target: edgeBeforeSelection?.target,
+    });
+    expect(edgeAfterSelection?.data).toMatchObject({ relationshipId: permanentId });
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
+    expect(reconcileUserArrangedNodes).not.toHaveBeenCalled();
+    expect(flowHarness.fitView).toHaveBeenCalledTimes(1);
+    expect(flowHarness.animationFrames).toHaveLength(0);
+    expect(currentNodes().map(({ id, position }) => ({ id, position }))).toEqual(positionsBeforeSelection);
+  });
+
+  it('opens the correct pair from the edge path hit target without changing layout', async () => {
+    const user = userEvent.setup();
+    const onRelationshipChange = vi.fn();
+    render(canonicalGraph(
+      {},
+      onRelationshipChange,
+      canonicalGroups,
+      ['inventory.item__t', 'inventory.location__t', 'inventory.holdings_record__t'],
+    ));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    const positionsBeforeClick = currentNodes().map(({ id, position }) => ({ id, position }));
+    const edges = flowHarness.latestProps?.edges as Edge[];
+    expect(edges.filter((edge) => edge.type === 'builderRelationship')).toHaveLength(2);
+    expect(edges.find((edge) => edge.id === holdingsPairId)?.interactionWidth).toBe(24);
+    expect(screen.getByTestId(`edge-path-${holdingsPairId}`)).toHaveAttribute(
+      'data-interaction-width',
+      '24',
+    );
+
+    act(() => {
+      const onEdgeClick = flowHarness.latestProps?.onEdgeClick as (event: unknown, edge: Edge) => void;
+      onEdgeClick({}, edges.find((edge) => edge.id === holdingsPairId)!);
+    });
+    const dialog = screen.getByRole('dialog', { name: 'Choose relationship' });
+    expect(dialog).toHaveTextContent('inventory.holdings_record__t');
+    expect(screen.getByRole('button', { name: /^Permanent location/ })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Close relationship selector' }));
+
+    expect(onRelationshipChange).not.toHaveBeenCalled();
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
+    expect(flowHarness.fitView).not.toHaveBeenCalled();
+    expect(currentNodes().map(({ id, position }) => ({ id, position }))).toEqual(positionsBeforeClick);
+  });
+
+  it('dismisses the selector with Escape or outside interaction and restores trigger focus', async () => {
+    const user = userEvent.setup();
+    render(canonicalGraph({}, vi.fn()));
+    const trigger = await screen.findByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    });
+    await user.click(trigger);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Choose relationship' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByTestId('react-flow'));
+    expect(screen.queryByRole('dialog', { name: 'Choose relationship' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('closes a stale selector when its pair or alternatives disappear without relayout', async () => {
+    const user = userEvent.setup();
+    const view = render(canonicalGraph({}, vi.fn()));
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole('button', {
+      name: 'Choose relationship between inventory.item__t and inventory.location__t',
+    }));
+    expect(screen.getByRole('dialog', { name: 'Choose relationship' })).toBeInTheDocument();
+
+    view.rerender(canonicalGraph({}, vi.fn(), {
+      [pairId]: { ...canonicalGroups[pairId], relationships: [effective] },
+    }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Choose relationship' })).not.toBeInTheDocument();
+    });
+    expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
+  });
+
   it('recovers automatic layout state after Strict Mode effect replay', async () => {
     render(<React.StrictMode>{graphElement(['items'])}</React.StrictMode>);
     await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
@@ -226,7 +610,6 @@ describe('BuilderGraph layout behavior', () => {
     await act(async () => Promise.resolve());
 
     expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1);
-    expect(reconcileUserArrangedNodes).toHaveBeenCalled();
     expect(currentNodes().map(({ id, position }) => ({ id, position }))).toEqual(positionsBeforeRefresh);
     expect(flowHarness.animationFrames).toHaveLength(0);
     expect(flowHarness.fitView).toHaveBeenCalledTimes(1);

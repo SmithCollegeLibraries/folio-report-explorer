@@ -64,6 +64,27 @@ export interface Relationship {
   child_column?: string;
   local_column: string;
   foreign_key: string;
+  relationship_id?: string;
+  pair_id?: string;
+  label?: string;
+  is_default?: boolean;
+  source?: 'metadb' | 'overlay';
+}
+
+/** Schema identity explicitly requested by Query Builder callers. */
+export type SchemaIdentity = 'ldlite';
+
+/** Relationship metadata guaranteed by the canonical Builder schema view. */
+export interface CanonicalRelationship extends Relationship {
+  relationship_id: string;
+  pair_id: string;
+  from_table: string;
+  from_column: string;
+  to_table: string;
+  to_column: string;
+  label: string;
+  is_default: boolean;
+  source: 'metadb' | 'overlay';
 }
 
 /** Full table detail */
@@ -85,6 +106,14 @@ export interface TableDetail {
   };
 }
 
+/** Table detail guaranteed to come from the canonical Builder catalog. */
+export interface CanonicalTableDetail extends Omit<TableDetail, 'relationships'> {
+  relationships: {
+    parents: CanonicalRelationship[];
+    children: CanonicalRelationship[];
+  };
+}
+
 /** Index definition */
 export interface IndexDef {
   name: string;
@@ -103,7 +132,24 @@ export interface JoinEdge {
   to_column: string;
   foreign_key: string;
   join_type?: JoinType;
+  relationship_id?: string;
+  pair_id?: string;
 }
+
+/** Trusted relationship selection sent by the Builder instead of a raw predicate. */
+export interface RelationshipSelection {
+  relationship_id: string;
+  join_type?: JoinType;
+}
+
+/** Join path edge guaranteed to use the canonical relationship catalog. */
+export interface CanonicalJoinEdge extends JoinEdge {
+  relationship_id: string;
+  pair_id: string;
+}
+
+/** The only join shape accepted by a canonical Builder request. */
+export type BuilderJoin = RelationshipSelection;
 
 /** Formatted join path */
 export interface JoinPath {
@@ -120,6 +166,17 @@ export interface PathResponse {
   path?: JoinPath;
   total_paths?: number;
   paths?: JoinPath[];
+}
+
+/** Formatted path whose edges are backed by trusted catalog identifiers. */
+export interface CanonicalJoinPath extends Omit<JoinPath, 'joins'> {
+  joins: CanonicalJoinEdge[];
+}
+
+/** Path response guaranteed by `identity=ldlite`. */
+export interface CanonicalPathResponse extends Omit<PathResponse, 'path' | 'paths'> {
+  path?: CanonicalJoinPath;
+  paths?: CanonicalJoinPath[];
 }
 
 // ─── Query Builder types ──────────────────────────────────────────
@@ -169,18 +226,31 @@ export interface HavingCondition {
   value: string;
 }
 
-/** Full query definition (what gets sent to /api/build) */
-export interface QueryDefinition {
+interface QueryDefinitionBase {
   tables: string[];
   columns: SelectedColumn[];
   filters: FilterCondition[];
-  joins: 'auto' | JoinEdge[];
   orderBy: SortSpec[];
   groupBy?: GroupBySpec[];
   having?: HavingCondition[];
   distinct?: boolean;
   limit: number;
 }
+
+/** Existing query contract retained for non-Builder and saved legacy callers. */
+export interface LegacyQueryDefinition extends QueryDefinitionBase {
+  schemaIdentity?: never;
+  joins: 'auto' | JoinEdge[];
+}
+
+/** Canonical Builder contract: joins can only reference trusted catalog IDs. */
+export interface CanonicalQueryDefinition extends QueryDefinitionBase {
+  schemaIdentity: 'ldlite';
+  joins: 'auto' | RelationshipSelection[];
+}
+
+/** Full query definition (what gets sent to /api/build). */
+export type QueryDefinition = LegacyQueryDefinition | CanonicalQueryDefinition;
 
 /** SQL build response */
 export interface BuildResponse {

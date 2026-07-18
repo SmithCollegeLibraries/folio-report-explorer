@@ -41,6 +41,9 @@ import type {
   ExpenseMonitorRefreshResponse,
   DashboardWidgetTemplate,
   FollowUpContext,
+  SchemaIdentity,
+  CanonicalTableDetail,
+  CanonicalPathResponse,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -134,28 +137,64 @@ api.interceptors.response.use(
 
 // ─── Schema ───────────────────────────────────────────────────────
 
-export async function fetchSchema(tables?: string[]): Promise<{
+export async function fetchSchema(tables?: string[], identity?: SchemaIdentity): Promise<{
   metadata: SchemaMetadata;
   tables: Record<string, TableSummary>;
 }> {
-  const params = tables ? { tables: tables.join(',') } : {};
+  const params: { tables?: string; identity?: SchemaIdentity } = {};
+  if (tables) params.tables = tables.join(',');
+  if (identity) params.identity = identity;
   const { data } = await api.get('/schema', { params });
   return data;
 }
 
-export async function fetchTableDetail(table: string): Promise<TableDetail> {
-  const { data } = await api.get(`/schema/${table}`);
+export function fetchTableDetail(
+  table: string,
+  identity: 'ldlite',
+): Promise<CanonicalTableDetail>;
+export function fetchTableDetail(
+  table: string,
+  identity?: undefined,
+): Promise<TableDetail>;
+export async function fetchTableDetail(
+  table: string,
+  identity?: SchemaIdentity,
+): Promise<TableDetail | CanonicalTableDetail> {
+  const { data } = identity
+    ? await api.get(`/schema/${table}`, { params: { identity } })
+    : await api.get(`/schema/${table}`);
   return data;
 }
 
+export function findPath(
+  from: string,
+  to: string,
+  all: boolean | undefined,
+  maxDepth: number | undefined,
+  identity: 'ldlite',
+): Promise<CanonicalPathResponse>;
+export function findPath(
+  from: string,
+  to: string,
+  all?: boolean,
+  maxDepth?: number,
+  identity?: undefined,
+): Promise<PathResponse>;
 export async function findPath(
   from: string,
   to: string,
   all = false,
   maxDepth = 6,
-): Promise<PathResponse> {
+  identity?: SchemaIdentity,
+): Promise<PathResponse | CanonicalPathResponse> {
   const { data } = await api.get('/path', {
-    params: { from, to, all: all ? 1 : 0, maxDepth },
+    params: {
+      from,
+      to,
+      all: all ? 1 : 0,
+      maxDepth,
+      ...(identity ? { identity } : {}),
+    },
   });
   return data;
 }
@@ -254,6 +293,7 @@ export async function saveQuery(query: {
   description?: string;
   queryDefinition: QueryDefinition | Record<string, unknown>;
   generatedSql?: string;
+  sqlEdited?: boolean;
   source?: 'builder' | 'nl';
   nlPrompt?: string;
   isPinned?: boolean;
