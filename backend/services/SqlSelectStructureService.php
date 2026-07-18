@@ -205,6 +205,22 @@ class SqlSelectStructureService
         return $references;
     }
 
+    /**
+     * Expose the existing tokenizer as a stable, read-only stream for focused
+     * structural analysis. Canonical and policy paths continue using the same
+     * private tokenizer directly.
+     */
+    public static function tokenizeForAnalysis(string $sql): array
+    {
+        $tokens = self::tokenize($sql);
+        $depths = self::depths($tokens);
+        foreach ($tokens as $index => &$token) {
+            $token['depth'] = $depths[$index] ?? 0;
+        }
+        unset($token);
+        return $tokens;
+    }
+
     private static function tokenize(string $sql): array
     {
         $tokens = [];

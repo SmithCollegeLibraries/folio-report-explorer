@@ -78,4 +78,32 @@ expectStructure(
     'Policy extraction must support PostgreSQL parenthesized ONLY table syntax.'
 );
 
+$analysisTokens = SqlSelectStructureService::tokenizeForAnalysis(
+    "SELECT 'DO SELECT' AS \"DO\", (nested.value) -- SELECT ignored\n"
+    . "FROM inventory.item__t nested /* DO ignored */"
+);
+expectStructure(
+    $analysisTokens[0] === ['kind' => 'identifier', 'value' => 'select', 'depth' => 0],
+    'Analysis tokens must expose top-level keywords with depth.'
+);
+expectStructure(
+    $analysisTokens[1] === ['kind' => 'string', 'value' => "'DO SELECT'", 'depth' => 0],
+    'Keywords inside strings must remain string tokens.'
+);
+expectStructure(
+    $analysisTokens[3] === ['kind' => 'identifier', 'value' => 'do', 'depth' => 0],
+    'Quoted identifiers must remain identifiers rather than strings or keywords.'
+);
+expectStructure(
+    $analysisTokens[6] === ['kind' => 'identifier', 'value' => 'nested', 'depth' => 1]
+        && $analysisTokens[8] === ['kind' => 'identifier', 'value' => 'value', 'depth' => 1],
+    'Nested analysis tokens must expose their parenthesis depth.'
+);
+expectStructure(
+    count(array_filter($analysisTokens, static function (array $token): bool {
+        return $token['value'] === 'ignored';
+    })) === 0,
+    'Line and block comments must be absent from analysis tokens.'
+);
+
 fwrite(STDOUT, "SqlSelectStructureService test passed\n");
