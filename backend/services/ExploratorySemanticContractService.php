@@ -6,6 +6,12 @@ class ExploratorySemanticContractService
 {
     private const CONTRACT_VERSION = 1;
 
+    private const EXPLORATORY_ROUTE_REASONS = [
+        'unsupported_query_family',
+        'user_requested_exploratory_generation',
+        'canonical_path_unavailable_for_marc_source_records',
+    ];
+
     private const ROI_RULES = [
         'purchase_date_basis' => 'purchase_date_basis',
         'investment_cost_basis' => 'investment_cost_basis',
@@ -46,7 +52,7 @@ class ExploratorySemanticContractService
         array $assumptions,
         string $routeReason
     ): array {
-        if (!self::isCrossDomainCallNumberRoi($question)) {
+        if (!self::isExploratoryRouteReason($routeReason) || !self::isCrossDomainCallNumberRoi($question)) {
             return [
                 'contractVersion' => self::CONTRACT_VERSION,
                 'applicable' => false,
@@ -101,7 +107,22 @@ class ExploratorySemanticContractService
             self::requirement('numeric_output_types', 'Keep analytical measures numeric.'),
         ];
 
-        $supported = array_flip(self::SUPPORTED_RULE_KEYS);
+        $coverage = self::auditCoverage($requirements, self::SUPPORTED_RULE_KEYS);
+
+        return [
+            'contractVersion' => self::CONTRACT_VERSION,
+            'applicable' => true,
+            'concept' => 'cross_domain_call_number_roi',
+            'requirements' => $coverage['requirements'],
+            'permittedFilters' => $filters,
+            'coverageStatus' => $coverage['coverageStatus'],
+            'uncoveredRequirementKeys' => $coverage['uncoveredRequirementKeys'],
+        ];
+    }
+
+    public static function auditCoverage(array $requirements, array $supportedRuleKeys): array
+    {
+        $supported = array_flip($supportedRuleKeys);
         $uncovered = [];
         foreach ($requirements as $requirement) {
             if (!isset($supported[$requirement['rule']])) {
@@ -110,14 +131,15 @@ class ExploratorySemanticContractService
         }
 
         return [
-            'contractVersion' => self::CONTRACT_VERSION,
-            'applicable' => true,
-            'concept' => 'cross_domain_call_number_roi',
             'requirements' => $requirements,
-            'permittedFilters' => $filters,
             'coverageStatus' => $uncovered === [] ? 'complete' : 'gap',
             'uncoveredRequirementKeys' => $uncovered,
         ];
+    }
+
+    private static function isExploratoryRouteReason(string $routeReason): bool
+    {
+        return in_array($routeReason, self::EXPLORATORY_ROUTE_REASONS, true);
     }
 
     private static function isCrossDomainCallNumberRoi(string $question): bool

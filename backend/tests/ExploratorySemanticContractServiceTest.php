@@ -27,8 +27,43 @@ contractAssertSame([
     'purchase_ranking', 'campus_scope', 'governed_filters', 'numeric_output_types',
 ], array_column($contract['requirements'], 'key'), 'ROI requirements must be stable and ordered.');
 contractAssertSame('Smith College', $contract['permittedFilters']['campus']['value'], 'Selected campus must be required and permitted.');
+contractAssertSame('selected_scope', $contract['permittedFilters']['campus']['provenance'], 'Campus permission must retain selected-scope provenance.');
+$requirementsByKey = array_column($contract['requirements'], null, 'key');
+contractAssertSame(true, $requirementsByKey['campus_scope']['parameters']['required'], 'A separately selected campus must be required.');
+contractAssertSame('Smith College', $requirementsByKey['campus_scope']['parameters']['value'], 'The campus requirement must retain the selected scope value.');
 contractAssertSame(false, isset($contract['permittedFilters']['material_type']), 'Material type must not be silently permitted.');
 contractAssertSame(false, isset($contract['permittedFilters']['acquisition_unit']), 'Acquisition unit must not be silently permitted.');
+
+$canonicalContract = ExploratorySemanticContractService::build(
+    $question,
+    'Smith College',
+    $assumptions,
+    'family_contract_supported:inventory_listing'
+);
+contractAssertSame(false, $canonicalContract['applicable'], 'Canonical-family routing must bypass the exploratory semantic contract.');
+
+$supportedVocabularyQuestion = 'Compare acquisitions and checkout data by call number and show ROI.';
+contractAssertSame(
+    true,
+    ExploratorySemanticContractService::build(
+        $supportedVocabularyQuestion,
+        null,
+        ExploratoryQueryDefaultsService::resolve($supportedVocabularyQuestion),
+        'unsupported_query_family'
+    )['applicable'],
+    'Concept detection must support the same representative vocabulary as documented-default detection.'
+);
+$outsideVocabularyQuestion = 'Compare spending and usage by classification and show value for money.';
+contractAssertSame(
+    false,
+    ExploratorySemanticContractService::build(
+        $outsideVocabularyQuestion,
+        null,
+        ExploratoryQueryDefaultsService::resolve($outsideVocabularyQuestion),
+        'unsupported_query_family'
+    )['applicable'],
+    'Concept detection must not broaden beyond documented-default vocabulary.'
+);
 
 $filteredQuestion = $question . ' Use material type filters. Use acquisition unit filters.';
 $filteredContract = ExploratorySemanticContractService::build(
@@ -59,6 +94,28 @@ contractAssertSame(
     'invoice_date',
     $invoiceContract['requirements'][0]['parameters']['value'],
     'An explicit correction must replace the default date basis.'
+);
+
+$unsupportedRequirement = [
+    'key' => 'future_blocking_requirement',
+    'rule' => 'future_unsupported_rule',
+    'label' => 'Satisfy the future blocking requirement.',
+    'parameters' => [],
+];
+$coverageGap = ExploratorySemanticContractService::auditCoverage(
+    [$unsupportedRequirement],
+    ['purchase_date_basis']
+);
+contractAssertSame('gap', $coverageGap['coverageStatus'], 'An unsupported rule must create a coverage gap.');
+contractAssertSame(
+    [$unsupportedRequirement],
+    $coverageGap['requirements'],
+    'Coverage auditing must preserve the original blocking requirement.'
+);
+contractAssertSame(
+    ['future_blocking_requirement'],
+    $coverageGap['uncoveredRequirementKeys'],
+    'Coverage auditing must identify the uncovered requirement key.'
 );
 
 $simple = ExploratorySemanticContractService::build('List item barcodes', null, [], 'unsupported_query_family');
