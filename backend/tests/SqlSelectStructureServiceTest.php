@@ -23,6 +23,12 @@ expectStructure($trusted['tables'] === $formatted['tables'], 'Alias and formatti
 expectStructure($trusted['joins'] === $formatted['joins'], 'Alias and formatting changes must retain the same semantic relationship.');
 expectStructure($trusted['joins'][0]['join_type'] === 'INNER', 'JOIN and INNER JOIN must normalize to INNER.');
 
+$quotedCanonical = SqlSelectStructureService::analyzeCanonical(
+    'SELECT "ii"."id" FROM "inventory"."item__t" AS "ii" '
+    . 'JOIN "inventory"."location__t" AS "il" ON "il"."id" = "ii"."effective_location_id"'
+);
+expectStructure($trusted === $quotedCanonical, 'Quote provenance must not change existing canonical table and join analysis.');
+
 $left = SqlSelectStructureService::analyzeCanonical(
     "SELECT ii.id FROM inventory.item__t ii LEFT JOIN inventory.location__t il ON il.id = ii.effective_location_id"
 );
@@ -91,8 +97,8 @@ expectStructure(
     'Keywords inside strings must remain string tokens.'
 );
 expectStructure(
-    $analysisTokens[3] === ['kind' => 'identifier', 'value' => 'do', 'depth' => 0],
-    'Quoted identifiers must remain identifiers rather than strings or keywords.'
+    $analysisTokens[3] === ['kind' => 'identifier', 'value' => 'do', 'quoted' => true, 'depth' => 0],
+    'Quoted identifiers must retain quote provenance rather than becoming keywords.'
 );
 expectStructure(
     $analysisTokens[6] === ['kind' => 'identifier', 'value' => 'nested', 'depth' => 1]
@@ -104,6 +110,16 @@ expectStructure(
         return $token['value'] === 'ignored';
     })) === 0,
     'Line and block comments must be absent from analysis tokens.'
+);
+
+$quotedKeywordTokens = SqlSelectStructureService::tokenizeForAnalysis(
+    'SELECT "where", "order", "Ordinary Identifier" FROM inventory.item__t'
+);
+expectStructure(
+    $quotedKeywordTokens[1]['quoted'] === true
+        && $quotedKeywordTokens[3]['quoted'] === true
+        && $quotedKeywordTokens[5]['quoted'] === true,
+    'Quoted keyword and ordinary identifiers must all retain quote provenance.'
 );
 
 fwrite(STDOUT, "SqlSelectStructureService test passed\n");

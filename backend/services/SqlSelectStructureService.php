@@ -278,7 +278,7 @@ class SqlSelectStructureService
                     $value .= $sql[$index++];
                 }
                 if (!$closed) throw new \InvalidArgumentException('Unterminated quoted identifier.');
-                $tokens[] = ['kind' => 'identifier', 'value' => strtolower($value)];
+                $tokens[] = ['kind' => 'identifier', 'value' => strtolower($value), 'quoted' => true];
                 continue;
             }
             if (preg_match('/[A-Za-z_]/', $char) === 1) {

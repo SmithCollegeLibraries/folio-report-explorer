@@ -135,4 +135,84 @@ analysisAssertSame(
     'A lookup filter wrapped in a normalization function must remain inspectable.'
 );
 
+foreach ([
+    'SELECT (SELECT MAX(item.id) FROM inventory.item__t item) AS maximum_id FROM inventory.instance__t instance',
+    'SELECT instance.id FROM inventory.instance__t instance WHERE EXISTS (SELECT 1 FROM inventory.item__t item)',
+    'SELECT instance.id FROM inventory.instance__t instance WHERE instance.id IN (SELECT item.id FROM inventory.item__t item)',
+] as $nestedSelectSql) {
+    analysisAssertSame(
+        true,
+        ExploratorySqlAnalysisService::analyze($nestedSelectSql)['ambiguous'],
+        'Nested scalar and predicate SELECTs must fail closed.'
+    );
+}
+
+$forwardCte = ExploratorySqlAnalysisService::analyze(
+    'WITH first_cte AS (SELECT * FROM second_cte), second_cte AS (SELECT 1) SELECT * FROM first_cte'
+);
+analysisAssertSame([], $forwardCte['ctes']['first_cte']['tables'], 'A forward CTE dependency must never be reported as a physical table.');
+analysisAssertSame(['second_cte'], $forwardCte['ctes']['first_cte']['dependencies'], 'Forward CTE references must remain dependencies.');
+analysisAssertSame(true, $forwardCte['ambiguous'], 'Forward CTE references must fail closed.');
+
+$selfCte = ExploratorySqlAnalysisService::analyze(
+    'WITH self_cte AS (SELECT * FROM self_cte) SELECT * FROM self_cte'
+);
+analysisAssertSame([], $selfCte['ctes']['self_cte']['tables'], 'A self CTE dependency must never be reported as a physical table.');
+analysisAssertSame(['self_cte'], $selfCte['ctes']['self_cte']['dependencies'], 'Self CTE references must remain dependencies.');
+analysisAssertSame(true, $selfCte['ambiguous'], 'Self CTE references must fail closed.');
+
+$literalIn = ExploratorySqlAnalysisService::analyze(
+    "SELECT item.id FROM inventory.item__t item WHERE item.material_type_id IN ('book', 'dvd')"
+);
+analysisAssertSame(['item.material_type_id'], $literalIn['predicates']['governedFilters'], 'A non-empty literal-only IN list must be governed-filter evidence.');
+analysisAssertSame(false, $literalIn['ambiguous'], 'A literal-only IN list must remain deterministic.');
+foreach ([
+    'SELECT item.id FROM inventory.item__t item WHERE item.material_type_id IN ()',
+    "SELECT item.id FROM inventory.item__t item WHERE item.material_type_id IN (LOWER('book'))",
+    'SELECT item.id FROM inventory.item__t item WHERE item.material_type_id IN (SELECT mt.id FROM inventory.material_type__t mt)',
+] as $unsupportedInSql) {
+    $unsupportedIn = ExploratorySqlAnalysisService::analyze($unsupportedInSql);
+    analysisAssertSame([], $unsupportedIn['predicates']['governedFilters'], 'Unsupported IN contents must not become governed-filter evidence.');
+    analysisAssertSame(true, $unsupportedIn['ambiguous'], 'Unsupported governed IN contents must fail closed.');
+}
+$mixedIn = ExploratorySqlAnalysisService::analyze(
+    "SELECT item.id FROM inventory.item__t item WHERE item.status IN ('active') AND item.material_type_id IN (LOWER('book'))"
+);
+analysisAssertSame(['item.status'], $mixedIn['predicates']['governedFilters'], 'Valid IN evidence must not cause invalid IN evidence to be accepted.');
+analysisAssertSame(true, $mixedIn['ambiguous'], 'A later unsupported IN must not be masked by an earlier valid IN.');
+
+$aliasCases = [
+    ['SELECT amount + tax FROM invoice.invoice_lines__t', 'amount + tax', null, false],
+    ['SELECT CASE WHEN paid THEN amount ELSE total END FROM invoice.invoice_lines__t', 'case when paid then amount else total end', null, false],
+    ['SELECT amount::numeric FROM invoice.invoice_lines__t', 'amount::numeric', null, false],
+    ['SELECT amount FROM invoice.invoice_lines__t', 'amount', null, false],
+    ['SELECT amount + tax AS total FROM invoice.invoice_lines__t', 'amount + tax', 'total', false],
+    ['SELECT COUNT(*) purchase_count FROM invoice.invoice_lines__t', 'count (*)', 'purchase_count', false],
+];
+foreach ($aliasCases as [$aliasSql, $expectedExpression, $expectedAlias, $expectedAmbiguous]) {
+    $aliasAnalysis = ExploratorySqlAnalysisService::analyze($aliasSql);
+    analysisAssertSame($expectedExpression, $aliasAnalysis['selectItems'][0]['expression'], 'Alias analysis must preserve the complete expression.');
+    analysisAssertSame($expectedAlias, $aliasAnalysis['selectItems'][0]['alias'], 'Alias analysis must only return a proven alias.');
+    analysisAssertSame($expectedAmbiguous, $aliasAnalysis['ambiguous'], 'Supported alias boundaries must analyze deterministically.');
+}
+foreach ([
+    ['SELECT amount total extra FROM invoice.invoice_lines__t', 'amount total extra'],
+    ['SELECT amount AS total extra FROM invoice.invoice_lines__t', 'amount as total extra'],
+    ['SELECT amount AS total + extra FROM invoice.invoice_lines__t', 'amount as total + extra'],
+] as [$ambiguousAliasSql, $ambiguousExpression]) {
+    $ambiguousAlias = ExploratorySqlAnalysisService::analyze($ambiguousAliasSql);
+    analysisAssertSame($ambiguousExpression, $ambiguousAlias['selectItems'][0]['expression'], 'Ambiguous alias syntax must preserve the full expression evidence.');
+    analysisAssertSame(null, $ambiguousAlias['selectItems'][0]['alias'], 'Ambiguous alias syntax must not invent an output alias.');
+    analysisAssertSame(true, $ambiguousAlias['ambiguous'], 'Multiple plausible alias boundaries must fail closed.');
+}
+
+$quotedKeywords = ExploratorySqlAnalysisService::analyze(
+    'SELECT "where", "order" AS "ordinary" FROM "inventory"."item__t"'
+);
+analysisAssertSame(false, $quotedKeywords['ambiguous'], 'Quoted keyword identifiers must not be treated as clauses.');
+analysisAssertSame(['inventory.item__t'], $quotedKeywords['tables'], 'Quoted table identifiers must remain table evidence.');
+analysisAssertSame('where', $quotedKeywords['selectItems'][0]['expression'], 'Quoted WHERE must remain an expression identifier.');
+analysisAssertSame('order', $quotedKeywords['selectItems'][1]['expression'], 'Quoted ORDER must remain an expression identifier.');
+analysisAssertSame('ordinary', $quotedKeywords['selectItems'][1]['alias'], 'Ordinary quoted aliases must remain inspectable.');
+
 fwrite(STDOUT, "ExploratorySqlAnalysisService test passed\n");

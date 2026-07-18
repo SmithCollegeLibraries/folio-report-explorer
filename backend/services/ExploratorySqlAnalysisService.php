@@ -24,6 +24,10 @@ class ExploratorySqlAnalysisService
         'OFFSET', 'FETCH', 'UNION', 'INTERSECT', 'EXCEPT', 'WINDOW', 'FOR',
     ];
 
+    private const EXPRESSION_TERMINALS = [
+        'END', 'ELSE', 'THEN', 'WHEN', 'NULL', 'TRUE', 'FALSE',
+    ];
+
     public static function analyze(string $sql): array
     {
         $empty = self::emptyAnalysis();
@@ -80,6 +84,7 @@ class ExploratorySqlAnalysisService
             $cursor++;
         }
 
+        $declaredCtes = self::declaredCteNames($tokens);
         $knownCtes = [];
         while (isset($tokens[$cursor])) {
             if (($tokens[$cursor]['depth'] ?? -1) !== 0 || ($tokens[$cursor]['kind'] ?? '') !== 'identifier') {
@@ -116,7 +121,12 @@ class ExploratorySqlAnalysisService
                 break;
             }
 
-            $scope = self::analyzeSelectScope(array_slice($tokens, $open + 1, $cursor - $open - 1), $knownCtes);
+            $scope = self::analyzeSelectScope(array_slice($tokens, $open + 1, $cursor - $open - 1), $declaredCtes);
+            foreach ($scope['dependencies'] as $dependency) {
+                if ($dependency === $name || !in_array($dependency, $knownCtes, true)) {
+                    $scope['ambiguous'] = true;
+                }
+            }
             $result['ctes'][$name] = [
                 'tables' => $scope['tables'],
                 'dependencies' => $scope['dependencies'],
@@ -140,6 +150,42 @@ class ExploratorySqlAnalysisService
         return $result;
     }
 
+    private static function declaredCteNames(array $tokens): array
+    {
+        if (!self::isKeyword($tokens[0] ?? [], 'WITH')) {
+            return [];
+        }
+        $names = [];
+        $cursor = self::isKeyword($tokens[1] ?? [], 'RECURSIVE') ? 2 : 1;
+        while (isset($tokens[$cursor])
+            && ($tokens[$cursor]['depth'] ?? -1) === 0
+            && ($tokens[$cursor]['kind'] ?? '') === 'identifier') {
+            $names[] = $tokens[$cursor]['value'];
+            $cursor++;
+            if (!self::isKeyword($tokens[$cursor] ?? [], 'AS')) {
+                break;
+            }
+            $cursor++;
+            if (($tokens[$cursor]['value'] ?? '') !== '(' || ($tokens[$cursor]['depth'] ?? -1) !== 0) {
+                break;
+            }
+            $cursor++;
+            while (isset($tokens[$cursor])
+                && !(($tokens[$cursor]['value'] ?? '') === ')' && ($tokens[$cursor]['depth'] ?? -1) === 0)) {
+                $cursor++;
+            }
+            if (!isset($tokens[$cursor])) {
+                break;
+            }
+            $cursor++;
+            if (($tokens[$cursor]['value'] ?? '') !== ',' || ($tokens[$cursor]['depth'] ?? -1) !== 0) {
+                break;
+            }
+            $cursor++;
+        }
+        return array_values(array_unique($names));
+    }
+
     private static function analyzeSelectScope(array $tokens, array $knownCtes): array
     {
         $scope = self::emptyScope();
@@ -150,6 +196,9 @@ class ExploratorySqlAnalysisService
         $base = self::baseDepth($tokens);
         $selectIndexes = [];
         foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) > $base && self::isKeyword($token, 'SELECT')) {
+                $scope['ambiguous'] = true;
+            }
             if (($token['depth'] ?? -1) !== $base) {
                 continue;
             }
@@ -183,8 +232,15 @@ class ExploratorySqlAnalysisService
                 $scope['ambiguous'] = true;
                 continue;
             }
-            $alias = self::outputAlias($itemTokens);
-            $expressionTokens = self::withoutOutputAlias($itemTokens);
+            $ambiguousAlias = self::hasAmbiguousAliasBoundary($itemTokens);
+            if ($ambiguousAlias) {
+                $scope['ambiguous'] = true;
+                $alias = null;
+                $expressionTokens = $itemTokens;
+            } else {
+                $alias = self::outputAlias($itemTokens);
+                $expressionTokens = self::withoutOutputAlias($itemTokens);
+            }
             $functions = self::functionNames($expressionTokens);
             $scope['selectItems'][] = [
                 'expression' => self::expressionText($expressionTokens),
@@ -225,6 +281,9 @@ class ExploratorySqlAnalysisService
             'dateColumns' => self::datePredicateColumns($allPredicateTokens),
             'governedFilters' => self::governedFilters($allPredicateTokens),
         ];
+        if (self::hasUnsupportedInFilter($allPredicateTokens)) {
+            $scope['ambiguous'] = true;
+        }
         foreach ($scope['joins'] as &$join) {
             unset($join['predicateTokens']);
         }
@@ -324,23 +383,27 @@ class ExploratorySqlAnalysisService
             return null;
         }
         $base = self::baseDepth($tokens);
-        for ($index = count($tokens) - 2; $index >= 0; $index--) {
-            if (($tokens[$index]['depth'] ?? -1) === $base && self::isKeyword($tokens[$index], 'AS')) {
-                $alias = $tokens[$index + 1] ?? [];
-                return ($alias['kind'] ?? '') === 'identifier' ? $alias['value'] : null;
-            }
-        }
         $last = count($tokens) - 1;
+        if ($last > 0 && ($tokens[$last - 1]['depth'] ?? -1) === $base
+            && self::isKeyword($tokens[$last - 1], 'AS')) {
+            return ($tokens[$last]['kind'] ?? '') === 'identifier' ? $tokens[$last]['value'] : null;
+        }
         if (($tokens[$last]['kind'] ?? '') !== 'identifier' || ($tokens[$last]['depth'] ?? -1) !== $base) {
             return null;
         }
-        if ($last === 0 || ($tokens[$last - 1]['value'] ?? '') === '.') {
+        if ($last === 0 || ($tokens[$last - 1]['value'] ?? '') === '.'
+            || ($tokens[$last - 1]['value'] ?? '') === '::') {
             return null;
         }
-        if (in_array(strtoupper($tokens[$last]['value']), self::SOURCE_STOPS, true)) {
+        if (in_array(strtoupper($tokens[$last]['value']), array_merge(self::SOURCE_STOPS, self::EXPRESSION_TERMINALS), true)) {
             return null;
         }
-        return $tokens[$last]['value'];
+        $previousKind = $tokens[$last - 1]['kind'] ?? '';
+        $previousValue = $tokens[$last - 1]['value'] ?? '';
+        if ($previousValue === ')' || in_array($previousKind, ['identifier', 'string', 'number'], true)) {
+            return $tokens[$last]['value'];
+        }
+        return null;
     }
 
     private static function referencedAliases(array $tokens): array
@@ -399,11 +462,68 @@ class ExploratorySqlAnalysisService
                 return in_array($tokens[$index + 1]['kind'] ?? '', ['string', 'number'], true);
             }
             if ($operator === 'IN') {
-                return ($tokens[$index + 1]['value'] ?? '') === '(';
+                return self::hasLiteralOnlyList($tokens, $index + 1);
             }
             if (in_array($operator, ['AND', 'OR', ','], true)) {
                 return false;
             }
+        }
+        return false;
+    }
+
+    private static function hasUnsupportedInFilter(array $tokens): bool
+    {
+        for ($index = 0; $index + 2 < count($tokens); $index++) {
+            if (($tokens[$index]['kind'] ?? '') !== 'identifier'
+                || ($tokens[$index + 1]['value'] ?? '') !== '.'
+                || ($tokens[$index + 2]['kind'] ?? '') !== 'identifier') {
+                continue;
+            }
+            $limit = min(count($tokens), $index + 9);
+            for ($operatorIndex = $index + 3; $operatorIndex < $limit; $operatorIndex++) {
+                $operator = strtoupper((string)($tokens[$operatorIndex]['value'] ?? ''));
+                if ($operator === 'IN') {
+                    if (!self::hasLiteralOnlyList($tokens, $operatorIndex + 1)) {
+                        return true;
+                    }
+                    break;
+                }
+                if (in_array($operator, ['AND', 'OR', ','], true)) {
+                    break;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static function hasLiteralOnlyList(array $tokens, int $openIndex): bool
+    {
+        if (($tokens[$openIndex]['value'] ?? '') !== '(') {
+            return false;
+        }
+        $openDepth = $tokens[$openIndex]['depth'] ?? -1;
+        $expectLiteral = true;
+        $literalCount = 0;
+        for ($index = $openIndex + 1; $index < count($tokens); $index++) {
+            $token = $tokens[$index];
+            if (($token['value'] ?? '') === ')' && ($token['depth'] ?? -1) === $openDepth) {
+                return !$expectLiteral && $literalCount > 0;
+            }
+            if (($token['depth'] ?? -1) !== $openDepth + 1) {
+                return false;
+            }
+            if ($expectLiteral) {
+                if (!in_array($token['kind'] ?? '', ['string', 'number'], true)) {
+                    return false;
+                }
+                $literalCount++;
+                $expectLiteral = false;
+                continue;
+            }
+            if (($token['value'] ?? '') !== ',') {
+                return false;
+            }
+            $expectLiteral = true;
         }
         return false;
     }
@@ -519,6 +639,23 @@ class ExploratorySqlAnalysisService
             return array_slice($tokens, 0, $last - 1);
         }
         return array_slice($tokens, 0, $last);
+    }
+
+    private static function hasAmbiguousAliasBoundary(array $tokens): bool
+    {
+        $base = self::baseDepth($tokens);
+        $penultimate = count($tokens) - 2;
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) === $base && self::isKeyword($token, 'AS') && $index !== $penultimate) {
+                return true;
+            }
+        }
+        $alias = self::outputAlias($tokens);
+        if ($alias === null) {
+            return false;
+        }
+        $expressionTokens = self::withoutOutputAlias($tokens);
+        return self::outputAlias($expressionTokens) !== null;
     }
 
     private static function functionNames(array $tokens): array
@@ -648,6 +785,7 @@ class ExploratorySqlAnalysisService
     private static function isKeyword(array $token, string $keyword): bool
     {
         return ($token['kind'] ?? '') === 'identifier'
+            && empty($token['quoted'])
             && strtoupper((string)($token['value'] ?? '')) === $keyword;
     }
 
