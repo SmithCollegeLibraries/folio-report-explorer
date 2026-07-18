@@ -578,12 +578,16 @@ class FolioQueryController extends Controller
         string $safeCategory
     ): array {
         $repairAttempts = $this->clampExploratoryRepairAttempts($result['repairAttempts'] ?? 0);
+        $validatorStage = (string)($result['validationSummary']['validatorStage'] ?? '');
+        $semanticExhaustion = $validatorStage === 'semantic_conformance';
         $response = [
             'needsClarification' => false,
             'needsExploratoryApproval' => false,
             'mode' => 'exploratory',
             'errorType' => 'sql_repair_exhausted',
-            'message' => 'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
+            'message' => $semanticExhaustion
+                ? "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption."
+                : 'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
             'route' => 'exploratory_recovery',
             'routeReason' => 'sql_repair_exhausted',
             'validationSummary' => [
@@ -603,7 +607,36 @@ class FolioQueryController extends Controller
             }
         }
 
+        if ($semanticExhaustion) {
+            $response['validationSummary']['validatorStage'] = 'semantic_conformance';
+            $response['unmetRequirements'] = $this->sanitizeExploratoryUnmetRequirements(
+                $result['unmetRequirements'] ?? []
+            );
+        }
+
         return $response;
+    }
+
+    private function sanitizeExploratoryUnmetRequirements($requirements): array
+    {
+        if (!is_array($requirements)) {
+            return [];
+        }
+
+        $safe = [];
+        foreach ($requirements as $requirement) {
+            if (!is_array($requirement)) {
+                continue;
+            }
+            $key = trim((string)($requirement['key'] ?? ''));
+            $label = trim((string)($requirement['label'] ?? ''));
+            if (preg_match('/^[a-z0-9_]{1,80}$/', $key) !== 1 || $label === '') {
+                continue;
+            }
+            $safe[$key] = ['key' => $key, 'label' => $label];
+        }
+
+        return array_values($safe);
     }
 
     private function sanitizeExploratoryFailureCategory(string $category): string
@@ -611,24 +644,30 @@ class FolioQueryController extends Controller
         $category = strtolower(trim($category));
         $allowedCategories = [
             'ambiguous_column',
+            'assumption_mismatch',
             'database_cancelled',
             'database_connectivity',
             'database_validation',
             'function_error',
             'grouping_error',
+            'grain_mismatch',
             'invalid_operator',
             'missing_column',
+            'missing_ordering',
             'missing_table',
             'missing_type',
             'non_select',
             'operator_error',
+            'output_type_mismatch',
             'policy_blocked',
             'provider_failure',
             'query_too_complex',
+            'semantic_coverage_gap',
             'syntax_error',
             'unknown_column',
             'unknown_error',
             'unknown_table',
+            'unrequested_filter',
             'validated',
             'validation_failure',
         ];

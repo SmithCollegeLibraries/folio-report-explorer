@@ -179,13 +179,96 @@ namespace {
     repairAssertSame(false, array_key_exists('sql', $exhausted), 'Exhausted recovery must never include SQL.');
     repairAssertSame('sql_repair_exhausted', $exhausted['errorType'] ?? null, 'Exhaustion should expose a stable error type.');
     repairAssertSame('exhausted', $exhausted['validationSummary']['status'] ?? null, 'Exhaustion should expose its validation status.');
+    repairAssertSame('missing_column', $exhausted['validationSummary']['failureCategory'] ?? null, 'Ordinary database exhaustion should retain its existing safe database category.');
     repairAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion should report the actual repair count.');
+    repairAssertSame(
+        'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
+        $exhausted['message'] ?? null,
+        'Ordinary database exhaustion should retain its existing generic recovery message.'
+    );
+    repairAssertSame(false, isset($exhausted['unmetRequirements']), 'Ordinary database exhaustion should not acquire semantic requirement fields.');
     repairAssertSame('Compare investment and circulation ROI', $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should preserve the original question.');
     repairAssertSame('Smith College', $exhausted['recoveryContext']['campus'] ?? null, 'Recovery should preserve campus scope.');
     repairAssertSame([['key' => 'purchase_date_basis', 'value' => 'payment_date']], $exhausted['assumptions'] ?? null, 'Recovery should preserve assumptions.');
     repairAssertSame('Aggregate investment before joining circulation.', $exhausted['attemptedPlan'] ?? null, 'Recovery should preserve the attempted plan.');
     repairAssertSame(['Use a shorter reporting window.'], $exhausted['suggestions'] ?? null, 'Recovery should preserve suggestions.');
     repairAssertNotContains('verified report pattern', json_encode($exhausted), 'Exhausted recovery must not use verified-pattern roadblock copy.');
+
+    $semanticRepairCalls = 0;
+    $semanticExhausted = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT stale_candidate FROM inventory.instance__t',
+            'mode' => 'exploratory',
+            'repairAttempts' => 1,
+            'route' => 'exploratory',
+            'routeReason' => 'unsupported_query_family',
+            'semanticValidation' => [
+                'status' => 'validated',
+                'evidence' => 'stale rejected candidate evidence',
+            ],
+        ],
+        'Compare purchases and circulation ROI by call number',
+        'Smith College',
+        function (): array {
+            return ['error' => 'ERROR: column private_schema.secret_value does not exist at character 42'];
+        },
+        function () use (&$semanticRepairCalls): array {
+            $semanticRepairCalls++;
+            return [
+                'repairAttempts' => 2,
+                'assumptions' => [['key' => 'purchase_date_basis', 'value' => 'payment_date']],
+                'attemptedPlan' => 'Aggregate paid spend before joining item-level circulation.',
+                'suggestions' => ['Adjust the purchase-date assumption and retry.'],
+                'unmetRequirements' => [[
+                    'key' => 'purchase_date_basis',
+                    'label' => 'Use the resolved purchase date basis.',
+                    'guidance' => 'internal repair guidance must not cross the controller boundary',
+                    'evidence' => 'private predicate evidence',
+                ]],
+                'validationSummary' => [
+                    'status' => 'exhausted',
+                    'validatorStage' => 'semantic_conformance',
+                    'failureCategory' => 'assumption_mismatch',
+                    'message' => "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption.",
+                ],
+                'error' => 'raw exception text must not cross the controller boundary',
+            ];
+        }
+    );
+
+    repairAssertSame(1, $semanticRepairCalls, 'Semantic exhaustion after one prior repair should make exactly one remaining repair call.');
+    repairAssertSame(2, $semanticExhausted['validationSummary']['repairAttempts'] ?? null, 'Semantic exhaustion should preserve the exact shared repair count.');
+    repairAssertSame('semantic_conformance', $semanticExhausted['validationSummary']['validatorStage'] ?? null, 'Controller recovery should preserve the semantic validator stage.');
+    repairAssertSame('assumption_mismatch', $semanticExhausted['validationSummary']['failureCategory'] ?? null, 'Controller recovery should preserve the safe semantic category.');
+    repairAssertSame(
+        "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption.",
+        $semanticExhausted['message'] ?? null,
+        'Controller recovery should preserve the reassuring semantic exhaustion message.'
+    );
+    repairAssertSame(
+        [['key' => 'purchase_date_basis', 'label' => 'Use the resolved purchase date basis.']],
+        $semanticExhausted['unmetRequirements'] ?? null,
+        'Controller recovery should expose stable unmet requirement keys and labels only.'
+    );
+    repairAssertSame([['key' => 'purchase_date_basis', 'value' => 'payment_date']], $semanticExhausted['assumptions'] ?? null, 'Semantic recovery should preserve assumptions.');
+    repairAssertSame('Aggregate paid spend before joining item-level circulation.', $semanticExhausted['attemptedPlan'] ?? null, 'Semantic recovery should preserve the attempted plan.');
+    repairAssertSame(['Adjust the purchase-date assumption and retry.'], $semanticExhausted['suggestions'] ?? null, 'Semantic recovery should preserve safe suggestions.');
+    repairAssertSame('Compare purchases and circulation ROI by call number', $semanticExhausted['recoveryContext']['originalQuestion'] ?? null, 'Semantic recovery should preserve the original question.');
+    repairAssertSame('Smith College', $semanticExhausted['recoveryContext']['campus'] ?? null, 'Semantic recovery should preserve campus scope.');
+    repairAssertSame(false, array_key_exists('sql', $semanticExhausted), 'Semantic controller recovery must not expose rejected SQL.');
+    repairAssertSame(false, array_key_exists('semanticValidation', $semanticExhausted), 'Semantic controller recovery must not expose stale candidate validation.');
+    $semanticRecoveryJson = json_encode($semanticExhausted);
+    foreach ([
+        'stale_candidate',
+        'internal repair guidance',
+        'private predicate evidence',
+        'private_schema.secret_value',
+        'raw exception text',
+        'stale rejected candidate evidence',
+    ] as $privateFragment) {
+        repairAssertNotContains($privateFragment, $semanticRecoveryJson, 'Semantic controller recovery must not expose internal SQL, guidance, evidence, or error detail.');
+    }
 
     $connectivityRepairCalls = 0;
     $connectivity = $validateAndRepair->invoke(
