@@ -139,6 +139,7 @@ class ExploratorySqlSemanticValidatorService
         $spendName = self::spendCteName($analysis);
         if ($spendName === null
             || self::finalMeasureCteName($analysis, 'purchase_count') !== $spendName
+            || !self::hasValidPurchaseCount($analysis)
             || self::hasItemOrCirculationLineage($spendName, $analysis['ctes'] ?? [], [])) {
             return self::GUIDANCE['spend_before_item_join'];
         }
@@ -223,7 +224,9 @@ class ExploratorySqlSemanticValidatorService
     private static function validateDescendingPurchaseRanking(array $analysis, array $requirement, array $contract): ?string
     {
         $first = $analysis['orderBy'][0] ?? [];
-        return ($first['expression'] ?? null) === 'purchase_count' && ($first['direction'] ?? null) === 'DESC'
+        return ($first['expression'] ?? null) === 'purchase_count'
+            && ($first['direction'] ?? null) === 'DESC'
+            && self::hasValidPurchaseCount($analysis)
             ? null : self::GUIDANCE['descending_purchase_ranking'];
     }
 
@@ -238,31 +241,88 @@ class ExploratorySqlSemanticValidatorService
             || strtolower((string)($campusPermission['value'] ?? '')) !== $expected) {
             return self::GUIDANCE['campus_scope'];
         }
-        foreach (self::reachableScopes($analysis) as $scope) {
-            foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
-                $values = array_map('strtolower', $predicate['values'] ?? []);
-                $column = (string)($predicate['column'] ?? '');
-                if (self::columnLeaf($column) === 'name'
-                    && self::columnSource($scope, $column) === 'inventory.loccampus__t'
-                    && self::isEnforcingFact($predicate)
-                    && empty($predicate['negated'])
-                    && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
-                    && $values === [$expected]) {
-                    return null;
-                }
+        $circulation = self::circulationItemCte($analysis);
+        if ($circulation === null || !self::hasCampusHierarchy($circulation, $expected, false)) {
+            return self::GUIDANCE['campus_scope'];
+        }
+        foreach (self::reachableCteEnforcement($analysis) as $name => $enforced) {
+            $scope = $analysis['ctes'][$name] ?? null;
+            if ($enforced && $scope !== null
+                && self::hasCampusHierarchy($scope, $expected, true)
+                && self::hasFinalCampusInstanceJoin($analysis, $name)) {
+                return null;
             }
         }
         return self::GUIDANCE['campus_scope'];
     }
 
+    private static function hasCampusHierarchy(array $scope, string $expected, bool $requireInstance): bool
+    {
+        $item = self::aliasForSource($scope, 'inventory.item__t');
+        $location = self::aliasForSource($scope, 'inventory.location__t');
+        $library = self::aliasForSource($scope, 'inventory.loclibrary__t');
+        $campus = self::aliasForSource($scope, 'inventory.loccampus__t');
+        if ($item === null || $location === null || $library === null || $campus === null
+            || !self::hasExactColumnEquality($scope, $item . '.effective_location_id', $location . '.id')
+            || !self::hasExactColumnEquality($scope, $location . '.library_id', $library . '.id')
+            || !self::hasExactColumnEquality($scope, $library . '.campus_id', $campus . '.id')) {
+            return false;
+        }
+        if ($requireInstance) {
+            $holdings = self::aliasForSource($scope, 'inventory.holdings_record__t');
+            if ($holdings === null
+                || !self::hasExactColumnEquality($scope, $item . '.holdings_record_id', $holdings . '.id')
+                || self::expressionForAlias($scope['selectItems'] ?? [], 'instance_id') !== $holdings . '.instance_id') {
+                return false;
+            }
+        }
+        foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
+            if (($predicate['column'] ?? null) === $campus . '.name'
+                && self::isEnforcingFact($predicate)
+                && empty($predicate['negated'])
+                && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
+                && array_map('strtolower', $predicate['values'] ?? []) === [$expected]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function hasExactColumnEquality(array $scope, string $left, string $right): bool
+    {
+        foreach (($scope['predicates']['columnComparisons'] ?? []) as $comparison) {
+            $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
+            if (($comparison['operator'] ?? null) === '='
+                && ($actual === [$left, $right] || $actual === [$right, $left])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function hasFinalCampusInstanceJoin(array $analysis, string $cteName): bool
+    {
+        $campusAlias = null;
+        $spendAlias = null;
+        $spendName = self::spendCteName($analysis);
+        foreach (array_keys($analysis['sourceAliases'] ?? []) as $alias) {
+            $binding = self::resolveQualifier($analysis, (string)$alias);
+            if (($binding['kind'] ?? null) === 'cte' && ($binding['source'] ?? null) === $cteName) {
+                $campusAlias = (string)$alias;
+            }
+            if (($binding['kind'] ?? null) === 'cte' && ($binding['source'] ?? null) === $spendName) {
+                $spendAlias = (string)$alias;
+            }
+        }
+        return $campusAlias !== null && $spendAlias !== null
+            && self::hasExactColumnEquality($analysis, $campusAlias . '.instance_id', $spendAlias . '.instance_id');
+    }
+
     private static function validateGovernedFilters(array $analysis, array $requirement, array $contract): ?string
     {
         $permitted = $contract['permittedFilters'] ?? [];
-        foreach (self::reachableScopes($analysis) as $scope) {
+        foreach (self::reachableContributingScopes($analysis) as $scope) {
             foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
-                if (!self::isEnforcingFact($predicate)) {
-                    continue;
-                }
                 $column = (string)($predicate['column'] ?? '');
                 if (strpos($column, 'material_type') !== false
                     && !self::hasFilterProvenance($permitted, 'material_type', 'explicit_prompt')) {
@@ -306,6 +366,19 @@ class ExploratorySqlSemanticValidatorService
             && self::containsTable($cte['tables'] ?? [], 'fund_distributions')
             && self::containsTable($cte['tables'] ?? [], 'po_line')
             ? $name : null;
+    }
+
+    private static function hasValidPurchaseCount(array $analysis): bool
+    {
+        $spendName = self::spendCteName($analysis);
+        $spend = $spendName === null ? null : ($analysis['ctes'][$spendName] ?? null);
+        $aggregate = self::itemForAlias($spend['selectItems'] ?? [], 'purchase_count')['exactAggregate'] ?? null;
+        return $spend !== null
+            && self::finalMeasureCteName($analysis, 'purchase_count') === $spendName
+            && ($aggregate['function'] ?? null) === 'count'
+            && !empty($aggregate['distinct'])
+            && self::columnLeaf((string)($aggregate['column'] ?? '')) === 'id'
+            && self::columnSource($spend, (string)$aggregate['column']) === 'orders.po_line__t';
     }
 
     private static function hasItemOrCirculationLineage(string $name, array $ctes, array $visited): bool
@@ -594,6 +667,15 @@ class ExploratorySqlSemanticValidatorService
             if ($enforced) {
                 $scopes[] = $analysis['ctes'][$name];
             }
+        }
+        return $scopes;
+    }
+
+    private static function reachableContributingScopes(array $analysis): array
+    {
+        $scopes = [$analysis];
+        foreach (array_keys(self::reachableCteEnforcement($analysis)) as $name) {
+            $scopes[] = $analysis['ctes'][$name];
         }
         return $scopes;
     }

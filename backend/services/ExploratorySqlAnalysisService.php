@@ -612,14 +612,22 @@ class ExploratorySqlAnalysisService
                 continue;
             }
             $argument = self::withoutWrappingParentheses($argument);
+            $distinct = self::isKeyword($argument[0] ?? [], 'DISTINCT');
+            if ($distinct) {
+                $argument = array_slice($argument, 1);
+            }
             if (count($argument) !== 3 || ($argument[0]['kind'] ?? '') !== 'identifier'
                 || ($argument[1]['value'] ?? '') !== '.' || ($argument[2]['kind'] ?? '') !== 'identifier') {
                 return null;
             }
-            return [
+            $aggregate = [
                 'function' => strtolower($function),
                 'column' => $argument[0]['value'] . '.' . $argument[2]['value'],
             ];
+            if ($distinct) {
+                $aggregate['distinct'] = true;
+            }
+            return $aggregate;
         }
         return null;
     }

@@ -145,6 +145,11 @@ analysisAssertSame(
     'Exact column-comparison atoms must preserve checkout-to-item join evidence.'
 );
 $spendItems = analysisItemsByAlias($analysis['ctes']['spend_by_instance']['selectItems']);
+analysisAssertSame(
+    ['function' => 'count', 'column' => 'pol.id', 'distinct' => true],
+    $spendItems['purchase_count']['exactAggregate'],
+    'Purchase-count analysis must preserve exact DISTINCT aggregate evidence.'
+);
 $circulationItems = analysisItemsByAlias($analysis['ctes']['circulation_by_item']['selectItems']);
 analysisAssertSame(
     ['function' => 'count', 'column' => 'audit_loan.created_date'],

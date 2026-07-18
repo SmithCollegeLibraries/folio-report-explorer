@@ -50,21 +50,21 @@ class ExploratorySemanticContractService
         $values = self::assumptionValues($assumptions);
         $filters = self::permittedFilters($question, $campus);
         $requirements = [
-            self::requirement('purchase_date_basis', 'Use the resolved purchase date basis.', [
+            self::requirement('purchase_date_basis', self::requirementLabel('purchase_date_basis', $values), [
                 'value' => $values['purchase_date_basis'] ?? null,
             ]),
-            self::requirement('investment_cost_basis', 'Use the resolved investment cost basis.', [
+            self::requirement('investment_cost_basis', self::requirementLabel('investment_cost_basis', $values), [
                 'value' => $values['investment_cost_basis'] ?? null,
             ]),
-            self::requirement('spend_grain', 'Aggregate spending before joining item-level data.'),
-            self::requirement('circulation_window', 'Use the resolved circulation window.', [
+            self::requirement('spend_grain', self::requirementLabel('spend_grain', $values)),
+            self::requirement('circulation_window', self::requirementLabel('circulation_window', $values), [
                 'value' => $values['circulation_window'] ?? null,
             ]),
-            self::requirement('circulation_grain', 'Aggregate circulation at item grain before final grouping.'),
-            self::requirement('call_number_grouping', 'Use the resolved call-number grouping.', [
+            self::requirement('circulation_grain', self::requirementLabel('circulation_grain', $values)),
+            self::requirement('call_number_grouping', self::requirementLabel('call_number_grouping', $values), [
                 'value' => $values['call_number_grouping'] ?? null,
             ]),
-            self::requirement('required_measures', 'Return every required purchase, spend, circulation, and ROI measure.', [
+            self::requirement('required_measures', self::requirementLabel('required_measures', $values), [
                 'values' => [
                     'purchase_count',
                     'spend',
@@ -73,21 +73,21 @@ class ExploratorySemanticContractService
                     'cost_per_checkout',
                 ],
             ]),
-            self::requirement('roi_formula', 'Use the resolved zero-safe ROI formula.', [
+            self::requirement('roi_formula', self::requirementLabel('roi_formula', $values), [
                 'value' => $values['roi_formula'] ?? null,
             ]),
-            self::requirement('purchase_ranking', 'Rank call-number groups by purchase count in descending order.', [
+            self::requirement('purchase_ranking', self::requirementLabel('purchase_ranking', $values), [
                 'measure' => 'purchase_count',
                 'direction' => 'descending',
             ]),
-            self::requirement('campus_scope', 'Apply the separately selected campus scope when supplied.', [
+            self::requirement('campus_scope', self::requirementLabel('campus_scope', $values), [
                 'required' => $campus !== null,
                 'value' => $campus,
             ]),
-            self::requirement('governed_filters', 'Use only filters permitted by the request contract.', [
+            self::requirement('governed_filters', self::requirementLabel('governed_filters', $values), [
                 'permitted' => array_keys($filters),
             ]),
-            self::requirement('numeric_output_types', 'Keep analytical measures numeric.'),
+            self::requirement('numeric_output_types', self::requirementLabel('numeric_output_types', $values)),
         ];
 
         $coverage = self::auditCoverage($requirements, ExploratorySqlSemanticValidatorService::supportedRuleKeys());
@@ -163,6 +163,45 @@ class ExploratorySemanticContractService
             'label' => $label,
             'parameters' => $parameters,
         ];
+    }
+
+    private static function requirementLabel(string $key, array $values): string
+    {
+        $labels = [
+            'spend_grain' => 'Purchase count and spending are aggregated before item-level circulation.',
+            'circulation_grain' => 'Checkouts are counted at item grain before final grouping.',
+            'required_measures' => 'Results include purchase count, spending, circulation, checkouts per dollar, and cost per checkout.',
+            'purchase_ranking' => 'Call-number groups rank by purchase count from highest to lowest.',
+            'campus_scope' => 'The selected campus is applied through the inventory location hierarchy.',
+            'governed_filters' => 'Material-type and acquisition-unit filters appear only when explicitly requested.',
+            'numeric_output_types' => 'Purchase, spending, circulation, and ROI measures remain numeric.',
+        ];
+        if ($key === 'purchase_date_basis') {
+            return ($values['purchase_date_basis'] ?? null) === 'invoice_date'
+                ? 'Purchases use invoice date for the five-year reporting period.'
+                : 'Purchases use payment date for the five-year reporting period.';
+        }
+        if ($key === 'investment_cost_basis') {
+            return ($values['investment_cost_basis'] ?? null) === 'estimated_po_line_price'
+                ? 'Spending uses estimated PO-line prices.'
+                : 'Spending uses paid invoice fund-distribution amounts.';
+        }
+        if ($key === 'circulation_window') {
+            return ($values['circulation_window'] ?? null) === 'lifetime_circulation'
+                ? 'Circulation uses lifetime checkout history.'
+                : 'Circulation uses the same five-year reporting period as purchases.';
+        }
+        if ($key === 'call_number_grouping') {
+            return ($values['call_number_grouping'] ?? null) === 'first_two_call_number_letters'
+                ? 'Results group by the first two call-number letters.'
+                : 'Results group by primary call-number class.';
+        }
+        if ($key === 'roi_formula') {
+            return ($values['roi_formula'] ?? null) === 'cost_per_checkout'
+                ? 'ROI returns cost per checkout.'
+                : 'ROI returns checkouts per dollar and cost per checkout.';
+        }
+        return $labels[$key] ?? 'The report satisfies an approved semantic requirement.';
     }
 
     private static function permittedFilters(string $question, ?string $campus): array
