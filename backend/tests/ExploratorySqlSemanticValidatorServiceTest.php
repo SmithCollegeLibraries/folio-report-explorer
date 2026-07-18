@@ -187,6 +187,22 @@ semanticAssertRejectedFor($correctedSql, $invoiceContract, 'purchase_date_basis'
 $invoiceSql = str_replace('invoice.payment_date', 'invoice.invoice_date', $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($invoiceSql, $invoiceContract)['status'], 'Invoice date must satisfy the explicit invoice-date assumption.');
 semanticAssertRejectedFor(str_replace('invoice.payment_date', 'pot.date_ordered', $correctedSql), $contract, 'purchase_date_basis', 'PO order date must not satisfy purchase-date basis.');
+$leftInvoiceWindowSql = str_replace(
+    [
+        'JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id',
+        "    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'\n",
+    ],
+    [
+        "LEFT JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id\n      AND invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'",
+        '',
+    ],
+    $correctedSql
+);
+semanticAssertRejectedFor($leftInvoiceWindowSql, $contract, 'purchase_date_basis', 'A purchase window solely on the nullable side of a LEFT JOIN must not count as enforced.');
+$innerInvoiceWindowSql = str_replace('LEFT JOIN invoice.invoices__t invoice', 'INNER JOIN invoice.invoices__t invoice', $leftInvoiceWindowSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($innerInvoiceWindowSql, $contract)['status'], 'A purchase window in the approved invoice INNER JOIN predicate must count as enforced.');
+$leftInvoiceWhereSql = str_replace('JOIN invoice.invoices__t invoice', 'LEFT JOIN invoice.invoices__t invoice', $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($leftInvoiceWhereSql, $contract)['status'], 'An approved invoice window in WHERE must enforce the nullable invoice side.');
 $unknownDateContract = $contract;
 $unknownDateContract['requirements'][0]['parameters']['value'] = 'future_date_basis';
 semanticAssertRejectedFor($correctedSql, $unknownDateContract, 'purchase_date_basis', 'Unknown date assumptions must fail closed.');
@@ -251,6 +267,19 @@ semanticAssertRejectedFor(str_replace('COUNT(audit_loan.created_date) AS checkou
 semanticAssertRejectedFor(str_replace('COUNT(audit_loan.created_date) AS checkouts', 'COUNT(item.id) AS checkouts', $correctedSql), $contract, 'circulation_grain', 'COUNT of inventory item must not satisfy checkout aggregate proof.');
 $auditIdCountSql = str_replace('COUNT(audit_loan.created_date) AS checkouts', 'COUNT(audit_loan.id) AS checkouts', $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($auditIdCountSql, $contract)['status'], 'COUNT of an audit-loan id must satisfy checkout aggregate proof.');
+$unrelatedAuditPredicateSql = str_replace(
+    [
+        "     AND audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')\n     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'",
+        '    GROUP BY item.id, item.holdings_record_id',
+    ],
+    [
+        '',
+        "    LEFT JOIN circulation.audit_loan__t other_audit\n      ON other_audit.loan__item_id = item.id\n     AND other_audit.loan__action IN ('checkedout', 'checkedOutThroughOverride')\n     AND other_audit.created_date >= CURRENT_DATE - INTERVAL '5 years'\n    GROUP BY item.id, item.holdings_record_id",
+    ],
+    $correctedSql
+);
+semanticAssertRejectedFor($unrelatedAuditPredicateSql, $contract, 'circulation_grain', 'Checkout action on an unrelated LEFT JOIN must not constrain the audit alias being counted.');
+semanticAssertRejectedFor($unrelatedAuditPredicateSql, $contract, 'circulation_window', 'Checkout date on an unrelated LEFT JOIN must not constrain the audit alias being counted.');
 semanticAssertRejectedFor(str_replace("     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql), $contract, 'circulation_window', 'Circulation date window must be enforced in the item-grain circulation CTE.');
 semanticAssertRejectedFor(str_replace("audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'", "audit_loan.created_date >= CURRENT_DATE - INTERVAL '3 years'", $correctedSql), $contract, 'circulation_window', 'Circulation must use the same date window as purchases.');
 $unknownWindowContract = $contract;
@@ -354,6 +383,16 @@ $campusSql = str_replace(
     $correctedSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusSql, $campusContract)['status'], 'The selected campus filter must satisfy campus scope.');
+$leftCampusOnSql = str_replace(
+    "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nGROUP BY",
+    "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nLEFT JOIN inventory.loccampus__t selected_scope ON selected_scope.id = class_by_instance.instance_id AND selected_scope.name = 'Smith College'\nGROUP BY",
+    $correctedSql
+);
+semanticAssertRejectedFor($leftCampusOnSql, $campusContract, 'campus_scope', 'Campus selection solely on the nullable side of a LEFT JOIN must not count as enforced.');
+$innerCampusOnSql = str_replace('LEFT JOIN inventory.loccampus__t selected_scope', 'INNER JOIN inventory.loccampus__t selected_scope', $leftCampusOnSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($innerCampusOnSql, $campusContract)['status'], 'Campus selection in an INNER JOIN predicate must count as enforced.');
+$quotedLeftCampusOnSql = str_replace('selected_scope', '"where"', $leftCampusOnSql);
+semanticAssertRejectedFor($quotedLeftCampusOnSql, $campusContract, 'campus_scope', 'Quoted aliases must preserve nullable LEFT JOIN enforcement semantics.');
 $nestedCampusSql = str_replace(
     'WITH spend_by_instance AS (',
     "WITH selected_campus AS (SELECT loccampus.id FROM inventory.loccampus__t loccampus WHERE loccampus.name = 'Smith College'),\nspend_by_instance AS (",
@@ -365,6 +404,10 @@ $nestedCampusSql = str_replace(
     $nestedCampusSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($nestedCampusSql, $campusContract)['status'], 'Campus predicates in a reachable dependency scope must validate.');
+$outerNestedCampusSql = str_replace('JOIN selected_campus campus_scope', 'LEFT JOIN selected_campus campus_scope', $nestedCampusSql);
+semanticAssertRejectedFor($outerNestedCampusSql, $campusContract, 'campus_scope', 'A filtered campus CTE reached only through a LEFT JOIN path must not count as enforced.');
+$leftCampusWhereSql = str_replace('JOIN inventory.loccampus__t selected_scope', 'LEFT JOIN inventory.loccampus__t selected_scope', $campusSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($leftCampusWhereSql, $campusContract)['status'], 'A campus WHERE predicate must enforce a nullable campus join.');
 $campusInSql = str_replace("selected_scope.name = 'Smith College'", "selected_scope.name IN ('Smith College')", $campusSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusInSql, $campusContract)['status'], 'Positive campus IN inclusion must be accepted.');
 semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "(selected_scope.name = 'Smith College' OR 1 = 1)", $campusSql), $campusContract, 'campus_scope', 'Parenthesized OR must invalidate campus proof.');
@@ -393,6 +436,15 @@ semanticAssertRejectedFor($campusSql, $campusWithoutProvenance, 'campus_scope', 
 
 semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.acquisition_unit_id = 'unit' AND invoice.payment_date", $correctedSql), $contract, 'governed_filters', 'Unrequested acquisition unit must be rejected.');
 semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.material_type_id = 'book' AND invoice.payment_date", $correctedSql), $contract, 'governed_filters', 'Unrequested material type must be rejected.');
+$governedOnlyContract = $contract;
+$governedOnlyContract['requirements'] = array_values(array_filter(
+    $contract['requirements'],
+    static fn(array $requirement): bool => ($requirement['rule'] ?? null) === 'governed_filters'
+));
+$leftGovernedSql = "SELECT pol.id FROM orders.po_line__t pol LEFT JOIN inventory.item__t filtered_item ON filtered_item.id = pol.id AND filtered_item.material_type_id = 'book'";
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($leftGovernedSql, $governedOnlyContract)['status'], 'A predicate solely on a nullable LEFT JOIN side must not count as a governed row exclusion.');
+$innerGovernedSql = str_replace('LEFT JOIN', 'INNER JOIN', $leftGovernedSql);
+semanticAssertRejectedFor($innerGovernedSql, $governedOnlyContract, 'governed_filters', 'An unrequested governed predicate in an INNER JOIN must be rejected.');
 $permittedContract = $contract;
 $permittedContract['permittedFilters']['material_type'] = ['provenance' => 'explicit_prompt'];
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate(str_replace("WHERE invoice.payment_date", "WHERE pol.material_type_id = 'book' AND invoice.payment_date", $correctedSql), $permittedContract)['status'], 'Explicit provenance must permit material type.');

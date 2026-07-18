@@ -125,7 +125,22 @@ analysisAssertSame(
     'Analysis must bind every spend-scope alias to its physical source.'
 );
 analysisAssertSame(
-    [['left' => 'audit_loan.loan__item_id', 'operator' => '=', 'right' => 'item.id']],
+    [[
+        'left' => 'audit_loan.loan__item_id',
+        'operator' => '=',
+        'right' => 'item.id',
+        'origin' => 'join_on',
+        'joinType' => 'LEFT',
+        'joinedAlias' => 'audit_loan',
+        'joinedSource' => 'circulation.audit_loan__t',
+        'joinedSourceKind' => 'table',
+        'joinPath' => [[
+            'type' => 'LEFT',
+            'alias' => 'audit_loan',
+            'source' => 'circulation.audit_loan__t',
+            'sourceKind' => 'table',
+        ]],
+    ]],
     $analysis['ctes']['circulation_by_item']['predicates']['columnComparisons'],
     'Exact column-comparison atoms must preserve checkout-to-item join evidence.'
 );
@@ -149,7 +164,17 @@ analysisAssertSame(
     'Spend analysis must preserve exact multiplication factors and scaling.'
 );
 analysisAssertSame(
-    [['column' => 'invoice.payment_date', 'operator' => '>=', 'expression' => 'current_date - interval 5 years']],
+    [[
+        'column' => 'invoice.payment_date',
+        'operator' => '>=',
+        'expression' => 'current_date - interval 5 years',
+        'origin' => 'where',
+        'joinType' => null,
+        'joinedAlias' => null,
+        'joinedSource' => null,
+        'joinedSourceKind' => null,
+        'joinPath' => [],
+    ]],
     $analysis['ctes']['spend_by_instance']['predicates']['dateWindows'],
     'Purchase window evidence must bind the exact date column, operator, and interval.'
 );
@@ -367,6 +392,21 @@ $ordinarySourceGrammar = ExploratorySqlAnalysisService::analyze(
 );
 analysisAssertSame('LEFT', $ordinarySourceGrammar['ctes']['joined_scope']['joins'][0]['type'], 'Unquoted LEFT JOIN classification must remain unchanged.');
 analysisAssertSame(['item.status'], $ordinarySourceGrammar['ctes']['joined_scope']['predicates']['governedFilters'], 'Unquoted WHERE must remain a clause boundary.');
+
+$outerJoinFactAnalysis = ExploratorySqlAnalysisService::analyze(
+    "SELECT item.id FROM inventory.item__t item LEFT JOIN inventory.loccampus__t \"where\" "
+    . "ON \"where\".id = item.id AND \"where\".name = 'Smith College'"
+);
+$outerJoinCampusFact = $outerJoinFactAnalysis['predicates']['literalPredicates'][0];
+analysisAssertSame('join_on', $outerJoinCampusFact['origin'], 'JOIN facts must retain their clause origin.');
+analysisAssertSame('LEFT', $outerJoinCampusFact['joinType'], 'JOIN facts must retain nullable-side join type.');
+analysisAssertSame('where', $outerJoinCampusFact['joinedAlias'], 'Quoted joined aliases must remain normalized in fact provenance.');
+analysisAssertSame('inventory.loccampus__t', $outerJoinCampusFact['joinedSource'], 'JOIN facts must retain their physical joined source.');
+analysisAssertSame(
+    [['type' => 'LEFT', 'alias' => 'where', 'source' => 'inventory.loccampus__t', 'sourceKind' => 'table']],
+    $outerJoinCampusFact['joinPath'],
+    'JOIN facts must retain enough path metadata for enforcement decisions.'
+);
 analysisAssertSame('id', $ordinarySourceGrammar['orderBy'][0]['expression'], 'Unquoted ORDER BY must remain a clause boundary.');
 analysisAssertSame('DESC', $ordinarySourceGrammar['orderBy'][0]['direction'], 'Unquoted ordering direction must remain unchanged.');
 

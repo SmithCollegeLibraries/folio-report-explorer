@@ -244,6 +244,7 @@ class ExploratorySqlSemanticValidatorService
                 $column = (string)($predicate['column'] ?? '');
                 if (self::columnLeaf($column) === 'name'
                     && self::columnSource($scope, $column) === 'inventory.loccampus__t'
+                    && self::isEnforcingFact($predicate)
                     && empty($predicate['negated'])
                     && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
                     && $values === [$expected]) {
@@ -258,7 +259,11 @@ class ExploratorySqlSemanticValidatorService
     {
         $permitted = $contract['permittedFilters'] ?? [];
         foreach (self::reachableScopes($analysis) as $scope) {
-            foreach (($scope['predicates']['governedFilters'] ?? []) as $column) {
+            foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
+                if (!self::isEnforcingFact($predicate)) {
+                    continue;
+                }
+                $column = (string)($predicate['column'] ?? '');
                 if (strpos($column, 'material_type') !== false
                     && !self::hasFilterProvenance($permitted, 'material_type', 'explicit_prompt')) {
                     return self::GUIDANCE['governed_filters'];
@@ -340,19 +345,20 @@ class ExploratorySqlSemanticValidatorService
     private static function isValidCirculationItemCte(array $cte): bool
     {
         $itemAlias = self::aliasForSource($cte, 'inventory.item__t');
-        $auditAlias = self::aliasForSource($cte, 'circulation.audit_loan__t');
         $itemId = self::expressionForAlias($cte['selectItems'] ?? [], 'item_id');
         $checkoutAggregate = self::itemForAlias($cte['selectItems'] ?? [], 'checkouts')['exactAggregate'] ?? null;
+        $auditAlias = self::countedAuditAlias($cte);
         $expectedGroup = $itemAlias === null ? [] : [$itemAlias . '.id', $itemAlias . '.holdings_record_id'];
         if ($itemAlias === null || $auditAlias === null
             || $itemId !== $itemAlias . '.id' || ($cte['groupBy'] ?? []) !== $expectedGroup
             || ($checkoutAggregate['function'] ?? null) !== 'count'
             || !isset($checkoutAggregate['column'])
             || self::columnSource($cte, $checkoutAggregate['column']) !== 'circulation.audit_loan__t'
-            || !self::hasColumnEquality(
+            || !self::hasJoinedColumnEquality(
                 $cte['predicates']['columnComparisons'] ?? [],
                 $auditAlias . '.loan__item_id',
-                $itemAlias . '.id'
+                $itemAlias . '.id',
+                $auditAlias
             )) {
             return false;
         }
@@ -360,6 +366,7 @@ class ExploratorySqlSemanticValidatorService
         foreach (($cte['predicates']['literalPredicates'] ?? []) as $predicate) {
             $values = array_map('strtolower', $predicate['values'] ?? []);
             if (($predicate['column'] ?? null) === $auditAlias . '.loan__action'
+                && self::isCountedAuditJoinFact($predicate, $auditAlias)
                 && empty($predicate['negated'])
                 && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
                 && $values !== [] && array_diff($values, $approved) === []) {
@@ -367,6 +374,19 @@ class ExploratorySqlSemanticValidatorService
             }
         }
         return false;
+    }
+
+    private static function countedAuditAlias(array $scope): ?string
+    {
+        $aggregate = self::itemForAlias($scope['selectItems'] ?? [], 'checkouts')['exactAggregate'] ?? null;
+        if (($aggregate['function'] ?? null) !== 'count' || !isset($aggregate['column'])) {
+            return null;
+        }
+        $alias = self::columnQualifier($aggregate['column']);
+        $binding = self::resolveQualifier($scope, $alias);
+        return ($binding['kind'] ?? null) === 'table'
+            && ($binding['source'] ?? null) === 'circulation.audit_loan__t'
+            ? $alias : null;
     }
 
     private static function finalMeasureCteName(array $analysis, string $measure): ?string
@@ -410,10 +430,16 @@ class ExploratorySqlSemanticValidatorService
         return count($aliases) === 1 ? $aliases[0] : null;
     }
 
-    private static function hasColumnEquality(array $comparisons, string $left, string $right): bool
+    private static function hasJoinedColumnEquality(
+        array $comparisons,
+        string $left,
+        string $right,
+        string $joinedAlias
+    ): bool
     {
         foreach ($comparisons as $comparison) {
-            if (($comparison['operator'] ?? null) !== '=') {
+            if (($comparison['operator'] ?? null) !== '='
+                || !self::isCountedAuditJoinFact($comparison, $joinedAlias)) {
                 continue;
             }
             $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
@@ -422,6 +448,21 @@ class ExploratorySqlSemanticValidatorService
             }
         }
         return false;
+    }
+
+    private static function isEnforcingFact(array $fact): bool
+    {
+        return ($fact['origin'] ?? null) === 'where'
+            || (($fact['origin'] ?? null) === 'join_on' && ($fact['joinType'] ?? null) === 'INNER');
+    }
+
+    private static function isCountedAuditJoinFact(array $fact, string $auditAlias): bool
+    {
+        return ($fact['origin'] ?? null) === 'join_on'
+            && in_array($fact['joinType'] ?? null, ['LEFT', 'INNER'], true)
+            && ($fact['joinedAlias'] ?? null) === $auditAlias
+            && ($fact['joinedSourceKind'] ?? null) === 'table'
+            && ($fact['joinedSource'] ?? null) === 'circulation.audit_loan__t';
     }
 
     private static function factorsForColumn(array $factors, string $leaf): array
@@ -549,34 +590,54 @@ class ExploratorySqlSemanticValidatorService
     private static function reachableScopes(array $analysis): array
     {
         $scopes = [$analysis];
-        foreach (self::reachableCteNames($analysis) as $name) {
-            $scopes[] = $analysis['ctes'][$name];
+        foreach (self::reachableCteEnforcement($analysis) as $name => $enforced) {
+            if ($enforced) {
+                $scopes[] = $analysis['ctes'][$name];
+            }
         }
         return $scopes;
     }
 
-    private static function reachableCteNames(array $analysis): array
+    private static function reachableCteEnforcement(array $analysis): array
     {
         $ctes = $analysis['ctes'] ?? [];
         $pending = [];
-        foreach (array_keys($analysis['sourceAliases'] ?? []) as $alias) {
+        foreach (self::sourceEnforcement($analysis) as $alias => $enforced) {
             $binding = self::resolveQualifier($analysis, (string)$alias);
             if (($binding['kind'] ?? null) === 'cte' && isset($ctes[$binding['source'] ?? ''])) {
-                $pending[] = $binding['source'];
+                $pending[] = [$binding['source'], $enforced];
             }
         }
         $reachable = [];
         while ($pending !== []) {
-            $name = array_shift($pending);
-            if (isset($reachable[$name]) || !isset($ctes[$name])) {
+            [$name, $enforced] = array_shift($pending);
+            if (!isset($ctes[$name]) || (($reachable[$name] ?? null) === true)) {
                 continue;
             }
-            $reachable[$name] = true;
-            foreach (($ctes[$name]['dependencies'] ?? []) as $dependency) {
-                $pending[] = $dependency;
+            $reachable[$name] = ($reachable[$name] ?? false) || $enforced;
+            foreach (self::sourceEnforcement($ctes[$name]) as $alias => $sourceEnforced) {
+                $binding = self::resolveQualifier($ctes[$name], (string)$alias);
+                if (($binding['kind'] ?? null) === 'cte' && isset($ctes[$binding['source'] ?? ''])) {
+                    $pending[] = [$binding['source'], $enforced && $sourceEnforced];
+                }
             }
         }
-        return array_keys($reachable);
+        return $reachable;
+    }
+
+    private static function sourceEnforcement(array $scope): array
+    {
+        $enforcement = array_fill_keys(array_keys($scope['sourceAliases'] ?? []), true);
+        foreach (($scope['joins'] ?? []) as $join) {
+            $type = $join['type'] ?? null;
+            if (in_array($type, ['RIGHT', 'FULL'], true)) {
+                foreach (array_keys($enforcement) as $alias) {
+                    $enforcement[$alias] = false;
+                }
+            }
+            $enforcement[$join['alias']] = in_array($type, ['INNER', 'RIGHT'], true);
+        }
+        return $enforcement;
     }
 
     private static function purchaseDateBasis(array $contract): ?string
@@ -592,16 +653,26 @@ class ExploratorySqlSemanticValidatorService
 
     private static function qualifyingWindow(array $scope, string $expectedColumn): ?array
     {
-        $facts = $scope['predicates']['dateWindows'] ?? [];
-        if (count($facts) !== 1
-            || self::columnLeaf((string)($facts[0]['column'] ?? '')) !== $expectedColumn
-            || ($facts[0]['operator'] ?? null) !== '>='
-            || ($facts[0]['expression'] ?? null) !== 'current_date - interval 5 years') {
-            return null;
-        }
         $expectedSource = $expectedColumn === 'created_date'
             ? 'circulation.audit_loan__t' : 'invoice.invoices__t';
-        if (self::columnSource($scope, (string)$facts[0]['column']) !== $expectedSource) {
+        $auditAlias = $expectedColumn === 'created_date' ? self::countedAuditAlias($scope) : null;
+        $facts = array_values(array_filter(
+            $scope['predicates']['dateWindows'] ?? [],
+            static function (array $fact) use ($scope, $expectedColumn, $expectedSource, $auditAlias): bool {
+                $column = (string)($fact['column'] ?? '');
+                $enforced = $expectedColumn === 'created_date'
+                    ? $auditAlias !== null
+                        && self::columnQualifier($column) === $auditAlias
+                        && self::isCountedAuditJoinFact($fact, $auditAlias)
+                    : self::isEnforcingFact($fact);
+                return self::columnLeaf($column) === $expectedColumn
+                    && self::columnSource($scope, $column) === $expectedSource
+                    && $enforced;
+            }
+        ));
+        if (count($facts) !== 1
+            || ($facts[0]['operator'] ?? null) !== '>='
+            || ($facts[0]['expression'] ?? null) !== 'current_date - interval 5 years') {
             return null;
         }
         return $facts[0];

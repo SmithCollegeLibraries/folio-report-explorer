@@ -65,6 +65,7 @@ class ExploratorySqlAnalysisService
             'selectItems' => $finalScope['selectItems'],
             'predicates' => $finalScope['predicates'],
             'groupBy' => $finalScope['groupBy'],
+            'joins' => $finalScope['joins'],
             'orderBy' => $finalScope['orderBy'],
             'limit' => $finalScope['limit'],
             'formattedAliases' => $finalScope['formattedAliases'],
@@ -274,10 +275,23 @@ class ExploratorySqlAnalysisService
         }
 
         $whereTokens = self::clauseSlice($tokens, 'WHERE', ['GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT', 'OFFSET', 'FETCH', 'WINDOW', 'FOR']);
-        $predicateGroups = $whereTokens === [] ? [] : [$whereTokens];
+        $predicateGroups = $whereTokens === [] ? [] : [[
+            'tokens' => $whereTokens,
+            'provenance' => self::predicateProvenance('where'),
+        ]];
+        $joinPath = [];
         foreach ($scope['joins'] as $join) {
+            $joinPath[] = [
+                'type' => $join['type'],
+                'alias' => $join['alias'],
+                'source' => $join['source'],
+                'sourceKind' => $join['sourceKind'],
+            ];
             if ($join['predicate'] !== '') {
-                $predicateGroups[] = $join['predicateTokens'];
+                $predicateGroups[] = [
+                    'tokens' => $join['predicateTokens'],
+                    'provenance' => self::predicateProvenance('join_on', $join, $joinPath),
+                ];
             }
         }
         $allPredicateTokens = [];
@@ -286,11 +300,20 @@ class ExploratorySqlAnalysisService
         $columnComparisons = [];
         $predicateAmbiguous = false;
         foreach ($predicateGroups as $group) {
-            $allPredicateTokens = array_merge($allPredicateTokens, $group);
-            $evidence = self::analyzeConjunction($group);
-            $literalPredicates = array_merge($literalPredicates, $evidence['literalPredicates']);
-            $dateWindows = array_merge($dateWindows, $evidence['dateWindows']);
-            $columnComparisons = array_merge($columnComparisons, $evidence['columnComparisons']);
+            $allPredicateTokens = array_merge($allPredicateTokens, $group['tokens']);
+            $evidence = self::analyzeConjunction($group['tokens']);
+            $literalPredicates = array_merge(
+                $literalPredicates,
+                self::factsWithProvenance($evidence['literalPredicates'], $group['provenance'])
+            );
+            $dateWindows = array_merge(
+                $dateWindows,
+                self::factsWithProvenance($evidence['dateWindows'], $group['provenance'])
+            );
+            $columnComparisons = array_merge(
+                $columnComparisons,
+                self::factsWithProvenance($evidence['columnComparisons'], $group['provenance'])
+            );
             $predicateAmbiguous = $predicateAmbiguous || $evidence['ambiguous'];
         }
         $scope['predicates'] = [
@@ -1058,6 +1081,7 @@ class ExploratorySqlAnalysisService
                 $scope['joins'][] = [
                     'type' => $joinType,
                     'source' => $source,
+                    'sourceKind' => $sourceKind,
                     'alias' => $alias,
                     'predicate' => self::expressionText($predicateTokens),
                     'referencedAliases' => self::referencedAliases($predicateTokens),
@@ -1069,6 +1093,28 @@ class ExploratorySqlAnalysisService
         $scope['tables'] = array_values(array_unique($scope['tables']));
         sort($scope['tables'], SORT_STRING);
         $scope['dependencies'] = array_values(array_unique($scope['dependencies']));
+    }
+
+    private static function predicateProvenance(
+        string $origin,
+        ?array $join = null,
+        array $joinPath = []
+    ): array {
+        return [
+            'origin' => $origin,
+            'joinType' => $join['type'] ?? null,
+            'joinedAlias' => $join['alias'] ?? null,
+            'joinedSource' => $join['source'] ?? null,
+            'joinedSourceKind' => $join['sourceKind'] ?? null,
+            'joinPath' => $joinPath,
+        ];
+    }
+
+    private static function factsWithProvenance(array $facts, array $provenance): array
+    {
+        return array_map(static function (array $fact) use ($provenance): array {
+            return array_merge($fact, $provenance);
+        }, $facts);
     }
 
     private static function withoutOutputAlias(array $tokens): array
