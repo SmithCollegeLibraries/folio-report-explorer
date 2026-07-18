@@ -56,16 +56,19 @@ describe('ExploratoryRecoveryPanel', () => {
     );
   });
 
-  it('renders rejected unsafe SQL as a hard stop without SQL or run controls', () => {
+  it('renders rejected unsafe SQL with deterministic refinement actions and no SQL controls', () => {
+    const onRefine = vi.fn();
     render(
       <ExploratoryRecoveryPanel
         response={{
           ...response,
           errorType: 'unsafe_generated_sql',
+          suggestions: [],
+          exploratoryPlan: { suggestions: [] },
           validationSummary: { status: 'rejected', repairAttempts: 0, failureCategory: 'non_select' },
         }}
         onRetry={() => undefined}
-        onRefine={() => undefined}
+        onRefine={onRefine}
       />,
     );
 
@@ -74,6 +77,11 @@ describe('ExploratoryRecoveryPanel', () => {
     expect(screen.queryByText(/safe failure category/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Non select$/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Refine with: Rephrase this as a read-only report.' }));
+    expect(onRefine).toHaveBeenCalledWith(
+      'Compare investment and circulation ROI',
+      'Rephrase this as a read-only report.',
+    );
     expect(screen.queryByText(/Generated SQL/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Run/i })).not.toBeInTheDocument();
   });

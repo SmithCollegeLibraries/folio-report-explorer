@@ -6,6 +6,11 @@ interface ExploratoryRecoveryPanelProps {
   onRefine: (question: string, suggestion: string) => void;
 }
 
+const REJECTED_REFINEMENT_SUGGESTIONS = [
+  'Rephrase this as a read-only report.',
+  'Specify a date range, grouping, and measures.',
+];
+
 function formatFailureCategory(category?: string): string {
   if (!category) return 'Validation failure';
   return category
@@ -17,9 +22,12 @@ function formatFailureCategory(category?: string): string {
 export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: ExploratoryRecoveryPanelProps) {
   const originalQuestion = response.recoveryContext?.originalQuestion?.trim() || '';
   const isRejected = response.validationSummary?.status === 'rejected';
-  const suggestions = response.suggestions?.length
+  const suppliedSuggestions = response.suggestions?.length
     ? response.suggestions
     : response.exploratoryPlan?.suggestions || [];
+  const suggestions = isRejected && suppliedSuggestions.length === 0
+    ? REJECTED_REFINEMENT_SUGGESTIONS
+    : suppliedSuggestions;
 
   return (
     <section className="rounded-lg border border-amber-200 bg-amber-50 p-5" aria-labelledby="exploratory-recovery-title">

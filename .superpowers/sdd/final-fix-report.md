@@ -198,3 +198,39 @@ The controller preflight boundary now catches only `DatabaseQueryCancelledExcept
 - PHP lint, `git diff --check`, and canonical/schema artifact isolation checks passed.
 
 The only advisories remain the two approved PHP 8.5 Reflection deprecations and the existing Vite large-chunk warning.
+
+## SELECT safety final-review fixes
+
+The final review identified two remaining coverage and recovery-contract gaps:
+
+- rejected responses without either suggestion source promised refinement but rendered no Refine action;
+- the controller regression used a safety double, leaving the real `SqlBuilderService::validateSafety()` behavior for a harmless `DO` value unproved.
+
+### RED
+
+The rejected component fixture explicitly provided empty top-level and exploratory-plan suggestion sources. Its attempt to click `Refine with: Rephrase this as a read-only report.` failed because only Retry was rendered:
+
+```text
+TestingLibraryElementError: Unable to find an accessible element with the role "button"
+and name "Refine with: Rephrase this as a read-only report."
+```
+
+The real-service regression was coverage-only and passed on first execution: `SELECT 'DO' AS action_word` was accepted, while `DELETE FROM inventory.instance__t` still raised `InvalidArgumentException`. No safety-policy production change was needed.
+
+### GREEN
+
+- Rejected responses now use two concise deterministic refinement choices only when both supplied suggestion sources are empty.
+- Existing response or exploratory-plan suggestions retain priority.
+- The fallback action preserves `onRefine(originalQuestion, suggestion)`; Retry remains present; classifier detail, Generated SQL, and Run controls remain absent.
+- `SqlBuilderServicePolicyViolationTest.php` now exercises the real safety service for both the harmless SELECT value and destructive rejection.
+
+### Focused verification
+
+```text
+Frontend Task 2 set: 3 files passed, 30 tests passed.
+Backend Task 1 set: all 3 scripts passed.
+```
+
+The backend output contained only the existing PHP 8.5 `ReflectionMethod::setAccessible()` deprecation.
+
+Final production verification also passed: TypeScript/Vite built 2,505 modules, PHP lint and `git diff --check` were clean, and no protected schema/cache/canonical artifacts changed. The existing Vite large-chunk advisory remains.

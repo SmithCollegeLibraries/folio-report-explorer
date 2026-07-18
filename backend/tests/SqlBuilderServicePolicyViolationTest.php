@@ -41,6 +41,24 @@ function assertSameValue($expected, $actual, string $message): void
     }
 }
 
+// Harmless words inside SELECT values must not be confused with executable SQL.
+$safeSelectAccepted = true;
+try {
+    SqlBuilderService::validateSafety("SELECT 'DO' AS action_word");
+} catch (\InvalidArgumentException $exception) {
+    $safeSelectAccepted = false;
+}
+assertSameValue(true, $safeSelectAccepted, 'A harmless action word in a SELECT value must pass safety validation.');
+
+// The real safety service must continue rejecting destructive statements.
+$destructiveRejected = false;
+try {
+    SqlBuilderService::validateSafety('DELETE FROM inventory.instance__t');
+} catch (\InvalidArgumentException $exception) {
+    $destructiveRejected = true;
+}
+assertSameValue(true, $destructiveRejected, 'Destructive SQL must remain rejected by safety validation.');
+
 // A query referencing a blocked PII table must raise a typed policy violation.
 $thrownClass = null;
 $isInvalidArg = false;
