@@ -126,6 +126,12 @@ $estimatedSql = str_replace(
     $estimatedBaseSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($estimatedSql, $estimatedContract)['status'], 'The advertised estimated PO-line price alternative must validate.');
+$quotedEligibilitySql = str_replace(
+    ['eligible_po_lines eligible ON eligible.po_line_id', 'eligible.po_line_id = pol.id'],
+    ['eligible_po_lines "where" ON "where".po_line_id', '"where".po_line_id = pol.id'],
+    $estimatedSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($quotedEligibilitySql, $estimatedContract)['status'], 'A quoted arbitrary alias on the enforcing eligibility INNER JOIN must validate.');
 semanticAssertRejectedFor(str_replace('pol.cost__po_line_estimated_price', 'invoice_line.total', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated price must resolve to the PO-line estimated-price column.');
 semanticAssertRejectedFor($correctedSql, $estimatedContract, 'investment_cost_basis', 'Paid fund distributions must not satisfy the estimated-price alternative.');
 $directEstimatedSql = str_replace(
@@ -138,6 +144,16 @@ semanticAssertRejectedFor(str_replace("    GROUP BY invoice_line.po_line_id\n), 
 semanticAssertRejectedFor(str_replace('GROUP BY invoice_line.po_line_id', 'GROUP BY invoice_line.id', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated eligibility must group by the selected PO-line id.');
 semanticAssertRejectedFor(str_replace('invoice_line.po_line_id AS po_line_id', 'invoice_line.id AS po_line_id', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated eligibility must select the invoice-line PO-line id.');
 semanticAssertRejectedFor(str_replace('eligible.po_line_id = pol.id', 'eligible.po_line_id = pol.instance_id', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated spending must join eligibility PO-line id to PO-line id.');
+foreach (['LEFT', 'RIGHT', 'FULL'] as $nullableEligibilityJoin) {
+    $nullableEligibilitySql = str_replace('JOIN eligible_po_lines eligible ON', $nullableEligibilityJoin . ' JOIN eligible_po_lines eligible ON', $estimatedSql);
+    semanticAssertRejectedFor($nullableEligibilitySql, $estimatedContract, 'investment_cost_basis', 'Estimated eligibility must restrict spending through an enforcing INNER JOIN.');
+}
+$whereOnlyEligibilitySql = str_replace(
+    'JOIN eligible_po_lines eligible ON eligible.po_line_id = pol.id',
+    "LEFT JOIN eligible_po_lines eligible ON eligible.po_line_id = eligible.po_line_id\n    WHERE eligible.po_line_id = pol.id",
+    $estimatedSql
+);
+semanticAssertRejectedFor($whereOnlyEligibilitySql, $estimatedContract, 'investment_cost_basis', 'A disconnected nullable eligibility join must not gain trust from a separate WHERE equality.');
 $estimatedDecoySql = str_replace(
     'WITH eligible_po_lines AS (',
     'WITH eligibility_decoy AS (SELECT 1 AS po_line_id), eligible_po_lines AS (',

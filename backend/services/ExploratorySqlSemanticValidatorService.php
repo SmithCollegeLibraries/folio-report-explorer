@@ -401,7 +401,13 @@ class ExploratorySqlSemanticValidatorService
             $name = (string)($binding['source'] ?? '');
             $eligibility = $analysis['ctes'][$name] ?? null;
             if ($eligibility === null
-                || !self::hasExactColumnEquality($spend, $alias . '.po_line_id', $poLine . '.id')) {
+                || !self::hasEnforcingJoinedEquality(
+                    $spend,
+                    $alias . '.po_line_id',
+                    $poLine . '.id',
+                    (string)$alias,
+                    $name
+                )) {
                 continue;
             }
             $invoiceLine = self::aliasForSource($eligibility, 'invoice.invoice_lines__t');
@@ -416,6 +422,41 @@ class ExploratorySqlSemanticValidatorService
             $candidates[] = $eligibility;
         }
         return count($candidates) === 1 ? $candidates[0] : null;
+    }
+
+    private static function hasEnforcingJoinedEquality(
+        array $scope,
+        string $left,
+        string $right,
+        string $joinedAlias,
+        string $joinedSource
+    ): bool {
+        $registeredJoin = false;
+        foreach (($scope['joins'] ?? []) as $join) {
+            if (($join['type'] ?? null) === 'INNER'
+                && ($join['sourceKind'] ?? null) === 'cte'
+                && ($join['alias'] ?? null) === $joinedAlias
+                && ($join['source'] ?? null) === $joinedSource) {
+                $registeredJoin = true;
+                break;
+            }
+        }
+        if (!$registeredJoin) {
+            return false;
+        }
+        foreach (($scope['predicates']['columnComparisons'] ?? []) as $comparison) {
+            $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
+            if (($comparison['operator'] ?? null) === '='
+                && ($comparison['origin'] ?? null) === 'join_on'
+                && ($comparison['joinType'] ?? null) === 'INNER'
+                && ($comparison['joinedAlias'] ?? null) === $joinedAlias
+                && ($comparison['joinedSourceKind'] ?? null) === 'cte'
+                && ($comparison['joinedSource'] ?? null) === $joinedSource
+                && ($actual === [$left, $right] || $actual === [$right, $left])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function spendCte(array $analysis): ?array
