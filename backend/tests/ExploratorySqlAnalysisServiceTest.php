@@ -13,6 +13,17 @@ function analysisAssertSame($expected, $actual, string $message): void
     }
 }
 
+function analysisItemsByAlias(array $items): array
+{
+    $byAlias = [];
+    foreach ($items as $item) {
+        if (($item['alias'] ?? null) !== null) {
+            $byAlias[$item['alias']] = $item;
+        }
+    }
+    return $byAlias;
+}
+
 $correctedSql = <<<'SQL'
 WITH spend_by_instance AS (
     SELECT pol.instance_id,
@@ -94,6 +105,53 @@ analysisAssertSame('purchase_count', $analysis['orderBy'][0]['expression'], 'Fin
 analysisAssertSame('DESC', $analysis['orderBy'][0]['direction'], 'Final ranking direction must be captured.');
 analysisAssertSame(6, count($analysis['selectItems']), 'Final selected expressions must be inspectable.');
 analysisAssertSame(false, $analysis['ambiguous'], 'Supported CTE SQL must analyze deterministically.');
+$spendItems = analysisItemsByAlias($analysis['ctes']['spend_by_instance']['selectItems']);
+analysisAssertSame(
+    [
+        'operator' => '*',
+        'factors' => [
+            ['columns' => ['fd.total'], 'exactColumn' => 'fd.total', 'numericLiteral' => null],
+            ['columns' => ['fd.fund_distributions__value'], 'exactColumn' => 'fd.fund_distributions__value', 'numericLiteral' => null],
+            ['columns' => [], 'exactColumn' => null, 'numericLiteral' => '0.01'],
+        ],
+    ],
+    $spendItems['spend']['aggregateMultiplication'],
+    'Spend analysis must preserve exact multiplication factors and scaling.'
+);
+analysisAssertSame(
+    [['column' => 'invoice.payment_date', 'operator' => '>=', 'expression' => 'current_date - interval 5 years']],
+    $analysis['ctes']['spend_by_instance']['predicates']['dateWindows'],
+    'Purchase window evidence must bind the exact date column, operator, and interval.'
+);
+$finalItems = analysisItemsByAlias($analysis['selectItems']);
+analysisAssertSame(
+    ['function' => 'sum', 'column' => 'circulation_by_instance.circulation'],
+    $finalItems['checkouts_per_dollar']['division']['numeratorAggregate'],
+    'ROI analysis must preserve the exact numerator aggregate.'
+);
+analysisAssertSame(
+    ['function' => 'sum', 'column' => 'spend_by_instance.spend'],
+    $finalItems['checkouts_per_dollar']['division']['denominatorAggregate'],
+    'ROI analysis must preserve the exact zero-safe denominator aggregate.'
+);
+foreach (['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'] as $numericAlias) {
+    analysisAssertSame(true, $finalItems[$numericAlias]['provenNumeric'], 'Required measures must have positive numeric-expression proof.');
+}
+$classItems = analysisItemsByAlias($analysis['ctes']['class_by_instance']['selectItems']);
+analysisAssertSame('substring_alpha_prefix', $classItems['call_number_class']['callNumberClassDerivation'], 'Substring class extraction must be registered structurally.');
+
+$unsafeBoolean = ExploratorySqlAnalysisService::analyze(
+    "SELECT invoice.id FROM invoice.invoices__t invoice WHERE invoice.campus = 'Smith College' OR 1 = 1"
+);
+analysisAssertSame(true, $unsafeBoolean['ambiguous'], 'OR in governed predicate context must fail closed.');
+$supportedConjunction = ExploratorySqlAnalysisService::analyze(
+    "SELECT invoice.id FROM invoice.invoices__t invoice WHERE invoice.campus = 'Smith College' AND invoice.status = 'paid'"
+);
+analysisAssertSame(false, $supportedConjunction['ambiguous'], 'A conjunction of supported simple predicates must remain deterministic.');
+$unknownNumeric = ExploratorySqlAnalysisService::analyze(
+    'SELECT CONCAT(SUM(invoice.total)) AS spend FROM invoice.invoices__t invoice'
+);
+analysisAssertSame(false, $unknownNumeric['selectItems'][0]['provenNumeric'], 'Unknown functions must not receive numeric-expression proof.');
 
 $flawed = ExploratorySqlAnalysisService::analyze($capturedProductionSql);
 analysisAssertSame(true, in_array('total_spent', $flawed['formattedAliases'], true), 'TO_CHAR spending must be marked text-formatted.');

@@ -94,8 +94,7 @@ class ExploratorySqlSemanticValidatorService
         if (!in_array($expected, ['payment_date', 'invoice_date'], true)) {
             return self::GUIDANCE['purchase_date_basis'];
         }
-        $column = $expected;
-        return $spend !== null && self::containsColumn($spend['predicates']['dateColumns'] ?? [], $column)
+        return $spend !== null && self::qualifyingWindow($spend, $expected) !== null
             ? null : self::GUIDANCE['purchase_date_basis'];
     }
 
@@ -106,23 +105,21 @@ class ExploratorySqlSemanticValidatorService
         }
         $spend = self::spendCte($analysis);
         $item = self::itemForAlias($spend['selectItems'] ?? [], 'spend');
-        $expression = strtolower((string)($item['expression'] ?? ''));
-        $occurrences = $item['referencedColumnOccurrences'] ?? [];
-        $valid = false;
-        foreach (($item['multiplicationGroups'] ?? []) as $group) {
-            $amountFactors = self::factorsForColumn($group, 'total');
-            $percentageFactors = self::factorsForColumn($group, 'fund_distributions__value');
-            $amountColumn = $amountFactors[0]['columns'][0] ?? '';
-            $percentageColumn = $percentageFactors[0]['columns'][0] ?? '';
-            if (count($amountFactors) === 1 && count($percentageFactors) === 1
-                && self::columnQualifier($amountColumn) === self::columnQualifier($percentageColumn)
-                && count(array_keys($occurrences, $amountColumn, true)) === 1
-                && count(array_keys($occurrences, $percentageColumn, true)) === 1
-                && (self::hasScaleFactor($group) || strpos($expression, '/ 100') !== false)) {
-                $valid = true;
-                break;
-            }
-        }
+        $multiplication = $item['aggregateMultiplication'] ?? null;
+        $factors = $multiplication['factors'] ?? [];
+        $amountFactors = self::factorsForColumn($factors, 'total');
+        $percentageFactors = self::factorsForColumn($factors, 'fund_distributions__value');
+        $scaleFactors = array_values(array_filter($factors, static function (array $factor): bool {
+            return ($factor['columns'] ?? []) === [] && ($factor['numericLiteral'] ?? null) === '0.01';
+        }));
+        $amountColumn = $amountFactors[0]['exactColumn'] ?? '';
+        $percentageColumn = $percentageFactors[0]['exactColumn'] ?? '';
+        $valid = ($multiplication['operator'] ?? null) === '*'
+            && count($factors) === 3
+            && count($amountFactors) === 1
+            && count($percentageFactors) === 1
+            && count($scaleFactors) === 1
+            && self::columnQualifier($amountColumn) === self::columnQualifier($percentageColumn);
         return $valid ? null : self::GUIDANCE['investment_cost_basis'];
     }
 
@@ -152,13 +149,15 @@ class ExploratorySqlSemanticValidatorService
         }
         $circulation = self::circulationItemCte($analysis);
         $spend = self::spendCte($analysis);
-        if ($circulation === null || $spend === null
-            || !self::containsColumn($circulation['predicates']['dateColumns'] ?? [], 'created_date')) {
+        if ($circulation === null || $spend === null) {
             return self::GUIDANCE['circulation_window'];
         }
-        $purchaseWindow = self::dateWindowSignature(self::predicateText($spend), ['payment_date', 'invoice_date']);
-        $circulationWindow = self::dateWindowSignature(self::predicateText($circulation), ['created_date']);
-        return $purchaseWindow !== null && $purchaseWindow === $circulationWindow
+        $purchaseBasis = self::purchaseDateBasis($contract);
+        $purchaseWindow = $purchaseBasis === null ? null : self::qualifyingWindow($spend, $purchaseBasis);
+        $circulationWindow = self::qualifyingWindow($circulation, 'created_date');
+        return $purchaseWindow !== null && $circulationWindow !== null
+            && $purchaseWindow['operator'] === $circulationWindow['operator']
+            && $purchaseWindow['expression'] === $circulationWindow['expression']
             ? null : self::GUIDANCE['circulation_window'];
     }
 
@@ -224,9 +223,8 @@ class ExploratorySqlSemanticValidatorService
             $item = self::itemForAlias($analysis['selectItems'] ?? [], $alias);
             $division = $item['division'] ?? null;
             if ($division === null
-                || !self::hasMeasureLineage($division['numeratorColumns'] ?? [], $expected[0], $analysis)
-                || !self::hasMeasureLineage($division['denominatorColumns'] ?? [], $expected[1], $analysis)
-                || ($division['zeroSafeDenominatorColumns'] ?? []) !== ($division['denominatorColumns'] ?? [])) {
+                || !self::hasAggregateMeasureLineage($division['numeratorAggregate'] ?? null, $expected[0], $analysis)
+                || !self::hasAggregateMeasureLineage($division['denominatorAggregate'] ?? null, $expected[1], $analysis)) {
                 return self::GUIDANCE['roi_formula'];
             }
         }
@@ -286,8 +284,16 @@ class ExploratorySqlSemanticValidatorService
     private static function validateNumericOutputTypes(array $analysis, array $requirement, array $contract): ?string
     {
         $measures = ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'];
-        return array_intersect($measures, $analysis['formattedAliases'] ?? []) === []
-            ? null : self::GUIDANCE['numeric_output_types'];
+        if (array_intersect($measures, $analysis['formattedAliases'] ?? []) !== []) {
+            return self::GUIDANCE['numeric_output_types'];
+        }
+        foreach ($measures as $measure) {
+            $item = self::itemForAlias($analysis['selectItems'] ?? [], $measure);
+            if ($item === null || empty($item['provenNumeric'])) {
+                return self::GUIDANCE['numeric_output_types'];
+            }
+        }
+        return null;
     }
 
     private static function spendCte(array $analysis): ?array
@@ -352,16 +358,6 @@ class ExploratorySqlSemanticValidatorService
         return false;
     }
 
-    private static function containsColumn(array $columns, string $suffix): bool
-    {
-        foreach ($columns as $column) {
-            if (substr($column, -strlen($suffix)) === $suffix) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static function containsExpression(array $expressions, string $needle): bool
     {
         foreach ($expressions as $expression) {
@@ -375,8 +371,7 @@ class ExploratorySqlSemanticValidatorService
     private static function factorsForColumn(array $factors, string $leaf): array
     {
         return array_values(array_filter($factors, static function (array $factor) use ($leaf): bool {
-            $columns = $factor['columns'] ?? [];
-            return count($columns) === 1 && self::columnLeaf($columns[0]) === $leaf;
+            return isset($factor['exactColumn']) && self::columnLeaf($factor['exactColumn']) === $leaf;
         }));
     }
 
@@ -393,6 +388,13 @@ class ExploratorySqlSemanticValidatorService
         return isset($ctes[$qualifier])
             && self::itemForAlias($ctes[$qualifier]['selectItems'] ?? [], 'circulation') !== null
             && self::hasTableLineage($qualifier, $ctes, 'audit_loan', []);
+    }
+
+    private static function hasAggregateMeasureLineage(?array $aggregate, string $measure, array $analysis): bool
+    {
+        return ($aggregate['function'] ?? null) === 'sum'
+            && isset($aggregate['column'])
+            && self::hasMeasureLineage([$aggregate['column']], $measure, $analysis);
     }
 
     private static function hasTableLineage(string $name, array $ctes, string $tableNeedle, array $visited): bool
@@ -425,17 +427,6 @@ class ExploratorySqlSemanticValidatorService
         return implode('.', $parts);
     }
 
-    private static function hasScaleFactor(array $factors): bool
-    {
-        foreach ($factors as $factor) {
-            if (($factor['columns'] ?? []) === []
-                && preg_match('/(?:^|[^0-9.])0\.01(?:[^0-9.]|$)/', (string)($factor['expression'] ?? '')) === 1) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static function expressionLeaf(string $expression): ?string
     {
         if (preg_match('/^(?:[a-z_][a-z0-9_$-]*\.)?([a-z_][a-z0-9_$-]*)$/', $expression, $matches) !== 1) {
@@ -451,12 +442,11 @@ class ExploratorySqlSemanticValidatorService
             return false;
         }
         $item = self::itemForAlias($ctes[$matches[1]]['selectItems'] ?? [], 'call_number_class');
-        foreach (($item['referencedColumns'] ?? []) as $column) {
-            if (self::columnLeaf($column) === 'effective_call_number_components__call_number') {
-                return true;
-            }
-        }
-        return false;
+        return in_array(
+            $item['callNumberClassDerivation'] ?? null,
+            ['substring_alpha_prefix', 'documented_lc_dewey_case'],
+            true
+        );
     }
 
     private static function expressionForAlias(array $items, string $alias): ?string
@@ -485,21 +475,27 @@ class ExploratorySqlSemanticValidatorService
         return array_merge([$analysis], array_values($analysis['ctes'] ?? []));
     }
 
-    private static function predicateText(array $scope): string
+    private static function purchaseDateBasis(array $contract): ?string
     {
-        $predicates = $scope['predicates'] ?? [];
-        return strtolower(trim((string)($predicates['where'] ?? '') . ' ' . implode(' ', $predicates['joins'] ?? [])));
-    }
-
-    private static function dateWindowSignature(string $predicates, array $dateColumns): ?string
-    {
-        foreach ($dateColumns as $column) {
-            $pattern = '/(?:^|\.)' . preg_quote($column, '/') . '\s*(>=|>|=)\s*(current_date\s*-\s*interval\s+\'?[0-9]+\s+[a-z]+\'?)/';
-            if (preg_match($pattern, $predicates, $matches) === 1) {
-                return $matches[1] . ' ' . $matches[2];
+        foreach (($contract['requirements'] ?? []) as $requirement) {
+            if (($requirement['key'] ?? null) === 'purchase_date_basis') {
+                $basis = $requirement['parameters']['value'] ?? null;
+                return in_array($basis, ['payment_date', 'invoice_date'], true) ? $basis : null;
             }
         }
         return null;
+    }
+
+    private static function qualifyingWindow(array $scope, string $expectedColumn): ?array
+    {
+        $facts = $scope['predicates']['dateWindows'] ?? [];
+        if (count($facts) !== 1
+            || self::columnLeaf((string)($facts[0]['column'] ?? '')) !== $expectedColumn
+            || ($facts[0]['operator'] ?? null) !== '>='
+            || ($facts[0]['expression'] ?? null) !== 'current_date - interval 5 years') {
+            return null;
+        }
+        return $facts[0];
     }
 
     private static function violation(array $requirement, string $category, string $guidance): array
