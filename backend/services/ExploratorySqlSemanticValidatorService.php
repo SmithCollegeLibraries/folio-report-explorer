@@ -105,11 +105,24 @@ class ExploratorySqlSemanticValidatorService
             return self::GUIDANCE['investment_cost_basis'];
         }
         $spend = self::spendCte($analysis);
-        $expression = self::expressionForAlias($spend['selectItems'] ?? [], 'spend');
-        $valid = $expression !== null
-            && substr_count($expression, 'fund_distributions__value') === 1
-            && strpos($expression, '.total') !== false
-            && (strpos($expression, '0.01') !== false || strpos($expression, '/ 100') !== false);
+        $item = self::itemForAlias($spend['selectItems'] ?? [], 'spend');
+        $expression = strtolower((string)($item['expression'] ?? ''));
+        $occurrences = $item['referencedColumnOccurrences'] ?? [];
+        $valid = false;
+        foreach (($item['multiplicationGroups'] ?? []) as $group) {
+            $amountFactors = self::factorsForColumn($group, 'total');
+            $percentageFactors = self::factorsForColumn($group, 'fund_distributions__value');
+            $amountColumn = $amountFactors[0]['columns'][0] ?? '';
+            $percentageColumn = $percentageFactors[0]['columns'][0] ?? '';
+            if (count($amountFactors) === 1 && count($percentageFactors) === 1
+                && self::columnQualifier($amountColumn) === self::columnQualifier($percentageColumn)
+                && count(array_keys($occurrences, $amountColumn, true)) === 1
+                && count(array_keys($occurrences, $percentageColumn, true)) === 1
+                && (self::hasScaleFactor($group) || strpos($expression, '/ 100') !== false)) {
+                $valid = true;
+                break;
+            }
+        }
         return $valid ? null : self::GUIDANCE['investment_cost_basis'];
     }
 
@@ -125,10 +138,9 @@ class ExploratorySqlSemanticValidatorService
             || $spending === null || empty($spending['aggregate'])) {
             return self::GUIDANCE['spend_before_item_join'];
         }
-        foreach (($spend['tables'] ?? []) as $table) {
-            if (strpos($table, 'inventory.') === 0 || strpos($table, 'circulation.') === 0) {
-                return self::GUIDANCE['spend_before_item_join'];
-            }
+        $spendName = self::spendCteName($analysis);
+        if ($spendName === null || self::hasItemOrCirculationLineage($spendName, $analysis['ctes'] ?? [], [])) {
+            return self::GUIDANCE['spend_before_item_join'];
         }
         return null;
     }
@@ -157,9 +169,17 @@ class ExploratorySqlSemanticValidatorService
             || !self::containsExpression($circulation['groupBy'] ?? [], 'item.id')) {
             return self::GUIDANCE['circulation_item_grain'];
         }
-        $predicates = self::predicateText($circulation);
-        return strpos($predicates, 'loan__action') !== false && strpos($predicates, 'checkedout') !== false
-            ? null : self::GUIDANCE['circulation_item_grain'];
+        $approved = ['checkedout', 'checkedoutthroughoverride'];
+        foreach (($circulation['predicates']['literalPredicates'] ?? []) as $predicate) {
+            $values = array_map('strtolower', $predicate['values'] ?? []);
+            if (self::columnLeaf((string)($predicate['column'] ?? '')) === 'loan__action'
+                && empty($predicate['negated'])
+                && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
+                && $values !== [] && array_diff($values, $approved) === []) {
+                return null;
+            }
+        }
+        return self::GUIDANCE['circulation_item_grain'];
     }
 
     private static function validateCallNumberGrouping(array $analysis, array $requirement, array $contract): ?string
@@ -168,8 +188,19 @@ class ExploratorySqlSemanticValidatorService
             return self::GUIDANCE['call_number_grouping'];
         }
         $groupBy = $analysis['groupBy'] ?? [];
-        return count($groupBy) === 1 && strpos($groupBy[0], 'call_number_class') !== false
-            ? null : self::GUIDANCE['call_number_grouping'];
+        if (count($groupBy) !== 1) {
+            return self::GUIDANCE['call_number_grouping'];
+        }
+        foreach (($analysis['selectItems'] ?? []) as $item) {
+            $expression = strtolower((string)($item['expression'] ?? ''));
+            $alias = strtolower((string)($item['alias'] ?? ''));
+            if (self::expressionLeaf($expression) === 'call_number_class'
+                && ($groupBy[0] === $expression || ($alias !== '' && $groupBy[0] === $alias))
+                && self::hasCallNumberLineage($expression, $analysis['ctes'] ?? [])) {
+                return null;
+            }
+        }
+        return self::GUIDANCE['call_number_grouping'];
     }
 
     private static function validateRequiredOutputMeasures(array $analysis, array $requirement, array $contract): ?string
@@ -190,11 +221,12 @@ class ExploratorySqlSemanticValidatorService
             'cost_per_checkout' => ['spend', 'circulation'],
         ];
         foreach ($operands as $alias => $expected) {
-            $expression = self::expressionForAlias($analysis['selectItems'] ?? [], $alias);
-            $division = $expression === null ? false : strpos($expression, '/');
-            if ($division === false || !self::isZeroSafe($expression)
-                || strpos(substr($expression, 0, $division), $expected[0]) === false
-                || strpos(substr($expression, $division + 1), $expected[1]) === false) {
+            $item = self::itemForAlias($analysis['selectItems'] ?? [], $alias);
+            $division = $item['division'] ?? null;
+            if ($division === null
+                || !self::hasMeasureLineage($division['numeratorColumns'] ?? [], $expected[0], $analysis)
+                || !self::hasMeasureLineage($division['denominatorColumns'] ?? [], $expected[1], $analysis)
+                || ($division['zeroSafeDenominatorColumns'] ?? []) !== ($division['denominatorColumns'] ?? [])) {
                 return self::GUIDANCE['roi_formula'];
             }
         }
@@ -220,9 +252,14 @@ class ExploratorySqlSemanticValidatorService
             return self::GUIDANCE['campus_scope'];
         }
         foreach (self::allScopes($analysis) as $scope) {
-            $text = self::predicateText($scope);
-            if (strpos($text, 'campus') !== false && $expected !== '' && strpos($text, $expected) !== false) {
-                return null;
+            foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
+                $values = array_map('strtolower', $predicate['values'] ?? []);
+                if (self::columnLeaf((string)($predicate['column'] ?? '')) === 'campus'
+                    && empty($predicate['negated'])
+                    && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
+                    && $values === [$expected]) {
+                    return null;
+                }
             }
         }
         return self::GUIDANCE['campus_scope'];
@@ -262,6 +299,36 @@ class ExploratorySqlSemanticValidatorService
             }
         }
         return null;
+    }
+
+    private static function spendCteName(array $analysis): ?string
+    {
+        foreach (($analysis['ctes'] ?? []) as $name => $cte) {
+            if (self::containsTable($cte['tables'] ?? [], 'fund_distributions')
+                && self::containsTable($cte['tables'] ?? [], 'po_line')) {
+                return $name;
+            }
+        }
+        return null;
+    }
+
+    private static function hasItemOrCirculationLineage(string $name, array $ctes, array $visited): bool
+    {
+        if (isset($visited[$name]) || !isset($ctes[$name])) {
+            return !isset($ctes[$name]);
+        }
+        $visited[$name] = true;
+        foreach (($ctes[$name]['tables'] ?? []) as $table) {
+            if (strpos($table, 'inventory.') === 0 || strpos($table, 'circulation.') === 0) {
+                return true;
+            }
+        }
+        foreach (($ctes[$name]['dependencies'] ?? []) as $dependency) {
+            if (self::hasItemOrCirculationLineage($dependency, $ctes, $visited)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function circulationItemCte(array $analysis): ?array
@@ -305,6 +372,93 @@ class ExploratorySqlSemanticValidatorService
         return false;
     }
 
+    private static function factorsForColumn(array $factors, string $leaf): array
+    {
+        return array_values(array_filter($factors, static function (array $factor) use ($leaf): bool {
+            $columns = $factor['columns'] ?? [];
+            return count($columns) === 1 && self::columnLeaf($columns[0]) === $leaf;
+        }));
+    }
+
+    private static function hasMeasureLineage(array $columns, string $measure, array $analysis): bool
+    {
+        if (count($columns) !== 1 || self::columnLeaf($columns[0]) !== $measure) {
+            return false;
+        }
+        $qualifier = self::columnQualifier($columns[0]);
+        $ctes = $analysis['ctes'] ?? [];
+        if ($measure === 'spend') {
+            return $qualifier === self::spendCteName($analysis);
+        }
+        return isset($ctes[$qualifier])
+            && self::itemForAlias($ctes[$qualifier]['selectItems'] ?? [], 'circulation') !== null
+            && self::hasTableLineage($qualifier, $ctes, 'audit_loan', []);
+    }
+
+    private static function hasTableLineage(string $name, array $ctes, string $tableNeedle, array $visited): bool
+    {
+        if (isset($visited[$name]) || !isset($ctes[$name])) {
+            return false;
+        }
+        $visited[$name] = true;
+        if (self::containsTable($ctes[$name]['tables'] ?? [], $tableNeedle)) {
+            return true;
+        }
+        foreach (($ctes[$name]['dependencies'] ?? []) as $dependency) {
+            if (self::hasTableLineage($dependency, $ctes, $tableNeedle, $visited)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function columnLeaf(string $column): string
+    {
+        $parts = explode('.', strtolower($column));
+        return (string)end($parts);
+    }
+
+    private static function columnQualifier(string $column): string
+    {
+        $parts = explode('.', strtolower($column));
+        array_pop($parts);
+        return implode('.', $parts);
+    }
+
+    private static function hasScaleFactor(array $factors): bool
+    {
+        foreach ($factors as $factor) {
+            if (($factor['columns'] ?? []) === []
+                && preg_match('/(?:^|[^0-9.])0\.01(?:[^0-9.]|$)/', (string)($factor['expression'] ?? '')) === 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function expressionLeaf(string $expression): ?string
+    {
+        if (preg_match('/^(?:[a-z_][a-z0-9_$-]*\.)?([a-z_][a-z0-9_$-]*)$/', $expression, $matches) !== 1) {
+            return null;
+        }
+        return $matches[1];
+    }
+
+    private static function hasCallNumberLineage(string $expression, array $ctes): bool
+    {
+        if (preg_match('/^([a-z_][a-z0-9_$-]*)\.call_number_class$/', $expression, $matches) !== 1
+            || !isset($ctes[$matches[1]])) {
+            return false;
+        }
+        $item = self::itemForAlias($ctes[$matches[1]]['selectItems'] ?? [], 'call_number_class');
+        foreach (($item['referencedColumns'] ?? []) as $column) {
+            if (self::columnLeaf($column) === 'effective_call_number_components__call_number') {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static function expressionForAlias(array $items, string $alias): ?string
     {
         $item = self::itemForAlias($items, $alias);
@@ -324,12 +478,6 @@ class ExploratorySqlSemanticValidatorService
     private static function hasFilterProvenance(array $permitted, string $filter, string $provenance): bool
     {
         return isset($permitted[$filter]) && ($permitted[$filter]['provenance'] ?? null) === $provenance;
-    }
-
-    private static function isZeroSafe(string $expression): bool
-    {
-        return strpos($expression, 'nullif (') !== false
-            || (strpos($expression, 'case when ') !== false && strpos($expression, '= 0 then null') !== false);
     }
 
     private static function allScopes(array $analysis): array

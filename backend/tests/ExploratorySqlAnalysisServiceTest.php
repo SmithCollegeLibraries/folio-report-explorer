@@ -101,6 +101,28 @@ analysisAssertSame(true, in_array('cost_per_checkout', $flawed['formattedAliases
 analysisAssertSame('pot.date_ordered', $flawed['predicates']['dateColumns'][0], 'Order-date filtering must not be mistaken for payment date.');
 analysisAssertSame(true, in_array('item.material_type_id', $flawed['predicates']['governedFilters'], true), 'Governed lookup filters must be inspectable.');
 
+$literalPredicateAnalysis = ExploratorySqlAnalysisService::analyze(
+    "SELECT invoice.id FROM invoice.invoices__t invoice WHERE invoice.campus = 'Smith College' AND invoice.status NOT IN ('cancelled')"
+);
+analysisAssertSame(
+    [
+        ['column' => 'invoice.campus', 'operator' => '=', 'values' => ['Smith College'], 'negated' => false],
+        ['column' => 'invoice.status', 'operator' => 'IN', 'values' => ['cancelled'], 'negated' => true],
+    ],
+    $literalPredicateAnalysis['predicates']['literalPredicates'],
+    'Literal predicate evidence must preserve exact columns, operators, values, and negation.'
+);
+
+$malformedClauseOrder = ExploratorySqlAnalysisService::analyze(
+    'SELECT item.id FROM inventory.item__t item LIMIT 10 ORDER BY item.id DESC'
+);
+analysisAssertSame(true, $malformedClauseOrder['ambiguous'], 'LIMIT before ORDER BY must fail closed.');
+
+foreach (['CAST(SUM(amount) AS TEXT)', 'SUM(amount)::text', 'SUM(amount)::varchar', 'SUM(amount)::char'] as $formattedExpression) {
+    $formatted = ExploratorySqlAnalysisService::analyze('SELECT ' . $formattedExpression . ' AS spend FROM invoice.invoice_lines__t');
+    analysisAssertSame(['spend'], $formatted['formattedAliases'], 'Text casts must mark required aliases as formatted.');
+}
+
 foreach ([
     'SELECT 1 UNION SELECT 2',
     'WITH RECURSIVE tree AS (SELECT 1) SELECT * FROM tree',

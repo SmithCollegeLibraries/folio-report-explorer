@@ -246,8 +246,12 @@ class ExploratorySqlAnalysisService
                 'expression' => self::expressionText($expressionTokens),
                 'alias' => $alias,
                 'referencedAliases' => self::referencedAliases($expressionTokens),
+                'referencedColumns' => self::referencedColumns($expressionTokens),
+                'referencedColumnOccurrences' => self::referencedColumnOccurrences($expressionTokens),
                 'functions' => $functions,
                 'aggregate' => count(array_intersect($functions, ['avg', 'count', 'max', 'min', 'sum'])) > 0,
+                'multiplicationGroups' => self::multiplicationGroups($expressionTokens),
+                'division' => self::divisionStructure($expressionTokens),
             ];
             if ($alias !== null) {
                 if (isset($scope['outputAliases'][$alias])) {
@@ -272,14 +276,17 @@ class ExploratorySqlAnalysisService
             }
         }
         $allPredicateTokens = [];
+        $literalPredicates = [];
         foreach ($predicateGroups as $group) {
             $allPredicateTokens = array_merge($allPredicateTokens, $group);
+            $literalPredicates = array_merge($literalPredicates, self::literalPredicates($group));
         }
         $scope['predicates'] = [
             'where' => $whereTokens === [] ? null : self::expressionText($whereTokens),
             'joins' => array_values(array_filter(array_column($scope['joins'], 'predicate'))),
             'dateColumns' => self::datePredicateColumns($allPredicateTokens),
             'governedFilters' => self::governedFilters($allPredicateTokens),
+            'literalPredicates' => $literalPredicates,
         ];
         if (self::hasUnsupportedInFilter($allPredicateTokens)) {
             $scope['ambiguous'] = true;
@@ -419,6 +426,158 @@ class ExploratorySqlAnalysisService
         return array_values(array_unique($aliases));
     }
 
+    private static function referencedColumns(array $tokens): array
+    {
+        return array_values(array_unique(self::referencedColumnOccurrences($tokens)));
+    }
+
+    private static function referencedColumnOccurrences(array $tokens): array
+    {
+        $columns = [];
+        for ($index = 0; $index + 2 < count($tokens); $index++) {
+            if (($tokens[$index]['kind'] ?? '') === 'identifier'
+                && ($tokens[$index + 1]['value'] ?? '') === '.'
+                && ($tokens[$index + 2]['kind'] ?? '') === 'identifier') {
+                $columns[] = $tokens[$index]['value'] . '.' . $tokens[$index + 2]['value'];
+            }
+        }
+        return $columns;
+    }
+
+    private static function multiplicationGroups(array $tokens): array
+    {
+        $groups = [];
+        $depths = array_values(array_unique(array_column($tokens, 'depth')));
+        foreach ($depths as $depth) {
+            $start = 0;
+            for ($index = 0; $index <= count($tokens); $index++) {
+                $atBoundary = $index === count($tokens)
+                    || (($tokens[$index]['depth'] ?? -1) === $depth
+                        && in_array($tokens[$index]['value'] ?? '', ['+', '-', '/', ',', '='], true));
+                if (!$atBoundary) {
+                    continue;
+                }
+                $segment = array_slice($tokens, $start, $index - $start);
+                $factors = self::splitAtDepth($segment, '*', $depth);
+                if (count($factors) > 1) {
+                    $groups[] = array_map(static function (array $factor): array {
+                        return [
+                            'expression' => self::expressionText($factor),
+                            'columns' => self::referencedColumns($factor),
+                        ];
+                    }, $factors);
+                }
+                $start = $index + 1;
+            }
+        }
+        return $groups;
+    }
+
+    private static function divisionStructure(array $tokens): ?array
+    {
+        if ($tokens === []) {
+            return null;
+        }
+        $base = self::baseDepth($tokens);
+        $divisionIndexes = [];
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) === $base && ($token['value'] ?? '') === '/') {
+                $divisionIndexes[] = $index;
+            }
+        }
+        if (count($divisionIndexes) !== 1) {
+            return null;
+        }
+        $index = $divisionIndexes[0];
+        $numerator = array_slice($tokens, 0, $index);
+        $denominator = array_slice($tokens, $index + 1);
+        return [
+            'numeratorColumns' => self::referencedColumns($numerator),
+            'denominatorColumns' => self::referencedColumns($denominator),
+            'zeroSafeDenominatorColumns' => self::zeroSafeOperandColumns($denominator),
+        ];
+    }
+
+    private static function zeroSafeOperandColumns(array $tokens): array
+    {
+        $tokens = self::withoutWrappingParentheses($tokens);
+        if (count($tokens) >= 5 && self::isKeyword($tokens[0], 'NULLIF')
+            && ($tokens[1]['value'] ?? '') === '(' && end($tokens)['value'] === ')') {
+            $arguments = self::splitTopLevel(array_slice($tokens, 2, -1), ',');
+            if (count($arguments) === 2 && count($arguments[1]) === 1
+                && ($arguments[1][0]['kind'] ?? '') === 'number'
+                && ($arguments[1][0]['value'] ?? '') === '0') {
+                return self::referencedColumns($arguments[0]);
+            }
+            return [];
+        }
+
+        $base = self::baseDepth($tokens);
+        if (!self::isKeyword($tokens[0] ?? [], 'CASE') || !self::isKeyword(end($tokens) ?: [], 'END')) {
+            return [];
+        }
+        $when = self::findKeywordIndex($tokens, 'WHEN', 1, $base);
+        $then = self::findKeywordIndex($tokens, 'THEN', 1, $base);
+        $else = self::findKeywordIndex($tokens, 'ELSE', 1, $base);
+        if ($when === null || $then === null || $else === null || !self::isKeyword($tokens[$then + 1] ?? [], 'NULL')) {
+            return [];
+        }
+        $condition = array_slice($tokens, $when + 1, $then - $when - 1);
+        $equals = null;
+        foreach ($condition as $index => $token) {
+            if (($token['depth'] ?? -1) === self::baseDepth($condition) && ($token['value'] ?? '') === '=') {
+                $equals = $index;
+                break;
+            }
+        }
+        if ($equals === null || count($condition) !== $equals + 2
+            || ($condition[$equals + 1]['kind'] ?? '') !== 'number'
+            || ($condition[$equals + 1]['value'] ?? '') !== '0') {
+            return [];
+        }
+        $conditionOperand = array_slice($condition, 0, $equals);
+        $elseOperand = array_slice($tokens, $else + 1, count($tokens) - $else - 2);
+        if (self::expressionText($conditionOperand) !== self::expressionText($elseOperand)) {
+            return [];
+        }
+        return self::referencedColumns($elseOperand);
+    }
+
+    private static function withoutWrappingParentheses(array $tokens): array
+    {
+        while (count($tokens) >= 2 && ($tokens[0]['value'] ?? '') === '(' && (end($tokens)['value'] ?? '') === ')') {
+            $base = $tokens[0]['depth'] ?? 0;
+            $closesAtEnd = true;
+            foreach ($tokens as $index => $token) {
+                if ($index < count($tokens) - 1 && ($token['value'] ?? '') === ')' && ($token['depth'] ?? -1) === $base) {
+                    $closesAtEnd = false;
+                    break;
+                }
+            }
+            if (!$closesAtEnd) {
+                break;
+            }
+            $tokens = array_slice($tokens, 1, -1);
+        }
+        return $tokens;
+    }
+
+    private static function splitAtDepth(array $tokens, string $separator, int $depth): array
+    {
+        $parts = [];
+        $start = 0;
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) === $depth && ($token['value'] ?? '') === $separator) {
+                $parts[] = array_slice($tokens, $start, $index - $start);
+                $start = $index + 1;
+            }
+        }
+        $parts[] = array_slice($tokens, $start);
+        return array_values(array_filter($parts, static function (array $part): bool {
+            return $part !== [];
+        }));
+    }
+
     private static function datePredicateColumns(array $tokens): array
     {
         $columns = [];
@@ -450,6 +609,100 @@ class ExploratorySqlAnalysisService
             }
         }
         return array_values(array_unique($columns));
+    }
+
+    private static function literalPredicates(array $tokens): array
+    {
+        $predicates = [];
+        for ($index = 0; $index + 3 < count($tokens); $index++) {
+            if (($tokens[$index]['kind'] ?? '') !== 'identifier'
+                || ($tokens[$index + 1]['value'] ?? '') !== '.'
+                || ($tokens[$index + 2]['kind'] ?? '') !== 'identifier') {
+                continue;
+            }
+            $column = $tokens[$index]['value'] . '.' . $tokens[$index + 2]['value'];
+            $operatorIndex = $index + 3;
+            $negated = self::isNegatedPredicate($tokens, $index);
+            if (self::isKeyword($tokens[$operatorIndex] ?? [], 'NOT')) {
+                $negated = true;
+                $operatorIndex++;
+            }
+            $operator = self::controlValue($tokens[$operatorIndex] ?? []);
+            if ($operator === '') {
+                $operator = (string)($tokens[$operatorIndex]['value'] ?? '');
+            }
+            if ($operator === 'IN') {
+                $values = self::literalListValues($tokens, $operatorIndex + 1);
+                if ($values !== null) {
+                    $predicates[] = [
+                        'column' => $column,
+                        'operator' => 'IN',
+                        'values' => $values,
+                        'negated' => $negated,
+                    ];
+                }
+                continue;
+            }
+            if (!in_array($operator, ['=', '!=', '<>', '>', '<', '>=', '<='], true)
+                || !in_array($tokens[$operatorIndex + 1]['kind'] ?? '', ['string', 'number'], true)) {
+                continue;
+            }
+            $predicates[] = [
+                'column' => $column,
+                'operator' => $operator,
+                'values' => [self::literalTokenValue($tokens[$operatorIndex + 1])],
+                'negated' => $negated,
+            ];
+        }
+        return $predicates;
+    }
+
+    private static function isNegatedPredicate(array $tokens, int $columnIndex): bool
+    {
+        $index = $columnIndex - 1;
+        while ($index >= 0 && ($tokens[$index]['value'] ?? '') === '(') {
+            $index--;
+        }
+        return self::isKeyword($tokens[$index] ?? [], 'NOT');
+    }
+
+    private static function literalListValues(array $tokens, int $openIndex): ?array
+    {
+        if (($tokens[$openIndex]['value'] ?? '') !== '(') {
+            return null;
+        }
+        $depth = ($tokens[$openIndex]['depth'] ?? -1) + 1;
+        $values = [];
+        $expectValue = true;
+        for ($index = $openIndex + 1; $index < count($tokens); $index++) {
+            if (($tokens[$index]['value'] ?? '') === ')' && ($tokens[$index]['depth'] ?? -1) === $depth - 1) {
+                return !$expectValue && $values !== [] ? $values : null;
+            }
+            if (($tokens[$index]['depth'] ?? -1) !== $depth) {
+                return null;
+            }
+            if ($expectValue) {
+                if (!in_array($tokens[$index]['kind'] ?? '', ['string', 'number'], true)) {
+                    return null;
+                }
+                $values[] = self::literalTokenValue($tokens[$index]);
+                $expectValue = false;
+            } elseif (($tokens[$index]['value'] ?? '') === ',') {
+                $expectValue = true;
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static function literalTokenValue(array $token): string
+    {
+        $value = (string)($token['value'] ?? '');
+        if (($token['kind'] ?? '') === 'string' && strlen($value) >= 2) {
+            return str_replace("''", "'", substr($value, 1, -1));
+        }
+        return $value;
     }
 
     private static function hasLiteralFilterAfter(array $tokens, int $start): bool
@@ -675,11 +928,23 @@ class ExploratorySqlAnalysisService
             if (($token['value'] ?? '') === '|' && ($tokens[$index + 1]['value'] ?? '') === '|') {
                 return true;
             }
-            if (($token['kind'] ?? '') === 'string' && strpos((string)$token['value'], '$') !== false) {
+            if (($token['value'] ?? '') === '::'
+                && self::isTextType($tokens[$index + 1] ?? [])) {
+                return true;
+            }
+            if (self::isKeyword($token, 'AS') && self::isTextType($tokens[$index + 1] ?? [])) {
+                return true;
+            }
+            if (($token['kind'] ?? '') === 'string') {
                 return true;
             }
         }
         return false;
+    }
+
+    private static function isTextType(array $token): bool
+    {
+        return self::isAnyKeyword($token, ['TEXT', 'VARCHAR', 'CHAR', 'CHARACTER']);
     }
 
     private static function findKeywordIndex(array $tokens, string $keyword, int $start, int $depth): ?int
@@ -760,6 +1025,18 @@ class ExploratorySqlAnalysisService
                 return false;
             }
         }
+        $orderedClauses = ['SELECT', 'FROM', 'WHERE', 'GROUP', 'HAVING', 'WINDOW', 'ORDER', 'LIMIT', 'OFFSET', 'FETCH', 'FOR'];
+        $lastPosition = -1;
+        foreach ($orderedClauses as $keyword) {
+            $position = self::findKeywordIndex($tokens, $keyword, 0, $depth);
+            if ($position === null) {
+                continue;
+            }
+            if ($position < $lastPosition) {
+                return false;
+            }
+            $lastPosition = $position;
+        }
         return true;
     }
 
@@ -811,7 +1088,13 @@ class ExploratorySqlAnalysisService
             'tables' => [],
             'dependencies' => [],
             'selectItems' => [],
-            'predicates' => ['where' => null, 'joins' => [], 'dateColumns' => [], 'governedFilters' => []],
+            'predicates' => [
+                'where' => null,
+                'joins' => [],
+                'dateColumns' => [],
+                'governedFilters' => [],
+                'literalPredicates' => [],
+            ],
             'groupBy' => [],
             'orderBy' => [],
             'limit' => null,
