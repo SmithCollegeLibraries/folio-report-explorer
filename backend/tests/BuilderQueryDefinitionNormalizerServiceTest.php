@@ -332,10 +332,79 @@ $unsupportedNormalized = BuilderQueryDefinitionNormalizerService::normalizeWithC
 );
 expectNormalizer($unsupportedNormalized['joins'][0]['join_type'] === 'JOIN', 'Unsupported join types must normalize to JOIN.');
 
+$saveCatalog = $catalog;
+$saveCatalog['relationships_by_id']['inventory.item__t.effective_location_id->inventory.location__t.id'] = [
+    'relationship_id' => 'inventory.item__t.effective_location_id->inventory.location__t.id',
+    'pair_id' => 'inventory.item__t<->inventory.location__t',
+    'from_table' => 'inventory.item__t',
+    'from_column' => 'effective_location_id',
+    'to_table' => 'inventory.location__t',
+    'to_column' => 'id',
+    'is_default' => true,
+];
+$saveCatalog['relationships_by_id']['inventory.item__t.permanent_location_id->inventory.location__t.id']['is_default'] = false;
+$saveCatalog['defaults_by_pair']['inventory.item__t<->inventory.location__t'] =
+    'inventory.item__t.effective_location_id->inventory.location__t.id';
+$alternateSaveDefinition = $definition;
+$alternateSaveDefinition['joins'] = [[
+    'relationship_id' => 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+    'join_type' => 'LEFT JOIN',
+]];
+$canonicalSaveDefinition = BuilderQueryDefinitionNormalizerService::canonicalizeDefaultsForSaveWithCatalog(
+    $alternateSaveDefinition,
+    $saveCatalog
+);
+expectNormalizer(
+    $canonicalSaveDefinition['joins'] === [[
+        'relationship_id' => 'inventory.item__t.effective_location_id->inventory.location__t.id',
+        'join_type' => 'LEFT JOIN',
+    ]],
+    'Canonical save must replace an alternate relationship with the reviewed default while preserving its supported join type.'
+);
+expectNormalizer(
+    $canonicalSaveDefinition['tables'] === $alternateSaveDefinition['tables']
+        && $canonicalSaveDefinition['schemaIdentity'] === 'ldlite',
+    'Canonical save must retain the external LDLite definition shape.'
+);
+
+$multiHopAlternateCatalog = $multiHopCatalog;
+$multiHopAlternateCatalog['relationships_by_id']['a.alt_id->b.a_id'] = [
+    'relationship_id' => 'a.alt_id->b.a_id',
+    'pair_id' => 'a<->b',
+    'from_table' => 'a',
+    'from_column' => 'alt_id',
+    'to_table' => 'b',
+    'to_column' => 'a_id',
+    'is_default' => false,
+];
+$multiHopAlternateDefinition = $multiHopDefinition;
+$multiHopAlternateDefinition['joins'] = [
+    ['relationship_id' => 'a.alt_id->b.a_id', 'join_type' => 'LEFT JOIN'],
+    ['relationship_id' => 'b.id->c.b_id'],
+];
+$canonicalMultiHopSave = BuilderQueryDefinitionNormalizerService::canonicalizeDefaultsForSaveWithCatalog(
+    $multiHopAlternateDefinition,
+    $multiHopAlternateCatalog
+);
+expectNormalizer(
+    $canonicalMultiHopSave['joins'] === [
+        ['relationship_id' => 'a.id->b.a_id', 'join_type' => 'LEFT JOIN'],
+        ['relationship_id' => 'b.id->c.b_id', 'join_type' => 'JOIN'],
+    ],
+    'Canonical save must materialize every reviewed default relationship in a multi-hop path.'
+);
+
 $legacyDefinition = ['tables' => ['inventory_items'], 'joins' => 'auto'];
 expectNormalizer(
     BuilderQueryDefinitionNormalizerService::normalize($legacyDefinition) === $legacyDefinition,
     'Definitions without LDLite identity must pass through unchanged.'
+);
+expectNormalizer(
+    BuilderQueryDefinitionNormalizerService::canonicalizeDefaultsForSaveWithCatalog(
+        $legacyDefinition,
+        $saveCatalog
+    ) === $legacyDefinition,
+    'Legacy and local definitions must remain unchanged during save canonicalization.'
 );
 
 $controllerSource = (string)file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');

@@ -135,18 +135,67 @@ export default function Builder() {
 
   // Fetch table details
   const [tableDetails, setTableDetails] = useState<Record<string, TableDetail>>({});
+  const [tableDetailErrors, setTableDetailErrors] = useState<Record<string, string>>({});
   const fetchedRef = useRef<Set<string>>(new Set());
+  const detailRequestVersionsRef = useRef<Record<string, number>>({});
+  const selectedTablesRef = useRef(selectedTables);
+  selectedTablesRef.current = selectedTables;
+
+  const loadTableDetail = useCallback((table: string) => {
+    if (fetchedRef.current.has(table)) return;
+
+    fetchedRef.current.add(table);
+    const requestVersion = (detailRequestVersionsRef.current[table] ?? 0) + 1;
+    detailRequestVersionsRef.current[table] = requestVersion;
+    setTableDetailErrors((previous) => {
+      if (!(table in previous)) return previous;
+      const next = { ...previous };
+      delete next[table];
+      return next;
+    });
+
+    fetchTableDetail(table, schemaIdentity).then((detail) => {
+      if (detailRequestVersionsRef.current[table] !== requestVersion
+          || !selectedTablesRef.current.includes(table)) {
+        return;
+      }
+      setTableDetails((previous) => ({ ...previous, [table]: detail }));
+    }).catch(() => {
+      if (detailRequestVersionsRef.current[table] !== requestVersion) return;
+      fetchedRef.current.delete(table);
+      if (!selectedTablesRef.current.includes(table)) return;
+      setTableDetailErrors((previous) => ({
+        ...previous,
+        [table]: `Could not load details for ${table}.`,
+      }));
+    });
+  }, []);
+
+  const forgetTableDetail = useCallback((table: string) => {
+    detailRequestVersionsRef.current[table] =
+      (detailRequestVersionsRef.current[table] ?? 0) + 1;
+    fetchedRef.current.delete(table);
+    setTableDetails((previous) => {
+      if (!(table in previous)) return previous;
+      const next = { ...previous };
+      delete next[table];
+      return next;
+    });
+    setTableDetailErrors((previous) => {
+      if (!(table in previous)) return previous;
+      const next = { ...previous };
+      delete next[table];
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     for (const t of selectedTables) {
       if (!tableDetails[t] && !fetchedRef.current.has(t)) {
-        fetchedRef.current.add(t);
-        fetchTableDetail(t, schemaIdentity).then((detail) => {
-          setTableDetails((prev) => ({ ...prev, [t]: detail }));
-        });
+        loadTableDetail(t);
       }
     }
-  }, [selectedTables]);
+  }, [loadTableDetail, selectedTables, tableDetails]);
 
   const relationshipGroups = useMemo(
     () => groupDirectRelationships(tableDetails, selectedTables),
@@ -419,6 +468,7 @@ export default function Builder() {
     (table: string) => {
       if (selectedTables.includes(table)) {
         // Remove table + its columns, filters, sorts
+        forgetTableDetail(table);
         setSelectedTables((prev) => prev.filter((t) => t !== table));
         setColumns((prev) => prev.filter((c) => c.table !== table));
         setFilters((prev) => prev.filter((f) => f.table !== table));
@@ -430,11 +480,12 @@ export default function Builder() {
       resetJob();
       setActiveJobId(null);
     },
-    [selectedTables, resetJob],
+    [selectedTables, resetJob, forgetTableDetail],
   );
 
   const removeTable = useCallback(
     (table: string) => {
+      forgetTableDetail(table);
       setSelectedTables((prev) => prev.filter((t) => t !== table));
       setColumns((prev) => prev.filter((c) => c.table !== table));
       setFilters((prev) => prev.filter((f) => f.table !== table));
@@ -443,7 +494,7 @@ export default function Builder() {
       resetJob();
       setActiveJobId(null);
     },
-    [resetJob],
+    [resetJob, forgetTableDetail],
   );
 
   // --- derived ---
@@ -597,6 +648,26 @@ export default function Builder() {
 
       {/* ─── Main area: two-column layout ─── */}
       <div className="flex-1 flex overflow-hidden">
+        {Object.entries(tableDetailErrors).length > 0 && (
+          <div
+            role="alert"
+            className="absolute left-4 top-16 z-20 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 shadow-sm"
+          >
+            {Object.entries(tableDetailErrors).map(([table, message]) => (
+              <div key={table}>
+                {message}{' '}
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={() => loadTableDetail(table)}
+                  aria-label={`Retry ${table} details`}
+                >
+                  Retry
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {relationshipNotice && (
           <div
             role="status"

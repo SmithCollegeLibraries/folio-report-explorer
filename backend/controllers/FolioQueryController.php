@@ -1688,6 +1688,9 @@ class FolioQueryController extends Controller
 
         if (($queryDefinition['schemaIdentity'] ?? null) === 'ldlite') {
             try {
+                $queryDefinition = BuilderQueryDefinitionNormalizerService::canonicalizeDefaultsForSave(
+                    $queryDefinition
+                );
                 $normalizedDefinition = BuilderQueryDefinitionNormalizerService::normalize($queryDefinition);
             } catch (\InvalidArgumentException $e) {
                 Yii::$app->response->statusCode = 400;
@@ -1702,20 +1705,15 @@ class FolioQueryController extends Controller
             }
 
             $trustedSql = trim((string)($trustedBuild['sql'] ?? ''));
-            $submittedSql = trim((string)$generatedSql);
-            if ($submittedSql === '') {
-                $submittedSql = $trustedSql;
-            }
+            $submittedSql = !empty($body['sqlEdited'])
+                ? trim((string)$generatedSql)
+                : $trustedSql;
 
             try {
                 if (!empty($body['sqlEdited'])) {
                     SqlBuilderService::validateSafety($submittedSql);
                     SqlBuilderService::validateTablePolicy($submittedSql);
                     $this->assertEditedCanonicalSqlBinding($trustedSql, $submittedSql);
-                } elseif ($this->normalizeSqlForBinding($submittedSql) !== $this->normalizeSqlForBinding($trustedSql)) {
-                    throw new \InvalidArgumentException(
-                        'Canonical SQL does not match the server-built query definition.'
-                    );
                 }
             } catch (\InvalidArgumentException $e) {
                 Yii::$app->response->statusCode = 422;
@@ -1742,13 +1740,6 @@ class FolioQueryController extends Controller
 
         Yii::$app->response->statusCode = 201;
         return $this->formatSaved($model);
-    }
-
-    private function normalizeSqlForBinding(string $sql): string
-    {
-        $sql = preg_replace('/\/\*.*?\*\//s', ' ', $sql);
-        $sql = preg_replace('/--[^\r\n]*/', ' ', (string)$sql);
-        return strtolower(trim((string)preg_replace('/\s+/', ' ', (string)$sql), " ;\t\n\r\0\x0B"));
     }
 
     private function assertEditedCanonicalSqlBinding(string $trustedSql, string $editedSql): void

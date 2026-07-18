@@ -6,6 +6,78 @@ require_once __DIR__ . '/BuilderSchemaService.php';
 
 final class BuilderQueryDefinitionNormalizerService
 {
+    public static function canonicalizeDefaultsForSave(array $definition): array
+    {
+        if (($definition['schemaIdentity'] ?? null) !== 'ldlite') {
+            return $definition;
+        }
+
+        return self::canonicalizeDefaultsForSaveWithCatalog(
+            $definition,
+            BuilderSchemaService::catalog()
+        );
+    }
+
+    public static function canonicalizeDefaultsForSaveWithCatalog(
+        array $definition,
+        array $catalog
+    ): array {
+        if (($definition['schemaIdentity'] ?? null) !== 'ldlite') {
+            return $definition;
+        }
+        if (!isset($definition['tables']) || !is_array($definition['tables'])) {
+            throw new \InvalidArgumentException('Canonical tables must be an array.');
+        }
+
+        $canonicalTables = array_values($definition['tables']);
+        $joinInputExists = array_key_exists('joins', $definition);
+        $joinInput = $joinInputExists ? $definition['joins'] : 'auto';
+        $useDefaults = !$joinInputExists || $joinInput === 'auto' || $joinInput === [];
+        if (!$useDefaults && !is_array($joinInput)) {
+            throw new \InvalidArgumentException(
+                'Canonical joins must be "auto", an empty array, or an array of relationship_id selections.'
+            );
+        }
+
+        $submittedRelationships = $useDefaults
+            ? self::defaultRelationships($catalog, $canonicalTables)
+            : self::selectedRelationships($joinInput, $catalog, $canonicalTables);
+        self::assertNecessaryRelationshipTree($submittedRelationships, $canonicalTables);
+
+        $joinTypesByPair = [];
+        foreach ($submittedRelationships as $relationship) {
+            $pairId = (string)($relationship['pair_id'] ?? self::pairId(
+                (string)$relationship['from_table'],
+                (string)$relationship['to_table']
+            ));
+            $joinTypesByPair[$pairId] = ($relationship['join_type'] ?? 'JOIN') === 'LEFT JOIN'
+                ? 'LEFT JOIN' : 'JOIN';
+        }
+
+        $defaultRelationships = self::defaultRelationships($catalog, $canonicalTables);
+        usort($defaultRelationships, function (array $left, array $right): int {
+            return strcmp(
+                (string)($left['relationship_id'] ?? ''),
+                (string)($right['relationship_id'] ?? '')
+            );
+        });
+
+        $canonical = $definition;
+        $canonical['joins'] = [];
+        foreach ($defaultRelationships as $relationship) {
+            $pairId = (string)($relationship['pair_id'] ?? self::pairId(
+                (string)$relationship['from_table'],
+                (string)$relationship['to_table']
+            ));
+            $canonical['joins'][] = [
+                'relationship_id' => (string)$relationship['relationship_id'],
+                'join_type' => $joinTypesByPair[$pairId] ?? 'JOIN',
+            ];
+        }
+
+        return $canonical;
+    }
+
     public static function normalize(array $definition): array
     {
         if (($definition['schemaIdentity'] ?? null) !== 'ldlite') {

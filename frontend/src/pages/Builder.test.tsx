@@ -61,10 +61,18 @@ vi.mock('../components/TableBrowser', () => ({
 }));
 
 vi.mock('../components/ColumnPicker', () => ({
-  default: ({ onColumnsChange }: { onColumnsChange: (columns: Array<{ table: string; column: string; aggregate: '' }>) => void }) => (
-    <button onClick={() => onColumnsChange([{ table: 'inventory.item__t', column: 'id', aggregate: '' }])}>
-      Select id
-    </button>
+  default: ({ onColumnsChange, tableColumns }: {
+    onColumnsChange: (columns: Array<{ table: string; column: string; aggregate: '' }>) => void;
+    tableColumns: Record<string, unknown[]>;
+  }) => (
+    <>
+      <output data-testid="builder-column-count">
+        {Object.values(tableColumns).reduce((count, columns) => count + columns.length, 0)}
+      </output>
+      <button onClick={() => onColumnsChange([{ table: 'inventory.item__t', column: 'id', aggregate: '' }])}>
+        Select id
+      </button>
+    </>
   ),
 }));
 
@@ -108,6 +116,7 @@ vi.mock('../components/JoinPanel', () => ({
     onRelationshipChange,
     onResetRelationships,
     defaultJoins,
+    relationshipGroups,
   }: {
     onJoinModeChange: (mode: 'auto' | 'manual') => void;
     onCustomJoinsChange: (joins: Array<{
@@ -133,10 +142,14 @@ vi.mock('../components/JoinPanel', () => ({
     onRelationshipChange?: (pairId: string, relationshipId: string) => void;
     onResetRelationships?: () => void;
     defaultJoins?: Array<{ relationship_id: string }>;
+    relationshipGroups?: Record<string, { pairId: string }>;
   }) => (
     <>
       <output data-testid="builder-default-joins">
         {(defaultJoins ?? []).map((join) => join.relationship_id).join(',')}
+      </output>
+      <output data-testid="builder-relationship-groups">
+        {Object.values(relationshipGroups ?? {}).map((group) => group.pairId).join(',')}
       </output>
       <button
         onClick={() => onDefaultJoinsChange?.([{
@@ -250,6 +263,96 @@ describe('Builder', () => {
       'inventory.item__t\u001finventory.location__t',
       'inventory.item__t\u001finventory.location__t\u001finventory.holdings_record__t',
     )).toEqual([]);
+  });
+
+  it('allows a failed table-detail request to be retried and restores columns and relationships', async () => {
+    let rejectFirst!: (error: Error) => void;
+    const firstRequest = new Promise<never>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    let attempts = 0;
+    apiMocks.fetchTableDetail.mockImplementation((table: string) => {
+      attempts += 1;
+      if (attempts === 1) return firstRequest;
+      const relationship = {
+        from_table: 'inventory.item__t', from_column: 'effective_location_id',
+        to_table: 'inventory.location__t', to_column: 'id',
+        relationship_id: 'inventory.item__t.effective_location_id->inventory.location__t.id',
+        pair_id: 'inventory.item__t<->inventory.location__t', is_default: true,
+      };
+      return Promise.resolve({
+        name: table,
+        table: { columns: [{ name: 'id' }] },
+        relationships: table === 'inventory.item__t'
+          ? { parents: [relationship], children: [] }
+          : { parents: [], children: [relationship] },
+      });
+    });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter><Builder /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    await act(async () => rejectFirst(new Error('detail service unavailable')));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not load details for inventory.item__t.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Retry inventory.item__t details' }));
+
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId('builder-column-count')).toHaveTextContent('1');
+    fireEvent.click(screen.getByRole('button', { name: 'Add location' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(3));
+    fireEvent.click(screen.getByRole('button', { name: 'Joins' }));
+    expect(screen.getByTestId('builder-relationship-groups')).toHaveTextContent(
+      'inventory.item__t<->inventory.location__t',
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('does not retain a table-detail response after its table is removed', async () => {
+    let resolveFirst!: (detail: {
+      name: string;
+      table: { columns: Array<{ name: string }> };
+      relationships: { parents: never[]; children: never[] };
+    }) => void;
+    const firstRequest = new Promise<Parameters<typeof resolveFirst>[0]>((resolve) => {
+      resolveFirst = resolve;
+    });
+    apiMocks.fetchTableDetail
+      .mockImplementationOnce(() => firstRequest)
+      .mockResolvedValue({
+        name: 'inventory.item__t',
+        table: { columns: [{ name: 'id' }] },
+        relationships: { parents: [], children: [] },
+      });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter><Builder /></MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add item' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
+    await act(async () => resolveFirst({
+      name: 'inventory.item__t',
+      table: { columns: [{ name: 'stale' }] },
+      relationships: { parents: [], children: [] },
+    }));
+    expect(screen.getByTestId('builder-column-count')).toHaveTextContent('0');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add item' }));
+    await waitFor(() => expect(apiMocks.fetchTableDetail).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId('builder-column-count')).toHaveTextContent('1');
   });
 
   it('discovers defaults without mounting Joins and builds a graph-selected alternate', async () => {

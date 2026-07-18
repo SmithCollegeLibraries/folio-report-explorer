@@ -128,7 +128,9 @@ class SqlSelectStructureService
 
         $tables = array_values(array_unique($tables));
         sort($tables, SORT_STRING);
-        usort($joins, static fn(array $left, array $right): int => strcmp(json_encode($left), json_encode($right)));
+        usort($joins, static function (array $left, array $right): int {
+            return strcmp(json_encode($left), json_encode($right));
+        });
 
         return ['tables' => $tables, 'joins' => $joins];
     }

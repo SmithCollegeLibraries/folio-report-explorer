@@ -20,6 +20,31 @@ namespace app\models {
 namespace app\services {
     class BuilderQueryDefinitionNormalizerService
     {
+        public static function canonicalizeDefaultsForSave(array $definition): array
+        {
+            if (($definition['schemaIdentity'] ?? null) !== 'ldlite') return $definition;
+            foreach (is_array($definition['joins'] ?? null) ? $definition['joins'] : [] as $join) {
+                if (isset($join['from_table']) || !isset($join['relationship_id'])) {
+                    throw new \InvalidArgumentException('Each canonical join must contain a relationship_id.');
+                }
+                if ($join['relationship_id'] === 'unknown') {
+                    throw new \InvalidArgumentException('Unknown Builder relationship: unknown');
+                }
+            }
+            $canonical = $definition;
+            if (($definition['tables'] ?? []) === ['a', 'c']) {
+                $canonical['joins'] = [
+                    ['relationship_id' => 'a.id->b.a_id', 'join_type' => 'LEFT JOIN'],
+                    ['relationship_id' => 'b.id->c.b_id', 'join_type' => 'JOIN'],
+                ];
+                return $canonical;
+            }
+            $canonical['joins'] = [[
+                'relationship_id' => 'inventory.item__t.effective_location_id->inventory.location__t.id',
+                'join_type' => 'JOIN',
+            ]];
+            return $canonical;
+        }
         public static function normalize(array $definition): array
         {
             foreach (is_array($definition['joins'] ?? null) ? $definition['joins'] : [] as $join) {
@@ -85,12 +110,20 @@ namespace {
     Yii::$app->request = new CanonicalSaveRequest(['name' => 'Valid', 'queryDefinition' => $definition, 'generatedSql' => $trustedSql]);
     $valid = $controller->actionSave();
     expectCanonicalSave(Yii::$app->response->statusCode === 201 && count(\app\models\SavedQuery::$saved) === 1, 'Valid canonical save must persist one server-verified query.');
+    expectCanonicalSave(
+        json_decode(\app\models\SavedQuery::$saved[0]->query_definition, true)['joins'][0]['relationship_id']
+            === 'inventory.item__t.effective_location_id->inventory.location__t.id',
+        'Canonical save must persist the server-owned default relationship definition.'
+    );
 
     Yii::$app->response->statusCode = 200;
     Yii::$app->request = new CanonicalSaveRequest(['name' => 'Tampered', 'queryDefinition' => $definition, 'generatedSql' => str_replace('effective_location_id', 'permanent_location_id', $trustedSql)]);
-    $tampered = $controller->actionSave();
-    expectCanonicalSave(Yii::$app->response->statusCode === 422 && isset($tampered['error']), 'Canonical SQL/definition mismatch must be rejected.');
-    expectCanonicalSave(count(\app\models\SavedQuery::$saved) === 1, 'Tampered SQL must not persist.');
+    $canonicalized = $controller->actionSave();
+    expectCanonicalSave(Yii::$app->response->statusCode === 201, 'Unedited alternate SQL must be replaced with the server-built default SQL.');
+    expectCanonicalSave(
+        end(\app\models\SavedQuery::$saved)->generated_sql === $trustedSql,
+        'Canonical save must never persist submitted alternate SQL.'
+    );
 
     Yii::$app->response->statusCode = 200;
     Yii::$app->request = new CanonicalSaveRequest([
@@ -100,6 +133,67 @@ namespace {
     ]);
     $editedAlternate = $controller->actionSave();
     expectCanonicalSave(Yii::$app->response->statusCode === 422 && isset($editedAlternate['error']), 'Edited SQL cannot replace a trusted default table link.');
+
+    Yii::$app->response->statusCode = 200;
+    $alternateDefinition = $definition;
+    $alternateDefinition['joins'] = [[
+        'relationship_id' => 'inventory.item__t.permanent_location_id->inventory.location__t.id',
+    ]];
+    Yii::$app->request = new CanonicalSaveRequest([
+        'name' => 'Alternate definition',
+        'queryDefinition' => $alternateDefinition,
+        'generatedSql' => str_replace('effective_location_id', 'permanent_location_id', $trustedSql),
+    ]);
+    $alternate = $controller->actionSave();
+    expectCanonicalSave(Yii::$app->response->statusCode === 201, 'A reviewed alternate definition must save as its canonical default.');
+    $alternateSaved = end(\app\models\SavedQuery::$saved);
+    expectCanonicalSave(
+        json_decode($alternateSaved->query_definition, true)['joins'][0]['relationship_id']
+            === 'inventory.item__t.effective_location_id->inventory.location__t.id'
+            && $alternateSaved->generated_sql === $trustedSql,
+        'Alternate definition and SQL must both be replaced by the matching default definition and SQL.'
+    );
+
+    Yii::$app->response->statusCode = 200;
+    $multiHopDefinition = [
+        'schemaIdentity' => 'ldlite',
+        'tables' => ['a', 'c'],
+        'columns' => [],
+        'joins' => [
+            ['relationship_id' => 'a.alt_id->b.a_id', 'join_type' => 'LEFT JOIN'],
+            ['relationship_id' => 'b.id->c.b_id'],
+        ],
+    ];
+    Yii::$app->request = new CanonicalSaveRequest([
+        'name' => 'Multi-hop defaults',
+        'queryDefinition' => $multiHopDefinition,
+        'generatedSql' => 'SELECT submitted alternate',
+    ]);
+    $multiHop = $controller->actionSave();
+    expectCanonicalSave(Yii::$app->response->statusCode === 201, 'Manual multi-hop selections must save as default relationships.');
+    expectCanonicalSave(
+        json_decode(end(\app\models\SavedQuery::$saved)->query_definition, true)['joins'] === [
+            ['relationship_id' => 'a.id->b.a_id', 'join_type' => 'LEFT JOIN'],
+            ['relationship_id' => 'b.id->c.b_id', 'join_type' => 'JOIN'],
+        ],
+        'The saved canonical definition must include every default multi-hop relationship.'
+    );
+
+    Yii::$app->response->statusCode = 200;
+    $legacyDefinition = ['tables' => ['local_audit_rows'], 'columns' => [], 'joins' => 'auto'];
+    Yii::$app->request = new CanonicalSaveRequest([
+        'name' => 'Legacy local',
+        'queryDefinition' => $legacyDefinition,
+        'generatedSql' => 'SELECT * FROM local_audit_rows',
+    ]);
+    $legacy = $controller->actionSave();
+    $legacySaved = end(\app\models\SavedQuery::$saved);
+    expectCanonicalSave(
+        Yii::$app->response->statusCode === 201
+            && json_decode($legacySaved->query_definition, true) === $legacyDefinition
+            && $legacySaved->generated_sql === 'SELECT * FROM local_audit_rows',
+        'Legacy and local saves must remain unchanged by LDLite canonicalization.'
+    );
 
     foreach ([
         [['relationship_id' => 'unknown'], 'Unknown relationship IDs must be rejected.'],
