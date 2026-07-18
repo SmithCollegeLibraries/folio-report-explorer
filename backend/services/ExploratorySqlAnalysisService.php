@@ -304,7 +304,7 @@ class ExploratorySqlAnalysisService
             $direction = 'ASC';
             $last = count($orderItem) - 1;
             if (self::isKeyword($orderItem[$last], 'ASC') || self::isKeyword($orderItem[$last], 'DESC')) {
-                $direction = strtoupper($orderItem[$last]['value']);
+                $direction = self::controlValue($orderItem[$last]);
                 array_pop($orderItem);
             }
             if ($orderItem === []) {
@@ -395,7 +395,7 @@ class ExploratorySqlAnalysisService
             || ($tokens[$last - 1]['value'] ?? '') === '::') {
             return null;
         }
-        if (in_array(strtoupper($tokens[$last]['value']), array_merge(self::SOURCE_STOPS, self::EXPRESSION_TERMINALS), true)) {
+        if (self::isAnyKeyword($tokens[$last], array_merge(self::SOURCE_STOPS, self::EXPRESSION_TERMINALS))) {
             return null;
         }
         $previousKind = $tokens[$last - 1]['kind'] ?? '';
@@ -457,7 +457,7 @@ class ExploratorySqlAnalysisService
         $operators = ['=', '!=', '<>', '>', '<', '>=', '<=', 'LIKE', 'ILIKE'];
         $limit = min(count($tokens), $start + 6);
         for ($index = $start; $index < $limit; $index++) {
-            $operator = strtoupper((string)($tokens[$index]['value'] ?? ''));
+            $operator = self::controlValue($tokens[$index]);
             if (in_array($operator, $operators, true)) {
                 return in_array($tokens[$index + 1]['kind'] ?? '', ['string', 'number'], true);
             }
@@ -481,7 +481,7 @@ class ExploratorySqlAnalysisService
             }
             $limit = min(count($tokens), $index + 9);
             for ($operatorIndex = $index + 3; $operatorIndex < $limit; $operatorIndex++) {
-                $operator = strtoupper((string)($tokens[$operatorIndex]['value'] ?? ''));
+                $operator = self::controlValue($tokens[$operatorIndex]);
                 if ($operator === 'IN') {
                     if (!self::hasLiteralOnlyList($tokens, $operatorIndex + 1)) {
                         return true;
@@ -537,7 +537,7 @@ class ExploratorySqlAnalysisService
                 $cursor++;
                 continue;
             }
-            if (in_array(strtoupper($tokens[$cursor]['value'] ?? ''), self::CLAUSE_STARTS, true)) {
+            if (self::isAnyKeyword($tokens[$cursor], self::CLAUSE_STARTS)) {
                 break;
             }
 
@@ -588,7 +588,7 @@ class ExploratorySqlAnalysisService
             }
             if (($tokens[$afterSource]['kind'] ?? '') === 'identifier'
                 && ($tokens[$afterSource]['depth'] ?? -1) === $base
-                && !in_array(strtoupper($tokens[$afterSource]['value']), self::SOURCE_STOPS, true)) {
+                && !self::isAnyKeyword($tokens[$afterSource], self::SOURCE_STOPS)) {
                 $alias = $tokens[$afterSource]['value'];
                 $afterSource++;
             }
@@ -725,8 +725,8 @@ class ExploratorySqlAnalysisService
                 continue;
             }
             if (($tokens[$index]['value'] ?? '') === ',' || self::isKeyword($tokens[$index], 'JOIN')
-                || in_array(strtoupper($tokens[$index]['value'] ?? ''), ['INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'NATURAL'], true)
-                || in_array(strtoupper($tokens[$index]['value'] ?? ''), self::CLAUSE_STARTS, true)) {
+                || self::isAnyKeyword($tokens[$index], ['INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS', 'NATURAL'])
+                || self::isAnyKeyword($tokens[$index], self::CLAUSE_STARTS)) {
                 return $index;
             }
         }
@@ -766,12 +766,15 @@ class ExploratorySqlAnalysisService
     private static function joinTypeBefore(array $tokens, int $joinIndex, int $depth): string
     {
         $previous = $tokens[$joinIndex - 1] ?? [];
-        if (($previous['depth'] ?? -1) === $depth && in_array(strtoupper($previous['value'] ?? ''), ['INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS'], true)) {
-            return strtoupper($previous['value']);
+        if (($previous['depth'] ?? -1) === $depth
+            && self::isAnyKeyword($previous, ['INNER', 'LEFT', 'RIGHT', 'FULL', 'CROSS'])) {
+            return self::controlValue($previous);
         }
         if (($previous['depth'] ?? -1) === $depth && self::isKeyword($previous, 'OUTER')) {
-            $type = strtoupper($tokens[$joinIndex - 2]['value'] ?? '');
-            return in_array($type, ['LEFT', 'RIGHT', 'FULL'], true) ? $type : 'UNKNOWN';
+            $typeToken = $tokens[$joinIndex - 2] ?? [];
+            return self::isAnyKeyword($typeToken, ['LEFT', 'RIGHT', 'FULL'])
+                ? self::controlValue($typeToken)
+                : 'UNKNOWN';
         }
         return 'INNER';
     }
@@ -785,8 +788,21 @@ class ExploratorySqlAnalysisService
     private static function isKeyword(array $token, string $keyword): bool
     {
         return ($token['kind'] ?? '') === 'identifier'
-            && empty($token['quoted'])
-            && strtoupper((string)($token['value'] ?? '')) === $keyword;
+            && self::controlValue($token) === $keyword;
+    }
+
+    private static function isAnyKeyword(array $token, array $keywords): bool
+    {
+        return ($token['kind'] ?? '') === 'identifier'
+            && in_array(self::controlValue($token), $keywords, true);
+    }
+
+    private static function controlValue(array $token): string
+    {
+        if (!empty($token['quoted'])) {
+            return '';
+        }
+        return strtoupper((string)($token['value'] ?? ''));
     }
 
     private static function emptyScope(): array

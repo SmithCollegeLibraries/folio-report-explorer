@@ -215,4 +215,38 @@ analysisAssertSame('where', $quotedKeywords['selectItems'][0]['expression'], 'Qu
 analysisAssertSame('order', $quotedKeywords['selectItems'][1]['expression'], 'Quoted ORDER must remain an expression identifier.');
 analysisAssertSame('ordinary', $quotedKeywords['selectItems'][1]['alias'], 'Ordinary quoted aliases must remain inspectable.');
 
+$quotedSourceAliases = ExploratorySqlAnalysisService::analyze(
+    'WITH joined_scope AS (SELECT "where".id, "order".id '
+    . 'FROM inventory.item__t "where" '
+    . 'JOIN inventory.holdings_record__t "order" ON "order".id = "where".holdings_record_id) '
+    . 'SELECT * FROM joined_scope'
+);
+analysisAssertSame(
+    ['inventory.holdings_record__t', 'inventory.item__t'],
+    $quotedSourceAliases['ctes']['joined_scope']['tables'],
+    'Quoted keyword source aliases must not truncate physical table discovery.'
+);
+analysisAssertSame(1, count($quotedSourceAliases['ctes']['joined_scope']['joins']), 'Quoted keyword aliases must retain join evidence.');
+analysisAssertSame('order', $quotedSourceAliases['ctes']['joined_scope']['joins'][0]['alias'], 'Quoted ORDER must remain a source alias.');
+analysisAssertSame('INNER', $quotedSourceAliases['ctes']['joined_scope']['joins'][0]['type'], 'Quoted aliases must not change INNER join classification.');
+analysisAssertSame(false, $quotedSourceAliases['ambiguous'], 'A supported join with quoted keyword aliases must remain deterministic.');
+
+$quotedLeftAlias = ExploratorySqlAnalysisService::analyze(
+    'WITH joined_scope AS (SELECT "left".id FROM inventory.item__t "left" '
+    . 'JOIN inventory.holdings_record__t holdings ON holdings.id = "left".holdings_record_id) '
+    . 'SELECT * FROM joined_scope'
+);
+analysisAssertSame('INNER', $quotedLeftAlias['ctes']['joined_scope']['joins'][0]['type'], 'Quoted LEFT aliases must not change INNER join classification.');
+analysisAssertSame(false, $quotedLeftAlias['ambiguous'], 'Quoted LEFT aliases must remain ordinary identifiers.');
+
+$ordinarySourceGrammar = ExploratorySqlAnalysisService::analyze(
+    "WITH joined_scope AS (SELECT item.id FROM inventory.item__t item LEFT JOIN inventory.holdings_record__t holdings "
+    . "ON holdings.id = item.holdings_record_id WHERE item.status = 'active') "
+    . "SELECT * FROM joined_scope ORDER BY id DESC"
+);
+analysisAssertSame('LEFT', $ordinarySourceGrammar['ctes']['joined_scope']['joins'][0]['type'], 'Unquoted LEFT JOIN classification must remain unchanged.');
+analysisAssertSame(['item.status'], $ordinarySourceGrammar['ctes']['joined_scope']['predicates']['governedFilters'], 'Unquoted WHERE must remain a clause boundary.');
+analysisAssertSame('id', $ordinarySourceGrammar['orderBy'][0]['expression'], 'Unquoted ORDER BY must remain a clause boundary.');
+analysisAssertSame('DESC', $ordinarySourceGrammar['orderBy'][0]['direction'], 'Unquoted ordering direction must remain unchanged.');
+
 fwrite(STDOUT, "ExploratorySqlAnalysisService test passed\n");
