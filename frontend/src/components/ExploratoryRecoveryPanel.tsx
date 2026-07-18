@@ -28,15 +28,17 @@ export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: Explor
       </h2>
       <p className="mt-1 text-sm text-amber-900">
         {isRejected
-          ? 'The unsafe query was rejected before execution. Retry the preserved request or refine one part of it below.'
+          ? 'Nothing ran or changed. Ask AI could not safely turn this request into a report. Retry the request or refine one part of it below.'
           : 'No query survived validation. Retry the preserved request or refine one part of it below.'}
       </p>
 
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-        <div className="rounded-md border border-amber-200 bg-white p-3">
-          <dt className="text-xs font-semibold uppercase tracking-wide text-amber-800">Safe failure category</dt>
-          <dd className="mt-1 text-gray-800">{formatFailureCategory(response.validationSummary?.failureCategory)}</dd>
-        </div>
+        {!isRejected && (
+          <div className="rounded-md border border-amber-200 bg-white p-3">
+            <dt className="text-xs font-semibold uppercase tracking-wide text-amber-800">Safe failure category</dt>
+            <dd className="mt-1 text-gray-800">{formatFailureCategory(response.validationSummary?.failureCategory)}</dd>
+          </div>
+        )}
         {(response.attemptedPlan || response.exploratoryPlan?.summary) && (
           <div className="rounded-md border border-amber-200 bg-white p-3">
             <dt className="text-xs font-semibold uppercase tracking-wide text-amber-800">Attempted plan</dt>

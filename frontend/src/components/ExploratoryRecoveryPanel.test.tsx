@@ -69,7 +69,11 @@ describe('ExploratoryRecoveryPanel', () => {
       />,
     );
 
-    expect(screen.getByText(/unsafe query was rejected/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing ran or changed/i)).toBeInTheDocument();
+    expect(screen.getByText(/could not safely turn this request into a report/i)).toBeInTheDocument();
+    expect(screen.queryByText(/safe failure category/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Non select$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
     expect(screen.queryByText(/Generated SQL/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Run/i })).not.toBeInTheDocument();
   });
