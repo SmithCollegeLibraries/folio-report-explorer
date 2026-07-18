@@ -49,6 +49,9 @@ class ExploratorySemanticContractService
 
         $values = self::assumptionValues($assumptions);
         $filters = self::permittedFilters($question, $campus);
+        $requiredMeasures = ($values['roi_formula'] ?? null) === 'cost_per_checkout'
+            ? ['purchase_count', 'spend', 'circulation', 'cost_per_checkout']
+            : ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'];
         $requirements = [
             self::requirement('purchase_date_basis', self::requirementLabel('purchase_date_basis', $values), [
                 'value' => $values['purchase_date_basis'] ?? null,
@@ -65,13 +68,7 @@ class ExploratorySemanticContractService
                 'value' => $values['call_number_grouping'] ?? null,
             ]),
             self::requirement('required_measures', self::requirementLabel('required_measures', $values), [
-                'values' => [
-                    'purchase_count',
-                    'spend',
-                    'circulation',
-                    'checkouts_per_dollar',
-                    'cost_per_checkout',
-                ],
+                'values' => $requiredMeasures,
             ]),
             self::requirement('roi_formula', self::requirementLabel('roi_formula', $values), [
                 'value' => $values['roi_formula'] ?? null,
@@ -80,7 +77,7 @@ class ExploratorySemanticContractService
                 'measure' => 'purchase_count',
                 'direction' => 'descending',
             ]),
-            self::requirement('campus_scope', self::requirementLabel('campus_scope', $values), [
+            self::requirement('campus_scope', self::requirementLabel('campus_scope', $values, $campus !== null), [
                 'required' => $campus !== null,
                 'value' => $campus,
             ]),
@@ -165,14 +162,13 @@ class ExploratorySemanticContractService
         ];
     }
 
-    private static function requirementLabel(string $key, array $values): string
+    private static function requirementLabel(string $key, array $values, bool $campusSupplied = false): string
     {
         $labels = [
             'spend_grain' => 'Purchase count and spending are aggregated before item-level circulation.',
             'circulation_grain' => 'Checkouts are counted at item grain before final grouping.',
             'required_measures' => 'Results include purchase count, spending, circulation, checkouts per dollar, and cost per checkout.',
             'purchase_ranking' => 'Call-number groups rank by purchase count from highest to lowest.',
-            'campus_scope' => 'The selected campus is applied through the inventory location hierarchy.',
             'governed_filters' => 'Material-type and acquisition-unit filters appear only when explicitly requested.',
             'numeric_output_types' => 'Purchase, spending, circulation, and ROI measures remain numeric.',
         ];
@@ -200,6 +196,16 @@ class ExploratorySemanticContractService
             return ($values['roi_formula'] ?? null) === 'cost_per_checkout'
                 ? 'ROI returns cost per checkout.'
                 : 'ROI returns checkouts per dollar and cost per checkout.';
+        }
+        if ($key === 'required_measures') {
+            return ($values['roi_formula'] ?? null) === 'cost_per_checkout'
+                ? 'Results include purchase count, spending, circulation, and cost per checkout.'
+                : 'Results include purchase count, spending, circulation, checkouts per dollar, and cost per checkout.';
+        }
+        if ($key === 'campus_scope') {
+            return $campusSupplied
+                ? 'The selected campus is applied through the inventory location hierarchy.'
+                : 'No campus restriction was requested.';
         }
         return $labels[$key] ?? 'The report satisfies an approved semantic requirement.';
     }

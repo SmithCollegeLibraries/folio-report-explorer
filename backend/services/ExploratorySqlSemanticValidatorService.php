@@ -100,11 +100,19 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateInvestmentCostBasis(array $analysis, array $requirement, array $contract): ?string
     {
-        if (($requirement['parameters']['value'] ?? null) !== 'actual_paid_fund_distribution') {
-            return self::GUIDANCE['investment_cost_basis'];
-        }
+        $basis = $requirement['parameters']['value'] ?? null;
         $spend = self::spendCte($analysis);
         $item = self::itemForAlias($spend['selectItems'] ?? [], 'spend');
+        if ($basis === 'estimated_po_line_price') {
+            $aggregate = $item['exactAggregate'] ?? null;
+            return ($aggregate['function'] ?? null) === 'sum'
+                && self::columnLeaf((string)($aggregate['column'] ?? '')) === 'cost__po_line_estimated_price'
+                && self::columnSource($spend, (string)$aggregate['column']) === 'orders.po_line__t'
+                ? null : self::GUIDANCE['investment_cost_basis'];
+        }
+        if ($basis !== 'actual_paid_fund_distribution') {
+            return self::GUIDANCE['investment_cost_basis'];
+        }
         $multiplication = $item['aggregateMultiplication'] ?? null;
         $factors = $multiplication['factors'] ?? [];
         $amountFactors = self::factorsForColumn($factors, 'total');
@@ -148,10 +156,15 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateCirculationWindow(array $analysis, array $requirement, array $contract): ?string
     {
-        if (($requirement['parameters']['value'] ?? null) !== 'same_as_purchase_window') {
+        $window = $requirement['parameters']['value'] ?? null;
+        $circulation = self::circulationItemCte($analysis);
+        if ($window === 'lifetime_circulation') {
+            return $circulation !== null && ($circulation['predicates']['dateWindows'] ?? []) === []
+                ? null : self::GUIDANCE['circulation_window'];
+        }
+        if ($window !== 'same_as_purchase_window') {
             return self::GUIDANCE['circulation_window'];
         }
-        $circulation = self::circulationItemCte($analysis);
         $spend = self::spendCte($analysis);
         if ($circulation === null || $spend === null) {
             return self::GUIDANCE['circulation_window'];
@@ -173,7 +186,12 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateCallNumberGrouping(array $analysis, array $requirement, array $contract): ?string
     {
-        if (($requirement['parameters']['value'] ?? null) !== 'primary_call_number_class') {
+        $basis = $requirement['parameters']['value'] ?? null;
+        $expectedDerivations = [
+            'primary_call_number_class' => ['substring_alpha_prefix', 'documented_lc_dewey_case'],
+            'first_two_call_number_letters' => ['substring_first_two'],
+        ];
+        if (!isset($expectedDerivations[$basis])) {
             return self::GUIDANCE['call_number_grouping'];
         }
         $groupBy = $analysis['groupBy'] ?? [];
@@ -185,7 +203,7 @@ class ExploratorySqlSemanticValidatorService
             $alias = strtolower((string)($item['alias'] ?? ''));
             if (self::expressionLeaf($expression) === 'call_number_class'
                 && ($groupBy[0] === $expression || ($alias !== '' && $groupBy[0] === $alias))
-                && self::hasCallNumberLineage($expression, $analysis)) {
+                && self::hasCallNumberLineage($expression, $analysis, $expectedDerivations[$basis])) {
                 return null;
             }
         }
@@ -195,7 +213,7 @@ class ExploratorySqlSemanticValidatorService
     private static function validateRequiredOutputMeasures(array $analysis, array $requirement, array $contract): ?string
     {
         $aliases = array_column($analysis['selectItems'] ?? [], 'alias');
-        $required = ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'];
+        $required = $requirement['parameters']['values'] ?? [];
         return array_diff($required, $aliases) === [] ? null : self::GUIDANCE['required_output_measures'];
     }
 
@@ -205,10 +223,12 @@ class ExploratorySqlSemanticValidatorService
         if (!in_array($basis, ['checkouts_per_dollar_with_cost_per_use', 'cost_per_checkout'], true)) {
             return self::GUIDANCE['roi_formula'];
         }
-        $operands = [
-            'checkouts_per_dollar' => ['circulation', 'spend'],
-            'cost_per_checkout' => ['spend', 'circulation'],
-        ];
+        $operands = $basis === 'cost_per_checkout'
+            ? ['cost_per_checkout' => ['spend', 'circulation']]
+            : [
+                'checkouts_per_dollar' => ['circulation', 'spend'],
+                'cost_per_checkout' => ['spend', 'circulation'],
+            ];
         foreach ($operands as $alias => $expected) {
             $item = self::itemForAlias($analysis['selectItems'] ?? [], $alias);
             $division = $item['division'] ?? null;
@@ -339,7 +359,7 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateNumericOutputTypes(array $analysis, array $requirement, array $contract): ?string
     {
-        $measures = ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'];
+        $measures = self::requiredMeasures($contract);
         if (array_intersect($measures, $analysis['formattedAliases'] ?? []) !== []) {
             return self::GUIDANCE['numeric_output_types'];
         }
@@ -350,6 +370,16 @@ class ExploratorySqlSemanticValidatorService
             }
         }
         return null;
+    }
+
+    private static function requiredMeasures(array $contract): array
+    {
+        foreach (($contract['requirements'] ?? []) as $requirement) {
+            if (($requirement['key'] ?? null) === 'required_measures') {
+                return $requirement['parameters']['values'] ?? [];
+            }
+        }
+        return [];
     }
 
     private static function spendCte(array $analysis): ?array
@@ -363,7 +393,6 @@ class ExploratorySqlSemanticValidatorService
         $name = self::finalMeasureCteName($analysis, 'spend');
         $cte = $name === null ? null : ($analysis['ctes'][$name] ?? null);
         return $cte !== null
-            && self::containsTable($cte['tables'] ?? [], 'fund_distributions')
             && self::containsTable($cte['tables'] ?? [], 'po_line')
             ? $name : null;
     }
@@ -593,7 +622,7 @@ class ExploratorySqlSemanticValidatorService
         return $matches[1];
     }
 
-    private static function hasCallNumberLineage(string $expression, array $analysis): bool
+    private static function hasCallNumberLineage(string $expression, array $analysis, array $approvedDerivations): bool
     {
         if (preg_match('/^([a-z_][a-z0-9_$-]*)\.call_number_class$/', $expression, $matches) !== 1) {
             return false;
@@ -605,11 +634,7 @@ class ExploratorySqlSemanticValidatorService
             return false;
         }
         $item = self::itemForAlias($ctes[$cteName]['selectItems'] ?? [], 'call_number_class');
-        if (!in_array(
-            $item['callNumberClassDerivation'] ?? null,
-            ['substring_alpha_prefix', 'documented_lc_dewey_case'],
-            true
-        )) {
+        if (!in_array($item['callNumberClassDerivation'] ?? null, $approvedDerivations, true)) {
             return false;
         }
         $sources = [];

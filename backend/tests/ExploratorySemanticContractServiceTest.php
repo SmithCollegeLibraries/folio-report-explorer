@@ -54,6 +54,14 @@ contractAssertSame('Smith College', $requirementsByKey['campus_scope']['paramete
 contractAssertSame(false, isset($contract['permittedFilters']['material_type']), 'Material type must not be silently permitted.');
 contractAssertSame(false, isset($contract['permittedFilters']['acquisition_unit']), 'Acquisition unit must not be silently permitted.');
 
+$noCampusRequirements = array_column(
+    ExploratorySemanticContractService::build($question, null, $assumptions, 'unsupported_query_family')['requirements'],
+    null,
+    'key'
+);
+contractAssertSame(false, $noCampusRequirements['campus_scope']['parameters']['required'], 'Null campus must remain optional.');
+contractAssertSame('No campus restriction was requested.', $noCampusRequirements['campus_scope']['label'], 'Null campus must not claim a selected campus was applied.');
+
 $canonicalContract = ExploratorySemanticContractService::build(
     $question,
     'Smith College',
@@ -132,6 +140,12 @@ contractAssertSame('Spending uses estimated PO-line prices.', $alternativeLabels
 contractAssertSame('Circulation uses lifetime checkout history.', $alternativeLabels['circulation_window'], 'Circulation labels must reflect the allowlisted alternative.');
 contractAssertSame('Results group by the first two call-number letters.', $alternativeLabels['call_number_grouping'], 'Grouping labels must reflect the allowlisted alternative.');
 contractAssertSame('ROI returns cost per checkout.', $alternativeLabels['roi_formula'], 'ROI labels must reflect the allowlisted alternative.');
+contractAssertSame('Results include purchase count, spending, circulation, and cost per checkout.', $alternativeLabels['required_measures'], 'Required-measure labels must match the selected ROI variant.');
+contractAssertSame(
+    ['purchase_count', 'spend', 'circulation', 'cost_per_checkout'],
+    array_column($alternativeContract['requirements'], null, 'key')['required_measures']['parameters']['values'],
+    'Cost-per-checkout contracts must require only the selected ROI output.'
+);
 
 $unsupportedRequirement = [
     'key' => 'future_blocking_requirement',

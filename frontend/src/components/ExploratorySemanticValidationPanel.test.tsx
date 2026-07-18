@@ -13,6 +13,7 @@ describe('ExploratorySemanticValidationPanel', () => {
       checkedRequirements: [
         { key: 'purchase_date_basis', label: 'Purchases use payment date for the last five years.' },
         { key: 'spend_grain', label: 'Spending is aggregated before item-level circulation is joined.' },
+        { key: 'campus_scope', label: 'No campus restriction was requested.' },
       ],
     };
 
@@ -22,6 +23,7 @@ describe('ExploratorySemanticValidationPanel', () => {
     expect(screen.getByRole('list')).toBeInTheDocument();
     expect(screen.getByText('Purchases use payment date for the last five years.')).toBeInTheDocument();
     expect(screen.getByText('Spending is aggregated before item-level circulation is joined.')).toBeInTheDocument();
+    expect(screen.getByText('No campus restriction was requested.')).toBeInTheDocument();
     expect(screen.queryByText(/SQL fragment|validator stage|evidence/i)).not.toBeInTheDocument();
   });
 

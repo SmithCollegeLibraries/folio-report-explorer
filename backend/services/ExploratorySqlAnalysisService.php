@@ -682,6 +682,11 @@ class ExploratorySqlAnalysisService
         if (self::isSubstringClassDerivation($argument)) {
             return 'substring_alpha_prefix';
         }
+        if (self::derivationTokenSignature($argument) === [
+            'substring', '(', '<call_number>', 'from', '1', 'for', '2', ')',
+        ]) {
+            return 'substring_first_two';
+        }
         return self::isDocumentedCaseClassDerivation($argument) ? 'documented_lc_dewey_case' : null;
     }
 

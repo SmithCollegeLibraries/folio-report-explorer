@@ -109,6 +109,43 @@ $valid = ExploratorySqlSemanticValidatorService::validate($correctedSql, $contra
 semanticAssertSame('validated', $valid['status'], 'Corrected ROI SQL must pass every rule.');
 semanticAssertSame(array_column($contract['requirements'], 'key'), array_column($valid['checkedRequirements'], 'key'), 'Every contract requirement must be checked before validation.');
 
+$estimatedQuestion = $question . ' Use estimated PO line price.';
+$estimatedContract = ExploratorySemanticContractService::build($estimatedQuestion, null, ExploratoryQueryDefaultsService::resolve($estimatedQuestion), 'unsupported_query_family');
+$estimatedSql = str_replace(
+    [
+        'SUM(fd.total * fd.fund_distributions__value * 0.01)',
+        "    FROM invoice.invoice_lines__t__fund_distributions fd\n    JOIN invoice.invoice_lines__t invoice_line ON invoice_line.id = fd.id\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id\n    JOIN orders.po_line__t pol ON pol.id = fd.po_line_id",
+    ],
+    [
+        'SUM(pol.cost__po_line_estimated_price)',
+        "    FROM orders.po_line__t pol\n    JOIN invoice.invoice_lines__t invoice_line ON invoice_line.po_line_id = pol.id\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id",
+    ],
+    $correctedSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($estimatedSql, $estimatedContract)['status'], 'The advertised estimated PO-line price alternative must validate.');
+semanticAssertRejectedFor(str_replace('pol.cost__po_line_estimated_price', 'invoice_line.total', $estimatedSql), $estimatedContract, 'investment_cost_basis', 'Estimated price must resolve to the PO-line estimated-price column.');
+semanticAssertRejectedFor($correctedSql, $estimatedContract, 'investment_cost_basis', 'Paid fund distributions must not satisfy the estimated-price alternative.');
+
+$lifetimeQuestion = $question . ' Use lifetime circulation.';
+$lifetimeContract = ExploratorySemanticContractService::build($lifetimeQuestion, null, ExploratoryQueryDefaultsService::resolve($lifetimeQuestion), 'unsupported_query_family');
+$lifetimeSql = str_replace("     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($lifetimeSql, $lifetimeContract)['status'], 'The advertised lifetime-circulation alternative must validate without an audit window.');
+semanticAssertRejectedFor($correctedSql, $lifetimeContract, 'circulation_window', 'A five-year audit restriction must not satisfy lifetime circulation.');
+semanticAssertRejectedFor(str_replace('GROUP BY item.id, item.holdings_record_id', "WHERE item.updated_at >= CURRENT_DATE - INTERVAL '5 years'\n    GROUP BY item.id, item.holdings_record_id", $lifetimeSql), $lifetimeContract, 'circulation_window', 'Unrelated date-window facts must not satisfy lifetime circulation.');
+
+$firstTwoQuestion = $question . ' Group by the first two call number letters.';
+$firstTwoContract = ExploratorySemanticContractService::build($firstTwoQuestion, null, ExploratoryQueryDefaultsService::resolve($firstTwoQuestion), 'unsupported_query_family');
+$firstTwoSql = str_replace("MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM '^[A-Za-z]+'))", 'MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM 1 FOR 2))', $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($firstTwoSql, $firstTwoContract)['status'], 'The advertised first-two-call-number-letters alternative must validate.');
+semanticAssertRejectedFor($correctedSql, $firstTwoContract, 'call_number_grouping', 'Primary-class extraction must not satisfy the first-two-letter alternative.');
+semanticAssertRejectedFor(str_replace('MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM 1 FOR 2))', 'MIN(holdings.effective_call_number_components__call_number)', $firstTwoSql), $firstTwoContract, 'call_number_grouping', 'Raw call numbers must not satisfy first-two-letter grouping.');
+
+$costOnlyQuestion = $question . ' Use cost per checkout.';
+$costOnlyContract = ExploratorySemanticContractService::build($costOnlyQuestion, null, ExploratoryQueryDefaultsService::resolve($costOnlyQuestion), 'unsupported_query_family');
+$costOnlySql = str_replace("       SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0) AS checkouts_per_dollar,\n", '', $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($costOnlySql, $costOnlyContract)['status'], 'The advertised cost-per-checkout-only alternative must validate without checkouts per dollar.');
+semanticAssertRejectedFor(str_replace('SUM(spend_by_instance.spend) / NULLIF(SUM(circulation_by_instance.circulation), 0)', 'SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0)', $costOnlySql), $costOnlyContract, 'roi_formula', 'Cost per checkout must remain spend over circulation.');
+
 $aliasedFinalSql = str_replace(
     [
         'spend_by_instance.purchase_count', 'spend_by_instance.spend',
@@ -186,6 +223,18 @@ $invoiceContract['requirements'][0]['parameters']['value'] = 'invoice_date';
 semanticAssertRejectedFor($correctedSql, $invoiceContract, 'purchase_date_basis', 'Payment date must not satisfy an invoice-date assumption.');
 $invoiceSql = str_replace('invoice.payment_date', 'invoice.invoice_date', $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($invoiceSql, $invoiceContract)['status'], 'Invoice date must satisfy the explicit invoice-date assumption.');
+$alternativeMatrix = [
+    ['purchase_date_basis', 'invoice_date', $invoiceContract, $invoiceSql],
+    ['investment_cost_basis', 'estimated_po_line_price', $estimatedContract, $estimatedSql],
+    ['circulation_window', 'lifetime_circulation', $lifetimeContract, $lifetimeSql],
+    ['call_number_grouping', 'first_two_call_number_letters', $firstTwoContract, $firstTwoSql],
+    ['roi_formula', 'cost_per_checkout', $costOnlyContract, $costOnlySql],
+];
+foreach ($alternativeMatrix as [$key, $expectedValue, $alternativeValueContract, $alternativeValueSql]) {
+    $requirements = array_column($alternativeValueContract['requirements'], null, 'key');
+    semanticAssertSame($expectedValue, $requirements[$key]['parameters']['value'], 'Defaults must emit the expected advertised alternative.');
+    semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($alternativeValueSql, $alternativeValueContract)['status'], 'Every advertised alternative must have a deterministic validator-pass fixture.');
+}
 semanticAssertRejectedFor(str_replace('invoice.payment_date', 'pot.date_ordered', $correctedSql), $contract, 'purchase_date_basis', 'PO order date must not satisfy purchase-date basis.');
 $leftInvoiceWindowSql = str_replace(
     [
