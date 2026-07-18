@@ -135,8 +135,43 @@ $decoySql = str_replace(
     $correctedSql
 );
 semanticAssertRejectedFor(str_replace('FROM spend_by_instance', 'FROM decoy spend_by_instance', $decoySql), $contract, 'roi_formula', 'Spend qualifier text must not override its final CTE binding.');
+$unusedSpendSql = str_replace('FROM spend_by_instance', 'FROM decoy spend_by_instance', $decoySql);
+semanticAssertRejectedFor($unusedSpendSql, $contract, 'purchase_date_basis', 'An unused valid spend CTE must not satisfy purchase-date proof.');
+semanticAssertRejectedFor($unusedSpendSql, $contract, 'investment_cost_basis', 'An unused valid spend CTE must not satisfy cost-basis proof.');
+semanticAssertRejectedFor($unusedSpendSql, $contract, 'spend_grain', 'An unused valid spend CTE must not satisfy spend-grain proof.');
+$mixedPurchaseSql = str_replace(
+    ['SUM(spend_by_instance.purchase_count) AS purchase_count', 'JOIN class_by_instance ON'],
+    ['SUM(purchase_source.purchase_count) AS purchase_count', 'JOIN decoy purchase_source ON purchase_source.instance_id = spend_by_instance.instance_id' . "\n" . 'JOIN class_by_instance ON'],
+    $decoySql
+);
+semanticAssertRejectedFor($mixedPurchaseSql, $contract, 'spend_grain', 'Final purchase count must resolve to the same validated spend CTE as final spending.');
 semanticAssertRejectedFor(str_replace('LEFT JOIN circulation_by_instance ON', 'LEFT JOIN decoy circulation_by_instance ON', $decoySql), $contract, 'roi_formula', 'Circulation qualifier text must not override its final CTE binding.');
+$unusedCirculationSql = str_replace('LEFT JOIN circulation_by_instance ON', 'LEFT JOIN decoy circulation_by_instance ON', $decoySql);
+semanticAssertRejectedFor($unusedCirculationSql, $contract, 'circulation_window', 'An unused valid checkout chain must not satisfy circulation-window proof.');
+semanticAssertRejectedFor($unusedCirculationSql, $contract, 'circulation_grain', 'An unused valid checkout chain must not satisfy circulation-grain proof.');
 semanticAssertRejectedFor(str_replace('JOIN class_by_instance ON', 'JOIN decoy class_by_instance ON', $decoySql), $contract, 'call_number_grouping', 'Class qualifier text must not override its final CTE binding.');
+
+$aliasedCheckoutDependencySql = str_replace(
+    ['circulation_by_item.checkouts', 'circulation_by_item.holdings_record_id', 'FROM circulation_by_item'],
+    ['checkout_source.checkouts', 'checkout_source.holdings_record_id', 'FROM circulation_by_item checkout_source'],
+    $correctedSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($aliasedCheckoutDependencySql, $contract)['status'], 'An arbitrary alias bound to the validated checkout dependency must pass.');
+$constantCirculationSql = str_replace(
+    "SELECT holdings.instance_id,\n           SUM(circulation_by_item.checkouts) AS circulation\n    FROM circulation_by_item\n    JOIN inventory.holdings_record__t holdings ON holdings.id = circulation_by_item.holdings_record_id\n    GROUP BY holdings.instance_id",
+    "SELECT audit_loan.loan__item_id AS instance_id,\n           1 AS circulation\n    FROM circulation.audit_loan__t audit_loan",
+    $correctedSql
+);
+semanticAssertRejectedFor($constantCirculationSql, $contract, 'circulation_grain', 'Direct audit lineage with a constant circulation measure must not satisfy the validated checkout chain.');
+semanticAssertRejectedFor($constantCirculationSql, $contract, 'roi_formula', 'A constant final circulation source must not satisfy ROI lineage.');
+$checkoutDecoySql = str_replace(
+    '), circulation_by_instance AS (',
+    "), checkout_decoy AS (SELECT 1 AS holdings_record_id, 1 AS checkouts), circulation_by_instance AS (",
+    $correctedSql
+);
+$checkoutDecoySql = str_replace('FROM circulation_by_item', 'FROM checkout_decoy circulation_by_item', $checkoutDecoySql);
+semanticAssertRejectedFor($checkoutDecoySql, $contract, 'circulation_grain', 'A trusted dependency alias rebound to an unrelated CTE must not use an unused valid item-grain CTE.');
+semanticAssertRejectedFor($checkoutDecoySql, $contract, 'roi_formula', 'A decoy checkout dependency must not satisfy circulation measure lineage.');
 
 $captured = ExploratorySqlSemanticValidatorService::validate($capturedProductionSql, $contract);
 semanticAssertSame('rejected', $captured['status'], 'Captured flawed production SQL must be blocked.');
@@ -307,12 +342,29 @@ $campusIndex = array_search('campus_scope', array_column($campusContract['requir
 $campusContract['requirements'][$campusIndex]['parameters'] = ['required' => true, 'value' => 'Smith College'];
 $campusContract['permittedFilters']['campus'] = ['value' => 'Smith College', 'provenance' => 'selected_scope'];
 semanticAssertRejectedFor($correctedSql, $campusContract, 'campus_scope', 'A supplied campus must be enforced.');
+$unusedCampusSql = str_replace(
+    'WITH spend_by_instance AS (',
+    "WITH unused_campus AS (SELECT loccampus.id FROM inventory.loccampus__t loccampus WHERE loccampus.name = 'Smith College'),\nspend_by_instance AS (",
+    $correctedSql
+);
+semanticAssertRejectedFor($unusedCampusSql, $campusContract, 'campus_scope', 'An unused campus-filter CTE must not satisfy campus scope.');
 $campusSql = str_replace(
     "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nGROUP BY",
     "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nJOIN inventory.loccampus__t selected_scope ON selected_scope.id = class_by_instance.instance_id\nWHERE selected_scope.name = 'Smith College'\nGROUP BY",
     $correctedSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusSql, $campusContract)['status'], 'The selected campus filter must satisfy campus scope.');
+$nestedCampusSql = str_replace(
+    'WITH spend_by_instance AS (',
+    "WITH selected_campus AS (SELECT loccampus.id FROM inventory.loccampus__t loccampus WHERE loccampus.name = 'Smith College'),\nspend_by_instance AS (",
+    $correctedSql
+);
+$nestedCampusSql = str_replace(
+    "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nGROUP BY",
+    "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nJOIN selected_campus campus_scope ON campus_scope.id = class_by_instance.instance_id\nGROUP BY",
+    $nestedCampusSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($nestedCampusSql, $campusContract)['status'], 'Campus predicates in a reachable dependency scope must validate.');
 $campusInSql = str_replace("selected_scope.name = 'Smith College'", "selected_scope.name IN ('Smith College')", $campusSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusInSql, $campusContract)['status'], 'Positive campus IN inclusion must be accepted.');
 semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "(selected_scope.name = 'Smith College' OR 1 = 1)", $campusSql), $campusContract, 'campus_scope', 'Parenthesized OR must invalidate campus proof.');

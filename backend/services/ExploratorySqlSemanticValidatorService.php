@@ -137,7 +137,9 @@ class ExploratorySqlSemanticValidatorService
             return self::GUIDANCE['spend_before_item_join'];
         }
         $spendName = self::spendCteName($analysis);
-        if ($spendName === null || self::hasItemOrCirculationLineage($spendName, $analysis['ctes'] ?? [], [])) {
+        if ($spendName === null
+            || self::finalMeasureCteName($analysis, 'purchase_count') !== $spendName
+            || self::hasItemOrCirculationLineage($spendName, $analysis['ctes'] ?? [], [])) {
             return self::GUIDANCE['spend_before_item_join'];
         }
         return null;
@@ -164,38 +166,8 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateCirculationItemGrain(array $analysis, array $requirement, array $contract): ?string
     {
-        $circulation = self::circulationItemCte($analysis);
-        if ($circulation === null) {
-            return self::GUIDANCE['circulation_item_grain'];
-        }
-        $itemAlias = self::aliasForSource($circulation, 'inventory.item__t');
-        $auditAlias = self::aliasForSource($circulation, 'circulation.audit_loan__t');
-        $itemId = self::expressionForAlias($circulation['selectItems'] ?? [], 'item_id');
-        $checkoutAggregate = self::itemForAlias($circulation['selectItems'] ?? [], 'checkouts')['exactAggregate'] ?? null;
-        $expectedGroup = $itemAlias === null ? [] : [$itemAlias . '.id', $itemAlias . '.holdings_record_id'];
-        if ($itemAlias === null || $auditAlias === null
-            || $itemId !== $itemAlias . '.id' || ($circulation['groupBy'] ?? []) !== $expectedGroup
-            || ($checkoutAggregate['function'] ?? null) !== 'count'
-            || !isset($checkoutAggregate['column'])
-            || self::columnSource($circulation, $checkoutAggregate['column']) !== 'circulation.audit_loan__t'
-            || !self::hasColumnEquality(
-                $circulation['predicates']['columnComparisons'] ?? [],
-                $auditAlias . '.loan__item_id',
-                $itemAlias . '.id'
-            )) {
-            return self::GUIDANCE['circulation_item_grain'];
-        }
-        $approved = ['checkedout', 'checkedoutthroughoverride'];
-        foreach (($circulation['predicates']['literalPredicates'] ?? []) as $predicate) {
-            $values = array_map('strtolower', $predicate['values'] ?? []);
-            if (($predicate['column'] ?? null) === $auditAlias . '.loan__action'
-                && empty($predicate['negated'])
-                && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
-                && $values !== [] && array_diff($values, $approved) === []) {
-                return null;
-            }
-        }
-        return self::GUIDANCE['circulation_item_grain'];
+        return self::circulationItemCte($analysis) !== null
+            ? null : self::GUIDANCE['circulation_item_grain'];
     }
 
     private static function validateCallNumberGrouping(array $analysis, array $requirement, array $contract): ?string
@@ -266,7 +238,7 @@ class ExploratorySqlSemanticValidatorService
             || strtolower((string)($campusPermission['value'] ?? '')) !== $expected) {
             return self::GUIDANCE['campus_scope'];
         }
-        foreach (self::allScopes($analysis) as $scope) {
+        foreach (self::reachableScopes($analysis) as $scope) {
             foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
                 $values = array_map('strtolower', $predicate['values'] ?? []);
                 $column = (string)($predicate['column'] ?? '');
@@ -285,7 +257,7 @@ class ExploratorySqlSemanticValidatorService
     private static function validateGovernedFilters(array $analysis, array $requirement, array $contract): ?string
     {
         $permitted = $contract['permittedFilters'] ?? [];
-        foreach (self::allScopes($analysis) as $scope) {
+        foreach (self::reachableScopes($analysis) as $scope) {
             foreach (($scope['predicates']['governedFilters'] ?? []) as $column) {
                 if (strpos($column, 'material_type') !== false
                     && !self::hasFilterProvenance($permitted, 'material_type', 'explicit_prompt')) {
@@ -317,24 +289,18 @@ class ExploratorySqlSemanticValidatorService
 
     private static function spendCte(array $analysis): ?array
     {
-        foreach (($analysis['ctes'] ?? []) as $cte) {
-            if (self::containsTable($cte['tables'] ?? [], 'fund_distributions')
-                && self::containsTable($cte['tables'] ?? [], 'po_line')) {
-                return $cte;
-            }
-        }
-        return null;
+        $name = self::spendCteName($analysis);
+        return $name === null ? null : ($analysis['ctes'][$name] ?? null);
     }
 
     private static function spendCteName(array $analysis): ?string
     {
-        foreach (($analysis['ctes'] ?? []) as $name => $cte) {
-            if (self::containsTable($cte['tables'] ?? [], 'fund_distributions')
-                && self::containsTable($cte['tables'] ?? [], 'po_line')) {
-                return $name;
-            }
-        }
-        return null;
+        $name = self::finalMeasureCteName($analysis, 'spend');
+        $cte = $name === null ? null : ($analysis['ctes'][$name] ?? null);
+        return $cte !== null
+            && self::containsTable($cte['tables'] ?? [], 'fund_distributions')
+            && self::containsTable($cte['tables'] ?? [], 'po_line')
+            ? $name : null;
     }
 
     private static function hasItemOrCirculationLineage(string $name, array $ctes, array $visited): bool
@@ -358,13 +324,62 @@ class ExploratorySqlSemanticValidatorService
 
     private static function circulationItemCte(array $analysis): ?array
     {
-        foreach (($analysis['ctes'] ?? []) as $cte) {
-            if (self::containsTable($cte['tables'] ?? [], 'inventory.item')
-                && self::containsTable($cte['tables'] ?? [], 'audit_loan')) {
-                return $cte;
+        $measureCteName = self::finalMeasureCteName($analysis, 'circulation');
+        $measureCte = $measureCteName === null ? null : ($analysis['ctes'][$measureCteName] ?? null);
+        $aggregate = self::itemForAlias($measureCte['selectItems'] ?? [], 'circulation')['exactAggregate'] ?? null;
+        if (($aggregate['function'] ?? null) !== 'sum'
+            || self::columnLeaf((string)($aggregate['column'] ?? '')) !== 'checkouts') {
+            return null;
+        }
+        $binding = self::resolveColumnBinding($measureCte, (string)$aggregate['column']);
+        $itemCteName = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+        $itemCte = $analysis['ctes'][$itemCteName] ?? null;
+        return $itemCte !== null && self::isValidCirculationItemCte($itemCte) ? $itemCte : null;
+    }
+
+    private static function isValidCirculationItemCte(array $cte): bool
+    {
+        $itemAlias = self::aliasForSource($cte, 'inventory.item__t');
+        $auditAlias = self::aliasForSource($cte, 'circulation.audit_loan__t');
+        $itemId = self::expressionForAlias($cte['selectItems'] ?? [], 'item_id');
+        $checkoutAggregate = self::itemForAlias($cte['selectItems'] ?? [], 'checkouts')['exactAggregate'] ?? null;
+        $expectedGroup = $itemAlias === null ? [] : [$itemAlias . '.id', $itemAlias . '.holdings_record_id'];
+        if ($itemAlias === null || $auditAlias === null
+            || $itemId !== $itemAlias . '.id' || ($cte['groupBy'] ?? []) !== $expectedGroup
+            || ($checkoutAggregate['function'] ?? null) !== 'count'
+            || !isset($checkoutAggregate['column'])
+            || self::columnSource($cte, $checkoutAggregate['column']) !== 'circulation.audit_loan__t'
+            || !self::hasColumnEquality(
+                $cte['predicates']['columnComparisons'] ?? [],
+                $auditAlias . '.loan__item_id',
+                $itemAlias . '.id'
+            )) {
+            return false;
+        }
+        $approved = ['checkedout', 'checkedoutthroughoverride'];
+        foreach (($cte['predicates']['literalPredicates'] ?? []) as $predicate) {
+            $values = array_map('strtolower', $predicate['values'] ?? []);
+            if (($predicate['column'] ?? null) === $auditAlias . '.loan__action'
+                && empty($predicate['negated'])
+                && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
+                && $values !== [] && array_diff($values, $approved) === []) {
+                return true;
             }
         }
-        return null;
+        return false;
+    }
+
+    private static function finalMeasureCteName(array $analysis, string $measure): ?string
+    {
+        $item = self::itemForAlias($analysis['selectItems'] ?? [], $measure);
+        $aggregate = $item['exactAggregate'] ?? null;
+        if (($aggregate['function'] ?? null) !== 'sum'
+            || self::columnLeaf((string)($aggregate['column'] ?? '')) !== $measure) {
+            return null;
+        }
+        $binding = self::resolveColumnBinding($analysis, (string)$aggregate['column']);
+        $name = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+        return $name !== '' && isset($analysis['ctes'][$name]) ? $name : null;
     }
 
     private static function containsTable(array $tables, string $needle): bool
@@ -431,9 +446,9 @@ class ExploratorySqlSemanticValidatorService
             return $cteName === self::spendCteName($analysis)
                 && self::itemForAlias($ctes[$cteName]['selectItems'] ?? [], 'spend') !== null;
         }
-        return isset($ctes[$cteName])
-            && self::itemForAlias($ctes[$cteName]['selectItems'] ?? [], 'circulation') !== null
-            && self::hasTableLineage($cteName, $ctes, 'audit_loan', []);
+        return $measure === 'circulation'
+            && $cteName === self::finalMeasureCteName($analysis, 'circulation')
+            && self::circulationItemCte($analysis) !== null;
     }
 
     private static function hasAggregateMeasureLineage(?array $aggregate, string $measure, array $analysis): bool
@@ -441,23 +456,6 @@ class ExploratorySqlSemanticValidatorService
         return ($aggregate['function'] ?? null) === 'sum'
             && isset($aggregate['column'])
             && self::hasMeasureLineage([$aggregate['column']], $measure, $analysis);
-    }
-
-    private static function hasTableLineage(string $name, array $ctes, string $tableNeedle, array $visited): bool
-    {
-        if (isset($visited[$name]) || !isset($ctes[$name])) {
-            return false;
-        }
-        $visited[$name] = true;
-        if (self::containsTable($ctes[$name]['tables'] ?? [], $tableNeedle)) {
-            return true;
-        }
-        foreach (($ctes[$name]['dependencies'] ?? []) as $dependency) {
-            if (self::hasTableLineage($dependency, $ctes, $tableNeedle, $visited)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static function columnLeaf(string $column): string
@@ -548,9 +546,37 @@ class ExploratorySqlSemanticValidatorService
         return isset($permitted[$filter]) && ($permitted[$filter]['provenance'] ?? null) === $provenance;
     }
 
-    private static function allScopes(array $analysis): array
+    private static function reachableScopes(array $analysis): array
     {
-        return array_merge([$analysis], array_values($analysis['ctes'] ?? []));
+        $scopes = [$analysis];
+        foreach (self::reachableCteNames($analysis) as $name) {
+            $scopes[] = $analysis['ctes'][$name];
+        }
+        return $scopes;
+    }
+
+    private static function reachableCteNames(array $analysis): array
+    {
+        $ctes = $analysis['ctes'] ?? [];
+        $pending = [];
+        foreach (array_keys($analysis['sourceAliases'] ?? []) as $alias) {
+            $binding = self::resolveQualifier($analysis, (string)$alias);
+            if (($binding['kind'] ?? null) === 'cte' && isset($ctes[$binding['source'] ?? ''])) {
+                $pending[] = $binding['source'];
+            }
+        }
+        $reachable = [];
+        while ($pending !== []) {
+            $name = array_shift($pending);
+            if (isset($reachable[$name]) || !isset($ctes[$name])) {
+                continue;
+            }
+            $reachable[$name] = true;
+            foreach (($ctes[$name]['dependencies'] ?? []) as $dependency) {
+                $pending[] = $dependency;
+            }
+        }
+        return array_keys($reachable);
     }
 
     private static function purchaseDateBasis(array $contract): ?string
