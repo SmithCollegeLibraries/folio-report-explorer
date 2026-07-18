@@ -43,16 +43,21 @@ class ExploratorySqlRepairService
             }
         }
 
+        $unmetRequirements = [];
+        foreach ($failure->getSafeViolations() as $violation) {
+            $unmetRequirements[$violation['key']] = [
+                'key' => $violation['key'],
+                'label' => $violation['label'],
+            ];
+        }
+
         return [
             'status' => 'exhausted',
             'repairAttempts' => $repairAttempts,
             'validatorStage' => $failure->getStage(),
             'failureCategory' => $failure->getSafeCategory(),
-            'suggestions' => [
-                'Retry the request.',
-                'Correct an assumption.',
-                'Narrow the period or output.',
-            ],
+            'unmetRequirements' => array_values($unmetRequirements),
+            'suggestions' => self::recoverySuggestions($failure->getSafeViolations()),
         ];
     }
 
@@ -71,6 +76,9 @@ class ExploratorySqlRepairService
             'attemptedPlan' => is_string($context['attemptedPlan'] ?? null)
                 ? $context['attemptedPlan']
                 : '',
+            'safeViolations' => is_array($context['safeViolations'] ?? null)
+                ? $context['safeViolations']
+                : [],
         ];
     }
 
@@ -79,12 +87,13 @@ class ExploratorySqlRepairService
         int $repairNumber,
         ?ExploratorySqlValidationException $failure
     ): array {
-        return $context + [
+        return array_merge($context, [
             'repairNumber' => $repairNumber,
             'previousCandidate' => $failure === null ? null : $failure->getCandidateSql(),
             'validatorStage' => $failure === null ? null : $failure->getStage(),
             'safeCategory' => $failure === null ? null : $failure->getSafeCategory(),
-        ];
+            'safeViolations' => $failure === null ? [] : $failure->getSafeViolations(),
+        ]);
     }
 
     private static function validatedOutcome(array $result, int $repairAttempts): array
@@ -101,5 +110,27 @@ class ExploratorySqlRepairService
         if (!$exception->isRepairable()) {
             throw $exception;
         }
+    }
+
+    private static function recoverySuggestions(array $safeViolations): array
+    {
+        $suggestions = [];
+        foreach ($safeViolations as $violation) {
+            $guidance = $violation['guidance'];
+            $suggestions[$guidance] = $guidance;
+            if (count($suggestions) === 3) {
+                break;
+            }
+        }
+
+        if ($suggestions !== []) {
+            return array_values($suggestions);
+        }
+
+        return [
+            'Retry the request.',
+            'Correct an assumption.',
+            'Narrow the period or output.',
+        ];
     }
 }

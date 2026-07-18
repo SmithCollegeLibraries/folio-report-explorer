@@ -74,6 +74,7 @@ assertSameValue(
         'campus' => 'main',
         'assumptions' => [['key' => 'period', 'value' => 'current_year']],
         'attemptedPlan' => 'Read inventory items.',
+        'safeViolations' => [],
         'repairNumber' => 0,
         'previousCandidate' => null,
         'validatorStage' => null,
@@ -181,6 +182,47 @@ assertSameValue(2, $preflightOutcome['repairAttempts'], 'A successful remaining 
 assertSameValue(1, $preflightCalls, 'One used repair should leave only one repair call available.');
 assertSameValue(2, $preflightContexts[0]['repairNumber'], 'The remaining repair should preserve shared repair numbering.');
 assertSameValue('database_preflight', $preflightContexts[0]['validatorStage'], 'The remaining repair should receive the preflight stage.');
+
+$semanticViolations = [[
+    'key' => 'purchase_date_basis',
+    'category' => 'assumption_mismatch',
+    'label' => 'Purchases use payment date for the last five years.',
+    'guidance' => 'Filter the approved invoice payment-date column with the requested five-year window.',
+]];
+$semanticContexts = [];
+$semanticCalls = 0;
+$semanticOutcome = ExploratorySqlRepairService::run(
+    function (array $context) use (&$semanticContexts, &$semanticCalls, $semanticViolations): array {
+        $semanticContexts[] = $context;
+        $semanticCalls++;
+        throw new ExploratorySqlValidationException(
+            'semantic_conformance',
+            'assumption_mismatch',
+            'SELECT private_candidate_' . $semanticCalls,
+            true,
+            'raw semantic evidence must stay private',
+            null,
+            $semanticViolations
+        );
+    },
+    ['originalQuestion' => 'Compare purchases and circulation ROI']
+);
+
+assertSameValue(3, $semanticCalls, 'Semantic failures should share the initial-plus-two-repair budget.');
+assertSameValue($semanticViolations, $semanticContexts[1]['safeViolations'], 'Repairs should receive only safe semantic violations.');
+assertSameValue(
+    [['key' => 'purchase_date_basis', 'label' => 'Purchases use payment date for the last five years.']],
+    $semanticOutcome['unmetRequirements'],
+    'Recovery should contain stable keys and user-readable labels only.'
+);
+assertFalseValue(
+    strpos(json_encode($semanticOutcome), 'private_candidate_') !== false,
+    'Recovery must not expose rejected SQL.'
+);
+assertFalseValue(
+    strpos(json_encode($semanticOutcome), 'raw semantic evidence') !== false,
+    'Recovery must not expose internal evidence.'
+);
 
 assertSameValue('schema_reference', (new ExploratorySqlValidationException('schema_reference', 'unknown_table', 'SELECT 1', true, 'internal'))->getStage(), 'The validation exception should expose its stage.');
 assertSameValue('unknown_table', (new ExploratorySqlValidationException('schema_reference', 'unknown_table', 'SELECT 1', true, 'internal'))->getSafeCategory(), 'The validation exception should expose its safe category.');
