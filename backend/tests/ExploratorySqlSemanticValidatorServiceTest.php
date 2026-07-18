@@ -132,6 +132,7 @@ semanticAssertRejectedFor(str_replace('fd.total * fd.fund_distributions__value *
 semanticAssertRejectedFor(str_replace('fd.total * fd.fund_distributions__value * 0.01', 'fd.total * 0.01 + fd.fund_distributions__value', $correctedSql), $contract, 'investment_cost_basis', 'Disconnected percentage occurrences must not satisfy cost math.');
 semanticAssertRejectedFor(str_replace('fd.total * fd.fund_distributions__value * 0.01', 'fd.total * fd.fund_distributions__value * 0.01 + fd.fund_distributions__value', $correctedSql), $contract, 'investment_cost_basis', 'A disconnected repeated percentage must fail exactly-once cost math.');
 semanticAssertRejectedFor(str_replace('fd.total * fd.fund_distributions__value * 0.01', 'invoice_line.total * fd.fund_distributions__value * 0.01', $correctedSql), $contract, 'investment_cost_basis', 'Paid amount and percentage must come from the same fund distribution.');
+semanticAssertRejectedFor(str_replace('fd.total * fd.fund_distributions__value * 0.01', 'fake_fd.total * fake_fd.fund_distributions__value * 0.01', $correctedSql), $contract, 'investment_cost_basis', 'Cost factors must resolve to the approved fund-distribution source alias.');
 foreach ([
     'fd.total * fd.fund_distributions__value + 1 / 100',
     'fd.total * fd.fund_distributions__value',
@@ -168,6 +169,17 @@ semanticAssertRejectedFor(str_replace("audit_loan.loan__action IN ('checkedout',
 semanticAssertRejectedFor(str_replace("audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')", "audit_loan.loan__action <> 'returned' AND audit_loan.note = 'checkedout'", $correctedSql), $contract, 'circulation_grain', 'Unrelated checkout substrings must not satisfy action inclusion.');
 semanticAssertRejectedFor(str_replace("audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')", "audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride') OR 1 = 1", $correctedSql), $contract, 'circulation_grain', 'OR must invalidate checkout-action proof.');
 semanticAssertRejectedFor(str_replace("audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')", "COALESCE(audit_loan.loan__action = 'checkedout', FALSE)", $correctedSql), $contract, 'circulation_grain', 'Unsupported Boolean functions must fail closed.');
+semanticAssertRejectedFor(str_replace("audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')", "CASE WHEN audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride') THEN TRUE ELSE TRUE END", $correctedSql), $contract, 'circulation_grain', 'Embedded CASE comparisons must not become checkout-action facts.');
+$brokenItemJoinSql = str_replace('audit_loan.loan__item_id = item.id', 'audit_loan.loan__item_id = item.holdings_record_id', $correctedSql);
+semanticAssertRejectedFor($brokenItemJoinSql, $contract, 'circulation_grain', 'Checkout item id must join to the inventory item id before aggregation.');
+$eventGrainSql = str_replace('GROUP BY item.id, item.holdings_record_id', 'GROUP BY item.id, audit_loan.id, item.holdings_record_id', $correctedSql);
+semanticAssertRejectedFor($eventGrainSql, $contract, 'circulation_grain', 'Event-grain grouping must not satisfy item-grain aggregation.');
+$fakeItemSql = str_replace(
+    ['item.id AS item_id', 'GROUP BY item.id, item.holdings_record_id'],
+    ['fake_item.id AS item_id', 'GROUP BY fake_item.id, item.holdings_record_id'],
+    $correctedSql
+);
+semanticAssertRejectedFor($fakeItemSql, $contract, 'circulation_grain', 'Unresolved item-like aliases must not satisfy item grain.');
 $singleActionSql = str_replace("audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')", "audit_loan.loan__action = 'checkedout'", $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($singleActionSql, $contract)['status'], 'Positive equality on an approved checkout action must be accepted.');
 semanticAssertRejectedFor(str_replace("     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql), $contract, 'circulation_window', 'Circulation date window must be enforced in the item-grain circulation CTE.');
@@ -181,10 +193,12 @@ $incidentalPaymentDateSql = str_replace(
     $correctedSql
 );
 semanticAssertRejectedFor($incidentalPaymentDateSql, $contract, 'purchase_date_basis', 'The expected date basis must own the qualifying purchase window.');
+semanticAssertRejectedFor(str_replace('invoice.payment_date', 'fake_invoice.payment_date', $correctedSql), $contract, 'purchase_date_basis', 'Purchase date qualifiers must resolve to the approved invoice source.');
 semanticAssertRejectedFor(str_replace('GROUP BY item.id, item.holdings_record_id', 'GROUP BY item.holdings_record_id', $correctedSql), $contract, 'circulation_grain', 'Circulation must aggregate at item grain.');
 semanticAssertRejectedFor(str_replace('GROUP BY class_by_instance.call_number_class', 'GROUP BY class_by_instance.instance_id', $correctedSql), $contract, 'call_number_grouping', 'Call-number class must be the final grouping dimension.');
 semanticAssertRejectedFor(str_replace('GROUP BY class_by_instance.call_number_class', 'GROUP BY class_by_instance.not_call_number_class', $correctedSql), $contract, 'call_number_grouping', 'Substring grouping aliases must be rejected.');
 semanticAssertRejectedFor(str_replace('class_by_instance.call_number_class', 'spend_by_instance.call_number_class', $correctedSql), $contract, 'call_number_grouping', 'Call-number grouping must have proven call-number expression lineage.');
+semanticAssertRejectedFor(str_replace('holdings.effective_call_number_components__call_number', 'fake_holdings.effective_call_number_components__call_number', $correctedSql), $contract, 'call_number_grouping', 'Call-number derivation qualifiers must resolve to an approved inventory source.');
 semanticAssertRejectedFor(
     str_replace("MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM '^[A-Za-z]+'))", 'MIN(holdings.effective_call_number_components__call_number)', $correctedSql),
     $contract,
@@ -235,6 +249,12 @@ semanticAssertRejectedFor(str_replace('SUM(circulation_by_instance.circulation) 
 semanticAssertRejectedFor(str_replace('NULLIF(SUM(spend_by_instance.spend), 0) AS checkouts_per_dollar', 'NULLIF(SUM(other.spend), 0) AS checkouts_per_dollar', $correctedSql), $contract, 'roi_formula', 'ROI denominator aliases must have proven spend lineage.');
 $unsafeCaseSql = str_replace('NULLIF(SUM(spend_by_instance.spend), 0)', 'CASE WHEN SUM(spend_by_instance.spend) = 0 THEN NULL ELSE SUM(spend_by_instance.spend) + 1 END', $correctedSql);
 semanticAssertRejectedFor($unsafeCaseSql, $contract, 'roi_formula', 'A CASE must test the exact denominator expression it returns.');
+$multiBranchCaseSql = str_replace(
+    'NULLIF(SUM(spend_by_instance.spend), 0)',
+    'CASE WHEN SUM(spend_by_instance.spend) = 0 THEN NULL WHEN SUM(spend_by_instance.spend) < 0 THEN NULL ELSE SUM(spend_by_instance.spend) END',
+    $correctedSql
+);
+semanticAssertRejectedFor($multiBranchCaseSql, $contract, 'roi_formula', 'Zero-safe CASE must contain exactly one WHEN branch.');
 semanticAssertRejectedFor(str_replace('SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0)', '(SUM(circulation_by_instance.circulation) + 1) / NULLIF(SUM(spend_by_instance.spend), 0)', $correctedSql), $contract, 'roi_formula', 'ROI numerator must be exactly one permitted aggregate.');
 semanticAssertRejectedFor(str_replace('SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0)', 'SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend) + 1, 0)', $correctedSql), $contract, 'roi_formula', 'ROI denominator must be exactly one permitted aggregate.');
 $caseSafeSql = str_replace('NULLIF(SUM(spend_by_instance.spend), 0)', 'CASE WHEN SUM(spend_by_instance.spend) = 0 THEN NULL ELSE SUM(spend_by_instance.spend) END', $correctedSql);
@@ -259,6 +279,8 @@ $campusInSql = str_replace("invoice.campus = 'Smith College'", "invoice.campus I
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusInSql, $campusContract)['status'], 'Positive campus IN inclusion must be accepted.');
 semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "(invoice.campus = 'Smith College' OR 1 = 1)", $campusSql), $campusContract, 'campus_scope', 'Parenthesized OR must invalidate campus proof.');
 semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "COALESCE(invoice.campus = 'Smith College', FALSE)", $campusSql), $campusContract, 'campus_scope', 'Unsupported Boolean wrappers must invalidate campus proof.');
+semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "CASE WHEN invoice.campus = 'Smith College' THEN TRUE ELSE TRUE END", $campusSql), $campusContract, 'campus_scope', 'Embedded CASE comparisons must not become campus facts.');
+semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "(invoice.campus = 'Smith College') = FALSE", $campusSql), $campusContract, 'campus_scope', 'Nested Boolean comparisons must not become campus facts.');
 semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "invoice.campus IN ('Smith College', 'Other College')", $campusSql), $campusContract, 'campus_scope', 'Campus IN must not widen the selected campus scope.');
 foreach ([
     "invoice.campus <> 'Smith College'",

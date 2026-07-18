@@ -105,6 +105,21 @@ analysisAssertSame('purchase_count', $analysis['orderBy'][0]['expression'], 'Fin
 analysisAssertSame('DESC', $analysis['orderBy'][0]['direction'], 'Final ranking direction must be captured.');
 analysisAssertSame(6, count($analysis['selectItems']), 'Final selected expressions must be inspectable.');
 analysisAssertSame(false, $analysis['ambiguous'], 'Supported CTE SQL must analyze deterministically.');
+analysisAssertSame(
+    [
+        'fd' => ['kind' => 'table', 'source' => 'invoice.invoice_lines__t__fund_distributions'],
+        'invoice_line' => ['kind' => 'table', 'source' => 'invoice.invoice_lines__t'],
+        'invoice' => ['kind' => 'table', 'source' => 'invoice.invoices__t'],
+        'pol' => ['kind' => 'table', 'source' => 'orders.po_line__t'],
+    ],
+    $analysis['ctes']['spend_by_instance']['sourceAliases'],
+    'Analysis must bind every spend-scope alias to its physical source.'
+);
+analysisAssertSame(
+    [['left' => 'audit_loan.loan__item_id', 'operator' => '=', 'right' => 'item.id']],
+    $analysis['ctes']['circulation_by_item']['predicates']['columnComparisons'],
+    'Exact column-comparison atoms must preserve checkout-to-item join evidence.'
+);
 $spendItems = analysisItemsByAlias($analysis['ctes']['spend_by_instance']['selectItems']);
 analysisAssertSame(
     [
@@ -148,6 +163,11 @@ $supportedConjunction = ExploratorySqlAnalysisService::analyze(
     "SELECT invoice.id FROM invoice.invoices__t invoice WHERE invoice.campus = 'Smith College' AND invoice.status = 'paid'"
 );
 analysisAssertSame(false, $supportedConjunction['ambiguous'], 'A conjunction of supported simple predicates must remain deterministic.');
+$embeddedCampus = ExploratorySqlAnalysisService::analyze(
+    "SELECT invoice.id FROM invoice.invoices__t invoice WHERE CASE WHEN invoice.campus = 'Smith College' THEN TRUE ELSE TRUE END"
+);
+analysisAssertSame([], $embeddedCampus['predicates']['literalPredicates'], 'Embedded comparisons must not become eligible literal facts.');
+analysisAssertSame(true, $embeddedCampus['ambiguous'], 'Unsupported Boolean atoms must fail closed.');
 $unknownNumeric = ExploratorySqlAnalysisService::analyze(
     'SELECT CONCAT(SUM(invoice.total)) AS spend FROM invoice.invoices__t invoice'
 );
@@ -163,13 +183,11 @@ $literalPredicateAnalysis = ExploratorySqlAnalysisService::analyze(
     "SELECT invoice.id FROM invoice.invoices__t invoice WHERE invoice.campus = 'Smith College' AND invoice.status NOT IN ('cancelled')"
 );
 analysisAssertSame(
-    [
-        ['column' => 'invoice.campus', 'operator' => '=', 'values' => ['Smith College'], 'negated' => false],
-        ['column' => 'invoice.status', 'operator' => 'IN', 'values' => ['cancelled'], 'negated' => true],
-    ],
+    [],
     $literalPredicateAnalysis['predicates']['literalPredicates'],
-    'Literal predicate evidence must preserve exact columns, operators, values, and negation.'
+    'An unsupported NOT IN atom must invalidate all facts in its conjunction.'
 );
+analysisAssertSame(true, $literalPredicateAnalysis['ambiguous'], 'Unsupported negation must fail the predicate scope closed.');
 
 $malformedClauseOrder = ExploratorySqlAnalysisService::analyze(
     'SELECT item.id FROM inventory.item__t item LIMIT 10 ORDER BY item.id DESC'
@@ -258,7 +276,7 @@ foreach ([
 $mixedIn = ExploratorySqlAnalysisService::analyze(
     "SELECT item.id FROM inventory.item__t item WHERE item.status IN ('active') AND item.material_type_id IN (LOWER('book'))"
 );
-analysisAssertSame(['item.status'], $mixedIn['predicates']['governedFilters'], 'Valid IN evidence must not cause invalid IN evidence to be accepted.');
+analysisAssertSame([], $mixedIn['predicates']['governedFilters'], 'An unsupported atom must invalidate every fact in its conjunction.');
 analysisAssertSame(true, $mixedIn['ambiguous'], 'A later unsupported IN must not be masked by an earlier valid IN.');
 
 $aliasCases = [
@@ -310,6 +328,14 @@ analysisAssertSame(1, count($quotedSourceAliases['ctes']['joined_scope']['joins'
 analysisAssertSame('order', $quotedSourceAliases['ctes']['joined_scope']['joins'][0]['alias'], 'Quoted ORDER must remain a source alias.');
 analysisAssertSame('INNER', $quotedSourceAliases['ctes']['joined_scope']['joins'][0]['type'], 'Quoted aliases must not change INNER join classification.');
 analysisAssertSame(false, $quotedSourceAliases['ambiguous'], 'A supported join with quoted keyword aliases must remain deterministic.');
+analysisAssertSame(
+    [
+        'where' => ['kind' => 'table', 'source' => 'inventory.item__t'],
+        'order' => ['kind' => 'table', 'source' => 'inventory.holdings_record__t'],
+    ],
+    $quotedSourceAliases['ctes']['joined_scope']['sourceAliases'],
+    'Quoted aliases must remain stable source bindings.'
+);
 
 $quotedLeftAlias = ExploratorySqlAnalysisService::analyze(
     'WITH joined_scope AS (SELECT "left".id FROM inventory.item__t "left" '

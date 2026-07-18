@@ -119,7 +119,8 @@ class ExploratorySqlSemanticValidatorService
             && count($amountFactors) === 1
             && count($percentageFactors) === 1
             && count($scaleFactors) === 1
-            && self::columnQualifier($amountColumn) === self::columnQualifier($percentageColumn);
+            && self::columnQualifier($amountColumn) === self::columnQualifier($percentageColumn)
+            && self::columnSource($spend, $amountColumn) === 'invoice.invoice_lines__t__fund_distributions';
         return $valid ? null : self::GUIDANCE['investment_cost_basis'];
     }
 
@@ -164,14 +165,26 @@ class ExploratorySqlSemanticValidatorService
     private static function validateCirculationItemGrain(array $analysis, array $requirement, array $contract): ?string
     {
         $circulation = self::circulationItemCte($analysis);
-        if ($circulation === null || self::expressionForAlias($circulation['selectItems'] ?? [], 'item_id') === null
-            || !self::containsExpression($circulation['groupBy'] ?? [], 'item.id')) {
+        if ($circulation === null) {
+            return self::GUIDANCE['circulation_item_grain'];
+        }
+        $itemAlias = self::aliasForSource($circulation, 'inventory.item__t');
+        $auditAlias = self::aliasForSource($circulation, 'circulation.audit_loan__t');
+        $itemId = self::expressionForAlias($circulation['selectItems'] ?? [], 'item_id');
+        $expectedGroup = $itemAlias === null ? [] : [$itemAlias . '.id', $itemAlias . '.holdings_record_id'];
+        if ($itemAlias === null || $auditAlias === null
+            || $itemId !== $itemAlias . '.id' || ($circulation['groupBy'] ?? []) !== $expectedGroup
+            || !self::hasColumnEquality(
+                $circulation['predicates']['columnComparisons'] ?? [],
+                $auditAlias . '.loan__item_id',
+                $itemAlias . '.id'
+            )) {
             return self::GUIDANCE['circulation_item_grain'];
         }
         $approved = ['checkedout', 'checkedoutthroughoverride'];
         foreach (($circulation['predicates']['literalPredicates'] ?? []) as $predicate) {
             $values = array_map('strtolower', $predicate['values'] ?? []);
-            if (self::columnLeaf((string)($predicate['column'] ?? '')) === 'loan__action'
+            if (($predicate['column'] ?? null) === $auditAlias . '.loan__action'
                 && empty($predicate['negated'])
                 && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
                 && $values !== [] && array_diff($values, $approved) === []) {
@@ -358,10 +371,32 @@ class ExploratorySqlSemanticValidatorService
         return false;
     }
 
-    private static function containsExpression(array $expressions, string $needle): bool
+    private static function columnSource(array $scope, string $column): ?string
     {
-        foreach ($expressions as $expression) {
-            if (strpos($expression, $needle) !== false) {
+        $qualifier = self::columnQualifier($column);
+        $binding = $scope['sourceAliases'][$qualifier] ?? null;
+        return ($binding['kind'] ?? null) === 'table' ? ($binding['source'] ?? null) : null;
+    }
+
+    private static function aliasForSource(array $scope, string $source): ?string
+    {
+        $aliases = [];
+        foreach (($scope['sourceAliases'] ?? []) as $alias => $binding) {
+            if (($binding['kind'] ?? null) === 'table' && ($binding['source'] ?? null) === $source) {
+                $aliases[] = $alias;
+            }
+        }
+        return count($aliases) === 1 ? $aliases[0] : null;
+    }
+
+    private static function hasColumnEquality(array $comparisons, string $left, string $right): bool
+    {
+        foreach ($comparisons as $comparison) {
+            if (($comparison['operator'] ?? null) !== '=') {
+                continue;
+            }
+            $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
+            if ($actual === [$left, $right] || $actual === [$right, $left]) {
                 return true;
             }
         }
@@ -442,11 +477,21 @@ class ExploratorySqlSemanticValidatorService
             return false;
         }
         $item = self::itemForAlias($ctes[$matches[1]]['selectItems'] ?? [], 'call_number_class');
-        return in_array(
+        if (!in_array(
             $item['callNumberClassDerivation'] ?? null,
             ['substring_alpha_prefix', 'documented_lc_dewey_case'],
             true
-        );
+        )) {
+            return false;
+        }
+        $sources = [];
+        foreach (($item['referencedColumns'] ?? []) as $column) {
+            if (self::columnLeaf($column) === 'effective_call_number_components__call_number') {
+                $sources[] = self::columnSource($ctes[$matches[1]], $column);
+            }
+        }
+        return $sources !== []
+            && array_diff($sources, ['inventory.item__t', 'inventory.holdings_record__t']) === [];
     }
 
     private static function expressionForAlias(array $items, string $alias): ?string
@@ -493,6 +538,11 @@ class ExploratorySqlSemanticValidatorService
             || self::columnLeaf((string)($facts[0]['column'] ?? '')) !== $expectedColumn
             || ($facts[0]['operator'] ?? null) !== '>='
             || ($facts[0]['expression'] ?? null) !== 'current_date - interval 5 years') {
+            return null;
+        }
+        $expectedSource = $expectedColumn === 'created_date'
+            ? 'circulation.audit_loan__t' : 'invoice.invoices__t';
+        if (self::columnSource($scope, (string)$facts[0]['column']) !== $expectedSource) {
             return null;
         }
         return $facts[0];

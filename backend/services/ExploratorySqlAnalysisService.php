@@ -61,6 +61,7 @@ class ExploratorySqlAnalysisService
         return [
             'ctes' => $ctes,
             'tables' => $finalScope['tables'],
+            'sourceAliases' => $finalScope['sourceAliases'],
             'selectItems' => $finalScope['selectItems'],
             'predicates' => $finalScope['predicates'],
             'groupBy' => $finalScope['groupBy'],
@@ -130,6 +131,7 @@ class ExploratorySqlAnalysisService
             $result['ctes'][$name] = [
                 'tables' => $scope['tables'],
                 'dependencies' => $scope['dependencies'],
+                'sourceAliases' => $scope['sourceAliases'],
                 'selectItems' => $scope['selectItems'],
                 'predicates' => $scope['predicates'],
                 'groupBy' => $scope['groupBy'],
@@ -279,26 +281,28 @@ class ExploratorySqlAnalysisService
         }
         $allPredicateTokens = [];
         $literalPredicates = [];
+        $dateWindows = [];
+        $columnComparisons = [];
+        $predicateAmbiguous = false;
         foreach ($predicateGroups as $group) {
             $allPredicateTokens = array_merge($allPredicateTokens, $group);
-            $literalPredicates = array_merge($literalPredicates, self::literalPredicates($group));
+            $evidence = self::analyzeConjunction($group);
+            $literalPredicates = array_merge($literalPredicates, $evidence['literalPredicates']);
+            $dateWindows = array_merge($dateWindows, $evidence['dateWindows']);
+            $columnComparisons = array_merge($columnComparisons, $evidence['columnComparisons']);
+            $predicateAmbiguous = $predicateAmbiguous || $evidence['ambiguous'];
         }
         $scope['predicates'] = [
             'where' => $whereTokens === [] ? null : self::expressionText($whereTokens),
             'joins' => array_values(array_filter(array_column($scope['joins'], 'predicate'))),
             'dateColumns' => self::datePredicateColumns($allPredicateTokens),
-            'dateWindows' => self::dateWindowFacts($allPredicateTokens),
-            'governedFilters' => self::governedFilters($allPredicateTokens),
+            'dateWindows' => $dateWindows,
+            'governedFilters' => array_values(array_unique(array_column($literalPredicates, 'column'))),
             'literalPredicates' => $literalPredicates,
+            'columnComparisons' => $columnComparisons,
         ];
-        if (self::hasUnsupportedInFilter($allPredicateTokens)) {
+        if ($predicateAmbiguous) {
             $scope['ambiguous'] = true;
-        }
-        foreach ($predicateGroups as $group) {
-            if (self::hasUnsupportedBooleanContext($group)) {
-                $scope['ambiguous'] = true;
-                break;
-            }
         }
         foreach ($scope['joins'] as &$join) {
             unset($join['predicateTokens']);
@@ -535,10 +539,23 @@ class ExploratorySqlAnalysisService
         if (!self::isKeyword($tokens[0] ?? [], 'CASE') || !self::isKeyword(end($tokens) ?: [], 'END')) {
             return null;
         }
-        $when = self::findKeywordIndex($tokens, 'WHEN', 1, $base);
-        $then = self::findKeywordIndex($tokens, 'THEN', 1, $base);
-        $else = self::findKeywordIndex($tokens, 'ELSE', 1, $base);
-        if ($when === null || $then === null || $else === null || !self::isKeyword($tokens[$then + 1] ?? [], 'NULL')) {
+        $branches = ['WHEN' => [], 'THEN' => [], 'ELSE' => [], 'END' => []];
+        foreach ($tokens as $index => $token) {
+            foreach (array_keys($branches) as $keyword) {
+                if (($token['depth'] ?? -1) === $base && self::isKeyword($token, $keyword)) {
+                    $branches[$keyword][] = $index;
+                }
+            }
+        }
+        if (count($branches['WHEN']) !== 1 || count($branches['THEN']) !== 1
+            || count($branches['ELSE']) !== 1 || $branches['END'] !== [count($tokens) - 1]) {
+            return null;
+        }
+        $when = $branches['WHEN'][0];
+        $then = $branches['THEN'][0];
+        $else = $branches['ELSE'][0];
+        if (!($when < $then && $then < $else) || $else !== $then + 2
+            || !self::isKeyword($tokens[$then + 1] ?? [], 'NULL')) {
             return null;
         }
         $condition = array_slice($tokens, $when + 1, $then - $when - 1);
@@ -757,132 +774,155 @@ class ExploratorySqlAnalysisService
         return array_values(array_unique($columns));
     }
 
-    private static function dateWindowFacts(array $tokens): array
+    private static function analyzeConjunction(array $tokens): array
     {
-        $facts = [];
-        for ($index = 0; $index + 6 < count($tokens); $index++) {
-            if (($tokens[$index]['kind'] ?? '') !== 'identifier'
-                || ($tokens[$index + 1]['value'] ?? '') !== '.'
-                || ($tokens[$index + 2]['kind'] ?? '') !== 'identifier') {
-                continue;
-            }
-            $column = $tokens[$index]['value'] . '.' . $tokens[$index + 2]['value'];
-            if (strpos($tokens[$index + 2]['value'], 'date') === false) {
-                continue;
-            }
-            $operator = (string)($tokens[$index + 3]['value'] ?? '');
-            $expression = array_slice($tokens, $index + 4, 4);
-            if (!in_array($operator, ['>=', '>'], true)
-                || !self::isKeyword($expression[0] ?? [], 'CURRENT_DATE')
-                || ($expression[1]['value'] ?? '') !== '-'
-                || !self::isKeyword($expression[2] ?? [], 'INTERVAL')
-                || ($expression[3]['kind'] ?? '') !== 'string') {
-                continue;
-            }
-            $interval = strtolower(self::literalTokenValue($expression[3]));
-            if (preg_match('/^[0-9]+\s+(?:day|days|month|months|year|years)$/', $interval) !== 1) {
-                continue;
-            }
-            $facts[] = [
-                'column' => $column,
-                'operator' => $operator,
-                'expression' => 'current_date - interval ' . $interval,
-            ];
-        }
-        return $facts;
-    }
-
-    private static function hasUnsupportedBooleanContext(array $tokens): bool
-    {
-        foreach ($tokens as $index => $token) {
+        $result = [
+            'literalPredicates' => [],
+            'dateWindows' => [],
+            'columnComparisons' => [],
+            'ambiguous' => false,
+        ];
+        $tokens = self::withoutWrappingParentheses($tokens);
+        foreach ($tokens as $token) {
             if (self::isKeyword($token, 'OR')) {
-                return true;
-            }
-            if (self::isKeyword($token, 'NOT')
-                && !(self::isKeyword($tokens[$index - 1] ?? [], 'IS')
-                    && self::isKeyword($tokens[$index + 1] ?? [], 'NULL'))) {
-                return true;
-            }
-            if (($token['kind'] ?? '') !== 'identifier' || ($tokens[$index + 1]['value'] ?? '') !== '(') {
-                continue;
-            }
-            if (self::isKeyword($token, 'IN') || self::isAnyKeyword($token, ['TRIM', 'LOWER', 'UPPER'])) {
-                continue;
-            }
-            return true;
-        }
-        return false;
-    }
-
-    private static function governedFilters(array $tokens): array
-    {
-        $columns = [];
-        for ($index = 0; $index + 2 < count($tokens); $index++) {
-            if (($tokens[$index]['kind'] ?? '') !== 'identifier'
-                || ($tokens[$index + 1]['value'] ?? '') !== '.'
-                || ($tokens[$index + 2]['kind'] ?? '') !== 'identifier') {
-                continue;
-            }
-            if (self::hasLiteralFilterAfter($tokens, $index + 3)) {
-                $columns[] = $tokens[$index]['value'] . '.' . $tokens[$index + 2]['value'];
+                $result['ambiguous'] = true;
+                return $result;
             }
         }
-        return array_values(array_unique($columns));
+        $base = self::baseDepth($tokens);
+        $atoms = [];
+        $start = 0;
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) === $base && self::isKeyword($token, 'AND')) {
+                $atoms[] = array_slice($tokens, $start, $index - $start);
+                $start = $index + 1;
+            }
+        }
+        $atoms[] = array_slice($tokens, $start);
+        foreach ($atoms as $atom) {
+            $atom = self::withoutWrappingParentheses($atom);
+            $evidence = self::analyzePredicateAtom($atom);
+            if ($evidence === null) {
+                $result['literalPredicates'] = [];
+                $result['dateWindows'] = [];
+                $result['columnComparisons'] = [];
+                $result['ambiguous'] = true;
+                return $result;
+            }
+            if (isset($evidence['literalPredicate'])) {
+                $result['literalPredicates'][] = $evidence['literalPredicate'];
+            }
+            if (isset($evidence['dateWindow'])) {
+                $result['dateWindows'][] = $evidence['dateWindow'];
+            }
+            if (isset($evidence['columnComparison'])) {
+                $result['columnComparisons'][] = $evidence['columnComparison'];
+            }
+        }
+        return $result;
     }
 
-    private static function literalPredicates(array $tokens): array
+    private static function analyzePredicateAtom(array $tokens): ?array
     {
-        $predicates = [];
-        for ($index = 0; $index + 3 < count($tokens); $index++) {
-            if (($tokens[$index]['kind'] ?? '') !== 'identifier'
-                || ($tokens[$index + 1]['value'] ?? '') !== '.'
-                || ($tokens[$index + 2]['kind'] ?? '') !== 'identifier') {
+        if ($tokens === []) {
+            return null;
+        }
+        $dateWindow = self::dateWindowAtom($tokens);
+        if ($dateWindow !== null) {
+            return ['dateWindow' => $dateWindow];
+        }
+        $base = self::baseDepth($tokens);
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) !== $base) {
                 continue;
             }
-            $column = $tokens[$index]['value'] . '.' . $tokens[$index + 2]['value'];
-            $operatorIndex = $index + 3;
-            $negated = self::isNegatedPredicate($tokens, $index);
-            if (self::isKeyword($tokens[$operatorIndex] ?? [], 'NOT')) {
-                $negated = true;
-                $operatorIndex++;
-            }
-            $operator = self::controlValue($tokens[$operatorIndex] ?? []);
-            if ($operator === '') {
-                $operator = (string)($tokens[$operatorIndex]['value'] ?? '');
-            }
-            if ($operator === 'IN') {
-                $values = self::literalListValues($tokens, $operatorIndex + 1);
-                if ($values !== null) {
-                    $predicates[] = [
-                        'column' => $column,
-                        'operator' => 'IN',
-                        'values' => $values,
-                        'negated' => $negated,
-                    ];
+            if (self::isKeyword($token, 'IN')) {
+                $column = self::normalizedColumnOperand(array_slice($tokens, 0, $index));
+                $values = self::literalListValues($tokens, $index + 1);
+                $close = count($tokens) - 1;
+                if ($column === null || $values === null || ($tokens[$close]['value'] ?? '') !== ')') {
+                    return null;
                 }
+                return ['literalPredicate' => [
+                    'column' => $column,
+                    'operator' => 'IN',
+                    'values' => $values,
+                    'negated' => false,
+                ]];
+            }
+            if (!in_array($token['value'] ?? '', ['=', '!=', '<>', '>', '<', '>=', '<='], true)) {
                 continue;
             }
-            if (!in_array($operator, ['=', '!=', '<>', '>', '<', '>=', '<='], true)
-                || !in_array($tokens[$operatorIndex + 1]['kind'] ?? '', ['string', 'number'], true)) {
-                continue;
+            $left = self::normalizedColumnOperand(array_slice($tokens, 0, $index));
+            $rightTokens = array_slice($tokens, $index + 1);
+            if ($left === null) {
+                return null;
             }
-            $predicates[] = [
-                'column' => $column,
-                'operator' => $operator,
-                'values' => [self::literalTokenValue($tokens[$operatorIndex + 1])],
-                'negated' => $negated,
-            ];
+            $rightColumn = self::normalizedColumnOperand($rightTokens);
+            if ($rightColumn !== null && ($token['value'] ?? '') === '=') {
+                return ['columnComparison' => ['left' => $left, 'operator' => '=', 'right' => $rightColumn]];
+            }
+            if (count($rightTokens) === 1
+                && in_array($rightTokens[0]['kind'] ?? '', ['string', 'number'], true)) {
+                return ['literalPredicate' => [
+                    'column' => $left,
+                    'operator' => (string)$token['value'],
+                    'values' => [self::literalTokenValue($rightTokens[0])],
+                    'negated' => false,
+                ]];
+            }
+            return null;
         }
-        return $predicates;
+        $is = self::findKeywordIndex($tokens, 'IS', 0, $base);
+        if ($is !== null && self::normalizedColumnOperand(array_slice($tokens, 0, $is)) !== null
+            && count($tokens) === $is + 3
+            && self::isKeyword($tokens[$is + 1] ?? [], 'NOT')
+            && self::isKeyword($tokens[$is + 2] ?? [], 'NULL')) {
+            return [];
+        }
+        return null;
     }
 
-    private static function isNegatedPredicate(array $tokens, int $columnIndex): bool
+    private static function normalizedColumnOperand(array $tokens): ?string
     {
-        $index = $columnIndex - 1;
-        while ($index >= 0 && ($tokens[$index]['value'] ?? '') === '(') {
-            $index--;
+        $tokens = self::withoutWrappingParentheses($tokens);
+        $column = self::exactColumnReference($tokens);
+        if ($column !== null) {
+            return $column;
         }
-        return self::isKeyword($tokens[$index] ?? [], 'NOT');
+        foreach (['TRIM', 'LOWER', 'UPPER'] as $function) {
+            $argument = self::singleFunctionArgument($tokens, $function);
+            if ($argument !== null) {
+                return self::exactColumnReference(self::withoutWrappingParentheses($argument));
+            }
+        }
+        return null;
+    }
+
+    private static function dateWindowAtom(array $tokens): ?array
+    {
+        $tokens = self::withoutWrappingParentheses($tokens);
+        if (count($tokens) !== 8) {
+            return null;
+        }
+        $column = self::exactColumnReference(array_slice($tokens, 0, 3));
+        $operator = (string)($tokens[3]['value'] ?? '');
+        if ($column === null || !in_array($operator, ['>=', '>'], true)
+            || !self::isKeyword($tokens[4] ?? [], 'CURRENT_DATE')
+            || ($tokens[5]['value'] ?? '') !== '-'
+            || !self::isKeyword($tokens[6] ?? [], 'INTERVAL')
+            || ($tokens[7]['kind'] ?? '') !== 'string') {
+            return null;
+        }
+        $interval = strtolower(self::literalTokenValue($tokens[7]));
+        if (preg_match('/^[0-9]+\s+(?:day|days|month|months|year|years)$/', $interval) !== 1) {
+            return null;
+        }
+        return [
+            'column' => $column,
+            'operator' => $operator,
+            'expression' => 'current_date - interval ' . $interval,
+        ];
     }
 
     private static function literalListValues(array $tokens, int $openIndex): ?array
@@ -922,82 +962,6 @@ class ExploratorySqlAnalysisService
             return str_replace("''", "'", substr($value, 1, -1));
         }
         return $value;
-    }
-
-    private static function hasLiteralFilterAfter(array $tokens, int $start): bool
-    {
-        $operators = ['=', '!=', '<>', '>', '<', '>=', '<=', 'LIKE', 'ILIKE'];
-        $limit = min(count($tokens), $start + 6);
-        for ($index = $start; $index < $limit; $index++) {
-            $operator = self::controlValue($tokens[$index]);
-            if (in_array($operator, $operators, true)) {
-                return in_array($tokens[$index + 1]['kind'] ?? '', ['string', 'number'], true);
-            }
-            if ($operator === 'IN') {
-                return self::hasLiteralOnlyList($tokens, $index + 1);
-            }
-            if (in_array($operator, ['AND', 'OR', ','], true)) {
-                return false;
-            }
-        }
-        return false;
-    }
-
-    private static function hasUnsupportedInFilter(array $tokens): bool
-    {
-        for ($index = 0; $index + 2 < count($tokens); $index++) {
-            if (($tokens[$index]['kind'] ?? '') !== 'identifier'
-                || ($tokens[$index + 1]['value'] ?? '') !== '.'
-                || ($tokens[$index + 2]['kind'] ?? '') !== 'identifier') {
-                continue;
-            }
-            $limit = min(count($tokens), $index + 9);
-            for ($operatorIndex = $index + 3; $operatorIndex < $limit; $operatorIndex++) {
-                $operator = self::controlValue($tokens[$operatorIndex]);
-                if ($operator === 'IN') {
-                    if (!self::hasLiteralOnlyList($tokens, $operatorIndex + 1)) {
-                        return true;
-                    }
-                    break;
-                }
-                if (in_array($operator, ['AND', 'OR', ','], true)) {
-                    break;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static function hasLiteralOnlyList(array $tokens, int $openIndex): bool
-    {
-        if (($tokens[$openIndex]['value'] ?? '') !== '(') {
-            return false;
-        }
-        $openDepth = $tokens[$openIndex]['depth'] ?? -1;
-        $expectLiteral = true;
-        $literalCount = 0;
-        for ($index = $openIndex + 1; $index < count($tokens); $index++) {
-            $token = $tokens[$index];
-            if (($token['value'] ?? '') === ')' && ($token['depth'] ?? -1) === $openDepth) {
-                return !$expectLiteral && $literalCount > 0;
-            }
-            if (($token['depth'] ?? -1) !== $openDepth + 1) {
-                return false;
-            }
-            if ($expectLiteral) {
-                if (!in_array($token['kind'] ?? '', ['string', 'number'], true)) {
-                    return false;
-                }
-                $literalCount++;
-                $expectLiteral = false;
-                continue;
-            }
-            if (($token['value'] ?? '') !== ',') {
-                return false;
-            }
-            $expectLiteral = true;
-        }
-        return false;
     }
 
     private static function analyzeSources(array $tokens, int $fromIndex, int $base, array $knownCtes, array &$scope): void
@@ -1065,7 +1029,13 @@ class ExploratorySqlAnalysisService
                 $afterSource++;
             }
 
-            if (count($parts) === 1 && in_array($source, $knownCtes, true)) {
+            $sourceKind = count($parts) === 1 && in_array($source, $knownCtes, true) ? 'cte' : 'table';
+            if (isset($scope['sourceAliases'][$alias])) {
+                $scope['ambiguous'] = true;
+            }
+            $scope['sourceAliases'][$alias] = ['kind' => $sourceKind, 'source' => $source];
+
+            if ($sourceKind === 'cte') {
                 $scope['dependencies'][] = $source;
             } else {
                 $scope['tables'][] = $source;
@@ -1306,6 +1276,7 @@ class ExploratorySqlAnalysisService
         return [
             'tables' => [],
             'dependencies' => [],
+            'sourceAliases' => [],
             'selectItems' => [],
             'predicates' => [
                 'where' => null,
@@ -1314,6 +1285,7 @@ class ExploratorySqlAnalysisService
                 'dateWindows' => [],
                 'governedFilters' => [],
                 'literalPredicates' => [],
+                'columnComparisons' => [],
             ],
             'groupBy' => [],
             'orderBy' => [],
@@ -1331,6 +1303,7 @@ class ExploratorySqlAnalysisService
         return [
             'ctes' => [],
             'tables' => [],
+            'sourceAliases' => [],
             'selectItems' => [],
             'predicates' => $scope['predicates'],
             'groupBy' => [],
