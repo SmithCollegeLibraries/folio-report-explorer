@@ -87,10 +87,12 @@ namespace app\services {
                 'invoice_lines',
                 'invoices',
                 'po_lines',
+                'purchase_orders',
                 'items',
                 'audit_loans',
                 'holdings_records',
                 'instances',
+                'classifications',
             ];
         }
 
@@ -101,10 +103,12 @@ namespace app\services {
                 'invoice_lines' => 'invoice.invoice_lines__t',
                 'invoices' => 'invoice.invoices__t',
                 'po_lines' => 'orders.po_line__t',
+                'purchase_orders' => 'orders.purchase_order__t',
                 'items' => 'inventory.item__t',
                 'audit_loans' => 'circulation.audit_loan__t',
                 'holdings_records' => 'inventory.holdings_record__t',
                 'instances' => 'inventory.instance__t',
+                'classifications' => 'classification.classification__t',
             ];
         }
 
@@ -263,16 +267,37 @@ GROUP BY class_by_instance.call_number_class
 ORDER BY purchase_count DESC
 SQL;
 
+$capturedProductionSql = <<<'SQL'
+SELECT pc.call_number_class,
+       TO_CHAR(SUM(ilt.total), 'FM$999,999,990.00') AS total_spent,
+       COUNT(DISTINCT pol.id) AS purchase_count,
+       TO_CHAR(SUM(ilt.total) / NULLIF(COUNT(al.id), 0), 'FM$999,999,990.00') AS cost_per_checkout
+FROM orders.po_line__t pol
+JOIN orders.purchase_order__t pot ON pot.id = pol.purchase_order_id
+JOIN invoice.invoice_lines__t ilt ON ilt.po_line_id = pol.id
+JOIN inventory.item__t item ON item.material_type_id = 'book'
+LEFT JOIN circulation.audit_loan__t al ON al.loan__item_id = item.id
+JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id
+JOIN inventory.instance__t instance ON instance.id = holdings.instance_id
+JOIN classification.classification__t pc ON pc.instance_id = instance.id
+WHERE pot.date_ordered >= CURRENT_DATE - INTERVAL '5 years'
+  AND item.material_type_id = 'book'
+GROUP BY pc.call_number_class
+SQL;
+
 RoiTestTransport::$responses = [
-    roiRegressionGeminiText('SELECT missing.id FROM inventory.missing_table__t missing'),
+    roiRegressionGeminiText($capturedProductionSql),
     roiRegressionGeminiText($validRoiSql),
 ];
 RoiTestTransport::$requests = [];
 
-$repaired = GeminiService::generateSqlWithShadow($question, 'Smith College');
+$repaired = GeminiService::generateSqlWithShadow($question);
 roiRegressionAssertSame($validRoiSql, $repaired['sql'] ?? null, 'The motivating request should return the validated repair candidate.');
-roiRegressionAssertSame(1, $repaired['repairAttempts'] ?? null, 'The motivating request should succeed after one repair.');
+roiRegressionAssertSame(1, $repaired['repairAttempts'] ?? null, 'Five semantic defects should trigger one automatic repair.');
 roiRegressionAssertSame('validated', $repaired['validationSummary']['status'] ?? null, 'The repaired candidate should be marked validated.');
+roiRegressionAssertSame('validated', $repaired['semanticValidation']['status'] ?? null, 'Returned exploratory SQL must pass semantic conformance.');
+roiRegressionAssertSame(1, $repaired['semanticValidation']['contractVersion'] ?? null, 'The response must identify the checked contract version.');
+roiRegressionAssertSame(12, count($repaired['semanticValidation']['checkedRequirements'] ?? []), 'Every ROI requirement must be checked.');
 roiRegressionAssertSame('unsupported_query_family', $repaired['routeReason'] ?? null, 'The motivating request should enter exploratory generation through normal unsupported-family routing.');
 roiRegressionAssertSame(false, $repaired['needsExploratoryApproval'] ?? null, 'Unsupported routing should not require an exploratory approval gate.');
 roiRegressionAssertSame(
@@ -294,6 +319,11 @@ roiRegressionAssertContains('ORDER BY purchase_count DESC', $repaired['sql'] ?? 
 roiRegressionAssertSame(2, count(RoiTestTransport::$requests), 'Success after one repair should make exactly two model calls.');
 
 $repairPrompt = json_encode(RoiTestTransport::$requests[1]);
+roiRegressionAssertContains('purchase_date_basis', $repairPrompt, 'Repair feedback must identify the unmet date requirement.');
+roiRegressionAssertContains('spend_grain', $repairPrompt, 'Repair feedback must identify the unsafe grain.');
+roiRegressionAssertContains('purchase_ranking', $repairPrompt, 'Repair feedback must identify missing ranking.');
+roiRegressionAssertContains('governed_filters', $repairPrompt, 'Repair feedback must identify unrequested filters.');
+roiRegressionAssertContains('numeric_output_types', $repairPrompt, 'Repair feedback must identify formatted numeric outputs.');
 roiRegressionAssertContains('po_line_id', $repairPrompt, 'The repair prompt should preserve the invoice-to-PO-line join guidance.');
 roiRegressionAssertContains('orders.po_line__t.instance_id', $repairPrompt, 'The repair prompt should preserve the PO-line-to-instance join guidance.');
 roiRegressionAssertContains('Aggregate spend before joining item-level circulation', $repairPrompt, 'The repair prompt should preserve spend pre-aggregation guidance.');

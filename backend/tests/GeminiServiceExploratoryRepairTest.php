@@ -83,8 +83,26 @@ namespace app\services {
         }
 
         public static function getMetadata(): array { return ['scraped_at' => 'test']; }
-        public static function getTableNames(): array { return ['item__t']; }
-        public static function discoverTableMapping(): array { return ['item__t' => 'inventory.item__t']; }
+        public static function getTableNames(): array
+        {
+            return [
+                'item__t', 'po_line__t', 'purchase_order__t', 'invoice_lines__t',
+                'audit_loan__t', 'holdings_record__t', 'instance__t', 'classification__t',
+            ];
+        }
+        public static function discoverTableMapping(): array
+        {
+            return [
+                'item__t' => 'inventory.item__t',
+                'po_line__t' => 'orders.po_line__t',
+                'purchase_order__t' => 'orders.purchase_order__t',
+                'invoice_lines__t' => 'invoice.invoice_lines__t',
+                'audit_loan__t' => 'circulation.audit_loan__t',
+                'holdings_record__t' => 'inventory.holdings_record__t',
+                'instance__t' => 'inventory.instance__t',
+                'classification__t' => 'classification.classification__t',
+            ];
+        }
 
         public static function fuzzyMatch($table)
         {
@@ -194,6 +212,27 @@ function roiPrompt(): string
     return 'Show ROI for purchases and circulation by call number, including checkouts and investment.';
 }
 
+function semanticallyFlawedRoiSql(): string
+{
+    return <<<'SQL'
+SELECT pc.call_number_class,
+       TO_CHAR(SUM(ilt.total), 'FM$999,999,990.00') AS total_spent,
+       COUNT(DISTINCT pol.id) AS purchase_count,
+       TO_CHAR(SUM(ilt.total) / NULLIF(COUNT(al.id), 0), 'FM$999,999,990.00') AS cost_per_checkout
+FROM orders.po_line__t pol
+JOIN orders.purchase_order__t pot ON pot.id = pol.purchase_order_id
+JOIN invoice.invoice_lines__t ilt ON ilt.po_line_id = pol.id
+JOIN inventory.item__t item ON item.material_type_id = 'book'
+LEFT JOIN circulation.audit_loan__t al ON al.loan__item_id = item.id
+JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id
+JOIN inventory.instance__t instance ON instance.id = holdings.instance_id
+JOIN classification.classification__t pc ON pc.instance_id = instance.id
+WHERE pot.date_ordered >= CURRENT_DATE - INTERVAL '5 years'
+  AND item.material_type_id = 'book'
+GROUP BY pc.call_number_class
+SQL;
+}
+
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
     geminiText('SELECT ii.id FROM inventory.item__t ii'),
@@ -201,17 +240,18 @@ TestTransport::$responses = [
 TestTransport::$requests = [];
 Yii::$logs = [];
 
-$repaired = GeminiService::generateSqlWithShadow(roiPrompt(), 'Smith College', null, true);
+$repaired = GeminiService::generateSqlWithShadow('Show item identifiers for inventory.', 'Smith College', null, true);
 repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $repaired['sql'] ?? null, 'A bad initial table should be replaced by the valid repair candidate.');
 repairAssertSame(1, $repaired['repairAttempts'] ?? null, 'One automatic repair should be reported.');
 repairAssertSame('validated', $repaired['validationSummary']['status'] ?? null, 'Successful exploratory SQL should be marked validated.');
-repairAssertSame(5, count($repaired['assumptions'] ?? []), 'The documented ROI defaults should be returned.');
+repairAssertSame(0, count($repaired['assumptions'] ?? []), 'Unrelated exploratory requests should not receive ROI assumptions.');
+repairAssertSame(false, isset($repaired['semanticValidation']), 'Non-applicable exploratory requests should not display a false semantic checklist.');
 repairAssertSame(2, count(TestTransport::$requests), 'Bad-then-valid generation should make one initial request and one repair request.');
 
 $repairPayload = json_encode(TestTransport::$requests[1]);
 repairAssertContains('SELECT mt.id FROM inventory.missing_table__t mt', $repairPayload, 'The repair request should contain the previous SQL candidate.');
 repairAssertContains('unknown_table', $repairPayload, 'The repair request should contain the safe validation category.');
-repairAssertContains('DOCUMENTED INTERPRETATIONS', $repairPayload, 'The repair request should contain documented assumptions.');
+repairAssertContains('None documented.', $repairPayload, 'The repair request should safely represent absent assumptions.');
 repairAssertContains('SCOPED SCHEMA', $repairPayload, 'The repair request should contain fresh scoped schema context.');
 repairAssertContains('Smith College', $repairPayload, 'The repair request should explicitly preserve the separately supplied campus.');
 
@@ -429,12 +469,12 @@ try {
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];
 Yii::$logs = [];
 $preflight = GeminiService::repairExploratorySqlAfterPreflight(
-    roiPrompt(),
+    'Show item identifiers.',
     'Smith College',
     [
         'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
         'repairAttempts' => 1,
-        'assumptions' => $repaired['assumptions'],
+        'routeReason' => 'unsupported_query_family',
         'explanation' => 'Join purchase and circulation facts.',
     ],
     'ERROR: column ii.missing_column does not exist at character 15'
@@ -445,6 +485,31 @@ $preflightPayload = json_encode(TestTransport::$requests[count(TestTransport::$r
 repairAssertContains('unknown_column', $preflightPayload, 'Preflight errors should be reduced to a safe category.');
 repairAssertSame(false, strpos($preflightPayload, 'at character 15') !== false, 'Raw PostgreSQL error detail must not enter repair prompts.');
 repairAssertSame(0, count(terminalTelemetryOutcomes()), 'A repaired candidate must not emit terminal validated until controller re-preflight succeeds.');
+
+TestTransport::$responses = [geminiText(semanticallyFlawedRoiSql())];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$semanticPreflightExhaustion = GeminiService::repairExploratorySqlAfterPreflight(
+    roiPrompt(),
+    'Smith College',
+    [
+        'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
+        'repairAttempts' => 1,
+        'routeReason' => 'unsupported_query_family',
+        'explanation' => 'Join purchase and circulation facts.',
+    ],
+    'ERROR: column ii.missing_column does not exist at character 15'
+);
+repairAssertSame(1, count(TestTransport::$requests), 'A semantic rejection after preflight should use only the one remaining repair call.');
+repairAssertSame(2, $semanticPreflightExhaustion['repairAttempts'] ?? null, 'Semantic rejection after preflight must consume the remaining shared repair budget.');
+repairAssertSame(false, isset($semanticPreflightExhaustion['sql']), 'Semantic exhaustion after preflight must not expose rejected SQL.');
+repairAssertSame('semantic_conformance', $semanticPreflightExhaustion['validationSummary']['validatorStage'] ?? null, 'Recovery should identify semantic conformance as the exhausted stage.');
+repairAssertSame(true, count($semanticPreflightExhaustion['unmetRequirements'] ?? []) > 0, 'Recovery should return safe unmet semantic requirements.');
+repairAssertContains("I couldn't produce a report that matched every checked requirement", $semanticPreflightExhaustion['validationSummary']['message'] ?? '', 'Semantic exhaustion should use the checked-requirements recovery message.');
+repairAssertSame(false, strpos(json_encode($semanticPreflightExhaustion), semanticallyFlawedRoiSql()) !== false, 'Semantic recovery must not leak the rejected SQL candidate.');
+$semanticTelemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
+repairAssertSame(false, strpos($semanticTelemetry, semanticallyFlawedRoiSql()) !== false, 'Semantic telemetry must not expose rejected SQL.');
+repairAssertSame(false, strpos($semanticTelemetry, roiPrompt()) !== false, 'Semantic telemetry must not expose the original prompt.');
 
 Yii::$logs = [];
 try {

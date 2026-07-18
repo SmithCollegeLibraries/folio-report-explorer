@@ -9,7 +9,9 @@ use app\exceptions\ExploratorySqlValidationException;
 
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
+require_once __DIR__ . '/ExploratorySemanticContractService.php';
 require_once __DIR__ . '/ExploratorySqlRepairService.php';
+require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
 require_once __DIR__ . '/../exceptions/ExploratorySqlValidationException.php';
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
@@ -262,11 +264,18 @@ class GeminiService
     {
         $assumptions = ExploratoryQueryDefaultsService::resolve($prompt);
         $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
+        $semanticContract = ExploratorySemanticContractService::build(
+            $prompt,
+            is_string($campus) ? $campus : null,
+            $assumptions,
+            $reason
+        );
         $context = [
             'originalQuestion' => $prompt,
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
+            'semanticContract' => $semanticContract,
             'route' => 'exploratory_legacy_freeform',
             'routeReason' => $reason,
         ];
@@ -370,12 +379,17 @@ class GeminiService
             'assumptions' => $context['assumptions'] ?? [],
             'attemptedPlan' => $context['attemptedPlan'] ?? '',
             'suggestions' => $outcome['suggestions'] ?? [],
+            'unmetRequirements' => is_array($outcome['unmetRequirements'] ?? null)
+                ? $outcome['unmetRequirements']
+                : [],
             'validationSummary' => [
                 'status' => 'exhausted',
                 'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
                 'validatorStage' => $outcome['validatorStage'] ?? 'response_validation',
                 'failureCategory' => $outcome['failureCategory'] ?? 'validation_failure',
-                'message' => 'I could not produce SQL that passed validation within the automatic repair limit.',
+                'message' => ($outcome['validatorStage'] ?? null) === 'semantic_conformance'
+                    ? "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption."
+                    : 'I could not produce SQL that passed validation within the automatic repair limit.',
             ],
             'recoveryContext' => [
                 'originalQuestion' => (string)($context['originalQuestion'] ?? ''),
@@ -5349,6 +5363,12 @@ PROMPT;
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
+            'semanticContract' => ExploratorySemanticContractService::build(
+                $prompt,
+                is_string($campus) ? $campus : null,
+                $assumptions,
+                (string)($currentResult['routeReason'] ?? 'preflight_validation_failed')
+            ),
             'route' => $currentResult['route'] ?? 'exploratory',
             'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
         ];
@@ -5432,12 +5452,25 @@ Correct the reported validation failure without weakening filters or omitting re
 Use only supplied schema tables and columns. Never access blocked data or produce non-SELECT SQL.
 PROMPT;
 
+        $semanticGuidance = [];
+        foreach (($context['safeViolations'] ?? []) as $violation) {
+            if (!is_array($violation)) {
+                continue;
+            }
+            $semanticGuidance[] = sprintf(
+                '- %s: %s',
+                (string)($violation['key'] ?? ''),
+                (string)($violation['guidance'] ?? '')
+            );
+        }
+
         $userContent = implode("\n\n", [
             "ORIGINAL QUESTION\n" . $question,
             "CAMPUS SCOPE\n" . $campusScope,
             "PREVIOUS CANDIDATE\n" . (string)($context['previousCandidate'] ?? ''),
             "VALIDATOR STAGE\n" . (string)($context['validatorStage'] ?? 'response_validation'),
             "SAFE CATEGORY\n" . (string)($context['safeCategory'] ?? 'validation_failure'),
+            "SEMANTIC REQUIREMENTS TO CORRECT\n" . ($semanticGuidance !== [] ? implode("\n", $semanticGuidance) : 'None supplied.'),
             "ASSUMPTIONS\n" . ($assumptionGuidance !== '' ? $assumptionGuidance : 'None documented.'),
             "ATTEMPTED PLAN\n" . (string)($context['attemptedPlan'] ?? ''),
             "SCOPED SCHEMA CONTEXT\n" . $schemaContext,
@@ -5490,8 +5523,45 @@ PROMPT;
 
         try {
             $result = $attempt();
+            $contract = is_array($context['semanticContract'] ?? null)
+                ? $context['semanticContract']
+                : [];
+            $semanticValidation = ExploratorySqlSemanticValidatorService::validate(
+                (string)($result['sql'] ?? ''),
+                $contract
+            );
+            if (($semanticValidation['status'] ?? null) === 'rejected') {
+                $violations = is_array($semanticValidation['violations'] ?? null)
+                    ? $semanticValidation['violations']
+                    : [];
+                throw new ExploratorySqlValidationException(
+                    'semantic_conformance',
+                    (string)($violations[0]['category'] ?? 'semantic_coverage_gap'),
+                    (string)($result['sql'] ?? ''),
+                    true,
+                    'The exploratory SQL candidate did not satisfy its semantic contract.',
+                    null,
+                    $violations
+                );
+            }
+            if (($semanticValidation['status'] ?? null) === 'validated') {
+                $result['semanticValidation'] = $semanticValidation;
+            }
+            $checkedRequirements = is_array($semanticValidation['checkedRequirements'] ?? null)
+                ? $semanticValidation['checkedRequirements']
+                : [];
+            $ruleKeys = array_map(
+                static function (array $requirement): string {
+                    return (string)($requirement['key'] ?? '');
+                },
+                $checkedRequirements
+            );
+            sort($ruleKeys);
             self::logNlTelemetry('nl2sql.exploratory_repair_outcome', array_merge($telemetry, [
                 'candidateLength' => strlen((string)($result['sql'] ?? '')),
+                'contractVersion' => (int)($semanticValidation['contractVersion'] ?? 0),
+                'failureCount' => 0,
+                'ruleKeys' => $ruleKeys,
                 'elapsedMs' => (int)round((microtime(true) - $startedAt) * 1000),
                 'outcome' => 'validated',
             ]));
@@ -5502,6 +5572,17 @@ PROMPT;
                 $failureTelemetry['stage'] = $exception->getStage();
                 $failureTelemetry['category'] = $exception->getSafeCategory();
                 $failureTelemetry['candidateLength'] = strlen($exception->getCandidateSql());
+                $safeViolations = $exception->getSafeViolations();
+                $ruleKeys = array_values(array_unique(array_map(
+                    static function (array $violation): string {
+                        return (string)($violation['key'] ?? '');
+                    },
+                    $safeViolations
+                )));
+                sort($ruleKeys);
+                $failureTelemetry['ruleKeys'] = $ruleKeys;
+                $failureTelemetry['failureCount'] = count($safeViolations);
+                $failureTelemetry['contractVersion'] = (int)($context['semanticContract']['contractVersion'] ?? 0);
             }
             $failureTelemetry['elapsedMs'] = (int)round((microtime(true) - $startedAt) * 1000);
             $failureTelemetry['outcome'] = 'rejected';
