@@ -109,6 +109,35 @@ $valid = ExploratorySqlSemanticValidatorService::validate($correctedSql, $contra
 semanticAssertSame('validated', $valid['status'], 'Corrected ROI SQL must pass every rule.');
 semanticAssertSame(array_column($contract['requirements'], 'key'), array_column($valid['checkedRequirements'], 'key'), 'Every contract requirement must be checked before validation.');
 
+$aliasedFinalSql = str_replace(
+    [
+        'spend_by_instance.purchase_count', 'spend_by_instance.spend',
+        'circulation_by_instance.circulation', 'class_by_instance.call_number_class',
+        'FROM spend_by_instance', 'JOIN class_by_instance ON', 'LEFT JOIN circulation_by_instance ON',
+    ],
+    [
+        's.purchase_count', 's.spend',
+        'c.circulation', 'cb.call_number_class',
+        'FROM spend_by_instance s', 'JOIN class_by_instance cb ON', 'LEFT JOIN circulation_by_instance c ON',
+    ],
+    $correctedSql
+);
+$aliasedFinalSql = str_replace(
+    ['class_by_instance.instance_id = spend_by_instance.instance_id', 'circulation_by_instance.instance_id = spend_by_instance.instance_id'],
+    ['cb.instance_id = s.instance_id', 'c.instance_id = s.instance_id'],
+    $aliasedFinalSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($aliasedFinalSql, $contract)['status'], 'Arbitrary final aliases bound to approved CTEs must validate.');
+
+$decoySql = str_replace(
+    ")\nSELECT class_by_instance.call_number_class,",
+    "), decoy AS (SELECT 1 AS instance_id, 1 AS purchase_count, 1 AS spend, 1 AS circulation, 'X' AS call_number_class)\nSELECT class_by_instance.call_number_class,",
+    $correctedSql
+);
+semanticAssertRejectedFor(str_replace('FROM spend_by_instance', 'FROM decoy spend_by_instance', $decoySql), $contract, 'roi_formula', 'Spend qualifier text must not override its final CTE binding.');
+semanticAssertRejectedFor(str_replace('LEFT JOIN circulation_by_instance ON', 'LEFT JOIN decoy circulation_by_instance ON', $decoySql), $contract, 'roi_formula', 'Circulation qualifier text must not override its final CTE binding.');
+semanticAssertRejectedFor(str_replace('JOIN class_by_instance ON', 'JOIN decoy class_by_instance ON', $decoySql), $contract, 'call_number_grouping', 'Class qualifier text must not override its final CTE binding.');
+
 $captured = ExploratorySqlSemanticValidatorService::validate($capturedProductionSql, $contract);
 semanticAssertSame('rejected', $captured['status'], 'Captured flawed production SQL must be blocked.');
 semanticAssertContainsAll(
@@ -182,6 +211,11 @@ $fakeItemSql = str_replace(
 semanticAssertRejectedFor($fakeItemSql, $contract, 'circulation_grain', 'Unresolved item-like aliases must not satisfy item grain.');
 $singleActionSql = str_replace("audit_loan.loan__action IN ('checkedout', 'checkedOutThroughOverride')", "audit_loan.loan__action = 'checkedout'", $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($singleActionSql, $contract)['status'], 'Positive equality on an approved checkout action must be accepted.');
+semanticAssertRejectedFor(str_replace('COUNT(audit_loan.created_date) AS checkouts', '1 AS checkouts', $correctedSql), $contract, 'circulation_grain', 'A constant must not satisfy checkout aggregate proof.');
+semanticAssertRejectedFor(str_replace('COUNT(audit_loan.created_date) AS checkouts', 'SUM(item.id) AS checkouts', $correctedSql), $contract, 'circulation_grain', 'An unrelated SUM must not satisfy checkout aggregate proof.');
+semanticAssertRejectedFor(str_replace('COUNT(audit_loan.created_date) AS checkouts', 'COUNT(item.id) AS checkouts', $correctedSql), $contract, 'circulation_grain', 'COUNT of inventory item must not satisfy checkout aggregate proof.');
+$auditIdCountSql = str_replace('COUNT(audit_loan.created_date) AS checkouts', 'COUNT(audit_loan.id) AS checkouts', $correctedSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($auditIdCountSql, $contract)['status'], 'COUNT of an audit-loan id must satisfy checkout aggregate proof.');
 semanticAssertRejectedFor(str_replace("     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql), $contract, 'circulation_window', 'Circulation date window must be enforced in the item-grain circulation CTE.');
 semanticAssertRejectedFor(str_replace("audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'", "audit_loan.created_date >= CURRENT_DATE - INTERVAL '3 years'", $correctedSql), $contract, 'circulation_window', 'Circulation must use the same date window as purchases.');
 $unknownWindowContract = $contract;
@@ -273,25 +307,34 @@ $campusIndex = array_search('campus_scope', array_column($campusContract['requir
 $campusContract['requirements'][$campusIndex]['parameters'] = ['required' => true, 'value' => 'Smith College'];
 $campusContract['permittedFilters']['campus'] = ['value' => 'Smith College', 'provenance' => 'selected_scope'];
 semanticAssertRejectedFor($correctedSql, $campusContract, 'campus_scope', 'A supplied campus must be enforced.');
-$campusSql = str_replace("WHERE invoice.payment_date", "WHERE invoice.campus = 'Smith College' AND invoice.payment_date", $correctedSql);
+$campusSql = str_replace(
+    "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nGROUP BY",
+    "LEFT JOIN circulation_by_instance ON circulation_by_instance.instance_id = spend_by_instance.instance_id\nJOIN inventory.loccampus__t selected_scope ON selected_scope.id = class_by_instance.instance_id\nWHERE selected_scope.name = 'Smith College'\nGROUP BY",
+    $correctedSql
+);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusSql, $campusContract)['status'], 'The selected campus filter must satisfy campus scope.');
-$campusInSql = str_replace("invoice.campus = 'Smith College'", "invoice.campus IN ('Smith College')", $campusSql);
+$campusInSql = str_replace("selected_scope.name = 'Smith College'", "selected_scope.name IN ('Smith College')", $campusSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($campusInSql, $campusContract)['status'], 'Positive campus IN inclusion must be accepted.');
-semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "(invoice.campus = 'Smith College' OR 1 = 1)", $campusSql), $campusContract, 'campus_scope', 'Parenthesized OR must invalidate campus proof.');
-semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "COALESCE(invoice.campus = 'Smith College', FALSE)", $campusSql), $campusContract, 'campus_scope', 'Unsupported Boolean wrappers must invalidate campus proof.');
-semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "CASE WHEN invoice.campus = 'Smith College' THEN TRUE ELSE TRUE END", $campusSql), $campusContract, 'campus_scope', 'Embedded CASE comparisons must not become campus facts.');
-semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "(invoice.campus = 'Smith College') = FALSE", $campusSql), $campusContract, 'campus_scope', 'Nested Boolean comparisons must not become campus facts.');
-semanticAssertRejectedFor(str_replace("invoice.campus = 'Smith College'", "invoice.campus IN ('Smith College', 'Other College')", $campusSql), $campusContract, 'campus_scope', 'Campus IN must not widen the selected campus scope.');
+semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "(selected_scope.name = 'Smith College' OR 1 = 1)", $campusSql), $campusContract, 'campus_scope', 'Parenthesized OR must invalidate campus proof.');
+semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "COALESCE(selected_scope.name = 'Smith College', FALSE)", $campusSql), $campusContract, 'campus_scope', 'Unsupported Boolean wrappers must invalidate campus proof.');
+semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "CASE WHEN selected_scope.name = 'Smith College' THEN TRUE ELSE TRUE END", $campusSql), $campusContract, 'campus_scope', 'Embedded CASE comparisons must not become campus facts.');
+semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "(selected_scope.name = 'Smith College') = FALSE", $campusSql), $campusContract, 'campus_scope', 'Nested Boolean comparisons must not become campus facts.');
+semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "selected_scope.name IN ('Smith College', 'Other College')", $campusSql), $campusContract, 'campus_scope', 'Campus IN must not widen the selected campus scope.');
 foreach ([
-    "invoice.campus <> 'Smith College'",
-    "invoice.campus NOT IN ('Smith College')",
-    "NOT invoice.campus = 'Smith College'",
-    "NOT (invoice.campus = 'Smith College')",
-    "invoice.not_campus = 'Smith College'",
+    "selected_scope.name <> 'Smith College'",
+    "selected_scope.name NOT IN ('Smith College')",
+    "NOT selected_scope.name = 'Smith College'",
+    "NOT (selected_scope.name = 'Smith College')",
+    "selected_scope.not_name = 'Smith College'",
 ] as $invalidCampusPredicate) {
-    $invalidCampusSql = str_replace("invoice.campus = 'Smith College'", $invalidCampusPredicate, $campusSql);
+    $invalidCampusSql = str_replace("selected_scope.name = 'Smith College'", $invalidCampusPredicate, $campusSql);
     semanticAssertRejectedFor($invalidCampusSql, $campusContract, 'campus_scope', 'Only positive inclusion on the exact campus column may satisfy campus scope.');
 }
+$quotedCampusSql = str_replace('selected_scope', '"where"', $campusSql);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($quotedCampusSql, $campusContract)['status'], 'A quoted arbitrary alias bound to loccampus must validate.');
+semanticAssertRejectedFor(str_replace('selected_scope.name', 'fake_scope.name', $campusSql), $campusContract, 'campus_scope', 'A fake campus-name qualifier must be rejected even with an unused approved source.');
+semanticAssertRejectedFor(str_replace('selected_scope.name', 'fake_scope.campus', $campusSql), $campusContract, 'campus_scope', 'A fake campus-column qualifier must be rejected even with an unused approved source.');
+semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "invoice.campus = 'Smith College'", $campusSql), $campusContract, 'campus_scope', 'An unapproved campus source must be rejected.');
 $campusWithoutProvenance = $campusContract;
 $campusWithoutProvenance['permittedFilters']['campus'] = ['value' => 'Smith College'];
 semanticAssertRejectedFor($campusSql, $campusWithoutProvenance, 'campus_scope', 'Campus scope without selected-scope provenance must fail closed.');

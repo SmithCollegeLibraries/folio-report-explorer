@@ -252,6 +252,7 @@ class ExploratorySqlAnalysisService
                 'referencedColumnOccurrences' => self::referencedColumnOccurrences($expressionTokens),
                 'functions' => $functions,
                 'aggregate' => count(array_intersect($functions, ['avg', 'count', 'max', 'min', 'sum'])) > 0,
+                'exactAggregate' => self::exactAggregate($expressionTokens),
                 'aggregateMultiplication' => self::aggregateMultiplication($expressionTokens),
                 'division' => self::divisionStructure($expressionTokens),
                 'provenNumeric' => self::isProvenNumericExpression($expressionTokens),

@@ -107,6 +107,15 @@ analysisAssertSame(6, count($analysis['selectItems']), 'Final selected expressio
 analysisAssertSame(false, $analysis['ambiguous'], 'Supported CTE SQL must analyze deterministically.');
 analysisAssertSame(
     [
+        'spend_by_instance' => ['kind' => 'cte', 'source' => 'spend_by_instance'],
+        'class_by_instance' => ['kind' => 'cte', 'source' => 'class_by_instance'],
+        'circulation_by_instance' => ['kind' => 'cte', 'source' => 'circulation_by_instance'],
+    ],
+    $analysis['sourceAliases'],
+    'Final-scope aliases must bind to their actual CTE sources.'
+);
+analysisAssertSame(
+    [
         'fd' => ['kind' => 'table', 'source' => 'invoice.invoice_lines__t__fund_distributions'],
         'invoice_line' => ['kind' => 'table', 'source' => 'invoice.invoice_lines__t'],
         'invoice' => ['kind' => 'table', 'source' => 'invoice.invoices__t'],
@@ -121,6 +130,12 @@ analysisAssertSame(
     'Exact column-comparison atoms must preserve checkout-to-item join evidence.'
 );
 $spendItems = analysisItemsByAlias($analysis['ctes']['spend_by_instance']['selectItems']);
+$circulationItems = analysisItemsByAlias($analysis['ctes']['circulation_by_item']['selectItems']);
+analysisAssertSame(
+    ['function' => 'count', 'column' => 'audit_loan.created_date'],
+    $circulationItems['checkouts']['exactAggregate'],
+    'Checkout analysis must preserve its exact aggregate function and source column.'
+);
 analysisAssertSame(
     [
         'operator' => '*',

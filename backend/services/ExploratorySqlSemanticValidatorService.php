@@ -171,9 +171,13 @@ class ExploratorySqlSemanticValidatorService
         $itemAlias = self::aliasForSource($circulation, 'inventory.item__t');
         $auditAlias = self::aliasForSource($circulation, 'circulation.audit_loan__t');
         $itemId = self::expressionForAlias($circulation['selectItems'] ?? [], 'item_id');
+        $checkoutAggregate = self::itemForAlias($circulation['selectItems'] ?? [], 'checkouts')['exactAggregate'] ?? null;
         $expectedGroup = $itemAlias === null ? [] : [$itemAlias . '.id', $itemAlias . '.holdings_record_id'];
         if ($itemAlias === null || $auditAlias === null
             || $itemId !== $itemAlias . '.id' || ($circulation['groupBy'] ?? []) !== $expectedGroup
+            || ($checkoutAggregate['function'] ?? null) !== 'count'
+            || !isset($checkoutAggregate['column'])
+            || self::columnSource($circulation, $checkoutAggregate['column']) !== 'circulation.audit_loan__t'
             || !self::hasColumnEquality(
                 $circulation['predicates']['columnComparisons'] ?? [],
                 $auditAlias . '.loan__item_id',
@@ -208,7 +212,7 @@ class ExploratorySqlSemanticValidatorService
             $alias = strtolower((string)($item['alias'] ?? ''));
             if (self::expressionLeaf($expression) === 'call_number_class'
                 && ($groupBy[0] === $expression || ($alias !== '' && $groupBy[0] === $alias))
-                && self::hasCallNumberLineage($expression, $analysis['ctes'] ?? [])) {
+                && self::hasCallNumberLineage($expression, $analysis)) {
                 return null;
             }
         }
@@ -265,7 +269,9 @@ class ExploratorySqlSemanticValidatorService
         foreach (self::allScopes($analysis) as $scope) {
             foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
                 $values = array_map('strtolower', $predicate['values'] ?? []);
-                if (self::columnLeaf((string)($predicate['column'] ?? '')) === 'campus'
+                $column = (string)($predicate['column'] ?? '');
+                if (self::columnLeaf($column) === 'name'
+                    && self::columnSource($scope, $column) === 'inventory.loccampus__t'
                     && empty($predicate['negated'])
                     && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
                     && $values === [$expected]) {
@@ -373,15 +379,15 @@ class ExploratorySqlSemanticValidatorService
 
     private static function columnSource(array $scope, string $column): ?string
     {
-        $qualifier = self::columnQualifier($column);
-        $binding = $scope['sourceAliases'][$qualifier] ?? null;
+        $binding = self::resolveColumnBinding($scope, $column);
         return ($binding['kind'] ?? null) === 'table' ? ($binding['source'] ?? null) : null;
     }
 
     private static function aliasForSource(array $scope, string $source): ?string
     {
         $aliases = [];
-        foreach (($scope['sourceAliases'] ?? []) as $alias => $binding) {
+        foreach (array_keys($scope['sourceAliases'] ?? []) as $alias) {
+            $binding = self::resolveQualifier($scope, (string)$alias);
             if (($binding['kind'] ?? null) === 'table' && ($binding['source'] ?? null) === $source) {
                 $aliases[] = $alias;
             }
@@ -415,14 +421,19 @@ class ExploratorySqlSemanticValidatorService
         if (count($columns) !== 1 || self::columnLeaf($columns[0]) !== $measure) {
             return false;
         }
-        $qualifier = self::columnQualifier($columns[0]);
+        $binding = self::resolveColumnBinding($analysis, $columns[0]);
+        if (($binding['kind'] ?? null) !== 'cte') {
+            return false;
+        }
+        $cteName = (string)($binding['source'] ?? '');
         $ctes = $analysis['ctes'] ?? [];
         if ($measure === 'spend') {
-            return $qualifier === self::spendCteName($analysis);
+            return $cteName === self::spendCteName($analysis)
+                && self::itemForAlias($ctes[$cteName]['selectItems'] ?? [], 'spend') !== null;
         }
-        return isset($ctes[$qualifier])
-            && self::itemForAlias($ctes[$qualifier]['selectItems'] ?? [], 'circulation') !== null
-            && self::hasTableLineage($qualifier, $ctes, 'audit_loan', []);
+        return isset($ctes[$cteName])
+            && self::itemForAlias($ctes[$cteName]['selectItems'] ?? [], 'circulation') !== null
+            && self::hasTableLineage($cteName, $ctes, 'audit_loan', []);
     }
 
     private static function hasAggregateMeasureLineage(?array $aggregate, string $measure, array $analysis): bool
@@ -470,13 +481,18 @@ class ExploratorySqlSemanticValidatorService
         return $matches[1];
     }
 
-    private static function hasCallNumberLineage(string $expression, array $ctes): bool
+    private static function hasCallNumberLineage(string $expression, array $analysis): bool
     {
-        if (preg_match('/^([a-z_][a-z0-9_$-]*)\.call_number_class$/', $expression, $matches) !== 1
-            || !isset($ctes[$matches[1]])) {
+        if (preg_match('/^([a-z_][a-z0-9_$-]*)\.call_number_class$/', $expression, $matches) !== 1) {
             return false;
         }
-        $item = self::itemForAlias($ctes[$matches[1]]['selectItems'] ?? [], 'call_number_class');
+        $binding = self::resolveQualifier($analysis, $matches[1]);
+        $cteName = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+        $ctes = $analysis['ctes'] ?? [];
+        if ($cteName === '' || !isset($ctes[$cteName])) {
+            return false;
+        }
+        $item = self::itemForAlias($ctes[$cteName]['selectItems'] ?? [], 'call_number_class');
         if (!in_array(
             $item['callNumberClassDerivation'] ?? null,
             ['substring_alpha_prefix', 'documented_lc_dewey_case'],
@@ -487,11 +503,28 @@ class ExploratorySqlSemanticValidatorService
         $sources = [];
         foreach (($item['referencedColumns'] ?? []) as $column) {
             if (self::columnLeaf($column) === 'effective_call_number_components__call_number') {
-                $sources[] = self::columnSource($ctes[$matches[1]], $column);
+                $sources[] = self::columnSource($ctes[$cteName], $column);
             }
         }
         return $sources !== []
             && array_diff($sources, ['inventory.item__t', 'inventory.holdings_record__t']) === [];
+    }
+
+    private static function resolveColumnBinding(array $scope, string $column): ?array
+    {
+        return self::resolveQualifier($scope, self::columnQualifier($column));
+    }
+
+    private static function resolveQualifier(array $scope, string $qualifier): ?array
+    {
+        $binding = $scope['sourceAliases'][strtolower($qualifier)] ?? null;
+        if (!is_array($binding)
+            || !in_array($binding['kind'] ?? null, ['table', 'cte'], true)
+            || !is_string($binding['source'] ?? null)
+            || $binding['source'] === '') {
+            return null;
+        }
+        return ['kind' => $binding['kind'], 'source' => $binding['source']];
     }
 
     private static function expressionForAlias(array $items, string $alias): ?string
