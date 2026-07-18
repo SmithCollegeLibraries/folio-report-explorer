@@ -10,6 +10,7 @@ import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
 import { ExploratoryAssumptionsPanel } from '../components/ExploratoryAssumptionsPanel';
 import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel';
+import { ExploratorySemanticValidationPanel } from '../components/ExploratorySemanticValidationPanel';
 import { useToast } from '../components/ToastProvider';
 import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
@@ -2141,6 +2142,9 @@ export default function Ask() {
                 repairCount={nlResult.repairAttempts ?? nlResult.validationSummary?.repairAttempts ?? 0}
                 onCorrect={handleCorrectAssumption}
               />
+            )}
+            {nlResult.mode === 'exploratory' && nlResult.semanticValidation && (
+              <ExploratorySemanticValidationPanel validation={nlResult.semanticValidation} />
             )}
 
             {/* Tab toggle bar */}

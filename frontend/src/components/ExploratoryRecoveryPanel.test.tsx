@@ -56,6 +56,46 @@ describe('ExploratoryRecoveryPanel', () => {
     );
   });
 
+  it('shows unmet requirement labels without exposing semantic validator internals', () => {
+    const onRetry = vi.fn();
+    const onRefine = vi.fn();
+    render(
+      <ExploratoryRecoveryPanel
+        response={{
+          ...response,
+          unmetRequirements: [
+            { key: 'purchase_date_basis', label: 'Confirm which purchase date defines the reporting window.' },
+            { key: 'spend_grain', label: 'Aggregate spending before joining item-level circulation.' },
+          ],
+          validationSummary: {
+            status: 'exhausted',
+            repairAttempts: 2,
+            validatorStage: 'semantic_conformance',
+            failureCategory: 'semantic_conformance_failed',
+          },
+        }}
+        onRetry={onRetry}
+        onRefine={onRefine}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'What still needs to be resolved' })).toBeInTheDocument();
+    expect(screen.getByText('Confirm which purchase date defines the reporting window.')).toBeInTheDocument();
+    expect(screen.getByText('Aggregate spending before joining item-level circulation.')).toBeInTheDocument();
+    expect(screen.queryByText(/safe failure category/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/semantic conformance failed/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledWith('Compare investment and circulation ROI');
+    fireEvent.click(screen.getByRole('button', { name: 'Refine with: Use cost per checkout as ROI.' }));
+    expect(onRefine).toHaveBeenCalledWith(
+      'Compare investment and circulation ROI',
+      'Use cost per checkout as ROI.',
+    );
+    expect(screen.queryByText(/Generated SQL/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run/i })).not.toBeInTheDocument();
+  });
+
   it('renders rejected unsafe SQL with deterministic refinement actions and no SQL controls', () => {
     const onRefine = vi.fn();
     render(

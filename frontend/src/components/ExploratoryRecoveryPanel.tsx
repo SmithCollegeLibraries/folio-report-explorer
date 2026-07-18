@@ -22,6 +22,7 @@ function formatFailureCategory(category?: string): string {
 export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: ExploratoryRecoveryPanelProps) {
   const originalQuestion = response.recoveryContext?.originalQuestion?.trim() || '';
   const isRejected = response.validationSummary?.status === 'rejected';
+  const isSemanticConformanceFailure = response.validationSummary?.validatorStage === 'semantic_conformance';
   const suppliedSuggestions = response.suggestions?.length
     ? response.suggestions
     : response.exploratoryPlan?.suggestions || [];
@@ -41,7 +42,7 @@ export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: Explor
       </p>
 
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-        {!isRejected && (
+        {!isRejected && !isSemanticConformanceFailure && (
           <div className="rounded-md border border-amber-200 bg-white p-3">
             <dt className="text-xs font-semibold uppercase tracking-wide text-amber-800">Safe failure category</dt>
             <dd className="mt-1 text-gray-800">{formatFailureCategory(response.validationSummary?.failureCategory)}</dd>
@@ -54,6 +55,20 @@ export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: Explor
           </div>
         )}
       </dl>
+
+      {response.unmetRequirements && response.unmetRequirements.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-semibold text-amber-950">What still needs to be resolved</h3>
+          <ul className="mt-2 space-y-1 text-sm text-amber-900">
+            {response.unmetRequirements.map((requirement) => (
+              <li key={requirement.key} className="flex gap-2">
+                <span aria-hidden="true">•</span>
+                <span>{requirement.label}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {response.assumptions && response.assumptions.length > 0 && (
         <div className="mt-4">

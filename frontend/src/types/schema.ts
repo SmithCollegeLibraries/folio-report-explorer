@@ -333,6 +333,17 @@ export interface RecoveryContext {
   campus?: string | null;
 }
 
+export interface SemanticRequirementLabel {
+  key: string;
+  label: string;
+}
+
+export interface SemanticValidation {
+  status: 'validated';
+  contractVersion: number;
+  checkedRequirements: SemanticRequirementLabel[];
+}
+
 export interface NlResponse {
   errorType?: string;
   sql?: string;
@@ -350,6 +361,9 @@ export interface NlResponse {
   assumptions?: ExploratoryAssumption[];
   repairAttempts?: number;
   validationSummary?: ValidationSummary;
+  semanticContractApplicable?: boolean;
+  semanticValidation?: SemanticValidation;
+  unmetRequirements?: SemanticRequirementLabel[];
   recoveryContext?: RecoveryContext;
   attemptedPlan?: string;
   clarificationType?: string;
