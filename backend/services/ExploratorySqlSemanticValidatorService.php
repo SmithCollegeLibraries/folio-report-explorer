@@ -951,19 +951,21 @@ class ExploratorySqlSemanticValidatorService
     private static function isPreaggregatedInvoiceScope(array $funded): bool
     {
         $invoiceLine = self::aliasForSource($funded, 'invoice.invoice_lines__t');
+        $invoice = self::aliasForSource($funded, 'invoice.invoices__t');
         $distribution = self::aliasForSource($funded, 'invoice.invoice_lines__t__fund_distributions');
-        if ($invoiceLine === null || $distribution === null
+        if ($invoiceLine === null || $invoice === null || $distribution === null
             || self::expressionForAlias($funded['selectItems'] ?? [], 'invoice_line_id') !== $invoiceLine . '.id'
             || self::expressionForAlias($funded['selectItems'] ?? [], 'po_line_id') !== $invoiceLine . '.po_line_id'
             || self::expressionForAlias($funded['selectItems'] ?? [], 'quantity') !== $invoiceLine . '.quantity'
-            || self::expressionForAlias($funded['selectItems'] ?? [], 'currency') !== $invoiceLine . '.currency'
+            || self::expressionForAlias($funded['selectItems'] ?? [], 'currency') !== $invoice . '.currency'
             || ($funded['groupBy'] ?? []) !== [
                 $invoiceLine . '.id',
                 $invoiceLine . '.po_line_id',
                 $invoiceLine . '.quantity',
-                $invoiceLine . '.currency',
+                $invoice . '.currency',
             ]
-            || !self::hasEnforcingColumnEquality($funded, $distribution . '.id', $invoiceLine . '.id')) {
+            || !self::hasEnforcingColumnEquality($funded, $distribution . '.id', $invoiceLine . '.id')
+            || !self::hasEnforcingColumnEquality($funded, $invoice . '.id', $invoiceLine . '.invoice_id')) {
             return false;
         }
         $spend = self::itemForAlias($funded['selectItems'] ?? [], 'spend');

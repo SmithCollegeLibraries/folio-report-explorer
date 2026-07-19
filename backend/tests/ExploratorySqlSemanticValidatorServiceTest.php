@@ -633,7 +633,7 @@ $physicalSql = str_replace(
 );
 $physicalSql = str_replace(
     'WITH exact_paid_lines AS (',
-    "WITH funded_invoice_lines AS (\n    SELECT invoice_line.id AS invoice_line_id,\n           invoice_line.po_line_id AS po_line_id,\n           invoice_line.quantity AS quantity,\n           invoice_line.currency AS currency,\n           SUM(fd.total * (fd.fund_distributions__value * 0.01)) AS spend\n    FROM invoice.invoice_lines__t invoice_line\n    JOIN invoice.invoice_lines__t__fund_distributions fd ON fd.id = invoice_line.id\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id\n    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'\n    GROUP BY invoice_line.id, invoice_line.po_line_id, invoice_line.quantity, invoice_line.currency\n), exact_paid_lines AS (",
+    "WITH funded_invoice_lines AS (\n    SELECT invoice_line.id AS invoice_line_id,\n           invoice_line.po_line_id AS po_line_id,\n           invoice_line.quantity AS quantity,\n           invoice.currency AS currency,\n           SUM(fd.total * (fd.fund_distributions__value * 0.01)) AS spend\n    FROM invoice.invoice_lines__t invoice_line\n    JOIN invoice.invoice_lines__t__fund_distributions fd ON fd.id = invoice_line.id\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id\n    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'\n    GROUP BY invoice_line.id, invoice_line.po_line_id, invoice_line.quantity, invoice.currency\n), exact_paid_lines AS (",
     $physicalSql
 );
 $physicalSql = str_replace(
@@ -692,7 +692,19 @@ $physicalSql = str_replace(
 );
 semanticAssertRejectedFor($rawFundDistributionSql, $physicalContract, 'spend_grain', 'Raw fund-distribution joins must not multiply invoice-line physical quantity.');
 $physicalResult = ExploratorySqlSemanticValidatorService::validate($physicalSql, $physicalContract);
-semanticAssertSame('validated', $physicalResult['status'], 'Policy-backed physical ROI must validate.');
+semanticAssertSame('validated', $physicalResult['status'], 'An enforcing invoice join with invoice-header currency must validate.');
+$wrongInvoiceLineCurrencySql = str_replace(
+    ['invoice.currency AS currency', 'invoice_line.quantity, invoice.currency'],
+    ['invoice_line.currency AS currency', 'invoice_line.quantity, invoice_line.currency'],
+    $physicalSql
+);
+semanticAssertRejectedFor($wrongInvoiceLineCurrencySql, $physicalContract, 'spend_grain', 'Funded-line currency must not bind to the nonexistent invoice-line currency column.');
+$nullableInvoiceJoinSql = str_replace(
+    "    JOIN invoice.invoice_lines__t__fund_distributions fd ON fd.id = invoice_line.id\n    JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id",
+    "    JOIN invoice.invoice_lines__t__fund_distributions fd ON fd.id = invoice_line.id\n    LEFT JOIN invoice.invoices__t invoice ON invoice.id = invoice_line.invoice_id",
+    $physicalSql
+);
+semanticAssertRejectedFor($nullableInvoiceJoinSql, $physicalContract, 'spend_grain', 'Invoice-header currency requires an enforcing invoice-line-to-invoice join.');
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($physicalSql, $physicalContract)['status'], 'Row-preserving exact links must allow fully unmatched invoice lines to use instance fallback.');
 semanticAssertRejectedFor(str_replace('LEFT JOIN orders.pieces__t receiving_piece', 'INNER JOIN orders.pieces__t receiving_piece', $physicalSql), $physicalContract, 'spend_grain', 'Receiving-piece exact linkage must remain row-preserving.');
 semanticAssertRejectedFor(str_replace('LEFT JOIN eligible_current_smith_items eligible_exact_item', 'INNER JOIN eligible_current_smith_items eligible_exact_item', $physicalSql), $physicalContract, 'spend_grain', 'Eligible-item exact linkage must remain row-preserving.');
