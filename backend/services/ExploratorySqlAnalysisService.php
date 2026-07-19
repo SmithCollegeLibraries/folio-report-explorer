@@ -244,6 +244,17 @@ class ExploratorySqlAnalysisService
                 $alias = self::outputAlias($itemTokens);
                 $expressionTokens = self::withoutOutputAlias($itemTokens);
             }
+            $inferredAlias = false;
+            if ($alias === null) {
+                $expression = self::expressionText($expressionTokens);
+                if (preg_match('/^(?:[a-z_][a-z0-9_$-]*\.)?([a-z_][a-z0-9_$-]*)$/', $expression, $matches) === 1) {
+                    $alias = $matches[1];
+                    $inferredAlias = true;
+                }
+            }
+            if ($inferredAlias && isset($scope['outputAliases'][$alias])) {
+                $alias = null;
+            }
             $functions = self::functionNames($expressionTokens);
             $scope['selectItems'][] = [
                 'expression' => self::expressionText($expressionTokens),

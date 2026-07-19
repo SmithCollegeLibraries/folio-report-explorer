@@ -328,7 +328,8 @@ $aliasCases = [
     ['SELECT amount + tax FROM invoice.invoice_lines__t', 'amount + tax', null, false],
     ['SELECT CASE WHEN paid THEN amount ELSE total END FROM invoice.invoice_lines__t', 'case when paid then amount else total end', null, false],
     ['SELECT amount::numeric FROM invoice.invoice_lines__t', 'amount::numeric', null, false],
-    ['SELECT amount FROM invoice.invoice_lines__t', 'amount', null, false],
+    ['SELECT amount FROM invoice.invoice_lines__t', 'amount', 'amount', false],
+    ['SELECT funded_line.currency FROM funded_invoice_lines funded_line', 'funded_line.currency', 'currency', false],
     ['SELECT amount + tax AS total FROM invoice.invoice_lines__t', 'amount + tax', 'total', false],
     ['SELECT COUNT(*) purchase_count FROM invoice.invoice_lines__t', 'count (*)', 'purchase_count', false],
 ];

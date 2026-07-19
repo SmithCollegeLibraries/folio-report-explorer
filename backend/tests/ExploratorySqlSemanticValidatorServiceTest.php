@@ -705,6 +705,27 @@ $nullableInvoiceJoinSql = str_replace(
     $physicalSql
 );
 semanticAssertRejectedFor($nullableInvoiceJoinSql, $physicalContract, 'spend_grain', 'Invoice-header currency requires an enforcing invoice-line-to-invoice join.');
+$intermediateFundedSql = preg_replace(
+    '/funded_invoice_lines AS \(/',
+    'funded_invoice_line_source AS (',
+    $physicalSql,
+    1
+);
+$intermediateFundedSql = str_replace(
+    '), exact_paid_lines AS (',
+    "), funded_invoice_lines AS (\n    SELECT funded_source.invoice_line_id,\n           funded_source.po_line_id,\n           funded_source.quantity,\n           funded_source.currency,\n           funded_source.spend\n    FROM funded_invoice_line_source funded_source\n), exact_paid_lines AS (",
+    (string)$intermediateFundedSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($intermediateFundedSql, $physicalContract)['status'], 'A consumed intermediate funded-line CTE must retain recursive purchase and currency lineage.');
+preg_match('/funded_invoice_lines AS \((.*?)\), exact_paid_lines AS \(/s', $physicalSql, $fundedMatch);
+$wrongConsumedWindowSql = str_replace('invoice.payment_date >=', 'invoice.invoice_date >=', $physicalSql);
+$deadCorrectFundedSql = preg_replace(
+    '/^WITH /',
+    "WITH dead_funded_invoice_lines AS (" . ($fundedMatch[1] ?? '') . "), ",
+    $wrongConsumedWindowSql,
+    1
+);
+semanticAssertRejectedFor((string)$deadCorrectFundedSql, $physicalContract, 'purchase_date_basis', 'A dead correct-looking funded CTE must not repair the consumed purchase-date lineage.');
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($physicalSql, $physicalContract)['status'], 'Row-preserving exact links must allow fully unmatched invoice lines to use instance fallback.');
 semanticAssertRejectedFor(str_replace('LEFT JOIN orders.pieces__t receiving_piece', 'INNER JOIN orders.pieces__t receiving_piece', $physicalSql), $physicalContract, 'spend_grain', 'Receiving-piece exact linkage must remain row-preserving.');
 semanticAssertRejectedFor(str_replace('LEFT JOIN eligible_current_smith_items eligible_exact_item', 'INNER JOIN eligible_current_smith_items eligible_exact_item', $physicalSql), $physicalContract, 'spend_grain', 'Eligible-item exact linkage must remain row-preserving.');
