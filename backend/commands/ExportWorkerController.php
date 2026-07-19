@@ -89,7 +89,7 @@ class ExportWorkerController extends Controller
     private function runningFolioJobCount()
     {
         return (int) QueryJob::find()
-            ->where(['status' => 'running'])
+            ->where(['status' => ['running', 'cancelling']])
             ->andWhere([
                 'or',
                 ['data_source' => 'folio'],
@@ -151,11 +151,11 @@ class ExportWorkerController extends Controller
         $this->stdout("Exporting job {$job->id}...\n");
         $startTime = microtime(true);
         $filePath = null;
+        $fileHandle = null;
 
         try {
-            $job->refresh();
-            if ($job->status === 'cancelled') {
-                $this->stdout("Job {$job->id} was cancelled, skipping.\n");
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, $fileHandle, $filePath, 'before export');
                 return;
             }
 
@@ -196,6 +196,10 @@ class ExportWorkerController extends Controller
                             )->execute();
                         }
                     }
+
+                    if ($this->isCancellationRequested($job)) {
+                        throw new \RuntimeException('Query cancellation requested.');
+                    }
                 }
 
                 $pdo = $db->getMasterPdo();
@@ -231,6 +235,11 @@ class ExportWorkerController extends Controller
                     $previewRows[] = $row;
                 }
 
+                if ($rowCount % 1000 === 0 && $this->isCancellationRequested($job)) {
+                    $this->finishCancellation($job, $fileHandle, $filePath, 'during export');
+                    return;
+                }
+
                 if ($rowCount % 10000 === 0) {
                     Yii::$app->db->createCommand()->update(
                         'query_jobs',
@@ -238,24 +247,30 @@ class ExportWorkerController extends Controller
                         ['id' => $job->id, 'status' => 'running']
                     )->execute();
 
-                    $job->refresh();
-                    if ($job->status === 'cancelled') {
-                        fclose($fileHandle);
-                        @unlink($filePath);
-                        $this->stdout("Job {$job->id} cancelled during export.\n");
-                        return;
-                    }
                 }
             }
 
             fclose($fileHandle);
+            $fileHandle = null;
+
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, $fileHandle, $filePath, 'before export completion');
+                return;
+            }
 
             $executionTime = (int) round((microtime(true) - $startTime) * 1000);
             $job->markExportCompleted($filePath, $rowCount, $executionTime, $headers, $previewRows);
             $this->stdout("Export job {$job->id} completed: {$rowCount} rows in {$executionTime}ms\n");
 
             $this->logQuery($job);
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, $fileHandle, $filePath, 'during export');
+                return;
+            }
+            if (is_resource($fileHandle)) {
+                fclose($fileHandle);
+            }
             if ($filePath && is_file($filePath)) {
                 @unlink($filePath);
             }
@@ -264,6 +279,41 @@ class ExportWorkerController extends Controller
             $this->stderr("Export job {$job->id} failed: {$e->getMessage()}\n");
             $this->logQuery($job);
         }
+    }
+
+    /**
+     * Refresh a job and determine whether a stop has been requested.
+     *
+     * @param QueryJob $job
+     * @return bool
+     */
+    private function isCancellationRequested(QueryJob $job)
+    {
+        $job->refresh();
+        return in_array($job->status, ['cancelling', 'cancelled'], true);
+    }
+
+    /**
+     * Close and remove partial output, then settle cancellation as terminal.
+     *
+     * @param QueryJob $job
+     * @param resource|null $fileHandle
+     * @param string|null $filePath
+     * @param string $phase
+     */
+    private function finishCancellation(QueryJob $job, &$fileHandle, $filePath, $phase)
+    {
+        if (is_resource($fileHandle)) {
+            fclose($fileHandle);
+            $fileHandle = null;
+        }
+        if ($filePath && is_file($filePath)) {
+            @unlink($filePath);
+        }
+        if ($job->status !== 'cancelled') {
+            $job->markCancelled();
+        }
+        $this->stdout("Job {$job->id} cancelled {$phase}.\n");
     }
 
     /**

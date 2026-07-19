@@ -93,7 +93,7 @@ class QueryWorkerController extends Controller
     private function runningFolioJobCount()
     {
         return (int) QueryJob::find()
-            ->where(['status' => 'running'])
+            ->where(['status' => ['running', 'cancelling']])
             ->andWhere([
                 'or',
                 ['data_source' => 'folio'],
@@ -172,9 +172,8 @@ class QueryWorkerController extends Controller
 
         try {
             // Check if job was cancelled while we were claiming it
-            $job->refresh();
-            if ($job->status === 'cancelled') {
-                $this->stdout("Job {$job->id} was cancelled, skipping.\n");
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'before execution');
                 return;
             }
 
@@ -208,6 +207,10 @@ class QueryWorkerController extends Controller
                                 )->execute();
                             }
                         }
+
+                        if ($this->isCancellationRequested($job)) {
+                            throw new \RuntimeException('Query cancellation requested.');
+                        }
                     }
 
                     $command = $db->createCommand($job->sql_text);
@@ -238,9 +241,8 @@ class QueryWorkerController extends Controller
                 : $runQuery();
 
             // Check if the job was cancelled while the query was running
-            $job->refresh();
-            if ($job->status === 'cancelled') {
-                $this->stdout("Job {$job->id} was cancelled during execution, discarding results.\n");
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'during execution');
                 return;
             }
 
@@ -253,8 +255,12 @@ class QueryWorkerController extends Controller
             // Also log to query_log for history
             $this->logQuery($job);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $executionTime = round((microtime(true) - $startTime) * 1000);
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'during execution');
+                return;
+            }
             $job->markFailed($e->getMessage(), $executionTime);
             $this->stderr("Job {$job->id} failed: {$e->getMessage()}\n");
 
@@ -276,9 +282,8 @@ class QueryWorkerController extends Controller
     {
         $this->stdout("Executing COMPOSITE job {$job->id}\n");
         try {
-            $job->refresh();
-            if ($job->status === 'cancelled') {
-                $this->stdout("Job {$job->id} was cancelled, skipping.\n");
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'before composite execution');
                 return;
             }
 
@@ -303,6 +308,21 @@ class QueryWorkerController extends Controller
                 $transaction = $folio->beginTransaction();
                 try {
                     $folio->createCommand("SET TRANSACTION READ ONLY")->execute();
+                    if ($job->hasAttribute('pg_backend_pid')) {
+                        $pidRow = $folio->createCommand('SELECT pg_backend_pid()')->queryOne();
+                        if ($pidRow !== false) {
+                            Yii::$app->db->createCommand()->update(
+                                'query_jobs',
+                                ['pg_backend_pid' => (int) $pidRow['pg_backend_pid']],
+                                ['id' => $job->id]
+                            )->execute();
+                        }
+                    }
+
+                    if ($this->isCancellationRequested($job)) {
+                        throw new \RuntimeException('Query cancellation requested.');
+                    }
+
                     $cmd = $folio->createCommand($job->sql_text);
                     foreach ($primaryParams as $key => $value) {
                         // Bind only params that appear in the primary SQL to avoid
@@ -336,6 +356,11 @@ class QueryWorkerController extends Controller
                 'query-worker.execute_composite.primary'
             );
 
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'after composite primary query');
+                return;
+            }
+
             // --- Run secondary (local MySQL) ---
             // Secondary SQL may use the same :params as the primary (e.g. :fiscalYear)
             $mysql = Yii::$app->db;
@@ -347,6 +372,11 @@ class QueryWorkerController extends Controller
                 }
             }
             $secondaryRows = $cmd2->queryAll();
+
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'after composite secondary query');
+                return;
+            }
 
             // Index secondary rows by merge key for O(1) lookup
             $secondaryIndex = [];
@@ -400,16 +430,51 @@ class QueryWorkerController extends Controller
             $executionTime = round((microtime(true) - $startTime) * 1000);
             $columns = !empty($mergedRows) ? array_keys($mergedRows[0]) : [];
 
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'before composite completion');
+                return;
+            }
+
             $job->markCompleted($columns, $mergedRows, $executionTime);
             $this->stdout("Composite job {$job->id} completed: " . count($mergedRows) . " rows in {$executionTime}ms\n");
             $this->logQuery($job);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             $executionTime = round((microtime(true) - $startTime) * 1000);
+            if ($this->isCancellationRequested($job)) {
+                $this->finishCancellation($job, 'during composite execution');
+                return;
+            }
             $job->markFailed($e->getMessage(), $executionTime);
             $this->stderr("Composite job {$job->id} failed: {$e->getMessage()}\n");
             $this->logQuery($job);
         }
+    }
+
+    /**
+     * Refresh a job and determine whether a stop has been requested.
+     *
+     * @param QueryJob $job
+     * @return bool
+     */
+    private function isCancellationRequested(QueryJob $job)
+    {
+        $job->refresh();
+        return in_array($job->status, ['cancelling', 'cancelled'], true);
+    }
+
+    /**
+     * Settle a cooperative or database-level cancellation as terminal.
+     *
+     * @param QueryJob $job
+     * @param string $phase
+     */
+    private function finishCancellation(QueryJob $job, $phase)
+    {
+        if ($job->status !== 'cancelled') {
+            $job->markCancelled();
+        }
+        $this->stdout("Job {$job->id} cancelled {$phase}.\n");
     }
 
     /**

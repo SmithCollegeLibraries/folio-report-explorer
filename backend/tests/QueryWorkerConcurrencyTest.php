@@ -100,7 +100,11 @@ assertQueryWorkerConcurrency($claimed->id === 'pending-job', 'Expected the pendi
 assertQueryWorkerConcurrency($claimed->status === 'running', 'Expected the claimed job to be marked running.');
 
 insertQueryWorkerConcurrencyJob('pending-over-limit', 'pending', '2026-05-27 10:02:00');
+Yii::$app->db->createCommand()->update('query_jobs', [
+    'status' => 'cancelling',
+    'progress_message' => 'Cancelling...',
+], ['id' => 'pending-job'])->execute();
 $overLimitClaim = claimNextQueryWorkerJob();
-assertQueryWorkerConcurrency($overLimitClaim === null, 'Expected no additional FOLIO job to be claimed after reaching the concurrency limit.');
+assertQueryWorkerConcurrency($overLimitClaim === null, 'Expected a cancelling FOLIO job to continue consuming its concurrency slot.');
 
 fwrite(STDOUT, "Query worker concurrency test passed\n");
