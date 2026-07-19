@@ -4,6 +4,12 @@ import type { HistoryItem } from '../types';
 
 const PAGE_LIMIT = 50;
 
+export interface HistoryViewParameters {
+  offset: number;
+  statusTab: string;
+  mineOnly: boolean;
+}
+
 export interface UseHistoryDataReturn {
   items: HistoryItem[];
   setItems: React.Dispatch<React.SetStateAction<HistoryItem[]>>;
@@ -21,6 +27,7 @@ export interface UseHistoryDataReturn {
   hasActive: boolean;
   load: () => Promise<void>;
   invalidateLoads: () => void;
+  getLatestViewParameters: () => HistoryViewParameters;
   limit: number;
   totalPages: number;
   currentPage: number;
@@ -35,23 +42,54 @@ export interface UseHistoryDataReturn {
 export function useHistoryData(): UseHistoryDataReturn {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffsetState] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusTab, setStatusTab] = useState<string>('all');
   const [mineOnly, setMineOnly] = useState(false);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
   const loadGenerationRef = useRef(0);
+  const latestViewParametersRef = useRef<HistoryViewParameters>({
+    offset,
+    statusTab,
+    mineOnly,
+  });
+
+  latestViewParametersRef.current = { offset, statusTab, mineOnly };
+
+  const setOffset = useCallback<React.Dispatch<React.SetStateAction<number>>>((nextOffset) => {
+    const previousOffset = latestViewParametersRef.current.offset;
+    const resolvedOffset = typeof nextOffset === 'function'
+      ? nextOffset(previousOffset)
+      : nextOffset;
+    latestViewParametersRef.current = {
+      ...latestViewParametersRef.current,
+      offset: resolvedOffset,
+    };
+    setOffsetState(resolvedOffset);
+  }, []);
+
+  const getLatestViewParameters = useCallback(
+    () => ({ ...latestViewParametersRef.current }),
+    [],
+  );
 
   const invalidateLoads = useCallback(() => {
     loadGenerationRef.current += 1;
+    setLoading(false);
   }, []);
 
   const load = useCallback(async () => {
     const generation = ++loadGenerationRef.current;
+    const view = latestViewParametersRef.current;
     setLoading(true);
     try {
-      const data = await fetchQueryHistory(PAGE_LIMIT, offset, statusTab, mineOnly);
+      const data = await fetchQueryHistory(
+        PAGE_LIMIT,
+        view.offset,
+        view.statusTab,
+        view.mineOnly,
+      );
       if (generation !== loadGenerationRef.current) return;
       setItems(data.items);
       setTotal(data.total);
@@ -62,9 +100,9 @@ export function useHistoryData(): UseHistoryDataReturn {
     } finally {
       if (generation === loadGenerationRef.current) setLoading(false);
     }
-  }, [offset, statusTab, mineOnly]);
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, offset, statusTab, mineOnly]);
 
   const hasActive = items.some((i) => (
     i.status === 'pending'
@@ -81,14 +119,24 @@ export function useHistoryData(): UseHistoryDataReturn {
   }, [hasActive, load]);
 
   const handleTabChange = useCallback((tab: string) => {
+    latestViewParametersRef.current = {
+      ...latestViewParametersRef.current,
+      statusTab: tab,
+      offset: 0,
+    };
     setStatusTab(tab);
-    setOffset(0);
+    setOffsetState(0);
     if (tab !== 'failed') setExpandedErrors(new Set());
   }, []);
 
   const handleMineOnlyChange = useCallback((next: boolean) => {
+    latestViewParametersRef.current = {
+      ...latestViewParametersRef.current,
+      mineOnly: next,
+      offset: 0,
+    };
     setMineOnly(next);
-    setOffset(0);
+    setOffsetState(0);
   }, []);
 
   // Auto-expand error rows when the Failed tab loads
@@ -118,7 +166,7 @@ export function useHistoryData(): UseHistoryDataReturn {
     statusTab, handleTabChange,
     mineOnly, handleMineOnlyChange,
     hasActive,
-    load, invalidateLoads,
+    load, invalidateLoads, getLatestViewParameters,
     limit: PAGE_LIMIT,
     totalPages,
     currentPage,

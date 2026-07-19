@@ -12,6 +12,7 @@ import {
   fetchHistorySuggestions,
 } from '../api/client';
 import { useHistoryData } from '../hooks/useHistoryData';
+import type { HistoryViewParameters } from '../hooks/useHistoryData';
 import { useSelectionManager } from '../hooks/useSelectionManager';
 import { useInlineRename } from '../hooks/useInlineRename';
 import { useCopyToClipboard } from '../hooks/useCopyToClipboard';
@@ -46,7 +47,7 @@ export default function History() {
     items, setItems, total, setTotal, offset, setOffset, loading, error, setError,
     statusTab, handleTabChange, mineOnly, handleMineOnlyChange,
     hasActive, limit, totalPages, currentPage,
-    expandedErrors, toggleExpandError, invalidateLoads,
+    expandedErrors, toggleExpandError, load, invalidateLoads, getLatestViewParameters,
   } = useHistoryData();
 
   const [expandedSql, setExpandedSql] = useState<Set<string>>(new Set());
@@ -211,34 +212,50 @@ export default function History() {
     };
   }, [items, total, offset, limit, modalItem?.jobId]);
 
-  const applySuccessfulDeletions = useCallback((deletedIds: string[]) => {
+  const applySuccessfulDeletions = useCallback((
+    deletedIds: string[],
+    deletionView: HistoryViewParameters,
+  ) => {
     if (deletedIds.length === 0) return;
 
     invalidateLoads();
+    const latestView = getLatestViewParameters();
+    const sameView = deletionView.offset === latestView.offset
+      && deletionView.statusTab === latestView.statusTab
+      && deletionView.mineOnly === latestView.mineOnly;
     const current = deletionSnapshotRef.current;
-    const next = deriveHistoryDeletionState(
-      current.items,
-      current.total,
-      current.offset,
-      current.limit,
-      deletedIds,
-      current.modalJobId,
-    );
-    deletionSnapshotRef.current = {
-      items: next.items,
-      total: next.total,
-      offset: next.offset,
-      limit: current.limit,
-      modalJobId: next.closeModal ? null : current.modalJobId,
-    };
-    setItems(next.items);
-    setTotal(next.total);
-    setOffset(next.offset);
+
+    if (sameView) {
+      const next = deriveHistoryDeletionState(
+        current.items,
+        current.total,
+        current.offset,
+        current.limit,
+        deletedIds,
+        current.modalJobId,
+      );
+      deletionSnapshotRef.current = {
+        items: next.items,
+        total: next.total,
+        offset: next.offset,
+        limit: current.limit,
+        modalJobId: next.closeModal ? null : current.modalJobId,
+      };
+      setItems(next.items);
+      setTotal(next.total);
+      setOffset(next.offset);
+      if (next.closeModal) closeModal();
+    } else if (current.modalJobId !== null && deletedIds.includes(current.modalJobId)) {
+      closeModal();
+    }
+
     selection.removeIds(deletedIds);
-    if (next.closeModal) closeModal();
+    void load();
   }, [
     closeModal,
+    getLatestViewParameters,
     invalidateLoads,
+    load,
     selection.removeIds,
     setItems,
     setOffset,
@@ -248,12 +265,13 @@ export default function History() {
   const handleDeleteSelected = async () => {
     const ids = selectableIds.filter((id) => selection.selectedIds.has(id));
     if (!ids.length) return;
+    const deletionView = getLatestViewParameters();
     setBatchDeleting(true);
     try {
       const results = await Promise.allSettled(ids.map((id) => deleteHistoryJob(id)));
       const deletedIds = ids.filter((_, idx) => results[idx].status === 'fulfilled');
       const failedCount = ids.length - deletedIds.length;
-      applySuccessfulDeletions(deletedIds);
+      applySuccessfulDeletions(deletedIds, deletionView);
       if (failedCount > 0) {
         setError(`Deleted ${deletedIds.length}, failed to delete ${failedCount}.`);
       }
@@ -264,11 +282,12 @@ export default function History() {
   };
 
   const handleDelete = async (jobId: string) => {
+    const deletionView = getLatestViewParameters();
     setConfirmDeleteId(null);
     setDeletingId(jobId);
     try {
       await deleteHistoryJob(jobId);
-      applySuccessfulDeletions([jobId]);
+      applySuccessfulDeletions([jobId], deletionView);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Delete failed');
     } finally {

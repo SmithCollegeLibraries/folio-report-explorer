@@ -79,6 +79,29 @@ describe('useHistoryData load generations', () => {
     expect(result.current.total).toBe(1);
   });
 
+  it('settles loading when the active request is invalidated without a replacement load', async () => {
+    const activeLoad = deferred<HistoryResponse>();
+    vi.mocked(fetchQueryHistory).mockReturnValue(activeLoad.promise);
+
+    const { result } = renderHook(() => useHistoryData());
+
+    expect(result.current.loading).toBe(true);
+
+    act(() => {
+      result.current.invalidateLoads();
+    });
+
+    expect(result.current.loading).toBe(false);
+
+    await act(async () => {
+      activeLoad.resolve(historyResponse([historyItem('stale-job')]));
+      await activeLoad.promise;
+    });
+
+    expect(result.current.loading).toBe(false);
+    expect(result.current.items).toEqual([]);
+  });
+
   it('does not let an older request clear newer loading or error state', async () => {
     const loadA = deferred<HistoryResponse>();
     const loadB = deferred<HistoryResponse>();
