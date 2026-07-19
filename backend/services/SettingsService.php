@@ -133,6 +133,14 @@ class SettingsService
                 self::get('nl2sql_force_legacy', 'NL2SQL_FORCE_LEGACY', 'false'),
                 FILTER_VALIDATE_BOOLEAN
             ),
+            'nl2sql_hardened_physical_roi' => filter_var(
+                self::get(
+                    'nl2sql_hardened_physical_roi',
+                    'NL2SQL_HARDENED_PHYSICAL_ROI',
+                    'true'
+                ),
+                FILTER_VALIDATE_BOOLEAN
+            ),
         ];
         return $display;
     }

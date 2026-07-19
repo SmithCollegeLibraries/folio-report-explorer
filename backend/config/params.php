@@ -39,6 +39,14 @@ return [
         SettingsService::get('nl2sql_force_legacy', 'NL2SQL_FORCE_LEGACY', 'false'),
         FILTER_VALIDATE_BOOLEAN
     ),
+    'nl2sqlHardenedPhysicalRoi' => filter_var(
+        SettingsService::get(
+            'nl2sql_hardened_physical_roi',
+            'NL2SQL_HARDENED_PHYSICAL_ROI',
+            'true'
+        ),
+        FILTER_VALIDATE_BOOLEAN
+    ),
     'schemaPath' => dirname(__DIR__) . '/data/folio_schema.json',
     'derivedPath' => dirname(__DIR__) . '/data/folio_derived_tables.json',
     'builderRelationshipOverlayPath' => dirname(__DIR__) . '/data/builder_relationship_overrides.json',

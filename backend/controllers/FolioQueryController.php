@@ -2924,6 +2924,7 @@ class FolioQueryController extends Controller
             'nl2sql_shadow_users',
             'nl2sql_shadow_sample_percent',
             'nl2sql_force_legacy',
+            'nl2sql_hardened_physical_roi',
         ];
         $filtered = [];
         foreach ($allowed as $key) {

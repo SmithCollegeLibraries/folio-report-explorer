@@ -96,6 +96,9 @@ namespace app\services {
                 'item__t' => 'inventory.item__t',
                 'po_line__t' => 'orders.po_line__t',
                 'purchase_order__t' => 'orders.purchase_order__t',
+                'purchase_order__t__acq_unit_ids' => 'orders.purchase_order__t__acq_unit_ids',
+                'acquisitions_unit__t' => 'orders.acquisitions_unit__t',
+                'pieces__t' => 'orders.pieces__t',
                 'invoice_lines__t' => 'invoice.invoice_lines__t',
                 'invoice_lines__t__fund_distributions' => 'invoice.invoice_lines__t__fund_distributions',
                 'invoices__t' => 'invoice.invoices__t',
@@ -167,6 +170,7 @@ Yii::$app = (object)['params' => [
     'geminiApiKey' => 'test-key',
     'geminiMaxRetries' => 1,
     'nl2sqlForceLegacy' => false,
+    'nl2sqlHardenedPhysicalRoi' => true,
 ]];
 
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
@@ -466,8 +470,9 @@ TestTransport::$requests = [];
 $compiledFallback = GeminiService::generateSqlWithShadow(roiPrompt(), 'Smith College', null, true);
 repairAssertSame('validated', $compiledFallback['validationSummary']['status'] ?? null, 'Semantic exhaustion for the documented ROI contract should use validated deterministic SQL.');
 repairAssertSame(2, $compiledFallback['repairAttempts'] ?? null, 'The deterministic fallback should preserve the exhausted model repair count.');
-repairAssertContains('WITH spend_by_instance AS', $compiledFallback['sql'] ?? '', 'The deterministic fallback should return the validated ROI aggregation shape.');
-repairAssertSame(3, count(TestTransport::$requests), 'The deterministic fallback should run only after the initial candidate and both model repairs fail.');
+repairAssertSame('physical_roi_v2', $compiledFallback['compilerVersion'] ?? null, 'Semantic exhaustion should use the hardened compiler.');
+repairAssertContains('physical_copies_purchased', $compiledFallback['sql'] ?? '', 'The hardened fallback should return physical-copy measures.');
+repairAssertSame(3, count(TestTransport::$requests), 'The fallback must run only after the initial candidate and two repairs.');
 
 SqlBuilderService::$blockPolicy = true;
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];

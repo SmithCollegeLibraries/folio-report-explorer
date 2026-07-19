@@ -10,6 +10,7 @@ use app\exceptions\ExploratorySqlValidationException;
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
 require_once __DIR__ . '/ExploratoryRoiSqlCompilerService.php';
+require_once __DIR__ . '/HardenedPhysicalRoiSqlCompilerService.php';
 require_once __DIR__ . '/ExploratorySemanticContractService.php';
 require_once __DIR__ . '/ExploratorySqlRepairService.php';
 require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
@@ -265,11 +266,14 @@ class GeminiService
     {
         $assumptions = ExploratoryQueryDefaultsService::resolve($prompt);
         $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
+        $useHardenedPhysicalRoi = !isset(Yii::$app->params['nl2sqlHardenedPhysicalRoi'])
+            || (bool)Yii::$app->params['nl2sqlHardenedPhysicalRoi'];
         $semanticContract = ExploratorySemanticContractService::build(
             $prompt,
             is_string($campus) ? $campus : null,
             $assumptions,
-            $reason
+            $reason,
+            ['physicalRoiPolicyVersion' => $useHardenedPhysicalRoi ? 'v2' : 'legacy']
         );
         $context = [
             'originalQuestion' => $prompt,
@@ -316,7 +320,9 @@ class GeminiService
         }
 
         if (($outcome['status'] ?? null) !== 'validated') {
-            $compiledFallback = ExploratoryRoiSqlCompilerService::compile($semanticContract);
+            $compiledFallback = $useHardenedPhysicalRoi
+                ? HardenedPhysicalRoiSqlCompilerService::compile($semanticContract)
+                : ExploratoryRoiSqlCompilerService::compile($semanticContract);
             if ($compiledFallback !== null) {
                 try {
                     $compiledFallback = self::validateCompiledExploratoryFallback(
