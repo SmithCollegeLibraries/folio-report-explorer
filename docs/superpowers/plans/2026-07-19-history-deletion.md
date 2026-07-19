@@ -68,7 +68,7 @@ public function delete(QueryJob $job)
 }
 ```
 
-The constructor resolves the configured export directory with `realpath()` and rejects a missing/non-directory configuration.
+The constructor stores the configured export directory. Export cleanup canonicalizes it with `realpath()` only when a job has an export path. A missing directory must not block deletion of a non-export job; an export reference whose directory or path cannot be canonicalized is logged, left untouched, and does not block deletion of the history row.
 
 - [ ] **Step 4: Implement narrowly scoped export cleanup**
 

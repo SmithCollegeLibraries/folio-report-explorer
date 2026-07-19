@@ -26,13 +26,13 @@ The service accepts a `QueryJob` and follows this sequence:
 
 1. Refresh the job and allow only `completed`, `failed`, or `cancelled`.
 2. Return a domain conflict for `pending`, `pending_export`, `running`, or `cancelling`, with guidance to stop the job first.
-3. If the job has an export path, validate it against the canonical `@runtime/exports` directory.
+3. If the job has an export path, validate it against the configured `@runtime/exports` directory when that directory and path can be canonicalized.
 4. Delete a normal export file only when its canonical parent is the export directory and its basename is exactly `<job UUID>.csv`.
 5. Refuse to touch symlinks, traversal paths, directories, or files outside that directory.
 6. If a valid in-scope export exists but cannot be removed, retain the database row and return a retryable server error.
 7. Delete the `query_jobs` row only after required in-scope cleanup succeeds.
 
-An unsafe or out-of-scope path is logged and never removed. The history row may still be deleted because retaining a user-visible history entry would not make the external path safe or recoverable. Cleanup tooling can report that orphan separately.
+An absent export directory does not block deletion of a non-export job. If a job references an export while the directory or path cannot be canonicalized, that path is treated as unsafe: it is logged and never removed, while the history row may still be deleted. Retaining a user-visible history entry would not make the external path safe or recoverable; cleanup tooling can report that orphan separately.
 
 ### Controller contract
 
