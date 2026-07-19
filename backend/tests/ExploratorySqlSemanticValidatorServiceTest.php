@@ -600,6 +600,30 @@ $indexedCurrencyLossSql = str_replace(
     $indexedPhysicalSql
 );
 semanticAssertRejectedFor($indexedCurrencyLossSql, $physicalContract, 'spend_grain', 'Exact-link counts must retain PO-line currency grain.');
+$pieceWrongOutputSql = str_replace(
+    'SELECT DISTINCT piece_paid_line.po_line_id,',
+    "SELECT DISTINCT piece_paid_line.po_line_id AS ignored_po_line_id,\n           piece_paid_line.instance_id AS po_line_id,",
+    $indexedPhysicalSql
+);
+semanticAssertRejectedFor($pieceWrongOutputSql, $physicalContract, 'spend_grain', 'Piece branch po_line_id must itself bind DISTINCT paid PO-line id.');
+$directWrongOutputSql = str_replace(
+    'SELECT DISTINCT direct_paid_line.po_line_id,',
+    "SELECT DISTINCT direct_paid_line.po_line_id AS ignored_po_line_id,\n           direct_paid_line.instance_id AS po_line_id,",
+    $indexedPhysicalSql
+);
+semanticAssertRejectedFor($directWrongOutputSql, $physicalContract, 'spend_grain', 'Direct branch po_line_id must itself bind DISTINCT paid PO-line id.');
+$swappedPreferredOutputSql = str_replace(
+    "SELECT ranked_exact_instances.po_line_id,\n           ranked_exact_instances.currency,\n           ranked_exact_instances.instance_id\n    FROM ranked_exact_instances",
+    "SELECT ranked_exact_instances.instance_id AS po_line_id,\n           ranked_exact_instances.currency,\n           ranked_exact_instances.po_line_id AS instance_id\n    FROM ranked_exact_instances",
+    $indexedPhysicalSql
+);
+semanticAssertRejectedFor($swappedPreferredOutputSql, $physicalContract, 'spend_grain', 'Preferred exact instance outputs must not swap PO-line and instance lineage.');
+$wrongPreferredCurrencySql = str_replace(
+    "SELECT ranked_exact_instances.po_line_id,\n           ranked_exact_instances.currency,\n           ranked_exact_instances.instance_id\n    FROM ranked_exact_instances",
+    "SELECT ranked_exact_instances.po_line_id,\n           ranked_exact_instances.instance_id AS currency,\n           ranked_exact_instances.instance_id\n    FROM ranked_exact_instances",
+    $indexedPhysicalSql
+);
+semanticAssertRejectedFor($wrongPreferredCurrencySql, $physicalContract, 'spend_grain', 'Preferred exact instance currency must retain ranked currency lineage.');
 $physicalSql = str_replace(
     [
         'COUNT(DISTINCT pol.id) AS purchase_count,',

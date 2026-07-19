@@ -1088,6 +1088,12 @@ class ExploratorySqlSemanticValidatorService
         $rankBinding = $rankAlias === '' ? null : self::resolveQualifier($preferred, $rankAlias);
         $rankName = ($rankBinding['kind'] ?? null) === 'cte' ? (string)($rankBinding['source'] ?? '') : '';
         $rank = $analysis['ctes'][$rankName] ?? null;
+        if ($rank === null
+            || self::expressionForAlias($preferred['selectItems'] ?? [], 'po_line_id') !== $rankAlias . '.po_line_id'
+            || self::expressionForAlias($preferred['selectItems'] ?? [], 'currency') !== $rankAlias . '.currency'
+            || self::expressionForAlias($preferred['selectItems'] ?? [], 'instance_id') !== $rankAlias . '.instance_id') {
+            return false;
+        }
         $ranked = $rank === null ? null : self::expressionForAlias($rank['selectItems'] ?? [], 'instance_rank');
         $countAlias = $rank === null ? '' : self::columnQualifier((string)self::expressionForAlias(
             $rank['selectItems'] ?? [],
@@ -1238,12 +1244,19 @@ class ExploratorySqlSemanticValidatorService
 
     private static function hasIndexedBranchOutputs(array $scope, string $paid, string $eligible): bool
     {
-        $hasDistinctPoLine = false;
-        foreach (($scope['selectItems'] ?? []) as $item) {
-            if (self::compactExpression((string)($item['expression'] ?? ''))
-                === 'distinct' . $paid . '.po_line_id') {
-                $hasDistinctPoLine = true;
-                break;
+        $expectedPoLine = 'distinct' . $paid . '.po_line_id';
+        $poLineOutput = self::itemForAlias($scope['selectItems'] ?? [], 'po_line_id');
+        if ($poLineOutput !== null) {
+            $hasDistinctPoLine = self::compactExpression((string)($poLineOutput['expression'] ?? ''))
+                === $expectedPoLine;
+        } else {
+            $hasDistinctPoLine = false;
+            foreach (($scope['selectItems'] ?? []) as $item) {
+                if (($item['alias'] ?? null) === null
+                    && self::compactExpression((string)($item['expression'] ?? '')) === $expectedPoLine) {
+                    $hasDistinctPoLine = true;
+                    break;
+                }
             }
         }
         return $hasDistinctPoLine
