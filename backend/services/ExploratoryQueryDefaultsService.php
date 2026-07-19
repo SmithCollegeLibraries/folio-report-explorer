@@ -115,10 +115,10 @@ class ExploratoryQueryDefaultsService
 
     private static function isCrossDomainRoiPrompt(string $normalized): bool
     {
-        return preg_match('/\b(?:purchas[a-z]*|acquisitions?)\b/', $normalized) === 1
+        return preg_match('/\b(?:purchas[a-z]*|acquisitions?|bought|buying|buys?)\b/', $normalized) === 1
             && preg_match('/\b(?:circulation|checkouts?)\b/', $normalized) === 1
             && preg_match('/\bcall numbers?\b/', $normalized) === 1
-            && preg_match('/\b(?:roi|return on investment)\b/', $normalized) === 1;
+            && preg_match('/\b(?:roi|return on investment|checkouts? per dollar|cost per (?:checkout|use))\b/', $normalized) === 1;
     }
 
     private static function normalize(string $text): string

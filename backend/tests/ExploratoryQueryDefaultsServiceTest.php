@@ -54,6 +54,43 @@ assertSameValue('payment_date', $byKey['purchase_date_basis']['value'], 'Payment
 assertSameValue('checkouts_per_dollar_with_cost_per_use', $byKey['roi_formula']['value'], 'ROI should include both usage-per-dollar and cost-per-use.');
 assertSameValue('default', $byKey['purchase_date_basis']['source'], 'Unspecified interpretations should be marked as defaults.');
 
+foreach (['bought', 'buying', 'buy', 'buys'] as $purchaseTerm) {
+    $equivalentAssumptions = ExploratoryQueryDefaultsService::resolve(
+        "Compare call numbers for physical copies {$purchaseTerm}, circulation, and ROI."
+    );
+    assertSameValue(
+        array_keys($byKey),
+        array_keys(array_column($equivalentAssumptions, null, 'key')),
+        "The approved {$purchaseTerm} synonym should receive the documented ROI defaults."
+    );
+}
+
+$formulaEquivalentAssumptions = ExploratoryQueryDefaultsService::resolve(
+    'Rank primary call-number classes by physical copies bought in five years, with paid spending, circulation, checkouts per dollar, and cost per checkout.'
+);
+assertSameValue(
+    array_keys($byKey),
+    array_keys(array_column($formulaEquivalentAssumptions, null, 'key')),
+    'Governed ROI formula wording should activate the same documented defaults without requiring the ROI abbreviation.'
+);
+
+foreach (['checkouts per dollar', 'cost per checkout', 'cost per use'] as $roiFormula) {
+    $formulaAssumptions = ExploratoryQueryDefaultsService::resolve(
+        "Compare purchased physical copies, circulation, and {$roiFormula} by call number."
+    );
+    assertSameValue(
+        array_keys($byKey),
+        array_keys(array_column($formulaAssumptions, null, 'key')),
+        "The governed {$roiFormula} formula should be recognized as ROI intent."
+    );
+}
+
+assertSameValue(
+    [],
+    ExploratoryQueryDefaultsService::resolve('Compare purchased physical copies and circulation by call number.'),
+    'All cross-domain concepts without ROI or a governed ROI formula should not activate ROI defaults.'
+);
+
 $invoiceDateAssumptions = ExploratoryQueryDefaultsService::resolve(
     $prompt . ' Use invoice date instead of payment date.'
 );

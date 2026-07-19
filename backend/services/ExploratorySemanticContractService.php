@@ -162,10 +162,10 @@ class ExploratorySemanticContractService
         $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
         $normalized = preg_replace('/\s+/', ' ', trim((string)$normalized));
 
-        return preg_match('/\b(?:purchas[a-z]*|acquisitions?)\b/', (string)$normalized) === 1
+        return preg_match('/\b(?:purchas[a-z]*|acquisitions?|bought|buying|buys?)\b/', (string)$normalized) === 1
             && preg_match('/\b(?:circulation|checkouts?)\b/', (string)$normalized) === 1
             && preg_match('/\bcall numbers?\b/', (string)$normalized) === 1
-            && preg_match('/\b(?:roi|return on investment)\b/', (string)$normalized) === 1;
+            && preg_match('/\b(?:roi|return on investment|checkouts? per dollar|cost per (?:checkout|use))\b/', (string)$normalized) === 1;
     }
 
     private static function assumptionValues(array $assumptions): array

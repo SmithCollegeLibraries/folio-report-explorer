@@ -106,6 +106,8 @@ Make complex Ask AI reports analytically trustworthy while restoring reliable qu
 
 ### NL2SQL-236 — Harden physical acquisitions/circulation ROI
 
+**Implementation status:** Compiler version `physical_roi_v2` is code complete; production smoke validation and live PostgreSQL preflight remain pending.
+
 **Documented interpretation:** When acquisitions are compared with circulation, `purchased most` means invoiced physical copies. Distinct titles are returned as a companion measure. Electronic resources are out of scope because COUNTER or comparable usage data is unavailable.
 
 **Scope:**
@@ -131,6 +133,14 @@ Make complex Ask AI reports analytically trustworthy while restoring reliable qu
 - The SQL passes semantic rules, schema-cache column validation, and PostgreSQL preflight.
 - Reworded prompts with equivalent meaning compile to equivalent semantics.
 - Unrelated Ask AI routes remain unchanged.
+
+**Verification evidence (2026-07-19):**
+
+- Nine focused ROI test scripts exit 0: `ExploratoryQueryDefaultsServiceTest.php`, `ExploratorySemanticContractServiceTest.php`, `ExploratorySqlAnalysisServiceTest.php`, `ExploratorySqlSemanticValidatorServiceTest.php`, `ExploratoryRoiSqlCompilerServiceTest.php`, `HardenedPhysicalRoiSqlCompilerServiceTest.php`, `PhysicalRoiCompilerRoutingTest.php`, `PhysicalRoiPresentationRegressionTest.php`, and `GeminiServiceExploratoryRepairTest.php`.
+- Equivalent purchased, purchases, and bought prompts compile through `physical_roi_v2` to the same policy and semantic SQL shape; circulation-only wording returns no ROI compilation, and only an explicit DVD prompt adds the DVD predicate.
+- Rollback: set `NL2SQL_HARDENED_PHYSICAL_ROI=false` to return ROI requests to the existing compiler without removing the v2 implementation.
+- Production smoke prompt: “Show me which call numbers we have purchased the most from the last 5 years. Compare circulation data to those call numbers and show the return on investment.” Save the environment and timestamp, generated-query or job identifier, `physical_roi_v2` compiler version, final SQL, preflight outcome, output aliases and row count, four report disclosures, and an export or screenshot of representative totals and linkage-coverage measures.
+- Live PostgreSQL preflight remains pending because database credentials are unavailable in this worktree; do not mark production validation complete until the saved smoke evidence includes a successful preflight against the production-like FOLIO schema.
 
 ## Priority 1: Verified analytical families
 
