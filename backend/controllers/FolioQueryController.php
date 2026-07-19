@@ -16,6 +16,7 @@ use app\services\IndexRecommendationService;
 use app\services\Nl2sqlRuntimePreflightService;
 use app\services\PreviousSuccessfulQueryReuseService;
 use app\services\QueryJobCancellationService;
+use app\services\QueryHistoryDeletionService;
 use app\services\ReferenceCacheRefreshService;
 use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
@@ -4026,7 +4027,7 @@ class FolioQueryController extends Controller
             ->offset($offset);
 
         if ($statusFilter === 'active') {
-            $query->andWhere(['qj.status' => ['pending', 'pending_export', 'running']]);
+            $query->andWhere(['qj.status' => ['pending', 'pending_export', 'running', 'cancelling']]);
         } elseif ($statusFilter === 'completed') {
             $query->andWhere(['qj.status' => 'completed']);
         } elseif ($statusFilter === 'failed') {
@@ -4054,8 +4055,10 @@ class FolioQueryController extends Controller
             'offset' => $offset,
             'limit'  => $limit,
             'items'  => array_map(function ($job) use ($isAdmin, $userId) {
-                $canDelete = $isAdmin
-                    || ($userId && isset($job['user_id']) && (int) $job['user_id'] === (int) $userId);
+                $authorized = $isAdmin
+                    || ($userId !== null && (int) $job['user_id'] === (int) $userId);
+                $terminal = in_array($job['status'], ['completed', 'failed', 'cancelled'], true);
+                $canDelete = $authorized && $terminal;
                 return [
                     'jobId'           => $job['id'],
                     'name'            => $job['name'] ?? null,
@@ -4341,23 +4344,33 @@ class FolioQueryController extends Controller
         $identity = $this->getAppIdentity();
         $isAdmin  = $identity && $identity->isAdmin();
 
-        $job = QueryJob::findOne((int) $id);
+        $job = QueryJob::findOne((string) $id);
         if (!$job) {
             Yii::$app->response->statusCode = 404;
             return ['error' => 'Job not found'];
         }
 
-        if (!$isAdmin && (int) $job->user_id !== (int) $userId) {
+        if (!$isAdmin && ($userId === null || (int) $job->user_id !== (int) $userId)) {
             Yii::$app->response->statusCode = 403;
             return ['error' => 'Forbidden'];
         }
 
-        if (!$job->delete()) {
+        try {
+            $service = new QueryHistoryDeletionService(Yii::getAlias('@runtime/exports'));
+            $service->delete($job);
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => $exception->getMessage()];
+        } catch (\Throwable $exception) {
+            Yii::error(
+                'Query history deletion failed for job ' . $job->id . ': ' . $exception,
+                'query.history.deletion'
+            );
             Yii::$app->response->statusCode = 500;
-            return ['error' => 'Failed to delete job'];
+            return ['error' => 'Unable to delete this history item right now. Please try again.'];
         }
 
-        return ['success' => true, 'jobId' => (int) $id];
+        return ['success' => true, 'jobId' => (string) $id];
     }
 
     // ─── Expense Class Monitor endpoints ──────────────────────────
