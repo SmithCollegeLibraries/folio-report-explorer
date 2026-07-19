@@ -28,6 +28,105 @@ function compilerAssertNotContains(string $needle, string $haystack, string $mes
     compilerAssertSame(false, strpos($haystack, $needle) !== false, $message);
 }
 
+function compilerAssertMatches(string $pattern, string $actual, string $message): void
+{
+    compilerAssertSame(1, preg_match($pattern, $actual), $message);
+}
+
+function compilerHasExactLinkSources(string $sql): bool
+{
+    return strpos($sql, 'receiving_piece.po_line_id = exact_paid_line.po_line_id') !== false
+        && strpos($sql, 'receiving_piece.item_id = eligible_item.item_id') !== false
+        && strpos($sql, 'WHEN receiving_piece.item_id IS NOT NULL THEN eligible_item.item_id') !== false
+        && strpos($sql, 'eligible_item.purchase_order_line_identifier = exact_paid_line.po_line_id') !== false;
+}
+
+function evaluatePhysicalAllocation(array $invoiceLines, array $pieceLinks, array $directLinks, array $currentItems): array
+{
+    $eligibleIds = array_fill_keys(array_column($currentItems, 'item_id'), true);
+    $currentInstances = array_fill_keys(array_column($currentItems, 'instance_id'), true);
+    $exactByPoLine = [];
+    foreach (array_merge($pieceLinks, $directLinks) as $link) {
+        if (isset($eligibleIds[$link['item_id']])) {
+            $exactByPoLine[$link['po_line_id']][$link['item_id']] = true;
+        }
+    }
+
+    $paidPoLines = [];
+    foreach ($invoiceLines as $invoiceLine) {
+        $key = $invoiceLine['po_line_id'] . '|' . $invoiceLine['currency'];
+        $paidPoLines[$key] ??= [
+            'po_line_id' => $invoiceLine['po_line_id'],
+            'instance_id' => $invoiceLine['instance_id'],
+            'currency' => $invoiceLine['currency'],
+            'quantity' => 0,
+            'spend' => 0.0,
+        ];
+        $paidPoLines[$key]['quantity'] += $invoiceLine['quantity'];
+        foreach ($invoiceLine['fund_distributions'] as $distribution) {
+            $paidPoLines[$key]['spend'] += $distribution['total'] * $distribution['percentage'] * 0.01;
+        }
+    }
+
+    $allocations = [];
+    foreach ($paidPoLines as $paidPoLine) {
+        $exact = min($paidPoLine['quantity'], count($exactByPoLine[$paidPoLine['po_line_id']] ?? []));
+        $fallback = isset($currentInstances[$paidPoLine['instance_id']])
+            ? max($paidPoLine['quantity'] - $exact, 0)
+            : 0;
+        if ($exact === 0 && $fallback === 0) {
+            continue;
+        }
+        $allocations[$paidPoLine['po_line_id']] = [
+            'exact' => $exact,
+            'fallback' => $fallback,
+            'allocated' => $exact + $fallback,
+            'spend' => $paidPoLine['spend'],
+        ];
+    }
+    return $allocations;
+}
+
+function evaluateDominantClass(array $items): array
+{
+    $counts = [];
+    foreach ($items as $item) {
+        $callNumber = trim((string)($item['call_number'] ?? ''));
+        if ($callNumber === '') {
+            $class = 'Unclassified';
+        } elseif (preg_match('/^([A-Z]{1,3})[0-9]/i', $callNumber, $matches) === 1) {
+            $class = strtoupper($matches[1]);
+        } elseif (preg_match('/^([0-9]+)/', $callNumber, $matches) === 1) {
+            $class = str_pad((string)(intdiv((int)$matches[1], 100) * 100), 3, '0', STR_PAD_LEFT);
+        } else {
+            $class = 'Local/Other';
+        }
+        $counts[$item['instance_id']][$class] = ($counts[$item['instance_id']][$class] ?? 0) + 1;
+    }
+
+    $dominant = [];
+    foreach ($counts as $instanceId => $classCounts) {
+        uksort($classCounts, static function (string $left, string $right) use ($classCounts): int {
+            return $classCounts[$right] <=> $classCounts[$left] ?: $left <=> $right;
+        });
+        $dominant[$instanceId] = array_key_first($classCounts);
+    }
+    return $dominant;
+}
+
+function evaluateDistinctCheckouts(array $loans, array $eligibleItemIds): int
+{
+    $eligible = array_fill_keys($eligibleItemIds, true);
+    $loanIds = [];
+    foreach ($loans as $loan) {
+        if (isset($eligible[$loan['item_id']])
+            && in_array(strtolower($loan['action']), ['checkedout', 'checkedoutthroughoverride'], true)) {
+            $loanIds[$loan['loan_id']] = true;
+        }
+    }
+    return count($loanIds);
+}
+
 function compilerAssertPhysicalColumnsExist(string $sql): void
 {
     $cache = json_decode((string)file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
@@ -101,6 +200,52 @@ compilerAssertContains("'Unclassified'", $compiled['sql'], 'Blank call numbers n
 compilerAssertContains('physical_copies_purchased', $compiled['sql'], 'Physical copy output is required.');
 compilerAssertContains('distinct_titles', $compiled['sql'], 'Distinct title output is required.');
 compilerAssertContains('fallback_percentage', $compiled['sql'], 'Linkage coverage is required.');
+compilerAssertContains('exact_item_links AS', $compiled['sql'], 'Exact piece and direct links must be unified.');
+compilerAssertSame(true, compilerHasExactLinkSources($compiled['sql']), 'Exact links must retain eligible receiving-piece and direct PO-line provenance.');
+compilerAssertContains('SELECT DISTINCT exact_paid_line.po_line_id AS po_line_id', $compiled['sql'], 'Overlapping exact-link sources must de-duplicate PO-line/item pairs.');
+compilerAssertContains('FROM exact_item_links', $compiled['sql'], 'Exact-link counts must consume exact item links.');
+compilerAssertSame(false, compilerHasExactLinkSources(str_replace('WHEN receiving_piece.item_id IS NOT NULL THEN eligible_item.item_id', 'WHEN FALSE THEN eligible_item.item_id', $compiled['sql'])), 'Removing receiving-piece provenance must fail structural exact-link proof.');
+compilerAssertSame(false, compilerHasExactLinkSources(str_replace('eligible_item.purchase_order_line_identifier = exact_paid_line.po_line_id', 'FALSE', $compiled['sql'])), 'Removing direct PO-line provenance must fail structural exact-link proof.');
+compilerAssertContains('FROM paid_po_lines paid_line', $compiled['sql'], 'Allocation must consume one row per PO line and currency.');
+compilerAssertContains('LEFT JOIN exact_link_counts exact_links', $compiled['sql'], 'Allocation must consume aggregated exact-link counts.');
+compilerAssertContains('LEFT JOIN current_smith_instances fallback_eligible', $compiled['sql'], 'Fallback eligibility must not exclude exact-linked PO lines.');
+compilerAssertContains('JOIN dominant_class ON dominant_class.instance_id = acquisitions_by_instance.instance_id', $compiled['sql'], 'Final aggregation must consume the deterministic dominant class.');
+compilerAssertContains('FROM current_smith_items item', $compiled['sql'], 'Circulation must use the governed current-item cohort.');
+compilerAssertContains('FROM current_smith_items' . "\n" . '    GROUP BY current_smith_items.instance_id', $compiled['sql'], 'Fallback eligibility must derive from the governed current-item cohort.');
+compilerAssertContains('FROM current_smith_items' . "\n" . '), class_counts AS', $compiled['sql'], 'Classing must use only the governed current-item cohort.');
+compilerAssertNotContains('class_by_instance', $compiled['sql'], 'The raw minimum-substring class path must be removed.');
+compilerAssertNotContains('paid_invoice_lines AS', $compiled['sql'], 'The unused paid-invoice-line CTE must be removed.');
+
+$allocationFixture = evaluatePhysicalAllocation(
+    [
+        ['po_line_id' => 'po-1', 'instance_id' => 'instance-1', 'currency' => 'USD', 'quantity' => 1, 'fund_distributions' => [['total' => 30, 'percentage' => 50], ['total' => 30, 'percentage' => 50]]],
+        ['po_line_id' => 'po-1', 'instance_id' => 'instance-1', 'currency' => 'USD', 'quantity' => 1, 'fund_distributions' => [['total' => 20, 'percentage' => 100]]],
+        ['po_line_id' => 'po-2', 'instance_id' => 'instance-2', 'currency' => 'USD', 'quantity' => 1, 'fund_distributions' => [['total' => 10, 'percentage' => 100]]],
+        ['po_line_id' => 'po-3', 'instance_id' => 'instance-3', 'currency' => 'USD', 'quantity' => 1, 'fund_distributions' => [['total' => 12, 'percentage' => 100]]],
+    ],
+    [['po_line_id' => 'po-1', 'item_id' => 'item-1']],
+    [['po_line_id' => 'po-1', 'item_id' => 'item-1'], ['po_line_id' => 'po-2', 'item_id' => 'item-2']],
+    [['item_id' => 'item-1', 'instance_id' => 'instance-1'], ['item_id' => 'item-2', 'instance_id' => 'unrelated-instance'], ['item_id' => 'item-3', 'instance_id' => 'instance-3']]
+);
+compilerAssertSame(['exact' => 1, 'fallback' => 1, 'allocated' => 2, 'spend' => 50.0], $allocationFixture['po-1'], 'Exact links must be counted once after multiple invoice lines and fund distributions are collapsed.');
+compilerAssertSame(['exact' => 1, 'fallback' => 0, 'allocated' => 1, 'spend' => 10.0], $allocationFixture['po-2'], 'An exact eligible link must survive without an unrelated fallback instance cohort.');
+compilerAssertSame(['exact' => 0, 'fallback' => 1, 'allocated' => 1, 'spend' => 12.0], $allocationFixture['po-3'], 'A fully unmatched PO line may use eligible current-instance fallback.');
+
+$dominantFixture = evaluateDominantClass([
+    ['instance_id' => 'a', 'call_number' => 'qa76'],
+    ['instance_id' => 'a', 'call_number' => 'QA77'],
+    ['instance_id' => 'a', 'call_number' => '500.2'],
+    ['instance_id' => 'a', 'call_number' => ''],
+    ['instance_id' => 'b', 'call_number' => 'local shelf'],
+    ['instance_id' => 'b', 'call_number' => null],
+]);
+compilerAssertSame('QA', $dominantFixture['a'], 'LC classes must be uppercase and win by eligible-item count.');
+compilerAssertSame('Local/Other', $dominantFixture['b'], 'Dominant-class ties must resolve by class name ascending.');
+compilerAssertSame(1, evaluateDistinctCheckouts([
+    ['loan_id' => 'loan-1', 'item_id' => 'dvd-1', 'action' => 'checkedout'],
+    ['loan_id' => 'loan-1', 'item_id' => 'dvd-1', 'action' => 'checkedOutThroughOverride'],
+    ['loan_id' => 'loan-2', 'item_id' => 'book-1', 'action' => 'checkedout'],
+], ['dvd-1']), 'Duplicate loan actions and non-cohort items must not inflate circulation.');
 compilerAssertPhysicalColumnsExist($compiled['sql']);
 compilerAssertSame(
     'validated',
@@ -113,6 +258,7 @@ $dvdContract = buildPhysicalRoiContract($dvdQuestion);
 $dvdCompiled = HardenedPhysicalRoiSqlCompilerService::compile($dvdContract);
 compilerAssertSame(true, is_array($dvdCompiled), 'The explicitly requested DVD report must compile.');
 compilerAssertContains("LOWER(material_type.name) = 'dvd'", $dvdCompiled['sql'], 'DVD reports must enforce the requested material type.');
+compilerAssertSame(1, substr_count($dvdCompiled['sql'], 'FROM inventory.item__t'), 'DVD reports must define one physical item cohort for every downstream measure.');
 compilerAssertNotContains("LOWER(material_type.name) = 'dvd'", $compiled['sql'], 'Generic ROI must not add a DVD predicate.');
 compilerAssertSame(
     'validated',
