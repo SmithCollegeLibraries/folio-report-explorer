@@ -100,29 +100,68 @@ WITH current_smith_items AS (
     WHERE purchase_line.cost__quantity_physical > 0
       AND TRIM(acquisition_unit.name) = 'SC'
     GROUP BY purchase_line.id, purchase_line.instance_id, funded_line.currency
+), piece_exact_links AS (
+    SELECT DISTINCT piece_paid_line.po_line_id,
+           piece_paid_line.currency,
+           eligible_piece_item.item_id,
+           eligible_piece_item.instance_id
+    FROM paid_po_lines piece_paid_line
+    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = piece_paid_line.po_line_id
+    JOIN current_smith_items eligible_piece_item ON eligible_piece_item.item_id = receiving_piece.item_id
+), direct_exact_links AS (
+    SELECT DISTINCT direct_paid_line.po_line_id,
+           direct_paid_line.currency,
+           eligible_direct_item.item_id,
+           eligible_direct_item.instance_id
+    FROM paid_po_lines direct_paid_line
+    JOIN current_smith_items eligible_direct_item
+      ON eligible_direct_item.purchase_order_line_identifier = direct_paid_line.po_line_id
 ), exact_item_links AS (
-    SELECT DISTINCT exact_paid_line.po_line_id AS po_line_id,
-           CASE
-               WHEN receiving_piece.item_id IS NOT NULL THEN eligible_item.item_id
-               WHEN eligible_item.purchase_order_line_identifier = exact_paid_line.po_line_id THEN eligible_item.item_id
-               ELSE NULL
-           END AS item_id
-    FROM paid_po_lines exact_paid_line
-    JOIN current_smith_items eligible_item ON eligible_item.instance_id = eligible_item.instance_id
-    LEFT JOIN orders.pieces__t receiving_piece
-      ON receiving_piece.po_line_id = exact_paid_line.po_line_id
-     AND receiving_piece.item_id = eligible_item.item_id
+    SELECT COALESCE(piece_exact_links.po_line_id, direct_exact_links.po_line_id) AS po_line_id,
+           COALESCE(piece_exact_links.currency, direct_exact_links.currency) AS currency,
+           COALESCE(piece_exact_links.item_id, direct_exact_links.item_id) AS item_id,
+           COALESCE(piece_exact_links.instance_id, direct_exact_links.instance_id) AS instance_id
+    FROM piece_exact_links
+    FULL OUTER JOIN direct_exact_links
+      ON direct_exact_links.po_line_id = piece_exact_links.po_line_id
+     AND direct_exact_links.currency = piece_exact_links.currency
+     AND direct_exact_links.item_id = piece_exact_links.item_id
 ), exact_link_counts AS (
     SELECT exact_item_links.po_line_id,
+           exact_item_links.currency,
            COUNT(DISTINCT exact_item_links.item_id) AS exact_item_count
     FROM exact_item_links
-    GROUP BY exact_item_links.po_line_id
+    GROUP BY exact_item_links.po_line_id, exact_item_links.currency
+), exact_instance_counts AS (
+    SELECT exact_item_links.po_line_id,
+           exact_item_links.currency,
+           exact_item_links.instance_id,
+           COUNT(DISTINCT exact_item_links.item_id) AS linked_item_count
+    FROM exact_item_links
+    GROUP BY exact_item_links.po_line_id, exact_item_links.currency, exact_item_links.instance_id
+), ranked_exact_instances AS (
+    SELECT exact_instance_counts.po_line_id,
+           exact_instance_counts.currency,
+           exact_instance_counts.instance_id,
+           ROW_NUMBER() OVER (
+               PARTITION BY exact_instance_counts.po_line_id, exact_instance_counts.currency
+               ORDER BY exact_instance_counts.linked_item_count DESC, exact_instance_counts.instance_id ASC
+           ) AS instance_rank
+    FROM exact_instance_counts
+), preferred_exact_instance AS (
+    SELECT ranked_exact_instances.po_line_id,
+           ranked_exact_instances.currency,
+           ranked_exact_instances.instance_id
+    FROM ranked_exact_instances
+    WHERE ranked_exact_instances.instance_rank = 1
 ), linkage_by_po_line AS (
     SELECT paid_line.po_line_id,
            paid_line.instance_id,
            paid_line.currency,
            paid_line.quantity,
            paid_line.spend,
+           preferred_exact_instance.instance_id AS preferred_exact_instance_id,
+           fallback_eligible.instance_id AS fallback_instance_id,
            LEAST(paid_line.quantity, COALESCE(exact_links.exact_item_count, 0)) AS exact_linked_copies,
            CASE
                WHEN fallback_eligible.instance_id IS NOT NULL
@@ -136,11 +175,16 @@ WITH current_smith_items AS (
                    ELSE 0
                  END AS allocated_physical_copies
     FROM paid_po_lines paid_line
-    LEFT JOIN exact_link_counts exact_links ON exact_links.po_line_id = paid_line.po_line_id
+    LEFT JOIN exact_link_counts exact_links
+      ON exact_links.po_line_id = paid_line.po_line_id
+     AND exact_links.currency = paid_line.currency
+    LEFT JOIN preferred_exact_instance
+      ON preferred_exact_instance.po_line_id = paid_line.po_line_id
+     AND preferred_exact_instance.currency = paid_line.currency
     LEFT JOIN current_smith_instances fallback_eligible ON fallback_eligible.instance_id = paid_line.instance_id
 ), eligible_acquisitions AS (
     SELECT linkage_by_po_line.po_line_id,
-           linkage_by_po_line.instance_id,
+           COALESCE(linkage_by_po_line.preferred_exact_instance_id, linkage_by_po_line.fallback_instance_id) AS resolved_instance_id,
            linkage_by_po_line.currency,
            linkage_by_po_line.quantity,
            linkage_by_po_line.spend,
@@ -150,16 +194,16 @@ WITH current_smith_items AS (
     FROM linkage_by_po_line
     WHERE linkage_by_po_line.allocated_physical_copies > 0
 ), acquisitions_by_instance AS (
-    SELECT allocated_line.instance_id AS instance_id,
+    SELECT allocated_line.resolved_instance_id AS instance_id,
            allocated_line.currency AS currency,
            SUM(allocated_line.allocated_physical_copies) AS purchase_count,
            SUM(allocated_line.allocated_physical_copies) AS physical_copies_purchased,
-           COUNT(DISTINCT allocated_line.instance_id) AS distinct_titles,
+           COUNT(DISTINCT allocated_line.resolved_instance_id) AS distinct_titles,
            SUM(allocated_line.spend) AS spend,
            SUM(allocated_line.exact_linked_copies) AS exact_linked_copies,
            SUM(allocated_line.fallback_linked_copies) AS fallback_linked_copies
     FROM eligible_acquisitions allocated_line
-    GROUP BY allocated_line.instance_id, allocated_line.currency
+    GROUP BY allocated_line.resolved_instance_id, allocated_line.currency
 ), item_classes AS (
     SELECT current_smith_items.item_id,
            current_smith_items.instance_id,
