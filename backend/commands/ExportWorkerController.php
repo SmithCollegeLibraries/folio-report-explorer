@@ -6,6 +6,7 @@ use Yii;
 use yii\console\Controller;
 use app\models\QueryJob;
 use app\services\DatabaseRetryService;
+use app\services\QueryJobCancellationService;
 
 /**
  * ExportWorkerController — background worker for large file exports.
@@ -186,6 +187,10 @@ class ExportWorkerController extends Controller
             $prepareAndExecute = function () use ($db, $dataSource, $job, $sql, $params) {
                 if ($dataSource === 'folio') {
                     $db->createCommand("SET statement_timeout = " . (int) Yii::$app->params['queryTimeoutMs'])->execute();
+                    $db->createCommand(
+                        "SELECT set_config('application_name', :application_name, false)",
+                        [':application_name' => QueryJobCancellationService::applicationName($job->id)]
+                    )->queryScalar();
                     if ($job->hasAttribute('pg_backend_pid')) {
                         $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
                         if ($pidRow !== false) {

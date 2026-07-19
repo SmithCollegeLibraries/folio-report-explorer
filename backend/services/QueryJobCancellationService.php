@@ -20,15 +20,39 @@ class QueryJobCancellationService
     /** @var callable */
     private $backendCanceller;
 
-    public function __construct(Connection $localDb, Connection $folioDb, callable $backendCanceller = null)
+    public function __construct(Connection $localDb, Connection $folioDb, ?callable $backendCanceller = null)
     {
         $this->localDb = $localDb;
         $this->folioDb = $folioDb;
-        $this->backendCanceller = $backendCanceller ?: function ($pid) {
+        $this->backendCanceller = $backendCanceller ?: function ($pid, $jobId) {
             return $this->folioDb
-                ->createCommand('SELECT pg_cancel_backend(:pid)', [':pid' => (int) $pid])
+                ->createCommand(
+                    'SELECT COALESCE((
+                        SELECT pg_cancel_backend(pid)
+                        FROM pg_stat_activity
+                        WHERE pid = :pid
+                          AND datname = current_database()
+                          AND usename = current_user
+                          AND application_name = :application_name
+                    ), FALSE)',
+                    [
+                        ':pid' => (int) $pid,
+                        ':application_name' => self::applicationName($jobId),
+                    ]
+                )
                 ->queryScalar();
         };
+    }
+
+    /**
+     * Return the PostgreSQL session tag shared by workers and cancellation.
+     *
+     * @param string $jobId
+     * @return string
+     */
+    public static function applicationName($jobId)
+    {
+        return 'folio-report-explorer:' . substr((string) $jobId, 0, 42);
     }
 
     /**
@@ -77,7 +101,7 @@ class QueryJobCancellationService
                 : 'folio';
             $pid = $job->hasAttribute('pg_backend_pid') ? (int) $job->pg_backend_pid : 0;
             if ($pid > 0 && in_array($dataSource, ['folio', 'composite'], true)) {
-                call_user_func($this->backendCanceller, $pid);
+                call_user_func($this->backendCanceller, $pid, $job->id);
             }
             return $job;
         }

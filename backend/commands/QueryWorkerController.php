@@ -6,6 +6,7 @@ use Yii;
 use yii\console\Controller;
 use app\models\QueryJob;
 use app\services\DatabaseRetryService;
+use app\services\QueryJobCancellationService;
 
 /**
  * QueryWorkerController — background worker that picks up pending query jobs
@@ -196,6 +197,10 @@ class QueryWorkerController extends Controller
                 try {
                     if ($dataSource === 'folio') {
                         $db->createCommand("SET TRANSACTION READ ONLY")->execute();
+                        $db->createCommand(
+                            "SELECT set_config('application_name', :application_name, true)",
+                            [':application_name' => QueryJobCancellationService::applicationName($job->id)]
+                        )->queryScalar();
                         // Store Postgres backend PID so cancel endpoint can issue pg_cancel_backend()
                         if ($job->hasAttribute('pg_backend_pid')) {
                             $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
@@ -308,6 +313,10 @@ class QueryWorkerController extends Controller
                 $transaction = $folio->beginTransaction();
                 try {
                     $folio->createCommand("SET TRANSACTION READ ONLY")->execute();
+                    $folio->createCommand(
+                        "SELECT set_config('application_name', :application_name, true)",
+                        [':application_name' => QueryJobCancellationService::applicationName($job->id)]
+                    )->queryScalar();
                     if ($job->hasAttribute('pg_backend_pid')) {
                         $pidRow = $folio->createCommand('SELECT pg_backend_pid()')->queryOne();
                         if ($pidRow !== false) {

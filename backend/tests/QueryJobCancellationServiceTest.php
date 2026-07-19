@@ -63,12 +63,12 @@ function insertCancellationJob($id, $status, $pid = null, $dataSource = 'folio')
     return QueryJob::findOne($id);
 }
 
-$cancelledPids = [];
+$cancelledBackends = [];
 $service = new QueryJobCancellationService(
     Yii::$app->db,
     Yii::$app->folioDb,
-    function ($pid) use (&$cancelledPids) {
-        $cancelledPids[] = $pid;
+    function ($pid, $jobId) use (&$cancelledBackends) {
+        $cancelledBackends[] = [$pid, $jobId];
         return true;
     }
 );
@@ -85,17 +85,27 @@ $running = $service->cancel(insertCancellationJob('running-job', 'running', 4321
 cancellationAssert($running->status === 'cancelling', 'A running job should remain in cancelling until the worker confirms termination.');
 cancellationAssert($running->completed_at === null, 'A cancelling job must not look terminal.');
 cancellationAssert($running->progress_message === 'Cancelling…', 'A running cancellation should expose progress copy.');
-cancellationAssert($cancelledPids === [4321], 'The service should request PostgreSQL cancellation for the stored backend PID.');
+cancellationAssert(
+    $cancelledBackends === [[4321, 'running-job']],
+    'The service should bind PostgreSQL cancellation to the stored PID and exact job identity.'
+);
+cancellationAssert(
+    QueryJobCancellationService::applicationName('running-job') === 'folio-report-explorer:running-job',
+    'Workers and the cancellation endpoint should derive the same PostgreSQL application name.'
+);
 
 $service->cancel($running);
-cancellationAssert($cancelledPids === [4321, 4321], 'Retrying a cancelling job should retry backend interruption idempotently.');
+cancellationAssert(
+    $cancelledBackends === [[4321, 'running-job'], [4321, 'running-job']],
+    'Retrying a cancelling job should retry the same validated backend interruption idempotently.'
+);
 
 $cancelled = $service->cancel(insertCancellationJob('cancelled-job', 'cancelled'));
 cancellationAssert($cancelled->status === 'cancelled', 'Cancelling an already cancelled job should be idempotent.');
 
 $local = $service->cancel(insertCancellationJob('local-job', 'running', 9999, 'local'));
 cancellationAssert($local->status === 'cancelling', 'A local running job should enter the cooperative cancelling state.');
-cancellationAssert($cancelledPids === [4321, 4321], 'A local query must not send its PID to PostgreSQL.');
+cancellationAssert(count($cancelledBackends) === 2, 'A local query must not send its PID to PostgreSQL.');
 
 $completedRejected = false;
 try {
