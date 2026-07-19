@@ -72,6 +72,8 @@ Make complex Ask AI reports analytically trustworthy while restoring reliable qu
 
 ### APP-002 — Make history deletion permanent
 
+**Implementation status:** Code complete on `fix/history-deletion`; production smoke test pending.
+
 **Problem:** Deleted rows can remain or reappear, and active jobs can currently be deleted while workers still reference them.
 
 **Scope:**
@@ -93,6 +95,12 @@ Make complex Ask AI reports analytically trustworthy while restoring reliable qu
 - Export cleanup cannot delete outside the configured export directory.
 - Partial batch failures identify how many jobs failed without restoring successful deletions.
 - Frontend tests reproduce and prevent the stale-load race.
+
+**Verification evidence (2026-07-19):**
+
+- All 103 backend test scripts pass in two consecutive runs; the credential-dependent live PostgreSQL test reports its documented skip in each run.
+- All 159 frontend tests across 32 test files pass, and the TypeScript/Vite production build succeeds.
+- Production smoke test: delete a completed owned job, wait through at least two five-second polling intervals, manually refresh, and confirm it remains absent; separately confirm that attempting to delete an active job instructs the user to stop it first.
 
 ## Priority 0: Presentation report correctness
 
