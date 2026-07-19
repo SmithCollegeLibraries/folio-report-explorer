@@ -59,8 +59,8 @@ class ExploratorySemanticContractService
                 ? ['purchase_count', 'spend', 'circulation', 'cost_per_checkout']
                 : ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'])
             : (($values['roi_formula'] ?? null) === 'cost_per_checkout'
-                ? ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'cost_per_checkout']
-                : ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout']);
+                ? ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'cost_per_checkout', 'exact_linked_copies', 'fallback_linked_copies', 'fallback_percentage']
+                : ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout', 'exact_linked_copies', 'fallback_linked_copies', 'fallback_percentage']);
         $purchaseRankingMeasure = $policyVersion === 'legacy' ? 'purchase_count' : 'physical_copies_purchased';
         $requirements = [
             self::requirement('purchase_date_basis', self::requirementLabel('purchase_date_basis', $values), [
@@ -251,9 +251,7 @@ class ExploratorySemanticContractService
             'governed_filters' => 'Physical-resource and SC acquisitions filters are required by reporting policy; material type appears only when explicitly requested.',
         ];
         if ($key === 'required_measures') {
-            return ($values['roi_formula'] ?? null) === 'cost_per_checkout'
-                ? 'Results include physical copies purchased, distinct titles, spending, circulation, and cost per checkout.'
-                : 'Results include physical copies purchased, distinct titles, spending, circulation, checkouts per dollar, and cost per checkout.';
+            return 'Results include physical copies purchased, distinct titles, spending, circulation, ROI, and exact-versus-fallback linkage diagnostics.';
         }
         return $labels[$key] ?? self::requirementLabel($key, $values);
     }
