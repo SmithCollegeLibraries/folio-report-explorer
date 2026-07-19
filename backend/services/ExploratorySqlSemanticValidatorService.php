@@ -764,7 +764,8 @@ class ExploratorySqlSemanticValidatorService
         }
         $poLine = self::aliasForSource($allocation, 'orders.po_line__t');
         $piece = self::aliasForSource($allocation, 'orders.pieces__t');
-        $item = self::aliasForSource($allocation, 'inventory.item__t');
+        $eligibleItem = self::eligibleExactItemBinding($allocation, $analysis);
+        $eligibleAlias = (string)($eligibleItem['alias'] ?? '');
         $quantityExpression = self::expressionForAlias($allocation['selectItems'] ?? [], 'quantity');
         $fundedAlias = $quantityExpression === null ? '' : self::columnQualifier($quantityExpression);
         $fundedBinding = $fundedAlias === '' ? null : self::resolveQualifier($allocation, $fundedAlias);
@@ -772,13 +773,58 @@ class ExploratorySqlSemanticValidatorService
             || !self::hasEnforcingColumnEquality($allocation, $fundedAlias . '.po_line_id', $poLine . '.id')) {
             return false;
         }
-        $hasReceivingPieceLink = $piece !== null && $item !== null
-            && self::hasRowPreservingColumnEquality($allocation, $piece . '.po_line_id', $poLine . '.id')
-            && self::hasRowPreservingColumnEquality($allocation, $item . '.id', $piece . '.item_id');
-        $hasDirectItemLink = $item !== null
-            && self::hasRowPreservingColumnEquality($allocation, $item . '.purchase_order_line_identifier', $poLine . '.id');
+        $hasReceivingPieceLink = $piece !== null && $eligibleAlias !== ''
+            && self::hasRowPreservingJoinedEquality(
+                $allocation,
+                $piece . '.po_line_id',
+                $poLine . '.id',
+                $piece,
+                'table',
+                'orders.pieces__t'
+            )
+            && self::hasRowPreservingJoinedEquality(
+                $allocation,
+                $eligibleAlias . '.id',
+                $piece . '.item_id',
+                $eligibleAlias,
+                'cte',
+                (string)($eligibleItem['source'] ?? '')
+            );
+        $hasDirectItemLink = $eligibleAlias !== ''
+            && !empty($eligibleItem['hasPurchaseOrderLine'])
+            && self::hasRowPreservingJoinedEquality(
+                $allocation,
+                $eligibleAlias . '.purchase_order_line_identifier',
+                $poLine . '.id',
+                $eligibleAlias,
+                'cte',
+                (string)($eligibleItem['source'] ?? '')
+            );
         return self::hasFallbackEligibilityCohort($allocation, $poLine, $analysis)
             && ($hasReceivingPieceLink || $hasDirectItemLink);
+    }
+
+    private static function eligibleExactItemBinding(array $allocation, array $analysis): ?array
+    {
+        foreach (($allocation['sourceAliases'] ?? []) as $alias => $binding) {
+            $name = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+            $scope = $analysis['ctes'][$name] ?? null;
+            $item = $scope === null ? null : self::aliasForSource($scope, 'inventory.item__t');
+            if ($scope === null || $item === null
+                || !self::hasCampusHierarchy($scope, 'smith college', false)
+                || self::expressionForAlias($scope['selectItems'] ?? [], 'id') !== $item . '.id') {
+                continue;
+            }
+            return [
+                'alias' => (string)$alias,
+                'source' => $name,
+                'hasPurchaseOrderLine' => self::expressionForAlias(
+                    $scope['selectItems'] ?? [],
+                    'purchase_order_line_identifier'
+                ) === $item . '.purchase_order_line_identifier',
+            ];
+        }
+        return null;
     }
 
     private static function hasFallbackEligibilityCohort(array $allocation, string $poLine, array $analysis): bool
@@ -801,13 +847,22 @@ class ExploratorySqlSemanticValidatorService
         return false;
     }
 
-    private static function hasRowPreservingColumnEquality(array $scope, string $left, string $right): bool
-    {
+    private static function hasRowPreservingJoinedEquality(
+        array $scope,
+        string $left,
+        string $right,
+        string $joinedAlias,
+        string $joinedSourceKind,
+        string $joinedSource
+    ): bool {
         foreach (($scope['predicates']['columnComparisons'] ?? []) as $comparison) {
             $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
             if (($comparison['operator'] ?? null) === '='
                 && ($comparison['origin'] ?? null) === 'join_on'
                 && ($comparison['joinType'] ?? null) === 'LEFT'
+                && ($comparison['joinedAlias'] ?? null) === $joinedAlias
+                && ($comparison['joinedSourceKind'] ?? null) === $joinedSourceKind
+                && ($comparison['joinedSource'] ?? null) === $joinedSource
                 && ($actual === [$left, $right] || $actual === [$right, $left])) {
                 return true;
             }
@@ -852,11 +907,12 @@ class ExploratorySqlSemanticValidatorService
         $allocationName = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
         $allocation = $analysis['ctes'][$allocationName] ?? null;
         $quantity = self::expressionForAlias($allocation['selectItems'] ?? [], 'quantity');
-        $item = self::aliasForSource($allocation ?? [], 'inventory.item__t');
-        if ($allocation === null || $quantity === null || $item === null) {
+        $eligibleItem = $allocation === null ? null : self::eligibleExactItemBinding($allocation, $analysis);
+        $eligibleAlias = (string)($eligibleItem['alias'] ?? '');
+        if ($allocation === null || $quantity === null || $eligibleAlias === '') {
             return false;
         }
-        $eligibleCount = 'count(distinct' . $item . '.id)';
+        $eligibleCount = 'count(distinct' . $eligibleAlias . '.id)';
         $exact = 'least(' . self::compactExpression($quantity) . ',' . $eligibleCount . ')';
         $fallback = 'greatest(' . self::compactExpression($quantity) . '-' . $exact . ',0)';
         if (self::compactExpression((string)self::expressionForAlias($allocation['selectItems'] ?? [], 'exact_linked_copies')) !== $exact
