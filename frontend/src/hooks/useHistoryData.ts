@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchQueryHistory } from '../api/client';
 import type { HistoryItem } from '../types';
 
@@ -20,6 +20,7 @@ export interface UseHistoryDataReturn {
   handleMineOnlyChange: (mineOnly: boolean) => void;
   hasActive: boolean;
   load: () => Promise<void>;
+  invalidateLoads: () => void;
   limit: number;
   totalPages: number;
   currentPage: number;
@@ -40,18 +41,26 @@ export function useHistoryData(): UseHistoryDataReturn {
   const [statusTab, setStatusTab] = useState<string>('all');
   const [mineOnly, setMineOnly] = useState(false);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  const loadGenerationRef = useRef(0);
+
+  const invalidateLoads = useCallback(() => {
+    loadGenerationRef.current += 1;
+  }, []);
 
   const load = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
+    setLoading(true);
     try {
-      setLoading(true);
       const data = await fetchQueryHistory(PAGE_LIMIT, offset, statusTab, mineOnly);
+      if (generation !== loadGenerationRef.current) return;
       setItems(data.items);
       setTotal(data.total);
       setError(null);
     } catch (e: any) {
+      if (generation !== loadGenerationRef.current) return;
       setError(e.response?.data?.error || 'Failed to load history');
     } finally {
-      setLoading(false);
+      if (generation === loadGenerationRef.current) setLoading(false);
     }
   }, [offset, statusTab, mineOnly]);
 
@@ -109,7 +118,7 @@ export function useHistoryData(): UseHistoryDataReturn {
     statusTab, handleTabChange,
     mineOnly, handleMineOnlyChange,
     hasActive,
-    load,
+    load, invalidateLoads,
     limit: PAGE_LIMIT,
     totalPages,
     currentPage,
