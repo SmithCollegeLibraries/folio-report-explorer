@@ -3,10 +3,12 @@
 require_once __DIR__ . '/../services/ExploratoryQueryDefaultsService.php';
 require_once __DIR__ . '/../services/ExploratorySemanticContractService.php';
 require_once __DIR__ . '/../services/ExploratorySqlSemanticValidatorService.php';
+require_once __DIR__ . '/../services/HardenedPhysicalRoiSqlCompilerService.php';
 
 use app\services\ExploratoryQueryDefaultsService;
 use app\services\ExploratorySemanticContractService;
 use app\services\ExploratorySqlSemanticValidatorService;
+use app\services\HardenedPhysicalRoiSqlCompilerService;
 
 function semanticAssertSame($expected, $actual, string $message): void
 {
@@ -571,6 +573,33 @@ $physicalContract = ExploratorySemanticContractService::build(
     ExploratoryQueryDefaultsService::resolve($question),
     'unsupported_query_family'
 );
+$indexedPhysicalSql = HardenedPhysicalRoiSqlCompilerService::compile($physicalContract)['sql'] ?? '';
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($indexedPhysicalSql, $physicalContract)['status'], 'Indexed piece/direct exact-link branches must validate.');
+$indexedSelfEqualitySql = str_replace(
+    'receiving_piece.po_line_id = piece_paid_line.po_line_id',
+    'piece_paid_line.po_line_id = piece_paid_line.po_line_id',
+    $indexedPhysicalSql
+);
+semanticAssertRejectedFor($indexedSelfEqualitySql, $physicalContract, 'spend_grain', 'A Cartesian/self-equality piece branch must be rejected.');
+preg_match('/piece_exact_links AS \((.*?)\), direct_exact_links AS \(/s', $indexedPhysicalSql, $indexedPieceMatch);
+$deadIndexedPieceSql = preg_replace(
+    '/^WITH /',
+    "WITH dead_piece_exact_links AS (" . ($indexedPieceMatch[1] ?? '') . "), ",
+    $indexedSelfEqualitySql,
+    1
+);
+semanticAssertRejectedFor((string)$deadIndexedPieceSql, $physicalContract, 'spend_grain', 'A dead correct piece branch must not repair the consumed self-equality branch.');
+semanticAssertRejectedFor(str_replace('FULL OUTER JOIN direct_exact_links', 'INNER JOIN direct_exact_links', $indexedPhysicalSql), $physicalContract, 'spend_grain', 'Overlapping exact branches require FULL-key de-duplication.');
+semanticAssertRejectedFor(str_replace("FROM piece_exact_links\n    FULL OUTER JOIN direct_exact_links", "FROM direct_exact_links\n    FULL OUTER JOIN direct_exact_links", $indexedPhysicalSql), $physicalContract, 'spend_grain', 'The receiving-piece exact source is mandatory.');
+semanticAssertRejectedFor(str_replace('FULL OUTER JOIN direct_exact_links', 'FULL OUTER JOIN piece_exact_links', $indexedPhysicalSql), $physicalContract, 'spend_grain', 'The direct PO-line exact source is mandatory.');
+semanticAssertRejectedFor(str_replace('JOIN current_smith_items eligible_piece_item', 'JOIN inventory.item__t eligible_piece_item', $indexedPhysicalSql), $physicalContract, 'spend_grain', 'Piece exact links must consume eligible current Smith items.');
+semanticAssertRejectedFor(str_replace('JOIN current_smith_items eligible_direct_item', 'LEFT JOIN current_smith_items eligible_direct_item', $indexedPhysicalSql), $physicalContract, 'spend_grain', 'Direct exact eligibility must be enforcing.');
+$indexedCurrencyLossSql = str_replace(
+    'GROUP BY exact_item_links.po_line_id, exact_item_links.currency',
+    'GROUP BY exact_item_links.po_line_id',
+    $indexedPhysicalSql
+);
+semanticAssertRejectedFor($indexedCurrencyLossSql, $physicalContract, 'spend_grain', 'Exact-link counts must retain PO-line currency grain.');
 $physicalSql = str_replace(
     [
         'COUNT(DISTINCT pol.id) AS purchase_count,',

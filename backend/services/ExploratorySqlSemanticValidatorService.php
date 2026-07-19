@@ -786,11 +786,14 @@ class ExploratorySqlSemanticValidatorService
         $allocatedItem = self::itemForAlias($spend['selectItems'] ?? [], 'physical_copies_purchased');
         $allocatedAggregate = $allocatedItem['exactAggregate'] ?? null;
         $allocatedAlias = self::columnQualifier((string)($allocatedAggregate['column'] ?? ''));
+        $instanceExpression = self::expressionForAlias($spend['selectItems'] ?? [], 'instance_id');
+        $instanceLeaf = $instanceExpression === null ? null : self::columnLeaf($instanceExpression);
         if (($allocatedAggregate['function'] ?? null) !== 'sum'
             || self::columnLeaf((string)($allocatedAggregate['column'] ?? '')) !== 'allocated_physical_copies'
-            || self::expressionForAlias($spend['selectItems'] ?? [], 'instance_id') !== $allocatedAlias . '.instance_id'
+            || !in_array($instanceLeaf, ['instance_id', 'resolved_instance_id'], true)
+            || $instanceExpression !== $allocatedAlias . '.' . $instanceLeaf
             || self::expressionForAlias($spend['selectItems'] ?? [], 'currency') !== $allocatedAlias . '.currency'
-            || ($spend['groupBy'] ?? []) !== [$allocatedAlias . '.instance_id', $allocatedAlias . '.currency']) {
+            || ($spend['groupBy'] ?? []) !== [$instanceExpression, $allocatedAlias . '.currency']) {
             return false;
         }
         foreach (['spend', 'exact_linked_copies', 'fallback_linked_copies'] as $measure) {
@@ -822,6 +825,39 @@ class ExploratorySqlSemanticValidatorService
         $exactBinding = self::resolveQualifier($allocation, $exactAlias);
         $exactName = ($exactBinding['kind'] ?? null) === 'cte' ? (string)($exactBinding['source'] ?? '') : '';
         if (!self::hasExactLinkCountLineage($analysis, $exactName, $paidName)) {
+            return false;
+        }
+        if ($instanceLeaf === 'resolved_instance_id'
+            && !self::hasResolvedExactInstanceLineage(
+                $analysis,
+                $spend,
+                $allocatedAlias,
+                $allocation,
+                $paidAlias,
+                $exactName
+            )) {
+            return false;
+        }
+        $exactScope = $analysis['ctes'][$exactName] ?? [];
+        if (!self::hasRowPreservingJoinedEquality(
+            $allocation,
+            $exactAlias . '.po_line_id',
+            $paidAlias . '.po_line_id',
+            $exactAlias,
+            'cte',
+            $exactName
+        )) {
+            return false;
+        }
+        if (in_array($exactAlias . '.currency', $exactScope['groupBy'] ?? [], true)
+            && !self::hasRowPreservingJoinedEquality(
+                $allocation,
+                $exactAlias . '.currency',
+                $paidAlias . '.currency',
+                $exactAlias,
+                'cte',
+                $exactName
+            )) {
             return false;
         }
 
@@ -914,8 +950,14 @@ class ExploratorySqlSemanticValidatorService
         if ($countScope === null || $linkScope === null
             || ($aggregate['function'] ?? null) !== 'count'
             || empty($aggregate['distinct'])
-            || ($aggregate['column'] ?? null) !== $linkAlias . '.item_id'
-            || ($countScope['groupBy'] ?? []) !== [$linkAlias . '.po_line_id']) {
+            || ($aggregate['column'] ?? null) !== $linkAlias . '.item_id') {
+            return false;
+        }
+        $groupBy = $countScope['groupBy'] ?? [];
+        if ($groupBy === [$linkAlias . '.po_line_id', $linkAlias . '.currency']) {
+            return self::hasIndexedExactLinkBranches($analysis, $linkScope, $paidName);
+        }
+        if ($groupBy !== [$linkAlias . '.po_line_id']) {
             return false;
         }
         $paidAlias = '';
@@ -965,6 +1007,273 @@ class ExploratorySqlSemanticValidatorService
                 $linkScope['selectItems'] ?? [],
                 'item_id'
             )) === $expectedItem;
+    }
+
+    private static function hasResolvedExactInstanceLineage(
+        array $analysis,
+        array $spend,
+        string $allocatedAlias,
+        array $allocation,
+        string $paidAlias,
+        string $exactCountName
+    ): bool {
+        $allocatedBinding = self::resolveQualifier($spend, $allocatedAlias);
+        $allocatedName = ($allocatedBinding['kind'] ?? null) === 'cte'
+            ? (string)($allocatedBinding['source'] ?? '') : '';
+        $allocated = $analysis['ctes'][$allocatedName] ?? null;
+        $resolved = self::compactExpression((string)self::expressionForAlias(
+            $allocated['selectItems'] ?? [],
+            'resolved_instance_id'
+        ));
+        if ($allocated === null
+            || preg_match('/^coalesce\(([a-z_][a-z0-9_$-]*)\.preferred_exact_instance_id,\1\.fallback_instance_id\)$/', $resolved, $matches) !== 1) {
+            return false;
+        }
+        $allocationAlias = $matches[1];
+        $allocationBinding = self::resolveQualifier($allocated, $allocationAlias);
+        if (($allocationBinding['kind'] ?? null) !== 'cte'
+            || ($allocationBinding['source'] ?? null) !== self::sourceNameForScope($analysis, $allocation)) {
+            return false;
+        }
+        $preferredExpression = self::expressionForAlias($allocation['selectItems'] ?? [], 'preferred_exact_instance_id');
+        $preferredAlias = $preferredExpression === null ? '' : self::columnQualifier($preferredExpression);
+        $preferredBinding = $preferredAlias === '' ? null : self::resolveQualifier($allocation, $preferredAlias);
+        $preferredName = ($preferredBinding['kind'] ?? null) === 'cte' ? (string)($preferredBinding['source'] ?? '') : '';
+        $preferred = $analysis['ctes'][$preferredName] ?? null;
+        if ($preferred === null
+            || !self::hasRowPreservingJoinedEquality(
+                $allocation,
+                $preferredAlias . '.po_line_id',
+                $paidAlias . '.po_line_id',
+                $preferredAlias,
+                'cte',
+                $preferredName
+            )
+            || !self::hasRowPreservingJoinedEquality(
+                $allocation,
+                $preferredAlias . '.currency',
+                $paidAlias . '.currency',
+                $preferredAlias,
+                'cte',
+                $preferredName
+            )) {
+            return false;
+        }
+        return self::isPreferredExactInstanceScope($analysis, $preferred, $exactCountName);
+    }
+
+    private static function sourceNameForScope(array $analysis, array $target): ?string
+    {
+        foreach (($analysis['ctes'] ?? []) as $name => $scope) {
+            if ($scope === $target) {
+                return (string)$name;
+            }
+        }
+        return null;
+    }
+
+    private static function isPreferredExactInstanceScope(array $analysis, array $preferred, string $exactCountName): bool
+    {
+        $rankExpression = null;
+        foreach (($preferred['predicates']['literalPredicates'] ?? []) as $predicate) {
+            if (self::columnLeaf((string)($predicate['column'] ?? '')) === 'instance_rank'
+                && ($predicate['operator'] ?? null) === '='
+                && ($predicate['values'] ?? []) === ['1']
+                && self::isEnforcingFact($predicate)) {
+                $rankExpression = (string)$predicate['column'];
+                break;
+            }
+        }
+        $rankAlias = $rankExpression === null ? '' : self::columnQualifier($rankExpression);
+        $rankBinding = $rankAlias === '' ? null : self::resolveQualifier($preferred, $rankAlias);
+        $rankName = ($rankBinding['kind'] ?? null) === 'cte' ? (string)($rankBinding['source'] ?? '') : '';
+        $rank = $analysis['ctes'][$rankName] ?? null;
+        $ranked = $rank === null ? null : self::expressionForAlias($rank['selectItems'] ?? [], 'instance_rank');
+        $countAlias = $rank === null ? '' : self::columnQualifier((string)self::expressionForAlias(
+            $rank['selectItems'] ?? [],
+            'po_line_id'
+        ));
+        $countBinding = $countAlias === '' ? null : self::resolveQualifier($rank ?? [], $countAlias);
+        $countName = ($countBinding['kind'] ?? null) === 'cte' ? (string)($countBinding['source'] ?? '') : '';
+        $count = $analysis['ctes'][$countName] ?? null;
+        $aggregate = self::itemForAlias($count['selectItems'] ?? [], 'linked_item_count')['exactAggregate'] ?? null;
+        $linkAlias = self::columnQualifier((string)($aggregate['column'] ?? ''));
+        $linkBinding = $linkAlias === '' ? null : self::resolveQualifier($count ?? [], $linkAlias);
+        $linkName = ($linkBinding['kind'] ?? null) === 'cte' ? (string)($linkBinding['source'] ?? '') : '';
+        $exactCount = $analysis['ctes'][$exactCountName] ?? null;
+        $exactAggregate = self::itemForAlias($exactCount['selectItems'] ?? [], 'exact_item_count')['exactAggregate'] ?? null;
+        $exactLinkBinding = isset($exactAggregate['column'])
+            ? self::resolveColumnBinding($exactCount, (string)$exactAggregate['column']) : null;
+        return $rank !== null && $count !== null
+            && self::compactExpression((string)$ranked) === 'row_number()over(partitionby' . $countAlias
+                . '.po_line_id,' . $countAlias . '.currencyorderby' . $countAlias
+                . '.linked_item_countdesc,' . $countAlias . '.instance_idasc)'
+            && ($aggregate['function'] ?? null) === 'count'
+            && !empty($aggregate['distinct'])
+            && ($aggregate['column'] ?? null) === $linkAlias . '.item_id'
+            && ($count['groupBy'] ?? []) === [
+                $linkAlias . '.po_line_id',
+                $linkAlias . '.currency',
+                $linkAlias . '.instance_id',
+            ]
+            && ($exactLinkBinding['kind'] ?? null) === 'cte'
+            && ($exactLinkBinding['source'] ?? null) === $linkName;
+    }
+
+    private static function hasIndexedExactLinkBranches(array $analysis, array $dedupe, string $paidName): bool
+    {
+        if (count($dedupe['sourceAliases'] ?? []) !== 2 || count($dedupe['joins'] ?? []) !== 1) {
+            return false;
+        }
+        $aliases = array_keys($dedupe['sourceAliases']);
+        $leftAlias = (string)$aliases[0];
+        $rightAlias = (string)$aliases[1];
+        $leftBinding = self::resolveQualifier($dedupe, $leftAlias);
+        $rightBinding = self::resolveQualifier($dedupe, $rightAlias);
+        $leftName = ($leftBinding['kind'] ?? null) === 'cte' ? (string)($leftBinding['source'] ?? '') : '';
+        $rightName = ($rightBinding['kind'] ?? null) === 'cte' ? (string)($rightBinding['source'] ?? '') : '';
+        $left = $analysis['ctes'][$leftName] ?? null;
+        $right = $analysis['ctes'][$rightName] ?? null;
+        if ($left === null || $right === null
+            || !self::hasRegisteredJoin($dedupe, 'FULL', $rightAlias, 'cte', $rightName)) {
+            return false;
+        }
+        foreach (['po_line_id', 'currency', 'item_id'] as $key) {
+            if (!self::hasJoinedEqualityOfType(
+                $dedupe,
+                $rightAlias . '.' . $key,
+                $leftAlias . '.' . $key,
+                'FULL',
+                $rightAlias,
+                'cte',
+                $rightName
+            )
+                || self::compactExpression((string)self::expressionForAlias(
+                    $dedupe['selectItems'] ?? [],
+                    $key
+                )) !== 'coalesce(' . $leftAlias . '.' . $key . ',' . $rightAlias . '.' . $key . ')') {
+                return false;
+            }
+        }
+        if (self::compactExpression((string)self::expressionForAlias(
+            $dedupe['selectItems'] ?? [],
+            'instance_id'
+        )) !== 'coalesce(' . $leftAlias . '.instance_id,' . $rightAlias . '.instance_id)') {
+            return false;
+        }
+        return self::isIndexedPieceExactBranch($analysis, $left, $paidName)
+                && self::isIndexedDirectExactBranch($analysis, $right, $paidName)
+            || self::isIndexedPieceExactBranch($analysis, $right, $paidName)
+                && self::isIndexedDirectExactBranch($analysis, $left, $paidName);
+    }
+
+    private static function isIndexedPieceExactBranch(array $analysis, array $scope, string $paidName): bool
+    {
+        $piece = self::aliasForSource($scope, 'orders.pieces__t');
+        $bindings = self::indexedExactBranchBindings($analysis, $scope, $paidName);
+        $paid = (string)($bindings['paid'] ?? '');
+        $eligible = (string)($bindings['eligible'] ?? '');
+        $eligibleName = (string)($bindings['eligibleName'] ?? '');
+        return $piece !== null && $paid !== '' && $eligible !== ''
+            && self::hasJoinedEqualityOfType(
+                $scope,
+                $piece . '.po_line_id',
+                $paid . '.po_line_id',
+                'INNER',
+                $piece,
+                'table',
+                'orders.pieces__t'
+            )
+            && self::hasJoinedEqualityOfType(
+                $scope,
+                $eligible . '.item_id',
+                $piece . '.item_id',
+                'INNER',
+                $eligible,
+                'cte',
+                $eligibleName
+            )
+            && self::hasIndexedBranchOutputs($scope, $paid, $eligible);
+    }
+
+    private static function isIndexedDirectExactBranch(array $analysis, array $scope, string $paidName): bool
+    {
+        if (self::aliasForSource($scope, 'orders.pieces__t') !== null) {
+            return false;
+        }
+        $bindings = self::indexedExactBranchBindings($analysis, $scope, $paidName);
+        $paid = (string)($bindings['paid'] ?? '');
+        $eligible = (string)($bindings['eligible'] ?? '');
+        $eligibleName = (string)($bindings['eligibleName'] ?? '');
+        return $paid !== '' && $eligible !== ''
+            && self::hasJoinedEqualityOfType(
+                $scope,
+                $eligible . '.purchase_order_line_identifier',
+                $paid . '.po_line_id',
+                'INNER',
+                $eligible,
+                'cte',
+                $eligibleName
+            )
+            && self::hasIndexedBranchOutputs($scope, $paid, $eligible);
+    }
+
+    private static function indexedExactBranchBindings(array $analysis, array $scope, string $paidName): array
+    {
+        $result = [];
+        foreach (($scope['sourceAliases'] ?? []) as $alias => $binding) {
+            if (($binding['kind'] ?? null) !== 'cte') {
+                continue;
+            }
+            $name = (string)($binding['source'] ?? '');
+            if ($name === $paidName) {
+                $result['paid'] = (string)$alias;
+            } elseif (self::hasCampusHierarchy($analysis['ctes'][$name] ?? [], 'smith college', true)) {
+                $result['eligible'] = (string)$alias;
+                $result['eligibleName'] = $name;
+            }
+        }
+        return $result;
+    }
+
+    private static function hasIndexedBranchOutputs(array $scope, string $paid, string $eligible): bool
+    {
+        $hasDistinctPoLine = false;
+        foreach (($scope['selectItems'] ?? []) as $item) {
+            if (self::compactExpression((string)($item['expression'] ?? ''))
+                === 'distinct' . $paid . '.po_line_id') {
+                $hasDistinctPoLine = true;
+                break;
+            }
+        }
+        return $hasDistinctPoLine
+            && self::expressionForAlias($scope['selectItems'] ?? [], 'currency') === $paid . '.currency'
+            && self::expressionForAlias($scope['selectItems'] ?? [], 'item_id') === $eligible . '.item_id'
+            && self::expressionForAlias($scope['selectItems'] ?? [], 'instance_id') === $eligible . '.instance_id';
+    }
+
+    private static function hasJoinedEqualityOfType(
+        array $scope,
+        string $left,
+        string $right,
+        string $type,
+        string $joinedAlias,
+        string $sourceKind,
+        string $source
+    ): bool {
+        foreach (($scope['predicates']['columnComparisons'] ?? []) as $comparison) {
+            $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
+            if (($comparison['operator'] ?? null) === '='
+                && ($comparison['origin'] ?? null) === 'join_on'
+                && ($comparison['joinType'] ?? null) === $type
+                && ($comparison['joinedAlias'] ?? null) === $joinedAlias
+                && ($comparison['joinedSourceKind'] ?? null) === $sourceKind
+                && ($comparison['joinedSource'] ?? null) === $source
+                && ($actual === [$left, $right] || $actual === [$right, $left])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function hasRegisteredJoin(
