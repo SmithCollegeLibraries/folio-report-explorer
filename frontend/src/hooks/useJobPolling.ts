@@ -16,7 +16,7 @@ interface UseJobPollingReturn {
   /** Elapsed wall-clock seconds since the job was submitted */
   elapsedSeconds: number;
   /** Cancel the current job */
-  cancel: () => void;
+  cancel: () => Promise<void>;
   /** Clear the job state */
   reset: () => void;
 }
@@ -57,13 +57,15 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
   const cancelCurrent = useCallback(async () => {
     if (activeJobId.current) {
       try {
-        await cancelJob(activeJobId.current);
+        const status = await cancelJob(activeJobId.current);
+        setJob(status);
+        if (status.status === 'cancelled') {
+          stopPolling();
+          setError('Query was cancelled');
+        }
       } catch {
-        // ignore cancel errors
+        setError('Unable to stop this query right now. It is still being monitored.');
       }
-      stopPolling();
-      setJob((prev) => prev ? { ...prev, status: 'cancelled', progressMessage: 'Cancelled' } : null);
-      setError('Query was cancelled');
     }
   }, [stopPolling]);
 
@@ -144,7 +146,10 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
     };
   }, [jobId, stopPolling]);
 
-  const isRunning = job?.status === 'pending' || job?.status === 'pending_export' || job?.status === 'running';
+  const isRunning = job?.status === 'pending'
+    || job?.status === 'pending_export'
+    || job?.status === 'running'
+    || job?.status === 'cancelling';
 
   return { job, results, isRunning, error, elapsedSeconds, cancel: cancelCurrent, reset };
 }

@@ -486,8 +486,9 @@ export async function checkJobStatus(
   return data;
 }
 
-export async function cancelJob(jobId: string): Promise<void> {
-  await api.post(`/query/cancel/${jobId}`);
+export async function cancelJob(jobId: string): Promise<JobStatusResponse> {
+  const { data } = await api.post(`/query/cancel/${jobId}`);
+  return data;
 }
 
 // ─── Report Templates ─────────────────────────────────────────────────

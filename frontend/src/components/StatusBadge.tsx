@@ -5,6 +5,7 @@ export const STATUS_CONFIG: Record<JobStatus, { label: string; cls: string; icon
   pending:   { label: 'Queued',    cls: 'bg-amber-100 text-amber-700',  icon: Clock },
   pending_export: { label: 'Queued for export', cls: 'bg-indigo-100 text-indigo-700', icon: Clock },
   running:   { label: 'Running',   cls: 'bg-blue-100 text-blue-700',    icon: Loader2 },
+  cancelling: { label: 'Cancelling…', cls: 'bg-blue-100 text-blue-700', icon: Loader2 },
   completed: { label: 'Completed', cls: 'bg-green-100 text-green-700',  icon: CheckCircle2 },
   failed:    { label: 'Failed',    cls: 'bg-red-100 text-red-700',      icon: XCircle },
   cancelled: { label: 'Cancelled', cls: 'bg-gray-100 text-gray-500',    icon: StopCircle },
@@ -19,7 +20,7 @@ export default function StatusBadge({ status }: Props) {
   const Icon = cfg.icon;
   return (
     <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded ${cfg.cls}`}>
-      <Icon size={11} className={status === 'running' ? 'animate-spin' : ''} />
+      <Icon size={11} className={status === 'running' || status === 'cancelling' ? 'animate-spin' : ''} />
       {cfg.label}
     </span>
   );

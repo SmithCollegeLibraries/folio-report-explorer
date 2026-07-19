@@ -261,7 +261,11 @@ export default function HistoryTable({
       header: () => null,
       cell: ({ row }) => {
         const item = row.original;
-        const isActive = item.status === 'pending' || item.status === 'pending_export' || item.status === 'running';
+        const isActive = item.status === 'pending'
+          || item.status === 'pending_export'
+          || item.status === 'running'
+          || item.status === 'cancelling';
+        const canCancel = item.status === 'pending' || item.status === 'pending_export' || item.status === 'running';
         const isFailed = item.status === 'failed';
         const isCompleted = item.status === 'completed';
         const isCancelling = cancellingId === item.jobId;
@@ -278,14 +282,16 @@ export default function HistoryTable({
                 >
                   <Code size={11} />
                 </button>
-                <button
-                  onClick={(e) => onCancel(item.jobId, e)}
-                  disabled={isCancelling}
-                  title="Cancel query"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
-                >
-                  {isCancelling ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />}
-                </button>
+                {canCancel && (
+                  <button
+                    onClick={(e) => onCancel(item.jobId, e)}
+                    disabled={isCancelling}
+                    title="Cancel query"
+                    className="inline-flex h-7 w-7 items-center justify-center rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                  >
+                    {isCancelling ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />}
+                  </button>
+                )}
               </>
             )}
 

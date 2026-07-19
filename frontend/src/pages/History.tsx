@@ -41,7 +41,7 @@ export default function History() {
   const {
     items, setItems, total, setTotal, offset, setOffset, loading, error, setError,
     statusTab, handleTabChange, mineOnly, handleMineOnlyChange,
-    hasActive, load, limit, totalPages, currentPage,
+    hasActive, limit, totalPages, currentPage,
     expandedErrors, toggleExpandError,
   } = useHistoryData();
 
@@ -166,8 +166,14 @@ export default function History() {
     e.stopPropagation();
     setCancellingId(jobId);
     try {
-      await cancelJob(jobId);
-      await load();
+      const updated = await cancelJob(jobId);
+      setItems((prev) => prev.map((item) => item.jobId === jobId ? {
+        ...item,
+        status: updated.status,
+        progressMessage: updated.progressMessage,
+        startedAt: updated.startedAt,
+        completedAt: updated.completedAt,
+      } : item));
     } catch (err: any) {
       setError(err.response?.data?.error || 'Cancel failed');
     } finally {

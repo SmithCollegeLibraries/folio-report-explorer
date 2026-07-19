@@ -554,7 +554,7 @@ export interface ReferenceCacheRefreshTableResponse {
 
 // ─── Async Job types ──────────────────────────────────────────────
 
-export type JobStatus = 'pending' | 'pending_export' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type JobStatus = 'pending' | 'pending_export' | 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled';
 
 /** Response from POST /query/submit */
 export interface JobSubmitResponse {
