@@ -212,7 +212,7 @@ export default function History() {
     };
   }, [items, total, offset, limit, modalItem?.jobId]);
 
-  const applySuccessfulDeletions = useCallback((
+  const applySuccessfulDeletions = useCallback(async (
     deletedIds: string[],
     deletionView: HistoryViewParameters,
   ) => {
@@ -250,7 +250,7 @@ export default function History() {
     }
 
     selection.removeIds(deletedIds);
-    void load();
+    await load();
   }, [
     closeModal,
     getLatestViewParameters,
@@ -271,7 +271,7 @@ export default function History() {
       const results = await Promise.allSettled(ids.map((id) => deleteHistoryJob(id)));
       const deletedIds = ids.filter((_, idx) => results[idx].status === 'fulfilled');
       const failedCount = ids.length - deletedIds.length;
-      applySuccessfulDeletions(deletedIds, deletionView);
+      await applySuccessfulDeletions(deletedIds, deletionView);
       if (failedCount > 0) {
         setError(`Deleted ${deletedIds.length}, failed to delete ${failedCount}.`);
       }
@@ -287,7 +287,7 @@ export default function History() {
     setDeletingId(jobId);
     try {
       await deleteHistoryJob(jobId);
-      applySuccessfulDeletions([jobId], deletionView);
+      await applySuccessfulDeletions([jobId], deletionView);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Delete failed');
     } finally {

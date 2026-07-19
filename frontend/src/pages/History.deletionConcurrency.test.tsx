@@ -238,4 +238,50 @@ describe('History deletion concurrency', () => {
     expect(screen.getByText('1 query')).toBeInTheDocument();
     expect(screen.queryByText('Loading history…')).not.toBeInTheDocument();
   });
+
+  it('keeps the partial batch failure notice after successful reconciliation', async () => {
+    const reconciliationLoad = deferredValue<{
+      items: HistoryItem[];
+      total: number;
+      offset: number;
+      limit: number;
+    }>();
+    const failedItem = historyItem('failed-delete', 'Delete failed');
+    vi.mocked(fetchQueryHistory)
+      .mockResolvedValueOnce({
+        items: [historyItem('deleted-job', 'Delete succeeded'), failedItem],
+        total: 2,
+        offset: 0,
+        limit: 50,
+      })
+      .mockReturnValueOnce(reconciliationLoad.promise);
+    vi.mocked(deleteHistoryJob)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('server rejected deletion'));
+
+    render(
+      <MemoryRouter initialEntries={['/history']}>
+        <Routes>
+          <Route path="/history/*" element={<History />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const user = userEvent.setup();
+    await screen.findByText('Delete succeeded');
+    await user.click(screen.getByTitle('Select all deletable rows'));
+    await user.click(screen.getByRole('button', { name: 'Delete selected (2)' }));
+    await user.click(screen.getByRole('button', { name: 'Yes' }));
+
+    await waitFor(() => expect(fetchQueryHistory).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      reconciliationLoad.resolve({ items: [failedItem], total: 1, offset: 0, limit: 50 });
+      await reconciliationLoad.promise;
+    });
+
+    expect(await screen.findByText('Deleted 1, failed to delete 1.')).toBeInTheDocument();
+    expect(screen.getByText('Delete failed')).toBeInTheDocument();
+    expect(screen.getByText('1 query')).toBeInTheDocument();
+  });
 });
