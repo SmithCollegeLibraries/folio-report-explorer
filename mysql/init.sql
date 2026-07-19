@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS query_jobs (
     name TEXT NULL COMMENT 'Human-readable query/request title',
     data_source ENUM('folio', 'local') DEFAULT 'folio',
     user_id INT NULL,
-    status ENUM('pending', 'running', 'completed', 'failed', 'cancelled') DEFAULT 'pending',
+    status ENUM('pending', 'running', 'cancelling', 'completed', 'failed', 'cancelled', 'pending_export') DEFAULT 'pending',
     result_columns JSON COMMENT 'Column names array',
     result_rows LONGTEXT COMMENT 'JSON-encoded row data',
     row_count INT,

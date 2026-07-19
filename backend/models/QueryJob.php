@@ -15,7 +15,7 @@ use yii\db\ActiveRecord;
  * @property string $data_source folio|local|composite
  * @property string $name  human-readable label/title
  * @property int    $user_id
- * @property string $status pending|running|completed|failed|cancelled|pending_export
+ * @property string $status pending|running|cancelling|completed|failed|cancelled|pending_export
  * @property string $result_columns JSON column names
  * @property string $result_rows JSON row data
  * @property int $row_count
@@ -45,7 +45,7 @@ class QueryJob extends ActiveRecord
             [['params', 'result_columns'], 'string'],
             [['sql_hash'], 'string', 'max' => 64],
             [['source'], 'in', 'range' => ['builder', 'nl', 'manual', 'report']],
-            [['status'], 'in', 'range' => ['pending', 'running', 'completed', 'failed', 'cancelled', 'pending_export']],
+            [['status'], 'in', 'range' => ['pending', 'running', 'cancelling', 'completed', 'failed', 'cancelled', 'pending_export']],
             [['row_count', 'execution_time_ms', 'user_id'], 'integer'],
             [['progress_message'], 'string', 'max' => 255],
             [['id'], 'string', 'max' => 36],
@@ -209,6 +209,23 @@ class QueryJob extends ActiveRecord
         $this->execution_time_ms = $executionTimeMs;
         $this->completed_at = date('Y-m-d H:i:s');
         $this->progress_message = 'Failed';
+        if ($this->hasAttribute('pg_backend_pid')) {
+            $this->pg_backend_pid = null;
+        }
+        $this->save(false);
+    }
+
+    /**
+     * Transition to the terminal cancelled state.
+     *
+     * @param string $message
+     */
+    public function markCancelled($message = 'Cancelled by user')
+    {
+        $this->status = 'cancelled';
+        $this->completed_at = date('Y-m-d H:i:s');
+        $this->progress_message = $message;
+        $this->error_message = null;
         if ($this->hasAttribute('pg_backend_pid')) {
             $this->pg_backend_pid = null;
         }
