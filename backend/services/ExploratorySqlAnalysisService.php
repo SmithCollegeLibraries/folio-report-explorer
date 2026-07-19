@@ -487,14 +487,7 @@ class ExploratorySqlAnalysisService
         if ($argument === null) {
             return null;
         }
-        $base = self::baseDepth($argument);
-        foreach ($argument as $token) {
-            if (($token['depth'] ?? -1) === $base
-                && in_array($token['value'] ?? '', ['+', '-', '/'], true)) {
-                return null;
-            }
-        }
-        $factorTokens = self::splitAtDepth($argument, '*', $base);
+        $factorTokens = self::multiplicationFactors($argument);
         if (count($factorTokens) < 2) {
             return null;
         }
@@ -509,6 +502,31 @@ class ExploratorySqlAnalysisService
             ];
         }
         return ['operator' => '*', 'factors' => $factors];
+    }
+
+    private static function multiplicationFactors(array $tokens): array
+    {
+        $tokens = self::withoutWrappingParentheses($tokens);
+        $base = self::baseDepth($tokens);
+        foreach ($tokens as $token) {
+            if (($token['depth'] ?? -1) === $base
+                && in_array($token['value'] ?? '', ['+', '-', '/'], true)) {
+                return [];
+            }
+        }
+        $parts = self::splitAtDepth($tokens, '*', $base);
+        if (count($parts) < 2) {
+            return [$tokens];
+        }
+        $factors = [];
+        foreach ($parts as $part) {
+            $nested = self::multiplicationFactors($part);
+            if ($nested === []) {
+                return [];
+            }
+            $factors = array_merge($factors, $nested);
+        }
+        return $factors;
     }
 
     private static function divisionStructure(array $tokens): ?array
@@ -804,11 +822,18 @@ class ExploratorySqlAnalysisService
                 continue;
             }
             $column = $tokens[$index + 2]['value'];
-            if (strpos($column, 'date') !== false || substr($column, -3) === '_at') {
+            if (self::isDatePredicateColumn($column)) {
                 $columns[] = $tokens[$index]['value'] . '.' . $column;
             }
         }
         return array_values(array_unique($columns));
+    }
+
+    private static function isDatePredicateColumn(string $column): bool
+    {
+        return $column === 'loan__loan_date'
+            || strpos($column, 'date') !== false
+            || substr($column, -3) === '_at';
     }
 
     private static function analyzeConjunction(array $tokens): array

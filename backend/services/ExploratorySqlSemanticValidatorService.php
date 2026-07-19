@@ -17,6 +17,8 @@ class ExploratorySqlSemanticValidatorService
         'roi_formula' => 'validateRoiFormula',
         'descending_purchase_ranking' => 'validateDescendingPurchaseRanking',
         'campus_scope' => 'validateCampusScope',
+        'physical_item_eligibility' => 'validatePhysicalItemEligibility',
+        'acquisition_unit_scope' => 'validateAcquisitionUnitScope',
         'governed_filters' => 'validateGovernedFilters',
         'numeric_output_types' => 'validateNumericOutputTypes',
     ];
@@ -32,6 +34,8 @@ class ExploratorySqlSemanticValidatorService
         'roi_formula' => 'Use zero-safe division for both ROI measures.',
         'descending_purchase_ranking' => 'Order by purchase count descending before applying a limit.',
         'campus_scope' => 'Apply the selected campus scope in the report predicates.',
+        'physical_item_eligibility' => 'Require positive physical quantity and current items at the selected campus.',
+        'acquisition_unit_scope' => 'Restrict purchase orders to the SC acquisitions unit.',
         'governed_filters' => 'Remove filters that were not permitted by the request contract.',
         'numeric_output_types' => 'Return analytical measures as numeric values without display formatting.',
     ];
@@ -143,7 +147,8 @@ class ExploratorySqlSemanticValidatorService
         if ($spend === null) {
             return self::GUIDANCE['spend_before_item_join'];
         }
-        $purchaseCount = self::itemForAlias($spend['selectItems'] ?? [], 'purchase_count');
+        $purchaseMeasure = self::purchaseRankingMeasure($contract);
+        $purchaseCount = self::itemForAlias($spend['selectItems'] ?? [], $purchaseMeasure);
         $spending = self::itemForAlias($spend['selectItems'] ?? [], 'spend');
         if ($purchaseCount === null || empty($purchaseCount['aggregate'])
             || $spending === null || empty($spending['aggregate'])) {
@@ -151,8 +156,8 @@ class ExploratorySqlSemanticValidatorService
         }
         $spendName = self::spendCteName($analysis);
         if ($spendName === null
-            || self::finalMeasureCteName($analysis, 'purchase_count') !== $spendName
-            || !self::hasValidPurchaseCount($analysis)
+            || self::finalMeasureCteName($analysis, $purchaseMeasure) !== $spendName
+            || !self::hasValidPurchaseMeasure($analysis, $purchaseMeasure)
             || self::hasItemOrCirculationLineage($spendName, $analysis['ctes'] ?? [], [])) {
             return self::GUIDANCE['spend_before_item_join'];
         }
@@ -180,7 +185,8 @@ class ExploratorySqlSemanticValidatorService
             : $spend;
         $purchaseWindow = $purchaseBasis === null || $purchaseScope === null
             ? null : self::qualifyingWindow($purchaseScope, $purchaseBasis);
-        $circulationWindow = self::qualifyingWindow($circulation, 'created_date');
+        $circulationWindow = self::qualifyingWindow($circulation, 'loan__loan_date')
+            ?? self::qualifyingWindow($circulation, 'created_date');
         return $purchaseWindow !== null && $circulationWindow !== null
             && $purchaseWindow['operator'] === $circulationWindow['operator']
             && $purchaseWindow['expression'] === $circulationWindow['expression']
@@ -252,10 +258,12 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateDescendingPurchaseRanking(array $analysis, array $requirement, array $contract): ?string
     {
+        $measure = (string)($requirement['parameters']['measure'] ?? '');
         $first = $analysis['orderBy'][0] ?? [];
-        return ($first['expression'] ?? null) === 'purchase_count'
+        return in_array($measure, ['purchase_count', 'physical_copies_purchased'], true)
+            && ($first['expression'] ?? null) === $measure
             && ($first['direction'] ?? null) === 'DESC'
-            && self::hasValidPurchaseCount($analysis)
+            && self::hasValidPurchaseMeasure($analysis, $measure)
             ? null : self::GUIDANCE['descending_purchase_ranking'];
     }
 
@@ -347,18 +355,99 @@ class ExploratorySqlSemanticValidatorService
             && self::hasExactColumnEquality($analysis, $campusAlias . '.instance_id', $spendAlias . '.instance_id');
     }
 
+    private static function validatePhysicalItemEligibility(array $analysis, array $requirement, array $contract): ?string
+    {
+        $parameters = $requirement['parameters'] ?? [];
+        $campus = strtolower((string)($parameters['campus'] ?? ''));
+        $spend = self::spendCte($analysis);
+        $poLine = self::aliasForSource($spend ?? [], 'orders.po_line__t');
+        if (empty($parameters['positivePhysicalQuantity'])
+            || empty($parameters['currentSelectedCampusItem'])
+            || $campus === ''
+            || $spend === null
+            || $poLine === null
+            || !self::hasPositivePhysicalQuantity($spend, $poLine)) {
+            return self::GUIDANCE['physical_item_eligibility'];
+        }
+        foreach (self::reachableCteEnforcement($analysis) as $name => $enforced) {
+            $scope = $analysis['ctes'][$name] ?? null;
+            if ($enforced && $scope !== null
+                && self::hasCampusHierarchy($scope, $campus, true)
+                && self::hasFinalCampusInstanceJoin($analysis, $name)) {
+                return null;
+            }
+        }
+        return self::GUIDANCE['physical_item_eligibility'];
+    }
+
+    private static function hasPositivePhysicalQuantity(array $scope, string $poLineAlias): bool
+    {
+        foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
+            if (($predicate['column'] ?? null) === $poLineAlias . '.cost__quantity_physical'
+                && ($predicate['operator'] ?? null) === '>'
+                && ($predicate['values'] ?? []) === ['0']
+                && empty($predicate['negated'])
+                && self::isEnforcingFact($predicate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function validateAcquisitionUnitScope(array $analysis, array $requirement, array $contract): ?string
+    {
+        $expected = strtolower(trim((string)($requirement['parameters']['code'] ?? '')));
+        $spend = self::spendCte($analysis);
+        $poLine = self::aliasForSource($spend ?? [], 'orders.po_line__t');
+        $purchaseOrder = self::aliasForSource($spend ?? [], 'orders.purchase_order__t');
+        $purchaseOrderUnit = self::aliasForSource($spend ?? [], 'orders.purchase_order__t__acq_unit_ids');
+        $acquisitionUnit = self::aliasForSource($spend ?? [], 'orders.acquisitions_unit__t');
+        if ($expected !== 'sc' || $spend === null || $poLine === null || $purchaseOrder === null
+            || $purchaseOrderUnit === null || $acquisitionUnit === null
+            || !self::hasExactColumnEquality($spend, $poLine . '.purchase_order_id', $purchaseOrder . '.id')
+            || !self::hasExactColumnEquality($spend, $purchaseOrderUnit . '.id', $purchaseOrder . '.id')
+            || !self::hasExactColumnEquality($spend, $acquisitionUnit . '.id', $purchaseOrderUnit . '.acq_unit_ids')) {
+            return self::GUIDANCE['acquisition_unit_scope'];
+        }
+        foreach (($spend['predicates']['literalPredicates'] ?? []) as $predicate) {
+            $leaf = self::columnLeaf((string)($predicate['column'] ?? ''));
+            $values = array_map(static function ($value): string {
+                return strtolower(trim((string)$value));
+            }, $predicate['values'] ?? []);
+            if (self::columnQualifier((string)($predicate['column'] ?? '')) === $acquisitionUnit
+                && in_array($leaf, ['name', 'code'], true)
+                && ($predicate['operator'] ?? null) === '='
+                && $values === [$expected]
+                && empty($predicate['negated'])
+                && self::isEnforcingFact($predicate)) {
+                return null;
+            }
+        }
+        return self::GUIDANCE['acquisition_unit_scope'];
+    }
+
     private static function validateGovernedFilters(array $analysis, array $requirement, array $contract): ?string
     {
         $permitted = $contract['permittedFilters'] ?? [];
         foreach (self::reachableContributingScopes($analysis) as $scope) {
             foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
                 $column = (string)($predicate['column'] ?? '');
-                if (strpos($column, 'material_type') !== false
-                    && !self::hasFilterProvenance($permitted, 'material_type', 'explicit_prompt')) {
-                    return self::GUIDANCE['governed_filters'];
+                if (strpos($column, 'material_type') !== false) {
+                    $permission = $permitted['material_type'] ?? [];
+                    $expected = strtolower((string)($permission['value'] ?? ''));
+                    $actual = array_map('strtolower', $predicate['values'] ?? []);
+                    if (!self::hasFilterProvenance($permitted, 'material_type', 'explicit_prompt')
+                        || $expected !== '' && $actual !== [$expected]) {
+                        return self::GUIDANCE['governed_filters'];
+                    }
                 }
                 if ((strpos($column, 'acquisition_unit') !== false || strpos($column, 'acquisitions_unit') !== false)
-                    && !self::hasFilterProvenance($permitted, 'acquisition_unit', 'explicit_prompt')) {
+                    && !self::hasFilterProvenance($permitted, 'acquisition_unit', 'explicit_prompt')
+                    && !self::hasFilterProvenance($permitted, 'acquisition_unit', 'reporting_policy')) {
+                    return self::GUIDANCE['governed_filters'];
+                }
+                if (self::columnLeaf($column) === 'cost__quantity_physical'
+                    && !self::hasFilterProvenance($permitted, 'physical_resource', 'reporting_policy')) {
                     return self::GUIDANCE['governed_filters'];
                 }
             }
@@ -368,7 +457,11 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateNumericOutputTypes(array $analysis, array $requirement, array $contract): ?string
     {
-        $recognized = ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'];
+        $recognized = [
+            'purchase_count', 'physical_copies_purchased', 'distinct_titles',
+            'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout',
+            'exact_linked_copies', 'fallback_linked_copies', 'fallback_percentage',
+        ];
         $returned = array_column($analysis['selectItems'] ?? [], 'alias');
         $measures = array_values(array_intersect($recognized, $returned));
         if (array_intersect($measures, $analysis['formattedAliases'] ?? []) !== []) {
@@ -474,17 +567,34 @@ class ExploratorySqlSemanticValidatorService
             ? $name : null;
     }
 
-    private static function hasValidPurchaseCount(array $analysis): bool
+    private static function hasValidPurchaseMeasure(array $analysis, string $measure): bool
     {
         $spendName = self::spendCteName($analysis);
         $spend = $spendName === null ? null : ($analysis['ctes'][$spendName] ?? null);
-        $aggregate = self::itemForAlias($spend['selectItems'] ?? [], 'purchase_count')['exactAggregate'] ?? null;
-        return $spend !== null
-            && self::finalMeasureCteName($analysis, 'purchase_count') === $spendName
+        $aggregate = self::itemForAlias($spend['selectItems'] ?? [], $measure)['exactAggregate'] ?? null;
+        if ($spend === null || self::finalMeasureCteName($analysis, $measure) !== $spendName) {
+            return false;
+        }
+        if ($measure === 'physical_copies_purchased') {
+            return ($aggregate['function'] ?? null) === 'sum'
+                && in_array(self::columnLeaf((string)($aggregate['column'] ?? '')), ['cost__quantity_physical', 'quantity'], true)
+                && self::columnSource($spend, (string)$aggregate['column']) === 'orders.po_line__t';
+        }
+        return $measure === 'purchase_count'
             && ($aggregate['function'] ?? null) === 'count'
             && !empty($aggregate['distinct'])
             && self::columnLeaf((string)($aggregate['column'] ?? '')) === 'id'
             && self::columnSource($spend, (string)$aggregate['column']) === 'orders.po_line__t';
+    }
+
+    private static function purchaseRankingMeasure(array $contract): string
+    {
+        foreach (($contract['requirements'] ?? []) as $requirement) {
+            if (($requirement['key'] ?? null) === 'purchase_ranking') {
+                return (string)($requirement['parameters']['measure'] ?? 'purchase_count');
+            }
+        }
+        return 'purchase_count';
     }
 
     private static function hasItemOrCirculationLineage(string $name, array $ctes, array $visited): bool
@@ -849,14 +959,15 @@ class ExploratorySqlSemanticValidatorService
 
     private static function qualifyingWindow(array $scope, string $expectedColumn): ?array
     {
-        $expectedSource = $expectedColumn === 'created_date'
+        $isCheckoutWindow = in_array($expectedColumn, ['created_date', 'loan__loan_date'], true);
+        $expectedSource = $isCheckoutWindow
             ? 'circulation.audit_loan__t' : 'invoice.invoices__t';
-        $auditAlias = $expectedColumn === 'created_date' ? self::countedAuditAlias($scope) : null;
+        $auditAlias = $isCheckoutWindow ? self::countedAuditAlias($scope) : null;
         $facts = array_values(array_filter(
             $scope['predicates']['dateWindows'] ?? [],
             static function (array $fact) use ($scope, $expectedColumn, $expectedSource, $auditAlias): bool {
                 $column = (string)($fact['column'] ?? '');
-                $enforced = $expectedColumn === 'created_date'
+                $enforced = in_array($expectedColumn, ['created_date', 'loan__loan_date'], true)
                     ? $auditAlias !== null
                         && self::columnQualifier($column) === $auditAlias
                         && self::isCountedAuditJoinFact($fact, $auditAlias)
@@ -897,6 +1008,8 @@ class ExploratorySqlSemanticValidatorService
             'roi_formula' => 'assumption_mismatch',
             'purchase_ranking' => 'missing_ordering',
             'campus_scope' => 'assumption_mismatch',
+            'physical_item_eligibility' => 'physical_cohort_mismatch',
+            'acquisition_unit_scope' => 'scope_mismatch',
             'governed_filters' => 'unrequested_filter',
             'numeric_output_types' => 'output_type_mismatch',
         ];

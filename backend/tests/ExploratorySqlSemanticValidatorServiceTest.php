@@ -32,12 +32,26 @@ function semanticAssertRejectedFor(string $sql, array $contract, string $key, st
     semanticAssertContainsAll([$key], array_column($result['violations'], 'key'), $message);
 }
 
+function semanticAssertRejectedCategory(string $sql, array $contract, string $key, string $category, string $message): void
+{
+    $result = ExploratorySqlSemanticValidatorService::validate($sql, $contract);
+    semanticAssertSame('rejected', $result['status'], $message);
+    foreach ($result['violations'] as $violation) {
+        if (($violation['key'] ?? null) === $key) {
+            semanticAssertSame($category, $violation['category'] ?? null, $message);
+            return;
+        }
+    }
+    semanticAssertContainsAll([$key], array_column($result['violations'], 'key'), $message);
+}
+
 $question = 'Show me which call numbers we have purchased the most from the last 5 years. Compare circulation data to those call numbers and show the return on investment.';
 $contract = ExploratorySemanticContractService::build(
     $question,
     null,
     ExploratoryQueryDefaultsService::resolve($question),
-    'unsupported_query_family'
+    'unsupported_query_family',
+    ['physicalRoiPolicyVersion' => 'legacy']
 );
 
 $correctedSql = <<<'SQL'
@@ -110,7 +124,7 @@ semanticAssertSame('validated', $valid['status'], 'Corrected ROI SQL must pass e
 semanticAssertSame(array_column($contract['requirements'], 'key'), array_column($valid['checkedRequirements'], 'key'), 'Every contract requirement must be checked before validation.');
 
 $estimatedQuestion = $question . ' Use estimated PO line price.';
-$estimatedContract = ExploratorySemanticContractService::build($estimatedQuestion, null, ExploratoryQueryDefaultsService::resolve($estimatedQuestion), 'unsupported_query_family');
+$estimatedContract = ExploratorySemanticContractService::build($estimatedQuestion, null, ExploratoryQueryDefaultsService::resolve($estimatedQuestion), 'unsupported_query_family', ['physicalRoiPolicyVersion' => 'legacy']);
 $estimatedBaseSql = str_replace("    WHERE invoice.payment_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql);
 $estimatedSql = str_replace(
     [
@@ -162,26 +176,26 @@ $estimatedDecoySql = str_replace(
 $estimatedDecoySql = str_replace('JOIN eligible_po_lines eligible ON', 'JOIN eligibility_decoy eligible ON', $estimatedDecoySql);
 semanticAssertRejectedFor($estimatedDecoySql, $estimatedContract, 'investment_cost_basis', 'An unused correct eligibility CTE must not lend trust to the joined decoy.');
 $estimatedInvoiceQuestion = $estimatedQuestion . ' Use invoice date.';
-$estimatedInvoiceContract = ExploratorySemanticContractService::build($estimatedInvoiceQuestion, null, ExploratoryQueryDefaultsService::resolve($estimatedInvoiceQuestion), 'unsupported_query_family');
+$estimatedInvoiceContract = ExploratorySemanticContractService::build($estimatedInvoiceQuestion, null, ExploratoryQueryDefaultsService::resolve($estimatedInvoiceQuestion), 'unsupported_query_family', ['physicalRoiPolicyVersion' => 'legacy']);
 $estimatedInvoiceSql = str_replace('invoice.payment_date', 'invoice.invoice_date', $estimatedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($estimatedInvoiceSql, $estimatedInvoiceContract)['status'], 'Estimated PO-line eligibility must support the advertised invoice-date basis.');
 
 $lifetimeQuestion = $question . ' Use lifetime circulation.';
-$lifetimeContract = ExploratorySemanticContractService::build($lifetimeQuestion, null, ExploratoryQueryDefaultsService::resolve($lifetimeQuestion), 'unsupported_query_family');
+$lifetimeContract = ExploratorySemanticContractService::build($lifetimeQuestion, null, ExploratoryQueryDefaultsService::resolve($lifetimeQuestion), 'unsupported_query_family', ['physicalRoiPolicyVersion' => 'legacy']);
 $lifetimeSql = str_replace("     AND audit_loan.created_date >= CURRENT_DATE - INTERVAL '5 years'\n", '', $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($lifetimeSql, $lifetimeContract)['status'], 'The advertised lifetime-circulation alternative must validate without an audit window.');
 semanticAssertRejectedFor($correctedSql, $lifetimeContract, 'circulation_window', 'A five-year audit restriction must not satisfy lifetime circulation.');
 semanticAssertRejectedFor(str_replace('GROUP BY item.id, item.holdings_record_id', "WHERE item.updated_at >= CURRENT_DATE - INTERVAL '5 years'\n    GROUP BY item.id, item.holdings_record_id", $lifetimeSql), $lifetimeContract, 'circulation_window', 'Unrelated date-window facts must not satisfy lifetime circulation.');
 
 $firstTwoQuestion = $question . ' Group by the first two call number letters.';
-$firstTwoContract = ExploratorySemanticContractService::build($firstTwoQuestion, null, ExploratoryQueryDefaultsService::resolve($firstTwoQuestion), 'unsupported_query_family');
+$firstTwoContract = ExploratorySemanticContractService::build($firstTwoQuestion, null, ExploratoryQueryDefaultsService::resolve($firstTwoQuestion), 'unsupported_query_family', ['physicalRoiPolicyVersion' => 'legacy']);
 $firstTwoSql = str_replace("MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM '^[A-Za-z]+'))", 'MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM 1 FOR 2))', $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($firstTwoSql, $firstTwoContract)['status'], 'The advertised first-two-call-number-letters alternative must validate.');
 semanticAssertRejectedFor($correctedSql, $firstTwoContract, 'call_number_grouping', 'Primary-class extraction must not satisfy the first-two-letter alternative.');
 semanticAssertRejectedFor(str_replace('MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM 1 FOR 2))', 'MIN(holdings.effective_call_number_components__call_number)', $firstTwoSql), $firstTwoContract, 'call_number_grouping', 'Raw call numbers must not satisfy first-two-letter grouping.');
 
 $costOnlyQuestion = $question . ' Use cost per checkout.';
-$costOnlyContract = ExploratorySemanticContractService::build($costOnlyQuestion, null, ExploratoryQueryDefaultsService::resolve($costOnlyQuestion), 'unsupported_query_family');
+$costOnlyContract = ExploratorySemanticContractService::build($costOnlyQuestion, null, ExploratoryQueryDefaultsService::resolve($costOnlyQuestion), 'unsupported_query_family', ['physicalRoiPolicyVersion' => 'legacy']);
 $costOnlySql = str_replace("       SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0) AS checkouts_per_dollar,\n", '', $correctedSql);
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($costOnlySql, $costOnlyContract)['status'], 'The advertised cost-per-checkout-only alternative must validate without checkouts per dollar.');
 semanticAssertRejectedFor(str_replace('SUM(spend_by_instance.spend) / NULLIF(SUM(circulation_by_instance.circulation), 0)', 'SUM(circulation_by_instance.circulation) / NULLIF(SUM(spend_by_instance.spend), 0)', $costOnlySql), $costOnlyContract, 'roi_formula', 'Cost per checkout must remain spend over circulation.');
@@ -550,6 +564,59 @@ semanticAssertRejectedFor(str_replace("selected_scope.name = 'Smith College'", "
 $campusWithoutProvenance = $campusContract;
 $campusWithoutProvenance['permittedFilters']['campus'] = ['value' => 'Smith College'];
 semanticAssertRejectedFor($campusSql, $campusWithoutProvenance, 'campus_scope', 'Campus scope without selected-scope provenance must fail closed.');
+
+$physicalContract = ExploratorySemanticContractService::build(
+    $question,
+    'Smith College',
+    ExploratoryQueryDefaultsService::resolve($question),
+    'unsupported_query_family'
+);
+$physicalSql = str_replace(
+    [
+        'COUNT(DISTINCT pol.id) AS purchase_count,',
+        'SUM(fd.total * fd.fund_distributions__value * 0.01) AS spend',
+        'JOIN orders.po_line__t pol ON pol.id = fd.po_line_id',
+        'WHERE invoice.payment_date',
+        'audit_loan.created_date >=',
+        'SUM(spend_by_instance.purchase_count) AS purchase_count,',
+        'ORDER BY purchase_count DESC',
+    ],
+    [
+        "SUM(paid_line.quantity) AS purchase_count,\n           SUM(paid_line.quantity) AS physical_copies_purchased,\n           COUNT(DISTINCT paid_line.instance_id) AS distinct_titles,",
+        'SUM(fd.total * (fd.fund_distributions__value * 0.01)) AS spend',
+        "JOIN orders.po_line__t paid_line ON paid_line.id = fd.po_line_id\n    JOIN orders.purchase_order__t purchase_order ON purchase_order.id = paid_line.purchase_order_id\n    JOIN orders.purchase_order__t__acq_unit_ids purchase_order_unit ON purchase_order_unit.id = purchase_order.id\n    JOIN orders.acquisitions_unit__t acquisition_unit ON acquisition_unit.id = purchase_order_unit.acq_unit_ids",
+        "WHERE paid_line.cost__quantity_physical > 0\n      AND TRIM(acquisition_unit.name) = 'SC'\n      AND invoice.payment_date",
+        'audit_loan.loan__loan_date >=',
+        "SUM(spend_by_instance.purchase_count) AS purchase_count,\n       SUM(spend_by_instance.physical_copies_purchased) AS physical_copies_purchased,\n       SUM(spend_by_instance.distinct_titles) AS distinct_titles,",
+        'ORDER BY physical_copies_purchased DESC',
+    ],
+    $campusSql
+);
+$physicalResult = ExploratorySqlSemanticValidatorService::validate($physicalSql, $physicalContract);
+semanticAssertSame('validated', $physicalResult['status'], 'Policy-backed physical ROI must validate.');
+
+$dvdQuestion = 'For DVDs, show call numbers purchased most in five years with circulation and ROI.';
+$dvdContract = ExploratorySemanticContractService::build(
+    $dvdQuestion,
+    'Smith College',
+    ExploratoryQueryDefaultsService::resolve($dvdQuestion),
+    'unsupported_query_family'
+);
+$dvdSql = str_replace(
+    [
+        'JOIN inventory.location__t scope_location ON',
+        "WHERE selected_scope.name = 'Smith College'\n    GROUP BY scope_holdings.instance_id",
+    ],
+    [
+        "JOIN inventory.material_type__t material_type ON material_type.id = scope_item.material_type_id\n    JOIN inventory.location__t scope_location ON",
+        "WHERE selected_scope.name = 'Smith College'\n      AND LOWER(material_type.name) = 'dvd'\n    GROUP BY scope_holdings.instance_id",
+    ],
+    $physicalSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($dvdSql, $dvdContract)['status'], 'Explicit DVD physical ROI must validate.');
+semanticAssertRejectedFor(str_replace("LOWER(material_type.name) = 'dvd'", "LOWER(material_type.name) = 'book'", $dvdSql), $dvdContract, 'governed_filters', 'An unrequested book filter must fail governance.');
+semanticAssertRejectedCategory(str_replace("    WHERE paid_line.cost__quantity_physical > 0\n      AND", '    WHERE', $physicalSql), $physicalContract, 'physical_item_eligibility', 'physical_cohort_mismatch', 'Positive physical quantity is mandatory.');
+semanticAssertRejectedCategory(str_replace("      AND TRIM(acquisition_unit.name) = 'SC'\n", '', $physicalSql), $physicalContract, 'acquisition_unit_scope', 'scope_mismatch', 'Smith acquisition-unit scope is mandatory.');
 
 semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.acquisition_unit_id = 'unit' AND invoice.payment_date", $correctedSql), $contract, 'governed_filters', 'Unrequested acquisition unit must be rejected.');
 semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.material_type_id = 'book' AND invoice.payment_date", $correctedSql), $contract, 'governed_filters', 'Unrequested material type must be rejected.');

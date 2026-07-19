@@ -15,7 +15,8 @@ function contractAssertSame($expected, $actual, string $message): void
 
 $question = 'Show me which call numbers we have purchased the most from the last 5 years. Compare circulation data to those call numbers and show the return on investment.';
 $assumptions = ExploratoryQueryDefaultsService::resolve($question);
-$contract = ExploratorySemanticContractService::build($question, 'Smith College', $assumptions, 'unsupported_query_family');
+$legacyOptions = ['physicalRoiPolicyVersion' => 'legacy'];
+$contract = ExploratorySemanticContractService::build($question, 'Smith College', $assumptions, 'unsupported_query_family', $legacyOptions);
 
 contractAssertSame(1, $contract['contractVersion'], 'The contract must be versioned.');
 contractAssertSame(true, $contract['applicable'], 'Cross-domain call-number ROI must receive semantic protection.');
@@ -53,9 +54,57 @@ contractAssertSame(true, $requirementsByKey['campus_scope']['parameters']['requi
 contractAssertSame('Smith College', $requirementsByKey['campus_scope']['parameters']['value'], 'The campus requirement must retain the selected scope value.');
 contractAssertSame(false, isset($contract['permittedFilters']['material_type']), 'Material type must not be silently permitted.');
 contractAssertSame(false, isset($contract['permittedFilters']['acquisition_unit']), 'Acquisition unit must not be silently permitted.');
+contractAssertSame(false, array_key_exists('reportPolicy', $contract), 'Legacy rollback contracts must retain their original keys.');
+
+$physical = ExploratorySemanticContractService::build(
+    $question,
+    'Smith College',
+    ExploratoryQueryDefaultsService::resolve($question),
+    'unsupported_query_family'
+);
+contractAssertSame(true, $physical['reportPolicy']['physicalOnly'] ?? null, 'ROI policy must require physical purchases.');
+contractAssertSame('SC', $physical['reportPolicy']['acquisitionUnitCode'] ?? null, 'ROI policy must require Smith acquisitions.');
+contractAssertSame(null, $physical['reportPolicy']['materialType'] ?? null, 'Generic ROI wording must not default to books.');
+contractAssertSame('reporting_policy', $physical['permittedFilters']['physical_resource']['provenance'] ?? null, 'Physical eligibility is policy-backed.');
+contractAssertSame('reporting_policy', $physical['permittedFilters']['acquisition_unit']['provenance'] ?? null, 'SC acquisitions are policy-backed.');
+contractAssertSame('complete', $physical['coverageStatus'], 'Every v2 policy requirement must have a registered rule.');
+$physicalRequirements = array_column($physical['requirements'], null, 'key');
+contractAssertSame(
+    ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'],
+    $physicalRequirements['required_measures']['parameters']['values'] ?? null,
+    'Physical ROI must expose copy and title measures instead of legacy PO-line counts.'
+);
+contractAssertSame('physical_copies_purchased', $physicalRequirements['purchase_ranking']['parameters']['measure'] ?? null, 'Physical ROI ranking must use physical copies purchased.');
+contractAssertSame(true, isset($physicalRequirements['physical_item_eligibility']), 'V2 contracts must block on physical item eligibility.');
+contractAssertSame(true, isset($physicalRequirements['acquisition_unit_scope']), 'V2 contracts must block on acquisition-unit scope.');
+contractAssertSame(false, isset($requirementsByKey['physical_item_eligibility']), 'Legacy contracts must omit physical item eligibility.');
+contractAssertSame(false, isset($requirementsByKey['acquisition_unit_scope']), 'Legacy contracts must omit acquisition-unit scope.');
+
+$dvdQuestion = 'For DVDs, show call numbers purchased most in five years with circulation and ROI.';
+$dvd = ExploratorySemanticContractService::build(
+    $dvdQuestion,
+    'Smith College',
+    ExploratoryQueryDefaultsService::resolve($dvdQuestion),
+    'unsupported_query_family'
+);
+contractAssertSame('dvd', $dvd['reportPolicy']['materialType'] ?? null, 'Explicit DVD scope must be retained.');
+contractAssertSame('explicit_prompt', $dvd['permittedFilters']['material_type']['provenance'] ?? null, 'DVD is an explicit material filter.');
+
+$physicalCostOnlyQuestion = $question . ' Use cost per checkout.';
+$physicalCostOnly = ExploratorySemanticContractService::build(
+    $physicalCostOnlyQuestion,
+    'Smith College',
+    ExploratoryQueryDefaultsService::resolve($physicalCostOnlyQuestion),
+    'unsupported_query_family'
+);
+contractAssertSame(
+    ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'cost_per_checkout'],
+    array_column($physicalCostOnly['requirements'], null, 'key')['required_measures']['parameters']['values'] ?? null,
+    'Cost-per-checkout-only v2 contracts must omit checkouts per dollar.'
+);
 
 $noCampusRequirements = array_column(
-    ExploratorySemanticContractService::build($question, null, $assumptions, 'unsupported_query_family')['requirements'],
+    ExploratorySemanticContractService::build($question, null, $assumptions, 'unsupported_query_family', $legacyOptions)['requirements'],
     null,
     'key'
 );
@@ -66,7 +115,8 @@ $canonicalContract = ExploratorySemanticContractService::build(
     $question,
     'Smith College',
     $assumptions,
-    'family_contract_supported:inventory_listing'
+    'family_contract_supported:inventory_listing',
+    $legacyOptions
 );
 contractAssertSame(false, $canonicalContract['applicable'], 'Canonical-family routing must bypass the exploratory semantic contract.');
 
@@ -77,7 +127,8 @@ contractAssertSame(
         $supportedVocabularyQuestion,
         null,
         ExploratoryQueryDefaultsService::resolve($supportedVocabularyQuestion),
-        'unsupported_query_family'
+        'unsupported_query_family',
+        $legacyOptions
     )['applicable'],
     'Concept detection must support the same representative vocabulary as documented-default detection.'
 );
@@ -88,7 +139,8 @@ contractAssertSame(
         $outsideVocabularyQuestion,
         null,
         ExploratoryQueryDefaultsService::resolve($outsideVocabularyQuestion),
-        'unsupported_query_family'
+        'unsupported_query_family',
+        $legacyOptions
     )['applicable'],
     'Concept detection must not broaden beyond documented-default vocabulary.'
 );
@@ -98,7 +150,8 @@ $filteredContract = ExploratorySemanticContractService::build(
     $filteredQuestion,
     null,
     ExploratoryQueryDefaultsService::resolve($filteredQuestion),
-    'unsupported_query_family'
+    'unsupported_query_family',
+    $legacyOptions
 );
 contractAssertSame(
     'explicit_prompt',
@@ -116,7 +169,8 @@ $invoiceContract = ExploratorySemanticContractService::build(
     $invoiceQuestion,
     'Smith College',
     ExploratoryQueryDefaultsService::resolve($invoiceQuestion),
-    'unsupported_query_family'
+    'unsupported_query_family',
+    $legacyOptions
 );
 contractAssertSame(
     'invoice_date',
@@ -133,7 +187,8 @@ $alternativeContract = ExploratorySemanticContractService::build(
     $alternativeQuestion,
     null,
     ExploratoryQueryDefaultsService::resolve($alternativeQuestion),
-    'unsupported_query_family'
+    'unsupported_query_family',
+    $legacyOptions
 );
 $alternativeLabels = array_column($alternativeContract['requirements'], 'label', 'key');
 contractAssertSame('Spending uses estimated PO-line prices.', $alternativeLabels['investment_cost_basis'], 'Investment labels must reflect the allowlisted alternative.');
@@ -169,7 +224,7 @@ contractAssertSame(
     'Coverage auditing must identify the uncovered requirement key.'
 );
 
-$simple = ExploratorySemanticContractService::build('List item barcodes', null, [], 'unsupported_query_family');
+$simple = ExploratorySemanticContractService::build('List item barcodes', null, [], 'unsupported_query_family', $legacyOptions);
 contractAssertSame(false, $simple['applicable'], 'An unrelated simple request must not receive an ROI checklist.');
 
 fwrite(STDOUT, "Exploratory semantic contract service test passed\n");

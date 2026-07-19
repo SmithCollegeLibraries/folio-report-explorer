@@ -25,6 +25,8 @@ class ExploratorySemanticContractService
         'roi_formula' => 'roi_formula',
         'purchase_ranking' => 'descending_purchase_ranking',
         'campus_scope' => 'campus_scope',
+        'physical_item_eligibility' => 'physical_item_eligibility',
+        'acquisition_unit_scope' => 'acquisition_unit_scope',
         'governed_filters' => 'governed_filters',
         'numeric_output_types' => 'numeric_output_types',
     ];
@@ -33,7 +35,8 @@ class ExploratorySemanticContractService
         string $question,
         ?string $campus,
         array $assumptions,
-        string $routeReason
+        string $routeReason,
+        array $options = []
     ): array {
         if (!self::isExploratoryRouteReason($routeReason) || !self::isCrossDomainCallNumberRoi($question)) {
             return [
@@ -48,10 +51,17 @@ class ExploratorySemanticContractService
         }
 
         $values = self::assumptionValues($assumptions);
-        $filters = self::permittedFilters($question, $campus);
-        $requiredMeasures = ($values['roi_formula'] ?? null) === 'cost_per_checkout'
-            ? ['purchase_count', 'spend', 'circulation', 'cost_per_checkout']
-            : ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'];
+        $policyVersion = ($options['physicalRoiPolicyVersion'] ?? 'v2') === 'legacy' ? 'legacy' : 'v2';
+        $materialType = $policyVersion === 'v2' ? self::explicitPhysicalMaterialType($question) : null;
+        $filters = self::permittedFilters($question, $campus, $policyVersion, $materialType);
+        $requiredMeasures = $policyVersion === 'legacy'
+            ? (($values['roi_formula'] ?? null) === 'cost_per_checkout'
+                ? ['purchase_count', 'spend', 'circulation', 'cost_per_checkout']
+                : ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'])
+            : (($values['roi_formula'] ?? null) === 'cost_per_checkout'
+                ? ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'cost_per_checkout']
+                : ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout']);
+        $purchaseRankingMeasure = $policyVersion === 'legacy' ? 'purchase_count' : 'physical_copies_purchased';
         $requirements = [
             self::requirement('purchase_date_basis', self::requirementLabel('purchase_date_basis', $values), [
                 'value' => $values['purchase_date_basis'] ?? null,
@@ -74,22 +84,34 @@ class ExploratorySemanticContractService
                 'value' => $values['roi_formula'] ?? null,
             ]),
             self::requirement('purchase_ranking', self::requirementLabel('purchase_ranking', $values), [
-                'measure' => 'purchase_count',
+                'measure' => $purchaseRankingMeasure,
                 'direction' => 'descending',
             ]),
             self::requirement('campus_scope', self::requirementLabel('campus_scope', $values, $campus !== null), [
                 'required' => $campus !== null,
                 'value' => $campus,
             ]),
+        ];
+        if ($policyVersion === 'v2') {
+            $requirements[] = self::requirement('physical_item_eligibility', 'Purchases require positive physical quantity and a current item at the selected campus.', [
+                'positivePhysicalQuantity' => true,
+                'currentSelectedCampusItem' => true,
+                'campus' => $campus,
+            ]);
+            $requirements[] = self::requirement('acquisition_unit_scope', 'Purchases are restricted to the Smith acquisitions unit.', [
+                'code' => 'SC',
+            ]);
+        }
+        $requirements = array_merge($requirements, [
             self::requirement('governed_filters', self::requirementLabel('governed_filters', $values), [
                 'permitted' => array_keys($filters),
             ]),
             self::requirement('numeric_output_types', self::requirementLabel('numeric_output_types', $values)),
-        ];
+        ]);
 
         $coverage = self::auditCoverage($requirements, ExploratorySqlSemanticValidatorService::supportedRuleKeys());
 
-        return [
+        $contract = [
             'contractVersion' => self::CONTRACT_VERSION,
             'applicable' => true,
             'concept' => 'cross_domain_call_number_roi',
@@ -98,6 +120,14 @@ class ExploratorySemanticContractService
             'coverageStatus' => $coverage['coverageStatus'],
             'uncoveredRequirementKeys' => $coverage['uncoveredRequirementKeys'],
         ];
+        if ($policyVersion === 'v2') {
+            $contract['reportPolicy'] = [
+                'physicalOnly' => true,
+                'acquisitionUnitCode' => 'SC',
+                'materialType' => $materialType,
+            ];
+        }
+        return $contract;
     }
 
     public static function auditCoverage(array $requirements, array $supportedRuleKeys): array
@@ -210,7 +240,12 @@ class ExploratorySemanticContractService
         return $labels[$key] ?? 'The report satisfies an approved semantic requirement.';
     }
 
-    private static function permittedFilters(string $question, ?string $campus): array
+    private static function permittedFilters(
+        string $question,
+        ?string $campus,
+        string $policyVersion,
+        ?string $materialType
+    ): array
     {
         $filters = [];
         if ($campus !== null) {
@@ -224,6 +259,21 @@ class ExploratorySemanticContractService
         $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
         $normalized = preg_replace('/\s+/', ' ', trim((string)$normalized));
 
+        if ($policyVersion === 'v2') {
+            $filters['physical_resource'] = ['provenance' => 'reporting_policy'];
+            $filters['acquisition_unit'] = [
+                'value' => 'SC',
+                'provenance' => 'reporting_policy',
+            ];
+            if ($materialType !== null) {
+                $filters['material_type'] = [
+                    'value' => $materialType,
+                    'provenance' => 'explicit_prompt',
+                ];
+            }
+            return $filters;
+        }
+
         if (preg_match('/\b(?:use (?:the )?material types?(?: filters?)?|(?:filter|limit|restrict)(?:ed)? (?:the (?:results|report) )?(?:by|to) material types?)\b/', (string)$normalized) === 1) {
             $filters['material_type'] = ['provenance' => 'explicit_prompt'];
         }
@@ -232,5 +282,14 @@ class ExploratorySemanticContractService
         }
 
         return $filters;
+    }
+
+    private static function explicitPhysicalMaterialType(string $question): ?string
+    {
+        $normalized = strtolower($question);
+        $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
+        $normalized = preg_replace('/\s+/', ' ', trim((string)$normalized));
+
+        return preg_match('/\bdvds?\b/', (string)$normalized) === 1 ? 'dvd' : null;
     }
 }
