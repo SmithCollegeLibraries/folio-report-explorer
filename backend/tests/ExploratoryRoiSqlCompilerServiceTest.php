@@ -18,6 +18,52 @@ function compilerAssertSame($expected, $actual, string $message): void
     }
 }
 
+function compilerAssertPhysicalColumnsExist(string $sql): void
+{
+    $cache = json_decode((string)file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
+    $columnsByTable = $cache['columns'] ?? [];
+    $subtableCache = json_decode((string)file_get_contents(__DIR__ . '/../data/subtable_cache.json'), true);
+    foreach (($subtableCache['subtables'] ?? []) as $table => $definition) {
+        $columnsByTable[strtolower($table)] = $definition['columns'] ?? [];
+    }
+
+    preg_match_all(
+        '/\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*)\s+([a-z_][a-z0-9_]*)\b/i',
+        $sql,
+        $bindings,
+        PREG_SET_ORDER
+    );
+
+    $tableByAlias = [];
+    $physicalTables = [];
+    foreach ($bindings as $binding) {
+        $table = strtolower($binding[1]);
+        $tableByAlias[strtolower($binding[2])] = $table;
+        $physicalTables[] = $table;
+    }
+
+    preg_match_all('/\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b/i', $sql, $references, PREG_SET_ORDER);
+    $missing = [];
+    foreach ($references as $reference) {
+        $alias = strtolower($reference[1]);
+        $qualifiedReference = $alias . '.' . strtolower($reference[2]);
+        if (in_array($qualifiedReference, $physicalTables, true)) {
+            continue;
+        }
+        if (!isset($tableByAlias[$alias])) {
+            continue;
+        }
+
+        $table = $tableByAlias[$alias];
+        $availableColumns = array_column($columnsByTable[$table] ?? [], 'name');
+        if (!in_array(strtolower($reference[2]), array_map('strtolower', $availableColumns), true)) {
+            $missing[] = $table . '.' . strtolower($reference[2]);
+        }
+    }
+
+    compilerAssertSame([], array_values(array_unique($missing)), 'Compiled ROI SQL must use only columns present in the discovered schema cache.');
+}
+
 $question = 'Show me which call numbers we have purchased the most from the last 5 years. Compare circulation data to those call numbers and show the return on investment.';
 $contract = ExploratorySemanticContractService::build(
     $question,
@@ -28,6 +74,7 @@ $contract = ExploratorySemanticContractService::build(
 
 $compiled = ExploratoryRoiSqlCompilerService::compile($contract);
 compilerAssertSame(true, is_array($compiled), 'The documented default ROI contract should compile deterministically.');
+compilerAssertPhysicalColumnsExist($compiled['sql']);
 compilerAssertSame(
     'validated',
     ExploratorySqlSemanticValidatorService::validate($compiled['sql'], $contract)['status'] ?? null,

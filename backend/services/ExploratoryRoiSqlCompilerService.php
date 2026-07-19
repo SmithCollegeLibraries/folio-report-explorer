@@ -83,9 +83,10 @@ WITH spend_by_instance AS (
     GROUP BY scope_holdings.instance_id
 ), class_by_instance AS (
     SELECT instance.id AS instance_id,
-           MIN(SUBSTRING(holdings.effective_call_number_components__call_number FROM '^[A-Za-z]+')) AS call_number_class
+           MIN(SUBSTRING(class_item.effective_call_number_components__call_number FROM '^[A-Za-z]+')) AS call_number_class
     FROM inventory.instance__t instance
     JOIN inventory.holdings_record__t holdings ON holdings.instance_id = instance.id
+    JOIN inventory.item__t class_item ON class_item.holdings_record_id = holdings.id
     GROUP BY instance.id
 )
 SELECT class_by_instance.call_number_class,
