@@ -1,5 +1,19 @@
 <?php
 
+$tableMappingFixture = sys_get_temp_dir() . '/folio_report_explorer_filter_shape_table_mapping_cache.json';
+file_put_contents($tableMappingFixture, json_encode([
+    '_discovered_at' => date('c'),
+    'mapping' => [
+        'inventory_instances' => 'inventory.instance__t',
+    ],
+], JSON_PRETTY_PRINT));
+$GLOBALS['filterShapeTableMappingFixture'] = $tableMappingFixture;
+register_shutdown_function(function () use ($tableMappingFixture) {
+    if (file_exists($tableMappingFixture)) {
+        unlink($tableMappingFixture);
+    }
+});
+
 $schemaServicePath = __DIR__ . '/../services/FolioSchemaService.php';
 $sqlBuilderPath = __DIR__ . '/../services/SqlBuilderService.php';
 
@@ -21,7 +35,7 @@ if (!class_exists('Yii')) {
         public static function getAlias($alias)
         {
             if ($alias === '@app/data/table_mapping_cache.json') {
-                return __DIR__ . '/../data/table_mapping_cache.json';
+                return $GLOBALS['filterShapeTableMappingFixture'];
             }
             if ($alias === '@app/data/subtable_cache.json') {
                 return __DIR__ . '/../data/subtable_cache.json';
