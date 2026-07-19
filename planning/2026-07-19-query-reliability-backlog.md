@@ -36,6 +36,8 @@ Make complex Ask AI reports analytically trustworthy while restoring reliable qu
 
 ### APP-001 — Make queue cancellation stop work
 
+**Implementation status:** Code complete on `docs/query-reliability-backlog`; production smoke test pending.
+
 **Problem:** Cancelling a running job currently changes only the MySQL job status. The PostgreSQL query continues consuming the single FOLIO execution slot, and the worker may later overwrite the job status.
 
 **Scope:**
@@ -57,6 +59,16 @@ Make complex Ask AI reports analytically trustworthy while restoring reliable qu
 - A non-owner who is not an administrator receives `403`.
 - Repeating cancellation is safe and does not produce a misleading error.
 - Concurrency tests cover cancellation before claim, during execution, and during terminal persistence.
+
+**Verification evidence (2026-07-19):**
+
+- `QueryJobCancellationServiceTest.php` covers pending, pending-export, running, local, repeated, terminal, PID, and per-job PostgreSQL session-tag behavior.
+- `FolioQueryControllerCancellationTest.php` covers owner, non-owner, administrator, missing, completed, and idempotent endpoint outcomes.
+- `QueryWorkerCancellationTest.php` and `QueryWorkerConcurrencyTest.php` cover cooperative terminalization and retention of the FOLIO concurrency slot while cancellation is pending.
+- All backend test scripts pass; the credential-dependent live PostgreSQL check reports its documented skip.
+- All 145 frontend tests pass and the TypeScript/Vite production build succeeds.
+- Rollback is isolated to commits `ae749ae`, `1911546`, `4a70abd`, `b628bdc`, and `5785948`; migration 038 must remain applied until no rows use `cancelling`, after which its enum addition can be removed if rollback is required.
+- Production smoke test: run an owned slow FOLIO query, click Stop, verify `Cancelling…` becomes `Cancelled`, verify no results are published, and verify a queued FOLIO job begins after PostgreSQL terminates the cancelled backend.
 
 ### APP-002 — Make history deletion permanent
 
