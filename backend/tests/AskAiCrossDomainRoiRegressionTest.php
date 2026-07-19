@@ -156,6 +156,8 @@ Yii::$app = (object)['params' => [
     'geminiApiKey' => 'test-key',
     'geminiMaxRetries' => 1,
     'nl2sqlForceLegacy' => false,
+    // This fixture verifies the original legacy repair contract through the rollback path.
+    'nl2sqlHardenedPhysicalRoi' => false,
 ]];
 
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
@@ -291,6 +293,11 @@ RoiTestTransport::$responses = [
 ];
 RoiTestTransport::$requests = [];
 
+roiRegressionAssertSame(
+    false,
+    Yii::$app->params['nl2sqlHardenedPhysicalRoi'],
+    'This regression must explicitly exercise rollback and legacy repair semantics.'
+);
 $repaired = GeminiService::generateSqlWithShadow($question);
 roiRegressionAssertSame($validRoiSql, $repaired['sql'] ?? null, 'The motivating request should return the validated repair candidate.');
 roiRegressionAssertSame(1, $repaired['repairAttempts'] ?? null, 'Five semantic defects should trigger one automatic repair.');
