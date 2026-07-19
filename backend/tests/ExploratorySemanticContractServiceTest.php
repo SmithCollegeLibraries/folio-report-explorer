@@ -69,6 +69,10 @@ contractAssertSame('reporting_policy', $physical['permittedFilters']['physical_r
 contractAssertSame('reporting_policy', $physical['permittedFilters']['acquisition_unit']['provenance'] ?? null, 'SC acquisitions are policy-backed.');
 contractAssertSame('complete', $physical['coverageStatus'], 'Every v2 policy requirement must have a registered rule.');
 $physicalRequirements = array_column($physical['requirements'], null, 'key');
+contractAssertSame('Physical copies purchased and spending are aggregated before item-level circulation.', $physicalRequirements['spend_grain']['label'] ?? null, 'V2 spend label must describe physical copies.');
+contractAssertSame('Results include physical copies purchased, distinct titles, spending, circulation, checkouts per dollar, and cost per checkout.', $physicalRequirements['required_measures']['label'] ?? null, 'V2 required-measure label must describe copy and title outputs.');
+contractAssertSame('Call-number groups rank by physical copies purchased from highest to lowest.', $physicalRequirements['purchase_ranking']['label'] ?? null, 'V2 ranking label must describe physical copies.');
+contractAssertSame('Physical-resource and SC acquisitions filters are required by reporting policy; material type appears only when explicitly requested.', $physicalRequirements['governed_filters']['label'] ?? null, 'V2 governance label must disclose SC reporting policy.');
 contractAssertSame(
     ['physical_copies_purchased', 'distinct_titles', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'],
     $physicalRequirements['required_measures']['parameters']['values'] ?? null,

@@ -69,7 +69,7 @@ class ExploratorySemanticContractService
             self::requirement('investment_cost_basis', self::requirementLabel('investment_cost_basis', $values), [
                 'value' => $values['investment_cost_basis'] ?? null,
             ]),
-            self::requirement('spend_grain', self::requirementLabel('spend_grain', $values)),
+            self::requirement('spend_grain', self::policyRequirementLabel('spend_grain', $values, $policyVersion)),
             self::requirement('circulation_window', self::requirementLabel('circulation_window', $values), [
                 'value' => $values['circulation_window'] ?? null,
             ]),
@@ -77,13 +77,13 @@ class ExploratorySemanticContractService
             self::requirement('call_number_grouping', self::requirementLabel('call_number_grouping', $values), [
                 'value' => $values['call_number_grouping'] ?? null,
             ]),
-            self::requirement('required_measures', self::requirementLabel('required_measures', $values), [
+            self::requirement('required_measures', self::policyRequirementLabel('required_measures', $values, $policyVersion), [
                 'values' => $requiredMeasures,
             ]),
             self::requirement('roi_formula', self::requirementLabel('roi_formula', $values), [
                 'value' => $values['roi_formula'] ?? null,
             ]),
-            self::requirement('purchase_ranking', self::requirementLabel('purchase_ranking', $values), [
+            self::requirement('purchase_ranking', self::policyRequirementLabel('purchase_ranking', $values, $policyVersion), [
                 'measure' => $purchaseRankingMeasure,
                 'direction' => 'descending',
             ]),
@@ -103,7 +103,7 @@ class ExploratorySemanticContractService
             ]);
         }
         $requirements = array_merge($requirements, [
-            self::requirement('governed_filters', self::requirementLabel('governed_filters', $values), [
+            self::requirement('governed_filters', self::policyRequirementLabel('governed_filters', $values, $policyVersion), [
                 'permitted' => array_keys($filters),
             ]),
             self::requirement('numeric_output_types', self::requirementLabel('numeric_output_types', $values)),
@@ -238,6 +238,24 @@ class ExploratorySemanticContractService
                 : 'No campus restriction was requested.';
         }
         return $labels[$key] ?? 'The report satisfies an approved semantic requirement.';
+    }
+
+    private static function policyRequirementLabel(string $key, array $values, string $policyVersion): string
+    {
+        if ($policyVersion !== 'v2') {
+            return self::requirementLabel($key, $values);
+        }
+        $labels = [
+            'spend_grain' => 'Physical copies purchased and spending are aggregated before item-level circulation.',
+            'purchase_ranking' => 'Call-number groups rank by physical copies purchased from highest to lowest.',
+            'governed_filters' => 'Physical-resource and SC acquisitions filters are required by reporting policy; material type appears only when explicitly requested.',
+        ];
+        if ($key === 'required_measures') {
+            return ($values['roi_formula'] ?? null) === 'cost_per_checkout'
+                ? 'Results include physical copies purchased, distinct titles, spending, circulation, and cost per checkout.'
+                : 'Results include physical copies purchased, distinct titles, spending, circulation, checkouts per dollar, and cost per checkout.';
+        }
+        return $labels[$key] ?? self::requirementLabel($key, $values);
     }
 
     private static function permittedFilters(

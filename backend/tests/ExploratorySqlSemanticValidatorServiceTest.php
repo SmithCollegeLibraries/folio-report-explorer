@@ -592,8 +592,72 @@ $physicalSql = str_replace(
     ],
     $campusSql
 );
+$poLineQuantitySql = $physicalSql;
+$physicalSql = str_replace(
+    'WITH spend_by_instance AS (',
+    "WITH exact_paid_lines AS (\n    SELECT invoice_line.id AS invoice_line_id,\n           paid_line.instance_id AS instance_id,\n           invoice_line.quantity AS quantity\n    FROM invoice.invoice_lines__t invoice_line\n    JOIN orders.po_line__t paid_line ON paid_line.id = invoice_line.po_line_id\n    JOIN orders.purchase_order__t purchase_order ON purchase_order.id = paid_line.purchase_order_id\n    JOIN orders.purchase_order__t__acq_unit_ids purchase_order_unit ON purchase_order_unit.id = purchase_order.id\n    JOIN orders.acquisitions_unit__t acquisition_unit ON acquisition_unit.id = purchase_order_unit.acq_unit_ids\n    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n    WHERE paid_line.cost__quantity_physical > 0\n      AND TRIM(acquisition_unit.name) = 'SC'\n    GROUP BY invoice_line.id, paid_line.instance_id, invoice_line.quantity\n), spend_by_instance AS (",
+    $physicalSql
+);
+$physicalSql = str_replace(
+    "JOIN orders.po_line__t paid_line ON paid_line.id = fd.po_line_id\n    JOIN orders.purchase_order__t purchase_order ON purchase_order.id = paid_line.purchase_order_id\n    JOIN orders.purchase_order__t__acq_unit_ids purchase_order_unit ON purchase_order_unit.id = purchase_order.id\n    JOIN orders.acquisitions_unit__t acquisition_unit ON acquisition_unit.id = purchase_order_unit.acq_unit_ids",
+    'JOIN exact_paid_lines paid_line ON paid_line.invoice_line_id = invoice_line.id',
+    $physicalSql
+);
+$physicalSql = str_replace(
+    "WHERE paid_line.cost__quantity_physical > 0\n      AND TRIM(acquisition_unit.name) = 'SC'\n      AND invoice.payment_date",
+    'WHERE invoice.payment_date',
+    $physicalSql
+);
+$physicalSql = str_replace('COUNT(audit_loan.created_date) AS checkouts', 'COUNT(DISTINCT audit_loan.loan__id) AS checkouts', $physicalSql);
+$poLineQuantityResult = ExploratorySqlSemanticValidatorService::validate($poLineQuantitySql, $physicalContract);
+semanticAssertSame('rejected', $poLineQuantityResult['status'], 'Direct PO-line physical quantity must not satisfy invoiced-copy lineage.');
 $physicalResult = ExploratorySqlSemanticValidatorService::validate($physicalSql, $physicalContract);
 semanticAssertSame('validated', $physicalResult['status'], 'Policy-backed physical ROI must validate.');
+$fallbackAllocationSql = str_replace(
+    "           invoice_line.quantity AS quantity\n",
+    "           invoice_line.quantity AS quantity,\n           invoice_line.quantity AS fallback_allocated_quantity\n",
+    $physicalSql
+);
+$fallbackAllocationSql = str_replace(
+    "    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n",
+    '',
+    $fallbackAllocationSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($fallbackAllocationSql, $physicalContract)['status'], 'A structurally marked invoice-quantity instance fallback must validate.');
+$directItemAllocationSql = str_replace(
+    "    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id",
+    '    JOIN inventory.item__t linked_item ON linked_item.purchase_order_line_identifier = paid_line.id',
+    $physicalSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($directItemAllocationSql, $physicalContract)['status'], 'Direct item PO-line linkage must be accepted as trusted exact allocation.');
+$untrustedAllocationSql = str_replace(
+    "    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n",
+    '',
+    $physicalSql
+);
+semanticAssertRejectedFor($untrustedAllocationSql, $physicalContract, 'spend_grain', 'Invoice quantity without exact linkage or a fallback allocation shape must be rejected.');
+semanticAssertRejectedFor(str_replace('SUM(paid_line.quantity) AS physical_copies_purchased', 'COUNT(DISTINCT paid_line.instance_id) AS physical_copies_purchased', $physicalSql), $physicalContract, 'spend_grain', 'Instance or PO-line counts must not satisfy physical-copy lineage.');
+$decoyPolicySql = str_replace(
+    'WITH exact_paid_lines AS (',
+    "WITH policy_decoy AS (\n    SELECT decoy_invoice_line.id AS invoice_line_id\n    FROM invoice.invoice_lines__t decoy_invoice_line\n    JOIN orders.po_line__t decoy_line ON decoy_line.id = decoy_invoice_line.po_line_id\n    JOIN orders.purchase_order__t decoy_order ON decoy_order.id = decoy_line.purchase_order_id\n    JOIN orders.purchase_order__t__acq_unit_ids decoy_order_unit ON decoy_order_unit.id = decoy_order.id\n    JOIN orders.acquisitions_unit__t decoy_unit ON decoy_unit.id = decoy_order_unit.acq_unit_ids\n    WHERE decoy_line.cost__quantity_physical > 0\n      AND TRIM(decoy_unit.name) = 'SC'\n    GROUP BY decoy_invoice_line.id\n), exact_paid_lines AS (",
+    $physicalSql
+);
+$decoyPolicySql = str_replace(
+    "    WHERE paid_line.cost__quantity_physical > 0\n      AND TRIM(acquisition_unit.name) = 'SC'\n",
+    '',
+    $decoyPolicySql
+);
+$decoyPolicySql = str_replace(
+    'JOIN exact_paid_lines paid_line ON paid_line.invoice_line_id = invoice_line.id',
+    "JOIN exact_paid_lines paid_line ON paid_line.invoice_line_id = invoice_line.id\n    LEFT JOIN policy_decoy policy_decoy ON policy_decoy.invoice_line_id = invoice_line.id",
+    $decoyPolicySql
+);
+semanticAssertRejectedFor($decoyPolicySql, $physicalContract, 'physical_item_eligibility', 'A nullable side-policy dependency must not lend physical eligibility to the purchase measure.');
+semanticAssertRejectedFor($decoyPolicySql, $physicalContract, 'acquisition_unit_scope', 'A nullable side-policy dependency must not lend SC scope to the purchase measure.');
+foreach (['audit_loan.loan__id', 'audit_loan.loan__action', 'audit_loan.loan__item_id', 'audit_loan.loan__loan_date'] as $nonDistinctCheckoutExpression) {
+    $nonDistinctCheckoutSql = str_replace('DISTINCT audit_loan.loan__id', $nonDistinctCheckoutExpression, $physicalSql);
+    semanticAssertRejectedFor($nonDistinctCheckoutSql, $physicalContract, 'circulation_grain', 'V2 circulation must count distinct audit loan ids.');
+}
 
 $dvdQuestion = 'For DVDs, show call numbers purchased most in five years with circulation and ROI.';
 $dvdContract = ExploratorySemanticContractService::build(
@@ -614,7 +678,14 @@ $dvdSql = str_replace(
     $physicalSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($dvdSql, $dvdContract)['status'], 'Explicit DVD physical ROI must validate.');
+semanticAssertRejectedFor($physicalSql, $dvdContract, 'governed_filters', 'An explicit DVD contract must enforce its material cohort.');
 semanticAssertRejectedFor(str_replace("LOWER(material_type.name) = 'dvd'", "LOWER(material_type.name) = 'book'", $dvdSql), $dvdContract, 'governed_filters', 'An unrequested book filter must fail governance.');
+$arbitraryMaterialAliasSql = str_replace(
+    ['inventory.material_type__t material_type', 'material_type.id', 'material_type.name'],
+    ['inventory.material_type__t format_dimension', 'format_dimension.id', 'format_dimension.name'],
+    $dvdSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($arbitraryMaterialAliasSql, $dvdContract)['status'], 'Material validation must resolve arbitrary aliases to the material-type table.');
 semanticAssertRejectedCategory(str_replace("    WHERE paid_line.cost__quantity_physical > 0\n      AND", '    WHERE', $physicalSql), $physicalContract, 'physical_item_eligibility', 'physical_cohort_mismatch', 'Positive physical quantity is mandatory.');
 semanticAssertRejectedCategory(str_replace("      AND TRIM(acquisition_unit.name) = 'SC'\n", '', $physicalSql), $physicalContract, 'acquisition_unit_scope', 'scope_mismatch', 'Smith acquisition-unit scope is mandatory.');
 

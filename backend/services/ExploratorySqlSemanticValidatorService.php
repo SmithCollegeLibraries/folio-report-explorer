@@ -158,7 +158,8 @@ class ExploratorySqlSemanticValidatorService
         if ($spendName === null
             || self::finalMeasureCteName($analysis, $purchaseMeasure) !== $spendName
             || !self::hasValidPurchaseMeasure($analysis, $purchaseMeasure)
-            || self::hasItemOrCirculationLineage($spendName, $analysis['ctes'] ?? [], [])) {
+            || ($purchaseMeasure === 'purchase_count'
+                && self::hasItemOrCirculationLineage($spendName, $analysis['ctes'] ?? [], []))) {
             return self::GUIDANCE['spend_before_item_join'];
         }
         return null;
@@ -195,8 +196,24 @@ class ExploratorySqlSemanticValidatorService
 
     private static function validateCirculationItemGrain(array $analysis, array $requirement, array $contract): ?string
     {
-        return self::circulationItemCte($analysis) !== null
-            ? null : self::GUIDANCE['circulation_item_grain'];
+        $circulation = self::circulationItemCte($analysis);
+        if ($circulation === null) {
+            return self::GUIDANCE['circulation_item_grain'];
+        }
+        if (!empty($contract['reportPolicy']['physicalOnly'])
+            && !self::hasDistinctAuditLoanCount($circulation)) {
+            return self::GUIDANCE['circulation_item_grain'];
+        }
+        return null;
+    }
+
+    private static function hasDistinctAuditLoanCount(array $scope): bool
+    {
+        $aggregate = self::itemForAlias($scope['selectItems'] ?? [], 'checkouts')['exactAggregate'] ?? null;
+        return ($aggregate['function'] ?? null) === 'count'
+            && !empty($aggregate['distinct'])
+            && self::columnLeaf((string)($aggregate['column'] ?? '')) === 'loan__id'
+            && self::columnSource($scope, (string)($aggregate['column'] ?? '')) === 'circulation.audit_loan__t';
     }
 
     private static function validateCallNumberGrouping(array $analysis, array $requirement, array $contract): ?string
@@ -359,14 +376,20 @@ class ExploratorySqlSemanticValidatorService
     {
         $parameters = $requirement['parameters'] ?? [];
         $campus = strtolower((string)($parameters['campus'] ?? ''));
-        $spend = self::spendCte($analysis);
-        $poLine = self::aliasForSource($spend ?? [], 'orders.po_line__t');
         if (empty($parameters['positivePhysicalQuantity'])
             || empty($parameters['currentSelectedCampusItem'])
-            || $campus === ''
-            || $spend === null
-            || $poLine === null
-            || !self::hasPositivePhysicalQuantity($spend, $poLine)) {
+            || $campus === '') {
+            return self::GUIDANCE['physical_item_eligibility'];
+        }
+        $hasPositiveQuantity = false;
+        foreach (self::purchaseMeasureScopes($analysis) as $scope) {
+            $poLine = self::aliasForSource($scope, 'orders.po_line__t');
+            if ($poLine !== null && self::hasPositivePhysicalQuantity($scope, $poLine)) {
+                $hasPositiveQuantity = true;
+                break;
+            }
+        }
+        if (!$hasPositiveQuantity) {
             return self::GUIDANCE['physical_item_eligibility'];
         }
         foreach (self::reachableCteEnforcement($analysis) as $name => $enforced) {
@@ -397,48 +420,104 @@ class ExploratorySqlSemanticValidatorService
     private static function validateAcquisitionUnitScope(array $analysis, array $requirement, array $contract): ?string
     {
         $expected = strtolower(trim((string)($requirement['parameters']['code'] ?? '')));
-        $spend = self::spendCte($analysis);
-        $poLine = self::aliasForSource($spend ?? [], 'orders.po_line__t');
-        $purchaseOrder = self::aliasForSource($spend ?? [], 'orders.purchase_order__t');
-        $purchaseOrderUnit = self::aliasForSource($spend ?? [], 'orders.purchase_order__t__acq_unit_ids');
-        $acquisitionUnit = self::aliasForSource($spend ?? [], 'orders.acquisitions_unit__t');
-        if ($expected !== 'sc' || $spend === null || $poLine === null || $purchaseOrder === null
-            || $purchaseOrderUnit === null || $acquisitionUnit === null
-            || !self::hasExactColumnEquality($spend, $poLine . '.purchase_order_id', $purchaseOrder . '.id')
-            || !self::hasExactColumnEquality($spend, $purchaseOrderUnit . '.id', $purchaseOrder . '.id')
-            || !self::hasExactColumnEquality($spend, $acquisitionUnit . '.id', $purchaseOrderUnit . '.acq_unit_ids')) {
+        if ($expected !== 'sc') {
             return self::GUIDANCE['acquisition_unit_scope'];
         }
-        foreach (($spend['predicates']['literalPredicates'] ?? []) as $predicate) {
-            $leaf = self::columnLeaf((string)($predicate['column'] ?? ''));
-            $values = array_map(static function ($value): string {
-                return strtolower(trim((string)$value));
-            }, $predicate['values'] ?? []);
-            if (self::columnQualifier((string)($predicate['column'] ?? '')) === $acquisitionUnit
-                && in_array($leaf, ['name', 'code'], true)
-                && ($predicate['operator'] ?? null) === '='
-                && $values === [$expected]
-                && empty($predicate['negated'])
-                && self::isEnforcingFact($predicate)) {
-                return null;
+        foreach (self::purchaseMeasureScopes($analysis) as $scope) {
+            $poLine = self::aliasForSource($scope, 'orders.po_line__t');
+            $purchaseOrder = self::aliasForSource($scope, 'orders.purchase_order__t');
+            $purchaseOrderUnit = self::aliasForSource($scope, 'orders.purchase_order__t__acq_unit_ids');
+            $acquisitionUnit = self::aliasForSource($scope, 'orders.acquisitions_unit__t');
+            if ($poLine === null || $purchaseOrder === null || $purchaseOrderUnit === null || $acquisitionUnit === null
+                || !self::hasExactColumnEquality($scope, $poLine . '.purchase_order_id', $purchaseOrder . '.id')
+                || !self::hasExactColumnEquality($scope, $purchaseOrderUnit . '.id', $purchaseOrder . '.id')
+                || !self::hasExactColumnEquality($scope, $acquisitionUnit . '.id', $purchaseOrderUnit . '.acq_unit_ids')) {
+                continue;
+            }
+            foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
+                $leaf = self::columnLeaf((string)($predicate['column'] ?? ''));
+                $values = array_map(static function ($value): string {
+                    return strtolower(trim((string)$value));
+                }, $predicate['values'] ?? []);
+                if (self::columnQualifier((string)($predicate['column'] ?? '')) === $acquisitionUnit
+                    && in_array($leaf, ['name', 'code'], true)
+                    && ($predicate['operator'] ?? null) === '='
+                    && $values === [$expected]
+                    && empty($predicate['negated'])
+                    && self::isEnforcingFact($predicate)) {
+                    return null;
+                }
             }
         }
         return self::GUIDANCE['acquisition_unit_scope'];
     }
 
+    private static function purchaseMeasureScopes(array $analysis): array
+    {
+        $spendName = self::spendCteName($analysis);
+        if ($spendName === null) {
+            return [];
+        }
+        $spend = $analysis['ctes'][$spendName] ?? null;
+        $aggregate = self::itemForAlias($spend['selectItems'] ?? [], 'physical_copies_purchased')['exactAggregate'] ?? null;
+        if ($spend === null || !isset($aggregate['column'])) {
+            return [];
+        }
+        $scopes = [];
+        self::collectColumnLineageScopes($spend, (string)$aggregate['column'], $analysis, [], $scopes);
+        return $scopes;
+    }
+
+    private static function collectColumnLineageScopes(
+        array $scope,
+        string $column,
+        array $analysis,
+        array $visited,
+        array &$scopes
+    ): void {
+        $scopes[] = $scope;
+        $binding = self::resolveColumnBinding($scope, $column);
+        $name = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+        if ($name === '' || isset($visited[$name]) || !isset($analysis['ctes'][$name])) {
+            return;
+        }
+        $visited[$name] = true;
+        $sourceScope = $analysis['ctes'][$name];
+        $sourceColumn = self::expressionForAlias($sourceScope['selectItems'] ?? [], self::columnLeaf($column));
+        if ($sourceColumn !== null) {
+            self::collectColumnLineageScopes($sourceScope, $sourceColumn, $analysis, $visited, $scopes);
+        }
+    }
+
     private static function validateGovernedFilters(array $analysis, array $requirement, array $contract): ?string
     {
         $permitted = $contract['permittedFilters'] ?? [];
+        $requiredMaterialValue = self::hasFilterProvenance($permitted, 'material_type', 'explicit_prompt')
+            ? strtolower(trim((string)($permitted['material_type']['value'] ?? '')))
+            : '';
+        $materialValueEnforced = false;
         foreach (self::reachableContributingScopes($analysis) as $scope) {
             foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
                 $column = (string)($predicate['column'] ?? '');
-                if (strpos($column, 'material_type') !== false) {
+                $columnSource = self::columnSource($scope, $column);
+                $isMaterialFilter = strpos(self::columnLeaf($column), 'material_type') !== false
+                    || $columnSource === 'inventory.material_type__t';
+                if ($isMaterialFilter) {
                     $permission = $permitted['material_type'] ?? [];
                     $expected = strtolower((string)($permission['value'] ?? ''));
                     $actual = array_map('strtolower', $predicate['values'] ?? []);
                     if (!self::hasFilterProvenance($permitted, 'material_type', 'explicit_prompt')
                         || $expected !== '' && $actual !== [$expected]) {
                         return self::GUIDANCE['governed_filters'];
+                    }
+                    if ($requiredMaterialValue !== ''
+                        && $columnSource === 'inventory.material_type__t'
+                        && self::columnLeaf($column) === 'name'
+                        && in_array($predicate['operator'] ?? null, ['=', 'IN'], true)
+                        && empty($predicate['negated'])
+                        && self::isEnforcingFact($predicate)
+                        && $actual === [$requiredMaterialValue]) {
+                        $materialValueEnforced = true;
                     }
                 }
                 if ((strpos($column, 'acquisition_unit') !== false || strpos($column, 'acquisitions_unit') !== false)
@@ -452,7 +531,8 @@ class ExploratorySqlSemanticValidatorService
                 }
             }
         }
-        return null;
+        return $requiredMaterialValue === '' || $materialValueEnforced
+            ? null : self::GUIDANCE['governed_filters'];
     }
 
     private static function validateNumericOutputTypes(array $analysis, array $requirement, array $contract): ?string
@@ -563,7 +643,8 @@ class ExploratorySqlSemanticValidatorService
         $name = self::finalMeasureCteName($analysis, 'spend');
         $cte = $name === null ? null : ($analysis['ctes'][$name] ?? null);
         return $cte !== null
-            && self::containsTable($cte['tables'] ?? [], 'po_line')
+            && (self::containsTable($cte['tables'] ?? [], 'po_line')
+                || self::containsTable($cte['tables'] ?? [], 'invoice_lines'))
             ? $name : null;
     }
 
@@ -577,8 +658,16 @@ class ExploratorySqlSemanticValidatorService
         }
         if ($measure === 'physical_copies_purchased') {
             return ($aggregate['function'] ?? null) === 'sum'
-                && in_array(self::columnLeaf((string)($aggregate['column'] ?? '')), ['cost__quantity_physical', 'quantity'], true)
-                && self::columnSource($spend, (string)$aggregate['column']) === 'orders.po_line__t';
+                && isset($aggregate['column'])
+                && self::columnHasLineage(
+                    $spend,
+                    (string)$aggregate['column'],
+                    $analysis,
+                    'invoice.invoice_lines__t',
+                    'quantity',
+                    []
+                )
+                && self::hasTrustedPhysicalAllocation($spend, (string)$aggregate['column'], $analysis);
         }
         return $measure === 'purchase_count'
             && ($aggregate['function'] ?? null) === 'count'
@@ -595,6 +684,72 @@ class ExploratorySqlSemanticValidatorService
             }
         }
         return 'purchase_count';
+    }
+
+    private static function columnHasLineage(
+        array $scope,
+        string $column,
+        array $analysis,
+        string $expectedTable,
+        string $expectedColumn,
+        array $visited
+    ): bool {
+        $binding = self::resolveColumnBinding($scope, $column);
+        if (($binding['kind'] ?? null) === 'table') {
+            return ($binding['source'] ?? null) === $expectedTable
+                && self::columnLeaf($column) === $expectedColumn;
+        }
+        $cteName = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+        if ($cteName === '' || isset($visited[$cteName]) || !isset($analysis['ctes'][$cteName])) {
+            return false;
+        }
+        $visited[$cteName] = true;
+        $sourceScope = $analysis['ctes'][$cteName];
+        $sourceColumn = self::expressionForAlias($sourceScope['selectItems'] ?? [], self::columnLeaf($column));
+        return $sourceColumn !== null
+            && self::columnHasLineage($sourceScope, $sourceColumn, $analysis, $expectedTable, $expectedColumn, $visited);
+    }
+
+    private static function hasTrustedPhysicalAllocation(array $scope, string $column, array $analysis): bool
+    {
+        $binding = self::resolveColumnBinding($scope, $column);
+        $allocationName = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+        $allocation = $analysis['ctes'][$allocationName] ?? null;
+        if ($allocation === null) {
+            return false;
+        }
+        $invoiceLine = self::aliasForSource($allocation, 'invoice.invoice_lines__t');
+        $poLine = self::aliasForSource($allocation, 'orders.po_line__t');
+        $piece = self::aliasForSource($allocation, 'orders.pieces__t');
+        $item = self::aliasForSource($allocation, 'inventory.item__t');
+        if ($invoiceLine === null || $poLine === null
+            || !self::hasEnforcingColumnEquality($allocation, $invoiceLine . '.po_line_id', $poLine . '.id')) {
+            return false;
+        }
+        $hasReceivingPieceLink = $piece !== null && $item !== null
+            && self::hasEnforcingColumnEquality($allocation, $piece . '.po_line_id', $poLine . '.id')
+            && self::hasEnforcingColumnEquality($allocation, $item . '.id', $piece . '.item_id');
+        $hasDirectItemLink = $item !== null
+            && self::hasEnforcingColumnEquality($allocation, $item . '.purchase_order_line_identifier', $poLine . '.id');
+        $hasInstanceFallback = self::expressionForAlias($allocation['selectItems'] ?? [], 'instance_id') === $poLine . '.instance_id'
+            && self::expressionForAlias($allocation['selectItems'] ?? [], 'fallback_allocated_quantity') === $invoiceLine . '.quantity'
+            && in_array($invoiceLine . '.id', $allocation['groupBy'] ?? [], true)
+            && in_array($poLine . '.instance_id', $allocation['groupBy'] ?? [], true)
+            && in_array($invoiceLine . '.quantity', $allocation['groupBy'] ?? [], true);
+        return $hasReceivingPieceLink || $hasDirectItemLink || $hasInstanceFallback;
+    }
+
+    private static function hasEnforcingColumnEquality(array $scope, string $left, string $right): bool
+    {
+        foreach (($scope['predicates']['columnComparisons'] ?? []) as $comparison) {
+            $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
+            if (($comparison['operator'] ?? null) === '='
+                && self::isEnforcingFact($comparison)
+                && ($actual === [$left, $right] || $actual === [$right, $left])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function hasItemOrCirculationLineage(string $name, array $ctes, array $visited): bool
