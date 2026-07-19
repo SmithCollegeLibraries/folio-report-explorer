@@ -131,4 +131,22 @@ assertSameValue(
     'A blocked table introduced through parenthesized PostgreSQL ONLY must not evade table policy.'
 );
 
+foreach ([
+    'feesfines.accounts__t__contributors',
+    'feesfines.actual_cost_record__t__instance__contributors',
+    'feesfines.actual_cost_record__t__instance__identifiers',
+] as $blockedDescendant) {
+    $descendantThrown = null;
+    try {
+        SqlBuilderService::validateTablePolicy('SELECT * FROM ' . $blockedDescendant);
+    } catch (\Throwable $e) {
+        $descendantThrown = get_class($e);
+    }
+    assertSameValue(
+        'app\\exceptions\\PolicyViolationException',
+        $descendantThrown,
+        'A discovered subtable of a blocked patron-data parent must inherit the parent policy block.'
+    );
+}
+
 fwrite(STDOUT, "SqlBuilderService policy violation test passed\n");

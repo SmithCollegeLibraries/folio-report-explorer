@@ -9,6 +9,7 @@ use app\exceptions\ExploratorySqlValidationException;
 
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
+require_once __DIR__ . '/ExploratoryRoiSqlCompilerService.php';
 require_once __DIR__ . '/ExploratorySemanticContractService.php';
 require_once __DIR__ . '/ExploratorySqlRepairService.php';
 require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
@@ -315,6 +316,32 @@ class GeminiService
         }
 
         if (($outcome['status'] ?? null) !== 'validated') {
+            $compiledFallback = ExploratoryRoiSqlCompilerService::compile($semanticContract);
+            if ($compiledFallback !== null) {
+                try {
+                    $compiledFallback = self::validateCompiledExploratoryFallback(
+                        $compiledFallback,
+                        $semanticContract
+                    );
+                    $outcome = [
+                        'status' => 'validated',
+                        'result' => $compiledFallback,
+                        'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
+                    ];
+                } catch (\app\exceptions\PolicyViolationException $exception) {
+                    throw $exception;
+                } catch (\Throwable $exception) {
+                    self::logNlTelemetry('nl2sql.exploratory_compiled_fallback_rejected', [
+                        'promptFingerprint' => self::fingerprintPrompt($prompt),
+                        'category' => $exception instanceof ExploratorySqlValidationException
+                            ? $exception->getSafeCategory()
+                            : 'validation_failure',
+                    ], true);
+                }
+            }
+        }
+
+        if (($outcome['status'] ?? null) !== 'validated') {
             self::logExploratoryTerminalOutcome(
                 $context,
                 'exhausted',
@@ -343,6 +370,31 @@ class GeminiService
         ]);
 
         return $primary;
+    }
+
+    private static function validateCompiledExploratoryFallback(array $result, array $contract): array
+    {
+        $sql = (string)($result['sql'] ?? '');
+        SqlBuilderService::validateSafety($sql);
+        SqlBuilderService::validateTablePolicy($sql);
+        self::validateTableReferences($sql);
+
+        $semanticValidation = ExploratorySqlSemanticValidatorService::validate($sql, $contract);
+        if (($semanticValidation['status'] ?? null) !== 'validated') {
+            throw new ExploratorySqlValidationException(
+                'semantic_conformance',
+                'semantic_coverage_gap',
+                $sql,
+                true,
+                'The deterministic exploratory fallback did not satisfy its semantic contract.',
+                null,
+                is_array($semanticValidation['violations'] ?? null) ? $semanticValidation['violations'] : []
+            );
+        }
+
+        $result['semanticContractApplicable'] = true;
+        $result['semanticValidation'] = $semanticValidation;
+        return $result;
     }
 
     private static function decorateValidatedExploratoryResult(
@@ -1949,14 +2001,19 @@ GUIDANCE;
             'database_connectivity',
             'database_validation',
             'grouping_error',
+            'blocked_keyword',
             'invalid_operator',
+            'invalid_select_shape',
             'missing_select',
+            'multiple_statements',
+            'non_select',
             'policy_blocked',
             'provider_failure',
             'query_too_complex',
             'syntax_error',
             'unknown_column',
             'unknown_table',
+            'unsupported_source_shape',
             'validation_failure',
         ];
         return in_array($normalized, $allowed, true)
@@ -5446,10 +5503,11 @@ PROMPT;
         }
         $systemPrompt = <<<'PROMPT'
 You are repairing one PostgreSQL SELECT query for a FOLIO reporting request.
-Return exactly one corrected SELECT statement, a concise explanation, and DATA SOURCE.
 Preserve requested outputs, campus scope, and documented interpretations.
 Correct the reported validation failure without weakening filters or omitting requested domains.
 Use only supplied schema tables and columns. Never access blocked data or produce non-SELECT SQL.
+Return the corrected query in one ```sql code block, followed by a concise explanation and a final line exactly like DATA SOURCE: folio.
+Never include a second SQL statement, an alternate query, or a semicolon inside the SQL code block.
 PROMPT;
 
         $semanticGuidance = [];
@@ -5491,7 +5549,45 @@ PROMPT;
         $data = json_decode($requestResult['response']->content, true);
         $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
-        return self::parseResponse($text);
+        try {
+            return self::parseResponse($text);
+        } catch (\InvalidArgumentException $exception) {
+            $candidateSql = '';
+            try {
+                $candidateSql = (string)(self::extractSqlResponseParts($text)['sql'] ?? '');
+            } catch (\Throwable $ignored) {
+                // A safe category is sufficient when no candidate SELECT can
+                // be isolated from the model response.
+            }
+
+            throw new ExploratorySqlValidationException(
+                'response_format',
+                self::classifyInvalidRepairResponse($exception),
+                $candidateSql,
+                true,
+                'The AI repair response was not a single valid SELECT statement.',
+                $exception
+            );
+        }
+    }
+
+    private static function classifyInvalidRepairResponse(\InvalidArgumentException $exception): string
+    {
+        $message = strtolower(trim($exception->getMessage()));
+        if (strpos($message, 'single select statement') !== false) {
+            return 'multiple_statements';
+        }
+        if (strpos($message, 'blocked keyword') !== false) {
+            return 'blocked_keyword';
+        }
+        if (strpos($message, 'marctab') !== false) {
+            return 'unsupported_source_shape';
+        }
+        if (strpos($message, 'only select queries') !== false || strpos($message, 'sql cannot be empty') !== false) {
+            return 'non_select';
+        }
+
+        return 'invalid_select_shape';
     }
 
     private static function runExploratorySqlAttempt(array $context, callable $attempt): array
@@ -6370,6 +6466,13 @@ PROMPT;
             ? json_decode((string)file_get_contents($mappingCachePath), true)
             : null;
         foreach (array_values(is_array($mappingCache['mapping'] ?? null) ? $mappingCache['mapping'] : []) as $metadbName) {
+            $metadbValues[strtolower((string)$metadbName)] = true;
+        }
+        $subtableCachePath = Yii::getAlias('@app/data/subtable_cache.json');
+        $subtableCache = is_string($subtableCachePath) && is_file($subtableCachePath)
+            ? json_decode((string)file_get_contents($subtableCachePath), true)
+            : null;
+        foreach (array_keys(is_array($subtableCache['subtables'] ?? null) ? $subtableCache['subtables'] : []) as $metadbName) {
             $metadbValues[strtolower((string)$metadbName)] = true;
         }
         $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];

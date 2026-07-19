@@ -97,9 +97,14 @@ namespace app\services {
                 'po_line__t' => 'orders.po_line__t',
                 'purchase_order__t' => 'orders.purchase_order__t',
                 'invoice_lines__t' => 'invoice.invoice_lines__t',
+                'invoice_lines__t__fund_distributions' => 'invoice.invoice_lines__t__fund_distributions',
+                'invoices__t' => 'invoice.invoices__t',
                 'audit_loan__t' => 'circulation.audit_loan__t',
                 'holdings_record__t' => 'inventory.holdings_record__t',
                 'instance__t' => 'inventory.instance__t',
+                'location__t' => 'inventory.location__t',
+                'loclibrary__t' => 'inventory.loclibrary__t',
+                'loccampus__t' => 'inventory.loccampus__t',
                 'classification__t' => 'classification.classification__t',
             ];
         }
@@ -121,6 +126,9 @@ namespace app\services {
 
         public static function validateSafety($sql): void
         {
+            if (strpos((string)$sql, 'invalid_repair_shape') !== false) {
+                throw new \InvalidArgumentException('Only a single SELECT statement is allowed.');
+            }
             if (preg_match('/^\s*SELECT\b|^\s*WITH\b/i', (string)$sql) !== 1) {
                 throw new \InvalidArgumentException('Only SELECT queries are allowed.');
             }
@@ -147,8 +155,9 @@ class Yii
 {
     public static $app;
     public static $logs = [];
+    public static $aliases = [];
 
-    public static function getAlias($alias) { return __DIR__ . '/../data/settings.json'; }
+    public static function getAlias($alias) { return self::$aliases[$alias] ?? (__DIR__ . '/../data/settings.json'); }
     public static function info($message, $category = null) { self::$logs[] = ['level' => 'info', 'message' => $message, 'category' => $category]; }
     public static function warning($message, $category = null) { self::$logs[] = ['level' => 'warning', 'message' => $message, 'category' => $category]; }
 }
@@ -254,6 +263,8 @@ repairAssertContains('unknown_table', $repairPayload, 'The repair request should
 repairAssertContains('None documented.', $repairPayload, 'The repair request should safely represent absent assumptions.');
 repairAssertContains('SCOPED SCHEMA', $repairPayload, 'The repair request should contain fresh scoped schema context.');
 repairAssertContains('Smith College', $repairPayload, 'The repair request should explicitly preserve the separately supplied campus.');
+repairAssertContains('Never include a second SQL statement', $repairPayload, 'The repair response contract should explicitly forbid alternate statements.');
+repairAssertContains('one ```sql code block', $repairPayload, 'The repair response contract should require the parser-supported fenced SQL shape.');
 
 $telemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
 repairAssertSame(false, strpos($telemetry, 'SELECT mt.id FROM inventory.missing_table__t mt') !== false, 'Telemetry must not contain raw candidate SQL.');
@@ -316,6 +327,24 @@ TestTransport::$responses = [
 ];
 $quotedPhysicalTable = GeminiService::generateSqlWithShadow('Show quoted item identifiers.', null, null, true);
 repairAssertSame(0, $quotedPhysicalTable['repairAttempts'] ?? null, 'An exact quoted physical table should validate.');
+
+$subtableCachePath = tempnam(sys_get_temp_dir(), 'exploratory-subtables-');
+file_put_contents($subtableCachePath, json_encode([
+    'subtables' => [
+        'invoice.invoice_lines__t__fund_distributions' => [
+            'parent' => 'invoice.invoice_lines__t',
+            'columns' => [['name' => 'id'], ['name' => 'total']],
+        ],
+    ],
+]));
+Yii::$aliases['@app/data/subtable_cache.json'] = $subtableCachePath;
+TestTransport::$responses = [
+    geminiText('SELECT fd.id FROM invoice.invoice_lines__t__fund_distributions fd'),
+];
+$cachedSubtable = GeminiService::generateSqlWithShadow('Show paid invoice fund distributions.', null, null, true);
+repairAssertSame(0, $cachedSubtable['repairAttempts'] ?? null, 'An exact physical subtable from the discovered subtable cache should validate without a repair.');
+unset(Yii::$aliases['@app/data/subtable_cache.json']);
+unlink($subtableCachePath);
 
 TestTransport::$responses = [
     geminiText('WITH "Recent Items"("id") AS (SELECT ii.id FROM "inventory"."item__t" ii) SELECT r.id FROM "Recent Items" r'),
@@ -382,6 +411,18 @@ $inexactTable = GeminiService::generateSqlWithShadow('Show item identifiers.', n
 repairAssertSame(1, $inexactTable['repairAttempts'] ?? null, 'A fuzzy table suffix must not be accepted as a physical table name.');
 repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $inexactTable['sql'] ?? null, 'An inexact physical table should be replaced by an exact schema name.');
 
+TestTransport::$responses = [
+    geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
+    geminiText("SELECT 'invalid_repair_shape' AS marker FROM inventory.item__t ii"),
+    geminiText('SELECT ii.id FROM inventory.item__t ii'),
+];
+TestTransport::$requests = [];
+$invalidRepairShape = GeminiService::generateSqlWithShadow('Show item identifiers.', null, null, true);
+repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $invalidRepairShape['sql'] ?? null, 'An invalid repair response should not prevent the remaining repair attempt from returning validated SQL.');
+repairAssertSame(2, $invalidRepairShape['repairAttempts'] ?? null, 'An invalid repair response should consume one repair attempt and continue within the shared budget.');
+repairAssertSame(3, count(TestTransport::$requests), 'The invalid repair scenario should consume its initial request and both repair requests.');
+repairAssertContains('multiple_statements', json_encode(TestTransport::$requests[count(TestTransport::$requests) - 1]), 'The remaining repair should receive only a safe multiple-statement category.');
+
 foreach ([
     'DELETE FROM inventory.item__t',
     "Here is the requested statement:\nDELETE FROM inventory.item__t",
@@ -407,13 +448,26 @@ TestTransport::$responses = [
     geminiText('SELECT c.id FROM inventory.missing_c__t c'),
 ];
 Yii::$logs = [];
-$exhausted = GeminiService::generateSqlWithShadow(roiPrompt(), 'Smith College', null, true);
+$exhaustedPrompt = 'Compare identifiers across unsupported inventory relations.';
+$exhausted = GeminiService::generateSqlWithShadow($exhaustedPrompt, 'Smith College', null, true);
 repairAssertSame(false, isset($exhausted['sql']), 'Exhausted recovery must not return unvalidated SQL.');
 repairAssertSame('exploratory_recovery', $exhausted['route'] ?? null, 'Exhausted recovery should use the safe recovery route.');
 repairAssertSame(2, $exhausted['repairAttempts'] ?? null, 'Exhaustion should consume exactly two repair attempts.');
-repairAssertSame(roiPrompt(), $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should retain the original question for an explicit retry.');
+repairAssertSame($exhaustedPrompt, $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should retain the original question for an explicit retry.');
 repairAssertSame('unknown_table', $exhausted['validationSummary']['failureCategory'] ?? null, 'Recovery should expose only the safe failure category.');
 repairAssertSame('exhausted', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Repair exhaustion should emit a terminal exhausted outcome.');
+
+TestTransport::$responses = [
+    geminiText(semanticallyFlawedRoiSql()),
+    geminiText(semanticallyFlawedRoiSql()),
+    geminiText(semanticallyFlawedRoiSql()),
+];
+TestTransport::$requests = [];
+$compiledFallback = GeminiService::generateSqlWithShadow(roiPrompt(), 'Smith College', null, true);
+repairAssertSame('validated', $compiledFallback['validationSummary']['status'] ?? null, 'Semantic exhaustion for the documented ROI contract should use validated deterministic SQL.');
+repairAssertSame(2, $compiledFallback['repairAttempts'] ?? null, 'The deterministic fallback should preserve the exhausted model repair count.');
+repairAssertContains('WITH spend_by_instance AS', $compiledFallback['sql'] ?? '', 'The deterministic fallback should return the validated ROI aggregation shape.');
+repairAssertSame(3, count(TestTransport::$requests), 'The deterministic fallback should run only after the initial candidate and both model repairs fail.');
 
 SqlBuilderService::$blockPolicy = true;
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];

@@ -779,7 +779,10 @@ class ReferenceResolverService
         if (self::promptContainsNormalizedTerm($normalizedPrompt, $normalizedName)) {
             $score = 1000 + strlen($normalizedName);
             $matchedBy = 'name';
-        } elseif ($normalizedNameWithoutPrefix !== $normalizedName && self::promptContainsNormalizedTerm($normalizedPrompt, $normalizedNameWithoutPrefix)) {
+        } elseif ($normalizedNameWithoutPrefix !== $normalizedName
+            && self::canMatchNameWithoutPrefix($sourceTable, $normalizedNameWithoutPrefix)
+            && self::promptContainsNormalizedTerm($normalizedPrompt, $normalizedNameWithoutPrefix)
+        ) {
             $score = 700 + strlen($normalizedNameWithoutPrefix);
             $matchedBy = 'name_without_prefix';
         } elseif ($code !== '' && self::promptContainsCaseSensitiveCode($rawPrompt, $code)) {
@@ -1065,6 +1068,13 @@ class ReferenceResolverService
      */
     private static function buildAmbiguousLocationClarification(string $normalizedPrompt, array $references)
     {
+        if (preg_match(
+            '/\b(?:location|locations|library|libraries|campus|campuses|service point|service points|collection|collections|holdings|shelved|room|branch)\b|\b(?:in|at)\s+[a-z0-9]/',
+            $normalizedPrompt
+        ) !== 1) {
+            return null;
+        }
+
         $promptTokens = array_values(array_filter(explode(' ', $normalizedPrompt), function ($token) {
             return strlen((string)$token) >= 4;
         }));
@@ -1160,6 +1170,15 @@ class ReferenceResolverService
             return false;
         }
         return preg_match('/\b' . preg_quote($normalizedTerm, '/') . '\b/', $normalizedPrompt) === 1;
+    }
+
+    private static function canMatchNameWithoutPrefix(string $sourceTable, string $normalizedName): bool
+    {
+        if (self::isLocationHierarchyTable($sourceTable)) {
+            return true;
+        }
+
+        return count(array_filter(explode(' ', trim($normalizedName)))) >= 2;
     }
 
     /**

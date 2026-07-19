@@ -84,6 +84,27 @@ assertResolverSame(false, $resolved['needsClarification'] ?? null, 'Exact local 
 assertResolverContains('inventory.location__t.name', implode("\n", $resolved['guidanceLines'] ?? []), 'Resolved guidance should name exact table/column target.');
 assertResolverContains('SC Neilson Reference', implode("\n", $resolved['guidanceLines'] ?? []), 'Resolved guidance should include exact source value.');
 
+$ordinaryDomainLanguage = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Compare circulation data to call numbers and show return on investment.',
+    [
+        ['source_table' => 'finance.fund__t', 'source_id' => 'fund-1', 'name' => 'HC Circulation', 'code' => 'HCCIR'],
+        ['source_table' => 'finance.fund__t', 'source_id' => 'fund-2', 'name' => 'UM Data', 'code' => 'UMDATA'],
+        ['source_table' => 'finance.expense_class__t', 'source_id' => 'expense-1', 'name' => 'UM Data', 'code' => 'UMDATA'],
+        ['source_table' => 'inventory.location__t', 'source_id' => 'loc-1', 'name' => 'MH Circulation Equipment', 'code' => 'MHCIRCEQ'],
+        ['source_table' => 'inventory.location__t', 'source_id' => 'loc-2', 'name' => 'MH Pratt Circulation Equipment', 'code' => 'MHPCIREQ'],
+    ],
+    []
+);
+assertResolverSame(false, $ordinaryDomainLanguage['needsClarification'] ?? null, 'Ordinary circulation-domain language must not be treated as an ambiguous physical location.');
+assertResolverSame([], $ordinaryDomainLanguage['guidanceLines'] ?? null, 'Single generic words left after stripping a campus prefix must not activate non-location reference filters.');
+
+$explicitFinanceName = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show spending for the HC Circulation fund.',
+    [['source_table' => 'finance.fund__t', 'source_id' => 'fund-1', 'name' => 'HC Circulation', 'code' => 'HCCIR']],
+    []
+);
+assertResolverContains('HC Circulation', implode("\n", $explicitFinanceName['guidanceLines'] ?? []), 'An explicit full finance reference name must still resolve.');
+
 $specific = ReferenceResolverService::resolvePromptAgainstReferences(
     'Show items with contributor type author and instance note type General note',
     [

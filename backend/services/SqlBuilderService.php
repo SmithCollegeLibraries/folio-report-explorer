@@ -832,8 +832,10 @@ class SqlBuilderService
                 continue;
             }
 
-            if (in_array($tableRef, $blockedTables, true)) {
-                throw new \app\exceptions\PolicyViolationException("Query references blocked table: {$tableRef}");
+            foreach ($blockedTables as $blockedTable) {
+                if ($tableRef === $blockedTable || strpos($tableRef, $blockedTable . '__') === 0) {
+                    throw new \app\exceptions\PolicyViolationException("Query references blocked table: {$tableRef}");
+                }
             }
 
             if (strpos($tableRef, '.') !== false) {
