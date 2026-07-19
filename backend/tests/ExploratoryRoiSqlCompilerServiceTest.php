@@ -69,11 +69,33 @@ $contract = ExploratorySemanticContractService::build(
     $question,
     'Smith College',
     ExploratoryQueryDefaultsService::resolve($question),
-    'unsupported_query_family'
+    'unsupported_query_family',
+    ['physicalRoiPolicyVersion' => 'legacy']
+);
+$requirementsByKey = array_column($contract['requirements'], null, 'key');
+compilerAssertSame(
+    ['purchase_count', 'spend', 'circulation', 'checkouts_per_dollar', 'cost_per_checkout'],
+    $requirementsByKey['required_measures']['parameters']['values'] ?? null,
+    'Legacy compiler coverage must retain the original required measures.'
+);
+compilerAssertSame(
+    'Results include purchase count, spending, circulation, checkouts per dollar, and cost per checkout.',
+    $requirementsByKey['required_measures']['label'] ?? null,
+    'Legacy compiler coverage must retain the original required-measures label.'
+);
+compilerAssertSame(
+    'Material-type and acquisition-unit filters appear only when explicitly requested.',
+    $requirementsByKey['governed_filters']['label'] ?? null,
+    'Legacy compiler coverage must retain the original governed-filters label.'
+);
+compilerAssertSame(
+    ['campus'],
+    array_keys($contract['permittedFilters'] ?? []),
+    'Legacy compiler coverage must not inherit v2 reporting-policy filters.'
 );
 
 $compiled = ExploratoryRoiSqlCompilerService::compile($contract);
-compilerAssertSame(true, is_array($compiled), 'The documented default ROI contract should compile deterministically.');
+compilerAssertSame(true, is_array($compiled), 'The documented legacy ROI contract should compile deterministically.');
 compilerAssertPhysicalColumnsExist($compiled['sql']);
 compilerAssertSame(
     'validated',
