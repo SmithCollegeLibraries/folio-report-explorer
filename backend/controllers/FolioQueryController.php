@@ -15,6 +15,7 @@ use app\services\DatabaseRetryService;
 use app\services\IndexRecommendationService;
 use app\services\Nl2sqlRuntimePreflightService;
 use app\services\PreviousSuccessfulQueryReuseService;
+use app\services\QueryJobCancellationService;
 use app\services\ReferenceCacheRefreshService;
 use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
@@ -1492,15 +1493,28 @@ class FolioQueryController extends Controller
             return ['error' => 'Job not found'];
         }
 
-        if (!in_array($job->status, ['pending', 'pending_export', 'running'])) {
-            Yii::$app->response->statusCode = 409;
-            return ['error' => "Cannot cancel job with status '{$job->status}'"];
+        $userId = $this->getCurrentUserId();
+        $identity = $this->getAppIdentity();
+        $isAdmin = $identity && $identity->isAdmin();
+        if (!$isAdmin && (int) $job->user_id !== (int) $userId) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Forbidden'];
         }
 
-        $job->status = 'cancelled';
-        $job->completed_at = date('Y-m-d H:i:s');
-        $job->progress_message = 'Cancelled by user';
-        $job->save(false);
+        try {
+            $service = new QueryJobCancellationService(Yii::$app->db, Yii::$app->folioDb);
+            $job = $service->cancel($job);
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => $exception->getMessage()];
+        } catch (\Throwable $exception) {
+            Yii::warning(
+                "Unable to interrupt query job {$job->id}: {$exception->getMessage()}",
+                'query.cancellation'
+            );
+            Yii::$app->response->statusCode = 503;
+            return ['error' => 'Unable to stop this query right now. It is still being monitored.'];
+        }
 
         return $job->toStatusArray();
     }
