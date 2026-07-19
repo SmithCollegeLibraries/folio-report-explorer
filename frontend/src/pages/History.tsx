@@ -18,6 +18,10 @@ import { useCopyToClipboard } from '../hooks/useCopyToClipboard';
 import HistoryToolbar from './history/HistoryToolbar';
 import HistoryTable from './history/HistoryTable';
 import HistoryResultsModal from './history/HistoryResultsModal';
+import {
+  deriveHistoryDeletionState,
+  isDeletableHistoryItem,
+} from './history/historyDeletionState';
 import SaveQueryDialog from '../components/SaveQueryDialog';
 import type {
   HistoryItem,
@@ -42,7 +46,7 @@ export default function History() {
     items, setItems, total, setTotal, offset, setOffset, loading, error, setError,
     statusTab, handleTabChange, mineOnly, handleMineOnlyChange,
     hasActive, limit, totalPages, currentPage,
-    expandedErrors, toggleExpandError,
+    expandedErrors, toggleExpandError, invalidateLoads,
   } = useHistoryData();
 
   const [expandedSql, setExpandedSql] = useState<Set<string>>(new Set());
@@ -70,7 +74,9 @@ export default function History() {
 
   // ── Selection ────────────────────────────────────────────────────
   const selectableIds = useMemo(
-    () => filteredItems.filter((i) => i.canDelete).map((i) => i.jobId),
+    () => filteredItems
+      .filter(isDeletableHistoryItem)
+      .map((i) => i.jobId),
     [filteredItems],
   );
   const selection = useSelectionManager(selectableIds);
@@ -82,29 +88,6 @@ export default function History() {
   useEffect(() => {
     if (selection.selectedCount === 0) setConfirmBatchDelete(false);
   }, [selection.selectedCount]);
-
-  const handleDeleteSelected = async () => {
-    const ids = selectableIds.filter((id) => selection.selectedIds.has(id));
-    if (!ids.length) return;
-    setBatchDeleting(true);
-    try {
-      const results = await Promise.allSettled(ids.map((id) => deleteHistoryJob(id)));
-      const deletedIds = ids.filter((_, idx) => results[idx].status === 'fulfilled');
-      const failedCount = ids.length - deletedIds.length;
-      if (deletedIds.length) {
-        const deletedSet = new Set(deletedIds);
-        setItems((prev) => prev.filter((i) => !deletedSet.has(i.jobId)));
-        setTotal((prev) => prev - deletedIds.length);
-        selection.removeIds(deletedIds);
-      }
-      if (failedCount > 0) {
-        setError(`Deleted ${deletedIds.length}, failed to delete ${failedCount}.`);
-      }
-    } finally {
-      setBatchDeleting(false);
-      setConfirmBatchDelete(false);
-    }
-  };
 
   // ── Inline rename ────────────────────────────────────────────────
   const rename = useInlineRename({
@@ -125,21 +108,6 @@ export default function History() {
   // ── Single row delete ────────────────────────────────────────────
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  const handleDelete = async (jobId: string) => {
-    setConfirmDeleteId(null);
-    setDeletingId(jobId);
-    try {
-      await deleteHistoryJob(jobId);
-      setItems((prev) => prev.filter((i) => i.jobId !== jobId));
-      setTotal((prev) => prev - 1);
-      selection.removeIds([jobId]);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Delete failed');
-    } finally {
-      setDeletingId(null);
-    }
-  };
 
   // ── Query-history index recommendations ─────────────────────────
   const handleGenerateIndexRecommendations = useCallback(async () => {
@@ -223,6 +191,68 @@ export default function History() {
     setHistorySuggestionsError(null);
     navigate('/history', { replace: true });
   }, [navigate]);
+
+  const applySuccessfulDeletions = useCallback((deletedIds: string[]) => {
+    if (deletedIds.length === 0) return;
+
+    invalidateLoads();
+    const next = deriveHistoryDeletionState(
+      items,
+      total,
+      offset,
+      limit,
+      deletedIds,
+      modalItem?.jobId ?? null,
+    );
+    setItems(next.items);
+    setTotal(next.total);
+    setOffset(next.offset);
+    selection.removeIds(deletedIds);
+    if (next.closeModal) closeModal();
+  }, [
+    closeModal,
+    invalidateLoads,
+    items,
+    limit,
+    modalItem?.jobId,
+    offset,
+    selection.removeIds,
+    setItems,
+    setOffset,
+    setTotal,
+    total,
+  ]);
+
+  const handleDeleteSelected = async () => {
+    const ids = selectableIds.filter((id) => selection.selectedIds.has(id));
+    if (!ids.length) return;
+    setBatchDeleting(true);
+    try {
+      const results = await Promise.allSettled(ids.map((id) => deleteHistoryJob(id)));
+      const deletedIds = ids.filter((_, idx) => results[idx].status === 'fulfilled');
+      const failedCount = ids.length - deletedIds.length;
+      applySuccessfulDeletions(deletedIds);
+      if (failedCount > 0) {
+        setError(`Deleted ${deletedIds.length}, failed to delete ${failedCount}.`);
+      }
+    } finally {
+      setBatchDeleting(false);
+      setConfirmBatchDelete(false);
+    }
+  };
+
+  const handleDelete = async (jobId: string) => {
+    setConfirmDeleteId(null);
+    setDeletingId(jobId);
+    try {
+      await deleteHistoryJob(jobId);
+      applySuccessfulDeletions([jobId]);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Delete failed');
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   const handleGenerateHistorySuggestions = useCallback(async () => {
     if (!modalItem) return;

@@ -17,6 +17,7 @@ import StatusBadge from '../../components/StatusBadge';
 import SourceBadge from '../../components/SourceBadge';
 import { fmtDate, fmtTime } from '../../utils/format';
 import type { HistoryItem } from '../../types';
+import { isDeletableHistoryItem } from './historyDeletionState';
 
 interface Props {
   items: HistoryItem[];
@@ -106,9 +107,10 @@ export default function HistoryTable({
       ),
       cell: ({ row }) => {
         const item = row.original;
+        const canDelete = isDeletableHistoryItem(item);
         return (
           <div className="text-center" onClick={(e) => e.stopPropagation()}>
-            {item.canDelete ? (
+            {canDelete ? (
               <input
                 type="checkbox"
                 checked={selectedIds.has(item.jobId)}
@@ -271,6 +273,7 @@ export default function HistoryTable({
         const isCancelling = cancellingId === item.jobId;
         const isDeleting = deletingId === item.jobId;
         const confirmingDelete = confirmDeleteId === item.jobId;
+        const canDelete = isDeletableHistoryItem(item);
         return (
           <div className="flex items-center justify-end gap-1 w-[210px]" onClick={(e) => e.stopPropagation()}>
             {isActive && (
@@ -345,7 +348,7 @@ export default function HistoryTable({
               </div>
             )}
 
-            {item.canDelete && (
+            {canDelete && (
               confirmingDelete ? (
                 <div className="flex items-center gap-1 ml-1">
                   <span className="text-xs text-red-600 font-medium">Delete?</span>

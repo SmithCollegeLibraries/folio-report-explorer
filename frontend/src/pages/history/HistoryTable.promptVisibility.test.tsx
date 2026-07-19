@@ -66,6 +66,18 @@ function renderHistoryTable(items: HistoryItem[], onOpen = vi.fn()) {
 }
 
 describe('HistoryTable prompt visibility', () => {
+  it.each(['pending', 'pending_export', 'running', 'cancelling'] as const)(
+    'hides selection and delete controls for %s rows even when canDelete is true',
+    (status) => {
+      renderHistoryTable([
+        makeHistoryItem({ jobId: `${status}-job`, status, canDelete: true }),
+      ]);
+
+      expect(screen.queryByTitle('Select for batch delete')).not.toBeInTheDocument();
+      expect(screen.queryByTitle('Delete from history')).not.toBeInTheDocument();
+    },
+  );
+
   it('summarizes pasted multi-line prompts in the table preview', () => {
     const pastedPrompt = [
       'Using the instance numbers below, generate a list that includes title, publisher and barcode. filter for Smith College Libraries',
