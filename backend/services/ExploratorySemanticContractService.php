@@ -27,6 +27,7 @@ class ExploratorySemanticContractService
         'campus_scope' => 'campus_scope',
         'physical_item_eligibility' => 'physical_item_eligibility',
         'acquisition_unit_scope' => 'acquisition_unit_scope',
+        'currency_separation' => 'currency_separation',
         'governed_filters' => 'governed_filters',
         'numeric_output_types' => 'numeric_output_types',
     ];
@@ -100,6 +101,9 @@ class ExploratorySemanticContractService
             ]);
             $requirements[] = self::requirement('acquisition_unit_scope', 'Purchases are restricted to the Smith acquisitions unit.', [
                 'code' => 'SC',
+            ]);
+            $requirements[] = self::requirement('currency_separation', 'Unlike invoice currencies remain in separate result groups.', [
+                'value' => 'invoice_currency',
             ]);
         }
         $requirements = array_merge($requirements, [

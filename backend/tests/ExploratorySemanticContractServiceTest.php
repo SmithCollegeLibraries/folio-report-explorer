@@ -81,8 +81,10 @@ contractAssertSame(
 contractAssertSame('physical_copies_purchased', $physicalRequirements['purchase_ranking']['parameters']['measure'] ?? null, 'Physical ROI ranking must use physical copies purchased.');
 contractAssertSame(true, isset($physicalRequirements['physical_item_eligibility']), 'V2 contracts must block on physical item eligibility.');
 contractAssertSame(true, isset($physicalRequirements['acquisition_unit_scope']), 'V2 contracts must block on acquisition-unit scope.');
+contractAssertSame('invoice_currency', $physicalRequirements['currency_separation']['parameters']['value'] ?? null, 'V2 contracts must separate results by invoice currency.');
 contractAssertSame(false, isset($requirementsByKey['physical_item_eligibility']), 'Legacy contracts must omit physical item eligibility.');
 contractAssertSame(false, isset($requirementsByKey['acquisition_unit_scope']), 'Legacy contracts must omit acquisition-unit scope.');
+contractAssertSame(false, isset($requirementsByKey['currency_separation']), 'Legacy contracts must omit currency separation.');
 
 $dvdQuestion = 'For DVDs, show call numbers purchased most in five years with circulation and ROI.';
 $dvd = ExploratorySemanticContractService::build(

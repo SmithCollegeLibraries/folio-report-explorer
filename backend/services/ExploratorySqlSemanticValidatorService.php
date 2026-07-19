@@ -19,6 +19,7 @@ class ExploratorySqlSemanticValidatorService
         'campus_scope' => 'validateCampusScope',
         'physical_item_eligibility' => 'validatePhysicalItemEligibility',
         'acquisition_unit_scope' => 'validateAcquisitionUnitScope',
+        'currency_separation' => 'validateCurrencySeparation',
         'governed_filters' => 'validateGovernedFilters',
         'numeric_output_types' => 'validateNumericOutputTypes',
     ];
@@ -36,6 +37,7 @@ class ExploratorySqlSemanticValidatorService
         'campus_scope' => 'Apply the selected campus scope in the report predicates.',
         'physical_item_eligibility' => 'Require positive physical quantity and current items at the selected campus.',
         'acquisition_unit_scope' => 'Restrict purchase orders to the SC acquisitions unit.',
+        'currency_separation' => 'Keep unlike invoice currencies in separate ROI groups.',
         'governed_filters' => 'Remove filters that were not permitted by the request contract.',
         'numeric_output_types' => 'Return analytical measures as numeric values without display formatting.',
     ];
@@ -233,7 +235,8 @@ class ExploratorySqlSemanticValidatorService
             return self::GUIDANCE['call_number_grouping'];
         }
         $groupBy = $analysis['groupBy'] ?? [];
-        if (count($groupBy) !== 1) {
+        $expectedGroupCount = !empty($contract['reportPolicy']['physicalOnly']) ? 2 : 1;
+        if (count($groupBy) !== $expectedGroupCount) {
             return self::GUIDANCE['call_number_grouping'];
         }
         foreach (($analysis['selectItems'] ?? []) as $item) {
@@ -542,6 +545,34 @@ class ExploratorySqlSemanticValidatorService
             ? null : self::GUIDANCE['governed_filters'];
     }
 
+    private static function validateCurrencySeparation(array $analysis, array $requirement, array $contract): ?string
+    {
+        if (($requirement['parameters']['value'] ?? null) !== 'invoice_currency') {
+            return self::GUIDANCE['currency_separation'];
+        }
+        $spendName = self::spendCteName($analysis);
+        $spend = $spendName === null ? null : ($analysis['ctes'][$spendName] ?? null);
+        $physical = self::itemForAlias($spend['selectItems'] ?? [], 'physical_copies_purchased')['exactAggregate'] ?? null;
+        $allocationBinding = isset($physical['column']) ? self::resolveColumnBinding($spend, (string)$physical['column']) : null;
+        $allocationName = ($allocationBinding['kind'] ?? null) === 'cte' ? (string)($allocationBinding['source'] ?? '') : '';
+        $allocation = $analysis['ctes'][$allocationName] ?? null;
+        $allocationAlias = self::columnQualifier((string)($physical['column'] ?? ''));
+        $quantity = self::expressionForAlias($allocation['selectItems'] ?? [], 'quantity');
+        $fundedAlias = $quantity === null ? '' : self::columnQualifier($quantity);
+        if ($spend === null || $allocation === null || self::fundedInvoiceLineScope($analysis) === null
+            || self::expressionForAlias($allocation['selectItems'] ?? [], 'currency') !== $fundedAlias . '.currency'
+            || !in_array($fundedAlias . '.currency', $allocation['groupBy'] ?? [], true)
+            || self::expressionForAlias($spend['selectItems'] ?? [], 'currency') !== $allocationAlias . '.currency'
+            || !in_array($allocationAlias . '.currency', $spend['groupBy'] ?? [], true)) {
+            return self::GUIDANCE['currency_separation'];
+        }
+        $finalPhysical = self::itemForAlias($analysis['selectItems'] ?? [], 'physical_copies_purchased')['exactAggregate'] ?? null;
+        $spendAlias = self::columnQualifier((string)($finalPhysical['column'] ?? ''));
+        return self::expressionForAlias($analysis['selectItems'] ?? [], 'currency') === $spendAlias . '.currency'
+            && in_array($spendAlias . '.currency', $analysis['groupBy'] ?? [], true)
+            ? null : self::GUIDANCE['currency_separation'];
+    }
+
     private static function isPurchaseMaterialCohort(
         string $scopeName,
         array $scope,
@@ -742,11 +773,46 @@ class ExploratorySqlSemanticValidatorService
             return false;
         }
         $hasReceivingPieceLink = $piece !== null && $item !== null
-            && self::hasEnforcingColumnEquality($allocation, $piece . '.po_line_id', $poLine . '.id')
-            && self::hasEnforcingColumnEquality($allocation, $item . '.id', $piece . '.item_id');
+            && self::hasRowPreservingColumnEquality($allocation, $piece . '.po_line_id', $poLine . '.id')
+            && self::hasRowPreservingColumnEquality($allocation, $item . '.id', $piece . '.item_id');
         $hasDirectItemLink = $item !== null
-            && self::hasEnforcingColumnEquality($allocation, $item . '.purchase_order_line_identifier', $poLine . '.id');
-        return $hasReceivingPieceLink || $hasDirectItemLink;
+            && self::hasRowPreservingColumnEquality($allocation, $item . '.purchase_order_line_identifier', $poLine . '.id');
+        return self::hasFallbackEligibilityCohort($allocation, $poLine, $analysis)
+            && ($hasReceivingPieceLink || $hasDirectItemLink);
+    }
+
+    private static function hasFallbackEligibilityCohort(array $allocation, string $poLine, array $analysis): bool
+    {
+        foreach (($allocation['sourceAliases'] ?? []) as $alias => $binding) {
+            $name = ($binding['kind'] ?? null) === 'cte' ? (string)($binding['source'] ?? '') : '';
+            $scope = $analysis['ctes'][$name] ?? null;
+            if ($scope !== null
+                && self::hasCampusHierarchy($scope, 'smith college', true)
+                && self::hasEnforcingJoinedEquality(
+                    $allocation,
+                    $alias . '.instance_id',
+                    $poLine . '.instance_id',
+                    (string)$alias,
+                    $name
+                )) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function hasRowPreservingColumnEquality(array $scope, string $left, string $right): bool
+    {
+        foreach (($scope['predicates']['columnComparisons'] ?? []) as $comparison) {
+            $actual = [$comparison['left'] ?? null, $comparison['right'] ?? null];
+            if (($comparison['operator'] ?? null) === '='
+                && ($comparison['origin'] ?? null) === 'join_on'
+                && ($comparison['joinType'] ?? null) === 'LEFT'
+                && ($actual === [$left, $right] || $actual === [$right, $left])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function hasPreaggregatedInvoiceQuantity(array $scope, string $column, array $analysis): bool
@@ -787,8 +853,7 @@ class ExploratorySqlSemanticValidatorService
         $allocation = $analysis['ctes'][$allocationName] ?? null;
         $quantity = self::expressionForAlias($allocation['selectItems'] ?? [], 'quantity');
         $item = self::aliasForSource($allocation ?? [], 'inventory.item__t');
-        if ($allocation === null || $quantity === null || $item === null
-            || !self::hasCampusHierarchy($allocation, 'smith college', false)) {
+        if ($allocation === null || $quantity === null || $item === null) {
             return false;
         }
         $eligibleCount = 'count(distinct' . $item . '.id)';
@@ -800,7 +865,13 @@ class ExploratorySqlSemanticValidatorService
             return false;
         }
         $spendName = self::spendCteName($analysis);
+        $spendExact = self::itemForAlias($spend['selectItems'] ?? [], 'exact_linked_copies')['exactAggregate'] ?? null;
+        $spendFallback = self::itemForAlias($spend['selectItems'] ?? [], 'fallback_linked_copies')['exactAggregate'] ?? null;
         if ($spendName === null
+            || ($spendExact['function'] ?? null) !== 'sum'
+            || ($spendExact['column'] ?? null) !== self::columnQualifier($column) . '.exact_linked_copies'
+            || ($spendFallback['function'] ?? null) !== 'sum'
+            || ($spendFallback['column'] ?? null) !== self::columnQualifier($column) . '.fallback_linked_copies'
             || self::finalMeasureCteName($analysis, 'exact_linked_copies') !== $spendName
             || self::finalMeasureCteName($analysis, 'fallback_linked_copies') !== $spendName) {
             return false;
@@ -1269,6 +1340,7 @@ class ExploratorySqlSemanticValidatorService
             'campus_scope' => 'assumption_mismatch',
             'physical_item_eligibility' => 'physical_cohort_mismatch',
             'acquisition_unit_scope' => 'scope_mismatch',
+            'currency_separation' => 'grain_mismatch',
             'governed_filters' => 'unrequested_filter',
             'numeric_output_types' => 'output_type_mismatch',
         ];

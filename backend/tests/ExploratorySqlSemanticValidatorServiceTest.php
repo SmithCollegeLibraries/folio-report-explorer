@@ -637,6 +637,17 @@ $physicalSql = str_replace(
     $physicalSql
 );
 $physicalSql = str_replace(
+    'WITH funded_invoice_lines AS (',
+    "WITH current_smith_instances AS (\n    SELECT fallback_holdings.instance_id AS instance_id\n    FROM inventory.item__t fallback_item\n    JOIN inventory.holdings_record__t fallback_holdings ON fallback_holdings.id = fallback_item.holdings_record_id\n    JOIN inventory.location__t fallback_location ON fallback_location.id = fallback_item.effective_location_id\n    JOIN inventory.loclibrary__t fallback_library ON fallback_library.id = fallback_location.library_id\n    JOIN inventory.loccampus__t fallback_campus ON fallback_campus.id = fallback_library.campus_id\n    WHERE fallback_campus.name = 'Smith College'\n    GROUP BY fallback_holdings.instance_id\n), funded_invoice_lines AS (",
+    $physicalSql
+);
+$physicalSql = str_replace(
+    "    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n    JOIN inventory.location__t allocation_location ON allocation_location.id = linked_item.effective_location_id\n    JOIN inventory.loclibrary__t allocation_library ON allocation_library.id = allocation_location.library_id\n    JOIN inventory.loccampus__t allocation_campus ON allocation_campus.id = allocation_library.campus_id",
+    "    JOIN current_smith_instances fallback_eligible ON fallback_eligible.instance_id = paid_line.instance_id\n    LEFT JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    LEFT JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id",
+    $physicalSql
+);
+$physicalSql = str_replace("      AND allocation_campus.name = 'Smith College'\n", '', $physicalSql);
+$physicalSql = str_replace(
     "           funded_line.spend AS spend\n    FROM funded_invoice_lines funded_line",
     "           funded_line.spend AS spend,\n           LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)) AS exact_linked_copies,\n           GREATEST(funded_line.quantity - LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)), 0) AS fallback_linked_copies,\n           LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)) + GREATEST(funded_line.quantity - LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)), 0) AS allocated_physical_copies\n    FROM funded_invoice_lines funded_line",
     $physicalSql
@@ -656,28 +667,70 @@ $physicalSql = str_replace(
     ],
     $physicalSql
 );
+$physicalSql = str_replace(
+    [
+        "funded_line.quantity AS quantity,\n           funded_line.spend AS spend,",
+        'GROUP BY funded_line.invoice_line_id, paid_line.instance_id, funded_line.quantity, funded_line.spend',
+        "SELECT paid_line.instance_id,\n           SUM(paid_line.allocated_physical_copies)",
+        'GROUP BY paid_line.instance_id',
+        "SELECT pol.instance_id,\n           SUM(paid_line.allocated_physical_copies)",
+        'GROUP BY pol.instance_id',
+        "SELECT class_by_instance.call_number_class,\n       SUM(spend_by_instance.purchase_count)",
+        'GROUP BY class_by_instance.call_number_class',
+    ],
+    [
+        "funded_line.quantity AS quantity,\n           funded_line.currency AS currency,\n           funded_line.spend AS spend,",
+        'GROUP BY funded_line.invoice_line_id, paid_line.instance_id, funded_line.quantity, funded_line.currency, funded_line.spend',
+        "SELECT paid_line.instance_id,\n           paid_line.currency AS currency,\n           SUM(paid_line.allocated_physical_copies)",
+        'GROUP BY paid_line.instance_id, paid_line.currency',
+        "SELECT paid_line.instance_id AS instance_id,\n           paid_line.currency AS currency,\n           SUM(paid_line.allocated_physical_copies)",
+        'GROUP BY paid_line.instance_id, paid_line.currency',
+        "SELECT class_by_instance.call_number_class,\n       spend_by_instance.currency AS currency,\n       SUM(spend_by_instance.purchase_count)",
+        'GROUP BY class_by_instance.call_number_class, spend_by_instance.currency',
+    ],
+    $physicalSql
+);
 semanticAssertRejectedFor($rawFundDistributionSql, $physicalContract, 'spend_grain', 'Raw fund-distribution joins must not multiply invoice-line physical quantity.');
 $physicalResult = ExploratorySqlSemanticValidatorService::validate($physicalSql, $physicalContract);
 semanticAssertSame('validated', $physicalResult['status'], 'Policy-backed physical ROI must validate.');
+$fullyUnmatchedSql = str_replace(
+    [
+        'JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id',
+        'JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id',
+    ],
+    [
+        'LEFT JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id',
+        'LEFT JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id',
+    ],
+    $physicalSql
+);
+semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($fullyUnmatchedSql, $physicalContract)['status'], 'Fully unmatched invoice lines must remain eligible for instance fallback.');
+$lostCurrencySql = str_replace("       spend_by_instance.currency AS currency,\n", '', $physicalSql);
+$lostCurrencySql = str_replace(', spend_by_instance.currency', '', $lostCurrencySql);
+semanticAssertRejectedFor($lostCurrencySql, $physicalContract, 'currency_separation', 'Final ROI output must retain invoice currency grouping.');
+$mixedCurrencySql = str_replace(', paid_line.currency', '', $physicalSql);
+semanticAssertRejectedFor($mixedCurrencySql, $physicalContract, 'currency_separation', 'Acquisition aggregation must not mix invoice currencies.');
+$nullableFallbackEligibilitySql = str_replace('JOIN current_smith_instances fallback_eligible ON', 'LEFT JOIN current_smith_instances fallback_eligible ON', $physicalSql);
+semanticAssertRejectedFor($nullableFallbackEligibilitySql, $physicalContract, 'spend_grain', 'Fallback requires an enforcing current Smith instance cohort.');
 $unusedFallbackMarkerSql = str_replace(
     "           funded_line.quantity AS quantity,\n",
     "           funded_line.quantity AS quantity,\n           funded_line.quantity AS fallback_allocated_quantity,\n",
     $physicalSql
 );
 $unusedFallbackMarkerSql = str_replace(
-    "    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n",
+    "    LEFT JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    LEFT JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n",
     '',
     $unusedFallbackMarkerSql
 );
 semanticAssertRejectedFor($unusedFallbackMarkerSql, $physicalContract, 'spend_grain', 'An unused fallback marker must not substitute for structural allocation proof.');
 $directItemAllocationSql = str_replace(
-    "    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id",
-    '    JOIN inventory.item__t linked_item ON linked_item.purchase_order_line_identifier = paid_line.id',
+    "    LEFT JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    LEFT JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id",
+    '    LEFT JOIN inventory.item__t linked_item ON linked_item.purchase_order_line_identifier = paid_line.id',
     $physicalSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($directItemAllocationSql, $physicalContract)['status'], 'Direct item PO-line linkage must be accepted as trusted exact allocation.');
 $untrustedAllocationSql = str_replace(
-    "    JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n",
+    "    LEFT JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    LEFT JOIN inventory.item__t linked_item ON linked_item.id = receiving_piece.item_id\n",
     '',
     $physicalSql
 );
@@ -687,6 +740,20 @@ semanticAssertRejectedFor(str_replace('LEAST(funded_line.quantity, COUNT(DISTINC
 semanticAssertRejectedFor(str_replace('GREATEST(funded_line.quantity - LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)), 0) AS fallback_linked_copies', 'funded_line.quantity AS fallback_linked_copies', $physicalSql), $physicalContract, 'spend_grain', 'Fallback copies must be the nonnegative invoiced-minus-exact remainder.');
 semanticAssertRejectedFor(str_replace('LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)) + GREATEST(funded_line.quantity - LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)), 0) AS allocated_physical_copies', 'funded_line.quantity AS allocated_physical_copies', $physicalSql), $physicalContract, 'spend_grain', 'Physical copies must be the exact-plus-fallback partition.');
 semanticAssertRejectedFor(str_replace('SUM(spend_by_instance.fallback_linked_copies) / NULLIF(SUM(spend_by_instance.physical_copies_purchased), 0) AS fallback_percentage', 'SUM(spend_by_instance.exact_linked_copies) / NULLIF(SUM(spend_by_instance.physical_copies_purchased), 0) AS fallback_percentage', $physicalSql), $physicalContract, 'spend_grain', 'Fallback percentage must disclose fallback copies over total physical copies.');
+$swappedDiagnosticsSql = str_replace(
+    ['SUM(paid_line.exact_linked_copies) AS exact_linked_copies', 'SUM(paid_line.fallback_linked_copies) AS fallback_linked_copies'],
+    ['SUM(paid_line.fallback_linked_copies) AS exact_linked_copies', 'SUM(paid_line.exact_linked_copies) AS fallback_linked_copies'],
+    $physicalSql
+);
+semanticAssertRejectedFor($swappedDiagnosticsSql, $physicalContract, 'spend_grain', 'Exact and fallback diagnostic bindings must not be swapped.');
+semanticAssertRejectedFor(str_replace('SUM(paid_line.fallback_linked_copies) AS fallback_linked_copies', 'SUM(paid_line.allocated_physical_copies) AS fallback_linked_copies', $physicalSql), $physicalContract, 'spend_grain', 'Allocated totals must not masquerade as fallback diagnostics.');
+$arbitraryDiagnosticSql = str_replace(
+    'LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)) AS exact_linked_copies,',
+    "LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)) AS exact_linked_copies,\n           LEAST(funded_line.quantity, COUNT(DISTINCT linked_item.id)) AS arbitrary_exact_copies,",
+    $physicalSql
+);
+$arbitraryDiagnosticSql = str_replace('SUM(paid_line.exact_linked_copies) AS exact_linked_copies', 'SUM(paid_line.arbitrary_exact_copies) AS exact_linked_copies', $arbitraryDiagnosticSql);
+semanticAssertRejectedFor($arbitraryDiagnosticSql, $physicalContract, 'spend_grain', 'Arbitrary intermediate aliases must not satisfy exact-link diagnostics.');
 $missingDiagnosticsSql = preg_replace('/^\s*SUM\(spend_by_instance\.(?:exact_linked_copies|fallback_linked_copies)\) AS (?:exact_linked_copies|fallback_linked_copies),\n/m', '', $physicalSql);
 $missingDiagnosticsSql = preg_replace('/,\n\s*SUM\(spend_by_instance\.fallback_linked_copies\) \/ NULLIF\(SUM\(spend_by_instance\.physical_copies_purchased\), 0\) AS fallback_percentage/', '', (string)$missingDiagnosticsSql);
 semanticAssertRejectedFor((string)$missingDiagnosticsSql, $physicalContract, 'required_measures', 'V2 reports must return exact, fallback, and fallback-percentage diagnostics.');
