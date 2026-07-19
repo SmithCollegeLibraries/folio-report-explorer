@@ -545,6 +545,35 @@ repairAssertContains('unknown_column', $preflightPayload, 'Preflight errors shou
 repairAssertSame(false, strpos($preflightPayload, 'at character 15') !== false, 'Raw PostgreSQL error detail must not enter repair prompts.');
 repairAssertSame(0, count(terminalTelemetryOutcomes()), 'A repaired candidate must not emit terminal validated until controller re-preflight succeeds.');
 
+$legacyContract = \app\services\ExploratorySemanticContractService::build(
+    roiPrompt(),
+    'Smith College',
+    \app\services\ExploratoryQueryDefaultsService::resolve(roiPrompt()),
+    'unsupported_query_family',
+    ['physicalRoiPolicyVersion' => 'legacy']
+);
+$legacyCompiled = \app\services\ExploratoryRoiSqlCompilerService::compile($legacyContract);
+repairAssertSame(true, is_array($legacyCompiled), 'The rollback regression requires a valid legacy repair candidate.');
+Yii::$app->params['nl2sqlHardenedPhysicalRoi'] = false;
+TestTransport::$responses = [geminiText($legacyCompiled['sql'])];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$legacyPreflightRepair = GeminiService::repairExploratorySqlAfterPreflight(
+    roiPrompt(),
+    'Smith College',
+    [
+        'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
+        'repairAttempts' => 1,
+        'routeReason' => 'unsupported_query_family',
+        'explanation' => 'Join purchase and circulation facts.',
+    ],
+    'ERROR: column ii.missing_column does not exist at character 15'
+);
+repairAssertSame('validated', $legacyPreflightRepair['validationSummary']['status'] ?? null, 'Explicit rollback must preserve the legacy policy during post-preflight repair.');
+repairAssertSame(2, $legacyPreflightRepair['repairAttempts'] ?? null, 'Legacy post-preflight repair must preserve the shared repair budget.');
+repairAssertSame(1, count(TestTransport::$requests), 'Legacy post-preflight repair should succeed with one remaining model call.');
+Yii::$app->params['nl2sqlHardenedPhysicalRoi'] = true;
+
 TestTransport::$responses = [geminiText(semanticallyFlawedRoiSql())];
 TestTransport::$requests = [];
 Yii::$logs = [];

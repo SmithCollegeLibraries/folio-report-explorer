@@ -44,4 +44,23 @@ describe('ExploratoryAssumptionsPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Correct Purchase date assumption' }));
     expect(onCorrect).toHaveBeenCalledWith('Use invoice date instead of payment date.');
   });
+
+  it('shows successful report coverage in plain language beside the assumptions', () => {
+    const { container } = render(
+      <ExploratoryAssumptionsPanel
+        assumptions={assumptions.slice(0, 1)}
+        repairCount={0}
+        onCorrect={() => undefined}
+        reportDisclosures={[
+          'Physical purchases and current Smith physical holdings only.',
+          'Exact receiving links are preferred; fallback-linked copies and percentage are shown.',
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Report coverage' })).toBeInTheDocument();
+    expect(screen.getByText('Physical purchases and current Smith physical holdings only.')).toBeInTheDocument();
+    expect(screen.getByText('Exact receiving links are preferred; fallback-linked copies and percentage are shown.')).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/CTE|join grain|schema cache|database error|raw SQL/i);
+  });
 });

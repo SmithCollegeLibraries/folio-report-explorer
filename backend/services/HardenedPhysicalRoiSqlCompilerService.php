@@ -115,7 +115,7 @@ WITH current_smith_items AS (
            eligible_direct_item.instance_id
     FROM paid_po_lines direct_paid_line
     JOIN current_smith_items eligible_direct_item
-      ON eligible_direct_item.purchase_order_line_identifier = direct_paid_line.po_line_id
+      ON eligible_direct_item.purchase_order_line_identifier = direct_paid_line.po_line_id::text
 ), exact_item_links AS (
     SELECT COALESCE(piece_exact_links.po_line_id, direct_exact_links.po_line_id) AS po_line_id,
            COALESCE(piece_exact_links.currency, direct_exact_links.currency) AS currency,

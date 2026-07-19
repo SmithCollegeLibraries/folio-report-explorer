@@ -964,6 +964,17 @@ class ExploratorySqlAnalysisService
         if ($column !== null) {
             return $column;
         }
+        if (count($tokens) === 5
+            && ($tokens[3]['value'] ?? '') === '::'
+            && self::isTextType($tokens[4] ?? [])) {
+            return self::exactColumnReference(array_slice($tokens, 0, 3));
+        }
+        $castArgument = self::singleFunctionArgument($tokens, 'CAST');
+        if ($castArgument !== null && count($castArgument) === 5
+            && self::isKeyword($castArgument[3] ?? [], 'AS')
+            && self::isTextType($castArgument[4] ?? [])) {
+            return self::exactColumnReference(array_slice($castArgument, 0, 3));
+        }
         foreach (['TRIM', 'LOWER', 'UPPER'] as $function) {
             $argument = self::singleFunctionArgument($tokens, $function);
             if ($argument !== null) {

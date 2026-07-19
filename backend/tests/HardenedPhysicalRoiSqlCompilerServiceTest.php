@@ -190,6 +190,17 @@ function compilerAssertPhysicalColumnsExist(string $sql): void
     compilerAssertSame([], array_values(array_unique($missing)), 'Compiled ROI SQL must use discovered physical columns only.');
 }
 
+function compilerCachedColumnType(string $table, string $column): ?string
+{
+    $cache = json_decode((string)file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
+    foreach (($cache['columns'][strtolower($table)] ?? []) as $definition) {
+        if (strtolower((string)($definition['name'] ?? '')) === strtolower($column)) {
+            return strtolower((string)($definition['type'] ?? ''));
+        }
+    }
+    return null;
+}
+
 function buildPhysicalRoiContract(string $question): array
 {
     return ExploratorySemanticContractService::build(
@@ -223,9 +234,12 @@ compilerAssertContains('fallback_percentage', $compiled['sql'], 'Linkage coverag
 compilerAssertContains('exact_item_links AS', $compiled['sql'], 'Exact piece and direct links must be unified.');
 compilerAssertContains('piece_exact_links AS', $compiled['sql'], 'Receiving-piece exact links must use an indexed branch.');
 compilerAssertContains('direct_exact_links AS', $compiled['sql'], 'Direct exact links must use an indexed branch.');
+compilerAssertSame('text', compilerCachedColumnType('inventory.item__t', 'purchase_order_line_identifier'), 'Direct item PO-line identifiers are cached as text.');
+compilerAssertSame('uuid', compilerCachedColumnType('orders.po_line__t', 'id'), 'PO-line IDs are cached as UUID.');
 compilerAssertContains('receiving_piece.po_line_id = piece_paid_line.po_line_id', $compiled['sql'], 'Piece links must bind by PO-line ID.');
 compilerAssertContains('eligible_piece_item.item_id = receiving_piece.item_id', $compiled['sql'], 'Piece links must bind by eligible item ID.');
-compilerAssertContains('eligible_direct_item.purchase_order_line_identifier = direct_paid_line.po_line_id', $compiled['sql'], 'Direct links must bind by PO-line identifier.');
+compilerAssertContains('eligible_direct_item.purchase_order_line_identifier = direct_paid_line.po_line_id::text', $compiled['sql'], 'Direct links must cast the UUID PO-line ID to the cached text identifier type.');
+compilerAssertNotContains('eligible_direct_item.purchase_order_line_identifier = direct_paid_line.po_line_id\n', $compiled['sql'], 'Direct links must not compare cached text and UUID columns directly.');
 compilerAssertContains('FULL OUTER JOIN direct_exact_links', $compiled['sql'], 'Overlapping exact branches must de-duplicate without UNION or Cartesian expansion.');
 compilerAssertNotContains('eligible_item.instance_id = eligible_item.instance_id', $compiled['sql'], 'Exact links must not use a tautological Cartesian join.');
 compilerAssertNotContains(' ON 1 = 1', $compiled['sql'], 'Exact links must not use a numeric tautological join.');
@@ -243,6 +257,12 @@ compilerAssertContains('FROM current_smith_items' . "\n" . '    GROUP BY current
 compilerAssertContains('FROM current_smith_items' . "\n" . '), class_counts AS', $compiled['sql'], 'Classing must use only the governed current-item cohort.');
 compilerAssertNotContains('class_by_instance', $compiled['sql'], 'The raw minimum-substring class path must be removed.');
 compilerAssertNotContains('paid_invoice_lines AS', $compiled['sql'], 'The unused paid-invoice-line CTE must be removed.');
+$unsafeDirectJoinSql = str_replace('direct_paid_line.po_line_id::text', 'direct_paid_line.po_line_id', $compiled['sql']);
+compilerAssertSame(
+    'rejected',
+    ExploratorySqlSemanticValidatorService::validate($unsafeDirectJoinSql, $contract)['status'] ?? null,
+    'Semantic validation must reject a direct item link that compares cached text and UUID columns without a cast.'
+);
 
 $allocationFixture = evaluatePhysicalAllocation(
     [

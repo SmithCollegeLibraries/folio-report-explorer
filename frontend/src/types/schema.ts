@@ -348,6 +348,7 @@ export interface NlResponse {
   errorType?: string;
   sql?: string;
   explanation?: string;
+  reportDisclosures?: string[];
   dataSource?: 'folio' | 'local';
   warnings?: string[];
   suggestions?: string[];

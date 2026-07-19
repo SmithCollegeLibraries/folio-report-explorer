@@ -809,10 +809,12 @@ $unusedFallbackMarkerSql = str_replace(
 semanticAssertRejectedFor($unusedFallbackMarkerSql, $physicalContract, 'spend_grain', 'An unused fallback marker must not substitute for structural allocation proof.');
 $directItemAllocationSql = str_replace(
     "    LEFT JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    LEFT JOIN eligible_current_smith_items eligible_exact_item ON eligible_exact_item.id = receiving_piece.item_id",
-    '    LEFT JOIN eligible_current_smith_items eligible_exact_item ON eligible_exact_item.purchase_order_line_identifier = paid_line.id',
+    '    LEFT JOIN eligible_current_smith_items eligible_exact_item ON eligible_exact_item.purchase_order_line_identifier = paid_line.id::text',
     $physicalSql
 );
 semanticAssertSame('validated', ExploratorySqlSemanticValidatorService::validate($directItemAllocationSql, $physicalContract)['status'], 'Direct item PO-line linkage must be accepted as trusted exact allocation.');
+$unsafeDirectItemAllocationSql = str_replace('paid_line.id::text', 'paid_line.id', $directItemAllocationSql);
+semanticAssertRejectedFor($unsafeDirectItemAllocationSql, $physicalContract, 'spend_grain', 'Direct item PO-line linkage must cast the UUID side to the item identifier text type.');
 $untrustedAllocationSql = str_replace(
     "    LEFT JOIN orders.pieces__t receiving_piece ON receiving_piece.po_line_id = paid_line.id\n    LEFT JOIN eligible_current_smith_items eligible_exact_item ON eligible_exact_item.id = receiving_piece.item_id\n",
     '',

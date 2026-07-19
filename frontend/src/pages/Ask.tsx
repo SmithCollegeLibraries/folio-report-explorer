@@ -2136,11 +2136,14 @@ export default function Ask() {
         {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && !isExploratoryValidationHardStop(nlResult.validationSummary) && (
           <div className="mx-auto w-full max-w-6xl p-3 space-y-3">
             <ExploratoryNoticePanel result={nlResult} />
-            {nlResult.mode === 'exploratory' && nlResult.assumptions && nlResult.assumptions.length > 0 && (
+            {nlResult.mode === 'exploratory'
+              && ((nlResult.assumptions?.length ?? 0) > 0 || (nlResult.reportDisclosures?.length ?? 0) > 0)
+              && (
               <ExploratoryAssumptionsPanel
-                assumptions={nlResult.assumptions}
+                assumptions={nlResult.assumptions ?? []}
                 repairCount={nlResult.repairAttempts ?? nlResult.validationSummary?.repairAttempts ?? 0}
                 onCorrect={handleCorrectAssumption}
+                reportDisclosures={nlResult.reportDisclosures}
               />
             )}
             {nlResult.mode === 'exploratory' && nlResult.semanticValidation && (

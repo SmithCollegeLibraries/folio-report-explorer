@@ -266,8 +266,7 @@ class GeminiService
     {
         $assumptions = ExploratoryQueryDefaultsService::resolve($prompt);
         $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
-        $useHardenedPhysicalRoi = !isset(Yii::$app->params['nl2sqlHardenedPhysicalRoi'])
-            || (bool)Yii::$app->params['nl2sqlHardenedPhysicalRoi'];
+        $useHardenedPhysicalRoi = self::useHardenedPhysicalRoi();
         $semanticContract = ExploratorySemanticContractService::build(
             $prompt,
             is_string($campus) ? $campus : null,
@@ -5421,6 +5420,7 @@ PROMPT;
             $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
         }
 
+        $useHardenedPhysicalRoi = self::useHardenedPhysicalRoi();
         $context = [
             'originalQuestion' => $prompt,
             'campus' => is_string($campus) ? $campus : null,
@@ -5430,7 +5430,8 @@ PROMPT;
                 $prompt,
                 is_string($campus) ? $campus : null,
                 $assumptions,
-                (string)($currentResult['routeReason'] ?? 'preflight_validation_failed')
+                (string)($currentResult['routeReason'] ?? 'preflight_validation_failed'),
+                ['physicalRoiPolicyVersion' => $useHardenedPhysicalRoi ? 'v2' : 'legacy']
             ),
             'route' => $currentResult['route'] ?? 'exploratory',
             'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
@@ -5488,6 +5489,12 @@ PROMPT;
             $assumptions,
             (int)$outcome['repairAttempts']
         );
+    }
+
+    private static function useHardenedPhysicalRoi(): bool
+    {
+        return !isset(Yii::$app->params['nl2sqlHardenedPhysicalRoi'])
+            || (bool)Yii::$app->params['nl2sqlHardenedPhysicalRoi'];
     }
 
     private static function generateExploratoryRepairCandidate(array $context): array

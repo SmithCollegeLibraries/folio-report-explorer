@@ -998,7 +998,7 @@ class ExploratorySqlSemanticValidatorService
         }
         $expectedItem = 'casewhen' . $piece . '.item_idisnotnullthen' . $eligibleAlias
             . '.item_idwhen' . $eligibleAlias . '.purchase_order_line_identifier=' . $paidAlias
-            . '.po_line_idthen' . $eligibleAlias . '.item_idelsenullend';
+            . '.po_line_id::textthen' . $eligibleAlias . '.item_idelsenullend';
         return self::compactExpression((string)self::expressionForAlias(
             $linkScope['selectItems'] ?? [],
             'po_line_id'
@@ -1221,7 +1221,28 @@ class ExploratorySqlSemanticValidatorService
                 'cte',
                 $eligibleName
             )
+            && self::hasTextSafeJoinedEquality(
+                $scope,
+                $eligible . '.purchase_order_line_identifier',
+                $paid . '.po_line_id'
+            )
             && self::hasIndexedBranchOutputs($scope, $paid, $eligible);
+    }
+
+    private static function hasTextSafeJoinedEquality(array $scope, string $textColumn, string $uuidColumn): bool
+    {
+        $expected = [
+            $textColumn . '=' . $uuidColumn . '::text',
+            $uuidColumn . '::text=' . $textColumn,
+            $textColumn . '=cast(' . $uuidColumn . 'astext)',
+            'cast(' . $uuidColumn . 'astext)=' . $textColumn,
+        ];
+        foreach (($scope['joins'] ?? []) as $join) {
+            if (in_array(self::compactExpression((string)($join['predicate'] ?? '')), $expected, true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static function indexedExactBranchBindings(array $analysis, array $scope, string $paidName): array
@@ -1382,6 +1403,11 @@ class ExploratorySqlSemanticValidatorService
                 $eligibleAlias,
                 'cte',
                 (string)($eligibleItem['source'] ?? '')
+            )
+            && self::hasTextSafeJoinedEquality(
+                $allocation,
+                $eligibleAlias . '.purchase_order_line_identifier',
+                $poLine . '.id'
             );
         return self::hasFallbackEligibilityCohort($allocation, $poLine, $analysis)
             && ($hasReceivingPieceLink || $hasDirectItemLink);
