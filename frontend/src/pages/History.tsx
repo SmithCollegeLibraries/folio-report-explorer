@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   History as HistoryIcon, ChevronLeft, ChevronRight, Activity,
@@ -192,18 +192,45 @@ export default function History() {
     navigate('/history', { replace: true });
   }, [navigate]);
 
-  const applySuccessfulDeletions = useCallback((deletedIds: string[]) => {
-    if (deletedIds.length === 0) return;
+  // Preserve the latest committed or synchronously derived state across async deletions.
+  const deletionSnapshotRef = useRef({
+    items,
+    total,
+    offset,
+    limit,
+    modalJobId: modalItem?.jobId ?? null,
+  });
 
-    invalidateLoads();
-    const next = deriveHistoryDeletionState(
+  useLayoutEffect(() => {
+    deletionSnapshotRef.current = {
       items,
       total,
       offset,
       limit,
+      modalJobId: modalItem?.jobId ?? null,
+    };
+  }, [items, total, offset, limit, modalItem?.jobId]);
+
+  const applySuccessfulDeletions = useCallback((deletedIds: string[]) => {
+    if (deletedIds.length === 0) return;
+
+    invalidateLoads();
+    const current = deletionSnapshotRef.current;
+    const next = deriveHistoryDeletionState(
+      current.items,
+      current.total,
+      current.offset,
+      current.limit,
       deletedIds,
-      modalItem?.jobId ?? null,
+      current.modalJobId,
     );
+    deletionSnapshotRef.current = {
+      items: next.items,
+      total: next.total,
+      offset: next.offset,
+      limit: current.limit,
+      modalJobId: next.closeModal ? null : current.modalJobId,
+    };
     setItems(next.items);
     setTotal(next.total);
     setOffset(next.offset);
@@ -212,15 +239,10 @@ export default function History() {
   }, [
     closeModal,
     invalidateLoads,
-    items,
-    limit,
-    modalItem?.jobId,
-    offset,
     selection.removeIds,
     setItems,
     setOffset,
     setTotal,
-    total,
   ]);
 
   const handleDeleteSelected = async () => {
