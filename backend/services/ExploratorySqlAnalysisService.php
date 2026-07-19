@@ -253,6 +253,7 @@ class ExploratorySqlAnalysisService
                 }
             }
             if ($inferredAlias && isset($scope['outputAliases'][$alias])) {
+                $scope['ambiguous'] = true;
                 $alias = null;
             }
             $functions = self::functionNames($expressionTokens);

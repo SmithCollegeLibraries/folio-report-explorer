@@ -893,6 +893,19 @@ semanticAssertRejectedFor(str_replace("WHERE invoice.payment_date", "WHERE pol.m
 $ambiguous = ExploratorySqlSemanticValidatorService::validate('SELECT 1 UNION SELECT 2', $contract);
 semanticAssertSame('rejected', $ambiguous['status'], 'Ambiguous SQL must fail closed.');
 semanticAssertSame(['semantic_coverage_gap'], array_values(array_unique(array_column($ambiguous['violations'], 'category'))), 'Ambiguity must produce only coverage-gap violations.');
+$duplicateOutputSql = str_replace(
+    'WITH spend_by_instance AS (',
+    "WITH duplicate_outputs AS (\n    SELECT item.id, holdings.id\n    FROM inventory.item__t item\n    JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\n), spend_by_instance AS (",
+    $correctedSql
+);
+$duplicateOutputSql = str_replace(
+    'FROM spend_by_instance',
+    "FROM spend_by_instance\nJOIN duplicate_outputs ON duplicate_outputs.id = spend_by_instance.instance_id",
+    $duplicateOutputSql
+);
+$duplicateOutput = ExploratorySqlSemanticValidatorService::validate($duplicateOutputSql, $contract);
+semanticAssertSame('rejected', $duplicateOutput['status'], 'A consumed CTE with duplicate unaliased outputs must fail closed.');
+semanticAssertSame(['semantic_coverage_gap'], array_values(array_unique(array_column($duplicateOutput['violations'], 'category'))), 'Consumed duplicate outputs must produce only semantic coverage gaps.');
 
 $unsupported = ['key' => 'future_requirement', 'rule' => 'future_rule', 'label' => 'Future requirement.', 'parameters' => []];
 $gapContract = $contract;

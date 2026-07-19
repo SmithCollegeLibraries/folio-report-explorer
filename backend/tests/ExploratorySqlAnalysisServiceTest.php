@@ -254,6 +254,11 @@ foreach ([
 ] as $ambiguousSql) {
     analysisAssertSame(true, ExploratorySqlAnalysisService::analyze($ambiguousSql)['ambiguous'], 'Unsupported structures must fail closed as ambiguous.');
 }
+$duplicateInferredOutputs = ExploratorySqlAnalysisService::analyze(
+    'SELECT item.id, holdings.id FROM inventory.item__t item '
+    . 'JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id'
+);
+analysisAssertSame(true, $duplicateInferredOutputs['ambiguous'], 'Duplicate unaliased output names must fail closed as ambiguous.');
 
 analysisAssertSame(
     [],
@@ -373,7 +378,7 @@ analysisAssertSame(
 analysisAssertSame(1, count($quotedSourceAliases['ctes']['joined_scope']['joins']), 'Quoted keyword aliases must retain join evidence.');
 analysisAssertSame('order', $quotedSourceAliases['ctes']['joined_scope']['joins'][0]['alias'], 'Quoted ORDER must remain a source alias.');
 analysisAssertSame('INNER', $quotedSourceAliases['ctes']['joined_scope']['joins'][0]['type'], 'Quoted aliases must not change INNER join classification.');
-analysisAssertSame(false, $quotedSourceAliases['ambiguous'], 'A supported join with quoted keyword aliases must remain deterministic.');
+analysisAssertSame(true, $quotedSourceAliases['ambiguous'], 'Duplicate quoted unaliased output names must fail closed as ambiguous.');
 analysisAssertSame(
     [
         'where' => ['kind' => 'table', 'source' => 'inventory.item__t'],
