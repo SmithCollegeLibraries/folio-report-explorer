@@ -1,7 +1,7 @@
 # Ask AI Confidence and Administrator Review Design
 
 **Date:** 2026-07-21  
-**Status:** Approved design
+**Status:** Revised after code review; pending user approval
 
 ## Purpose
 
@@ -18,7 +18,7 @@ The system will use transparent execution with asynchronous administrator review
 3. **Ask only answerable questions.** Clarification is limited to reporting meaning and is used only when no responsible documented default exists.
 4. **Use AI for the long tail.** Novel, obscure, cross-domain, and multilayered questions remain legitimate Ask AI use cases.
 5. **Be transparent without creating work.** AI-assisted results explain material assumptions and limitations without requiring acknowledgment or approval.
-6. **Separate confidence from safety.** A low-confidence interpretation may execute; unsafe, invalid, destructive, or impossible queries may not.
+6. **Separate confidence from execution eligibility.** A low-confidence interpretation may execute; unsafe, invalid, destructive, semantically nonconforming, or impossible queries may not.
 7. **Preserve explicit intent.** Concrete identifiers, requested fields, dates, scopes, and limits are retained exactly.
 8. **Review asynchronously.** Low-confidence and unsuccessful requests are flagged for administrators without delaying ordinary user results.
 9. **Do not rewrite history.** Administrator review never silently changes a completed result.
@@ -44,9 +44,51 @@ Alternative approaches were rejected:
 
 The selected approach executes every technically safe and executable report. It varies user-facing explanation according to analytical confidence and automatically creates administrator review items when evidence indicates material uncertainty.
 
+## Relationship to Existing Behavior and Specifications
+
+This design extends the current Ask AI pipeline rather than describing behavior that already exists in full.
+
+Existing foundations that remain authoritative are:
+
+- the five query-family contracts in `backend/data/query_family_contracts.json` and their application-owned compilation through `QueryFamilyCompilerService`;
+- exploratory SQL generation, the two-repair budget, safety and table-policy enforcement, schema-reference validation, semantic conformance, and PostgreSQL preflight;
+- documented exploratory defaults and domain-language clarification;
+- `ai_clarification_events` for clarification learning, `ai_query_feedback` for explicit user accuracy feedback, and reference-cache candidate review for reference-data governance; and
+- query-job execution status and cancellation semantics.
+
+The following capabilities are greenfield work required by this design:
+
+- evidence-based confidence classification;
+- system-generated administrator report-review items and their lifecycle;
+- persisted generation and validation provenance for review;
+- general explicit-identifier and requested-field preservation outside the narrow existing query-family slot policies;
+- structural comparison of an initial AI candidate with a repaired candidate; and
+- nontechnical recovery payloads that replace current validator-category presentation.
+
+This design does not weaken the blocking semantic-conformance gate defined by the 2026-07-18 Ask AI semantic-conformance specification. Every applicable blocking requirement must have validator coverage and pass. A failed requirement or `semantic_coverage_gap` remains an unable-to-execute outcome after bounded repair; it is never converted into a warning-only result. “Weak or partial semantic coverage” in this design means only that all detected blocking requirements passed but the contract covers a limited portion of the broader exploratory analysis.
+
+This design also supersedes earlier Ask AI copy instructing ordinary users to review SQL before using results. Generated SQL remains available through an intentional optional **View SQL** or advanced-details action, and it may continue to travel internally as follow-up context, but inspecting SQL is not a user responsibility or a recovery requirement.
+
+The obsolete `needsExploratoryApproval` response flag must be retired from backend responses, frontend types, conditional rendering, and tests. There is no replacement approval gate.
+
+## Compatibility Vocabulary
+
+This design adds no fourth execution-status enum. Its user-facing outcomes are derived from existing pipeline fields plus a single administrator-review decision.
+
+| User-facing outcome | Response `mode` | Persisted `executionMode` | Existing route | `validationSummary.status` | `reviewRequired` | Execute |
+|---|---|---|---|---|---|---|
+| Verified deterministic | `canonical` | `deterministic` | `builder_intent` with `family_contract_supported:*` | `validated` | `false` | Yes |
+| AI-assisted | `exploratory` | `exploratory` | normally `exploratory_legacy_freeform` | `validated` | `false` | Yes |
+| AI-assisted, review flagged | `exploratory` | `exploratory` | normally `exploratory_legacy_freeform` | `validated` | `true` | Yes |
+| Unable to execute safely | existing applicable mode | matching persisted mode | existing recovery or blocked route | `exhausted` or `rejected` | `true` | No |
+
+`route` and `routeReason` continue to explain how processing occurred. `validationSummary.status` continues to describe whether the candidate passed execution validation. `reviewRequired` is a boolean decision, not a confidence enum and not an execution state. Review reasons are stable internal keys stored with the administrator review item.
+
+The current hardened physical ROI compiler remains an exploratory compiled fallback with compiler version `physical_roi_v2`; it is not reclassified as a canonical query family by this design. Therefore the verified deterministic tier initially applies only to the existing five query families. Finance, ROI, and other cross-domain analysis normally remain AI-assisted or AI-assisted with review until separately promoted through approved canonical artifacts.
+
 ## Confidence and Execution Outcomes
 
-Confidence is determined from application evidence. The AI provider cannot declare its own output trustworthy.
+Confidence is determined from application evidence. The AI provider cannot declare its own output trustworthy. Any present or future NL-to-SQL model confidence field must be discarded before classification. The current model-generated `confidence` field used by index recommendations is a separate feature and is outside this report-confidence pipeline.
 
 ### Verified deterministic
 
@@ -72,7 +114,7 @@ The query is safe and executable, but material analytical uncertainty remains.
 
 - Execute automatically.
 - Show a more visible plain-language limitation.
-- Create an administrator review item asynchronously.
+- Create an administrator review item for asynchronous administrator handling.
 - Do not show queue state, approval state, or technical diagnostics to the user.
 
 Review-triggering evidence includes:
@@ -81,7 +123,7 @@ Review-triggering evidence includes:
 - cross-domain or multilayer aggregation;
 - incomplete or proxy record linkage;
 - inferred institutional, collection, date, or population scope;
-- weak or partial semantic-rule coverage;
+- limited but passing semantic-contract coverage after every detected blocking requirement has validator coverage and passes;
 - obscure or unresolved collection terminology;
 - automatic repair that materially changed the proposed query;
 - known limitations in source data or historical coverage; and
@@ -97,7 +139,7 @@ The system cannot produce technically valid and safe SQL, or the calculation req
 - Offer safe partial reports, alternative interpretations, or a conversational refinement when available.
 - Do not expose rejected SQL or technical failure details.
 
-Low confidence by itself is never a reason to withhold execution. Destructive output, policy violations, invalid SQL after bounded repair, failed preflight, or unavailable required data remain hard execution boundaries.
+Low confidence by itself is never a reason to withhold execution. Destructive output, policy violations, invalid SQL after bounded repair, failed blocking semantic requirements, semantic coverage gaps, failed preflight, or unavailable required data remain hard execution boundaries.
 
 ## User Experience
 
@@ -133,13 +175,15 @@ The user receives a useful reporting explanation rather than an implementation f
 
 > I couldn't verify a source for electronic-resource usage, so I can't calculate a reliable return on investment. I can still show spending by vendor, renewal date, and fund.
 
-Messages must not include table names, column names, PostgreSQL errors, SQL classifications, stack traces, validator categories, or repair internals.
+Messages must not include table names, column names, PostgreSQL errors, SQL classifications, stack traces, validator categories, validator stages, internal requirement keys, or repair internals.
+
+This is explicit remediation of current shipping behavior. Ordinary recovery responses must stop serializing `validationSummary.failureCategory` and `validationSummary.validatorStage`. User-readable unmet requirements may remain, but the response contains display text rather than internal key/label pairs. The frontend must remove the “Safe failure category” presentation and other technical error-formatting branches. Complete categories, stages, and stable requirement keys are retained only in administrator review evidence and protected telemetry.
 
 The original request, follow-up context, and accepted assumptions remain available so the user does not have to start again.
 
 ### Explicit-values fast path
 
-A request containing explicit identifiers and fields, such as “show these instance numbers with these fields,” takes a narrow explicit-values path:
+A request containing explicit identifiers and fields, such as “show these instance numbers with these fields,” takes a narrow explicit-values path. This is a new general capability; the current `explicit_prompt_only` query-family slot policy is only a limited precedent.
 
 - preserve all supplied identifiers exactly;
 - preserve the requested field list and limits;
@@ -160,7 +204,7 @@ Ask AI processes every request through the following stages:
 6. **Classify analytical confidence.** Evaluate deterministic evidence independently from execution safety.
 7. **Execute when technically permissible.** Analytical uncertainty does not block an otherwise valid query.
 8. **Explain at the user's level.** Add only the assumptions and limitations needed to interpret an AI-assisted result.
-9. **Flag review asynchronously.** Persist an administrator review item when confidence evidence crosses the review threshold or execution cannot proceed.
+9. **Flag review without blocking.** Persist an administrator review item when confidence evidence crosses the review threshold or execution cannot proceed.
 
 ## Component Responsibilities
 
@@ -199,23 +243,89 @@ Ask AI processes every request through the following stages:
 - Classifies verified, ordinary AI-assisted, and review-flagged AI-assisted results.
 - Considers routing, defaults, unresolved ambiguity, semantic coverage, repair history, linkage quality, preflight outcome, and known data limitations.
 - Does not block execution.
+- Returns `reviewRequired` plus stable review-reason keys; it does not create a new execution-mode or validation-status enum.
 
 ### User explanation service
 
 - Converts internal evidence into concise domain-language assumptions, limitations, clarifications, and alternatives.
 - Applies an allowlisted vocabulary suitable for nontechnical users.
 - Prevents technical identifiers and diagnostic details from reaching normal Ask AI responses.
+- Produces separate user and administrator representations so sanitization is structural rather than dependent on frontend hiding.
 
 ### Administrator review service
 
-- Creates review items outside the user's execution-critical path.
+- Creates best-effort review items without introducing an approval dependency or delaying query execution.
 - Stores technical evidence and links it to the query job.
 - Supports classification and future remediation.
 - Does not create an approval dependency for safe execution.
 
+The confidence classifier, user explanation service, administrator review service, review model, migration, controller/API endpoints, and administrator interface are all new components. Existing exploratory generation and validation services supply evidence to them but do not own review state.
+
+## Confidence Evidence and Repair Comparison
+
+The classifier consumes a versioned evidence record rather than a model opinion. At minimum it includes:
+
+- response mode, route, route reason, and selected query family when any;
+- documented assumptions and whether each was explicit or defaulted;
+- clarification outcomes and unresolved domain ambiguity;
+- applicable semantic-contract version, coverage state, checked requirements, and pass/fail outcome;
+- validation stages completed and final preflight outcome;
+- repair attempt count;
+- initial and final normalized SQL hashes;
+- initial and final structural signatures;
+- compiler and compiler version when application compilation occurred;
+- schema, reference, and semantic artifact versions or hashes when available; and
+- known source-data or linkage limitations.
+
+“Repair materially changed the query” requires a new deterministic structural comparison. It is not inferred from repair count or raw SQL inequality. The implementation extends the existing exploratory SQL analysis capability to produce a stable signature covering relation set, join graph, predicates and scope, grouping grain, measures, output fields, and ordering. A change limited to whitespace, formatting, harmless aliases, or equivalent normalization is not material. A change to any covered analytical component is a review reason.
+
 ## Administrator Review Workflow
 
-A review item contains:
+### Persistence model
+
+This design introduces two MySQL-backed records rather than overloading `query_jobs.status` or the existing learning tables.
+
+`ai_report_generations` persists the trusted server-side outcome of each accepted Ask AI request, including clarification, blocked, recovery, and validated outcomes. Its schema includes:
+
+- UUID primary key and nullable linked `query_job_id`;
+- nullable `user_id`, prompt fingerprint, original question, and follow-up context;
+- response mode, persisted execution mode, route, route reason, and validation status;
+- generated SQL and SQL hash when a candidate survived generation;
+- user-visible assumptions, limitations, and recovery text;
+- versioned confidence evidence and structural signatures;
+- compiler, model, prompt, semantic-contract, schema-artifact, reference-artifact, and other available provenance fields, with unavailable fields stored explicitly as null;
+- `review_required` and stable review-reason keys; and
+- created, linked, and updated timestamps.
+
+`ai_report_reviews` is created only when `review_required=true`. Its schema includes:
+
+- UUID primary key and a unique foreign key to `ai_report_generations`;
+- lifecycle status `pending | in_review | resolved | dismissed`;
+- nullable disposition `acceptable | assumption_change | deterministic_candidate | generation_defect | data_unavailable | specialist_interpretation`;
+- administrator notes and reviewer identity;
+- result advisory state `none | cautioned | superseded` and nullable `superseded_by_job_id`;
+- claimed, resolved, created, and updated timestamps; and
+- indexes supporting pending-review ordering, disposition reporting, user ownership, and query-job lookup.
+
+Query execution status remains exclusively in `query_jobs.status`; `cautioned` and `superseded` are review/advisory states and never become query-job execution statuses.
+
+The `/api/nl` boundary writes the generation record and, when required, its review record through `AdministratorReviewService`. The response includes an opaque generation identifier. When the frontend later submits the query for execution, it passes that identifier; the execution controller verifies ownership and SQL hash, links the resulting query job, and copies trusted provenance into `query_jobs.metadata`. Provenance is never reconstructed from client-supplied fields.
+
+The local database writes are best effort and wrapped so review persistence cannot turn a safe report into a user-visible failure. A persistence failure emits protected operational telemetry. “Asynchronous review” means administrator work is decoupled from report approval and execution; this design does not require a separate worker merely to insert a review row. Administrator claim/update operations use the repository's existing atomic conditional-update pattern so two administrators cannot claim the same pending item.
+
+The greenfield administrator API provides:
+
+- a paginated, filterable pending/reviewed list;
+- an authorized technical-detail endpoint for one review;
+- an atomic claim action changing `pending` to `in_review` only when still pending;
+- resolve and dismiss actions requiring a disposition; and
+- caution and supersede actions that preserve the linked query job's execution status.
+
+All endpoints require the existing administrator role. Ordinary Ask AI and history endpoints expose only the user-facing advisory text and never return review notes or technical evidence.
+
+### Review content and lifecycle
+
+A review item exposes its linked generation evidence to authorized administrators, including:
 
 - the original user question and follow-up context;
 - plain-language assumptions displayed to the user;
@@ -224,7 +334,7 @@ A review item contains:
 - referenced relations, schema artifact version, and data source;
 - repair attempts and sanitized failure evidence;
 - result or query-job identifiers and execution timestamp;
-- compiler, model, prompt, semantic-contract, and artifact provenance when available; and
+- compiler, model, prompt, semantic-contract, and artifact provenance, with missing provenance identified explicitly; and
 - later refinements or reruns linked to the same conversational request.
 
 Administrators classify review items as:
@@ -238,25 +348,47 @@ Administrators classify review items as:
 
 Review outcomes improve future behavior through documented defaults, semantic rules, reusable verified patterns, deterministic-family candidates, or defect work. Review is not used to silently edit completed reports.
 
-If review discovers a material problem, the original result retains the provenance of what ran and may be marked cautioned or superseded. A corrected result is generated separately.
+If review discovers a material problem, the original query job keeps its completed execution status and the linked review receives advisory state `cautioned` or `superseded`. A corrected result is generated as a separate query job and referenced by `superseded_by_job_id`. History APIs derive advisory presentation from the linked review rather than mutating execution history.
 
 The ordinary user sees no queue position, approval status, technical category, or administrator diagnostic. If the product exposes review status at all, it uses a nonblocking message such as:
 
 > This report was created with AI assistance and was flagged for routine review.
 
+### Relationship to existing learning stores
+
+The stores coexist with nonoverlapping ownership:
+
+- `ai_report_generations` records system generation, validation, confidence, and provenance.
+- `ai_report_reviews` records system-created administrator triage and disposition.
+- `ai_query_feedback` remains explicit user feedback about result accuracy. A feedback record may link to a generation or cause a review to be created, but it is not the review queue.
+- `ai_clarification_events` remains the source for clarification choices and promotion into training hints. A review disposition may nominate a new default or clarification rule, but promotion continues through the existing clarification/hint governance.
+- reference-cache candidate review remains limited to approving reference data and does not absorb report review.
+
+No review disposition automatically changes prompts, defaults, contracts, training hints, or reference artifacts. Those changes continue through their existing tested and reviewable workflows.
+
+### Retention and deletion
+
+- Add configurable `AI_REPORT_REVIEW_RETENTION_DAYS`, defaulting to 90 days.
+- Deleting a query-history job also deletes its linked generation and review records through the existing history-deletion service, including single and batch deletion paths.
+- Unlinked generation failures and their reviews are deleted 90 days after creation by the same retention policy.
+- Resolved or dismissed reviews are deleted 90 days after resolution; aggregate metrics retain no prompt or SQL content.
+- Deleting a user purges that user's raw questions, SQL, follow-up context, and administrator notes from these stores rather than merely orphaning them with a null user id.
+- Access to generation SQL, technical evidence, and administrator notes requires administrator authorization and is excluded from ordinary history payloads.
+
 ## Data and Privacy Boundaries
 
 - Ordinary responses exclude rejected SQL, database errors, internal identifiers, validator categories, and stack traces.
-- Administrator evidence is access-controlled and follows existing prompt, SQL, and telemetry retention policies.
+- Administrator evidence is access-controlled and follows the explicit review retention and deletion policy above.
 - Review records identify the user-visible assumptions exactly as displayed.
 - Technical telemetry uses hashes or sanitized identifiers where raw content is unnecessary.
-- Review creation must not extend normal query latency or cause a safe result to fail if the review queue is temporarily unavailable.
+- Review creation uses a small local-database write and must not cause a safe result to fail if review persistence is temporarily unavailable.
 
 ## Error Handling
 
 - Provider and repair failures are handled internally before producing a user state.
 - Repairable failures consume the bounded repair budget.
 - Policy violations and destructive output receive no repair that could weaken the policy boundary.
+- Failed blocking semantic requirements and semantic coverage gaps remain no-result outcomes after the repair budget; they cannot be downgraded into review-only warnings.
 - A review-persistence failure does not block an otherwise safe report; it emits administrator-visible operational telemetry for later recovery.
 - A valid zero-row result is returned as a completed report with guidance for refining scope, not as a generation failure.
 - An unavailable-data limitation is explained explicitly and is not represented as zero.
@@ -271,14 +403,21 @@ The ordinary user sees no queue position, approval status, technical category, o
 5. Explicit identifiers, requested fields, dates, scopes, and limits are preserved.
 6. Reasonable documented defaults prevent unnecessary clarification roadblocks.
 7. Clarification questions use reporting language and appear only when no responsible default exists.
-8. Unsafe, destructive, invalid, policy-violating, or impossible queries never execute.
+8. Unsafe, destructive, invalid, policy-violating, blocking-semantically-nonconforming, semantic-coverage-gap, or impossible queries never execute.
 9. Repair is attempted internally before a repairable problem affects the user.
 10. Exhausted failures are flagged for review and return plain-language alternatives when available.
-11. Ordinary Ask AI users never see technical query diagnostics.
+11. Ordinary Ask AI users never see technical query diagnostics; the currently shipped safe-category, validator-stage, internal-requirement-key, and technical error-formatting presentation is removed or replaced with domain-language text.
 12. Valid zero-row results are distinguishable from unvalidated queries.
 13. Administrator review does not silently mutate historical results.
-14. Review queue unavailability does not block safe report execution.
+14. Review persistence unavailability does not block safe report execution.
 15. Ask AI does not redirect nontechnical users into Builder or Schema Explorer as a required recovery step.
+16. Existing `mode`, `executionMode`, `route`, `routeReason`, and `validationSummary.status` retain their defined meanings; user outcomes are derived through the compatibility mapping rather than parallel enums.
+17. The hardened physical ROI compiler remains exploratory and cannot be presented as a canonical verified family.
+18. Model self-ratings do not influence confidence classification.
+19. A materially changed repair is detected from structural signatures rather than attempt count or raw SQL inequality.
+20. Review and generation provenance is persisted server-side and linked to query jobs without trusting client-supplied provenance.
+21. `needsExploratoryApproval` is absent from production responses, frontend types, rendering branches, and active tests.
+22. Existing clarification, user-feedback, and reference-review records keep their current responsibilities and do not become disconnected duplicate review queues.
 
 ## Testing Strategy
 
@@ -322,7 +461,25 @@ Each case asserts:
 - zero-row versus unvalidated distinction; and
 - stable treatment of materially equivalent prompts.
 
-Integration tests must also prove that review creation is asynchronous, a review storage failure does not block a safe result, and an administrator action cannot silently overwrite a completed report.
+Compatibility and integration tests must also prove:
+
+- each current query-family route maps to verified deterministic without changing route telemetry;
+- ordinary exploratory, flagged exploratory, exhausted, rejected, clarification, and policy-blocked responses map according to the compatibility table;
+- hardened ROI remains exploratory even when `physical_roi_v2` compiles the final SQL;
+- a failed blocking semantic requirement and `semantic_coverage_gap` never return SQL or results;
+- a limited but passing semantic contract may execute and may trigger review;
+- current `failureCategory`, `validatorStage`, and internal requirement keys do not reach ordinary response payloads or rendered copy;
+- SQL remains available through the intentional advanced action and follow-up context without copy requiring novice users to inspect it;
+- no NL-to-SQL model confidence value can affect classifier output;
+- repaired candidates with only formatting or alias normalization are not materially changed;
+- repaired candidates with changed relations, joins, scope, grain, measures, outputs, or ordering are materially changed;
+- generation and review records persist the required provenance, including explicit nulls for unavailable artifacts;
+- the opaque generation identifier links only an owned matching-SQL execution job;
+- administrator claim is atomic and review endpoints enforce administrator authorization;
+- caution and supersession leave `query_jobs.status` unchanged;
+- review persistence failure does not block a safe result;
+- retention and history deletion remove linked sensitive generation and review data; and
+- `needsExploratoryApproval` has no remaining production or type-level usage.
 
 ## Out of Scope
 
@@ -333,6 +490,7 @@ Integration tests must also prove that review creation is asynchronous, a review
 - Guaranteeing that every possible reporting question can be answered.
 - Treating absent data as a zero value.
 - Silently converting an exploratory result into a verified canonical report.
+- Building a generic asynchronous task worker for administrator review; human review is asynchronous, while local persistence is a best-effort request-boundary write.
 
 ## Success Measures
 
