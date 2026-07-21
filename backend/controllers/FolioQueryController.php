@@ -125,8 +125,7 @@ class FolioQueryController extends Controller
                         ],
                         'roles' => ['@'],
                         'matchCallback' => function ($rule, $action) {
-                            $identity = $this->getAppIdentity();
-                            return $identity && $identity->isAdmin();
+                            return $this->isPersistedAdministrator();
                         },
                     ],
                     // Stable API denial for authenticated non-administrators.
@@ -231,17 +230,27 @@ class FolioQueryController extends Controller
      */
     private function requireAdministrator(): ?array
     {
-        $user = Yii::$app->user;
-        $identity = $user->identity;
-        if (!$user->isGuest
-            && ($identity instanceof User || $identity instanceof DummyIdentity)
-            && $identity->isAdmin()
-        ) {
+        if ($this->isPersistedAdministrator()) {
             return null;
         }
 
         Yii::$app->response->statusCode = 403;
         return ['error' => 'Forbidden'];
+    }
+
+    private function isPersistedAdministrator(): bool
+    {
+        $user = Yii::$app->user;
+        $identity = $user->identity;
+        if ($user->isGuest || !($identity instanceof User)) {
+            return false;
+        }
+
+        return User::find()->where([
+            'id' => (int)$identity->getId(),
+            'role' => 'admin',
+            'is_approved' => 1,
+        ])->exists();
     }
 
     /**

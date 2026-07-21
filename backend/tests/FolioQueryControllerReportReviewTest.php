@@ -9,6 +9,7 @@ require __DIR__ . '/../vendor/autoload.php';
 require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
 
 use app\controllers\FolioQueryController;
+use app\models\DummyIdentity;
 use app\models\User;
 use yii\web\Application;
 
@@ -254,6 +255,27 @@ foreach ($forbiddenCalls as $call) {
     reviewControllerAssert(Yii::$app->response->statusCode === 403, $call[0] . ' must reject a regular user with HTTP 403.');
     reviewControllerAssert(($response['error'] ?? null) === 'Forbidden', $call[0] . ' must use stable forbidden copy.');
 }
+
+Yii::$app->user->setIdentity(new DummyIdentity());
+foreach ($forbiddenCalls as $call) {
+    $response = reviewControllerInvoke($call[0], $call[1] ?? [], $call[2] ?? [], $call[3] ?? []);
+    reviewControllerAssert(Yii::$app->response->statusCode === 403, $call[0] . ' must reject DummyIdentity with HTTP 403.');
+    reviewControllerAssert(($response['error'] ?? null) === 'Forbidden', $call[0] . ' must reject DummyIdentity with stable forbidden copy.');
+}
+
+$forgedAdministrator = new User();
+$forgedAdministrator->setAttributes([
+    'id' => 7,
+    'smith_id' => 'smith-7',
+    'username' => 'forged-admin',
+    'email' => 'forged-admin@example.test',
+    'role' => 'admin',
+    'is_approved' => 1,
+], false);
+Yii::$app->user->setIdentity($forgedAdministrator);
+$forgedResponse = reviewControllerInvoke('actionReportReviewList');
+reviewControllerAssert(Yii::$app->response->statusCode === 403, 'An in-memory administrator role must not override the persisted regular-user role.');
+reviewControllerAssert(($forgedResponse['error'] ?? null) === 'Forbidden', 'A forged administrator identity must receive stable forbidden copy.');
 
 reviewControllerIdentity(1, 'admin');
 $page = reviewControllerInvoke('actionReportReviewList', [], ['limit' => 1, 'offset' => 0]);

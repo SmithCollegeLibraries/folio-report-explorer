@@ -10,11 +10,42 @@ require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
 use app\services\AdministratorReviewService;
 use yii\console\Application;
 
+class ReviewTrackingConnection extends yii\db\Connection
+{
+    public $executedSql = [];
+}
+
+class ReviewTrackingCommand extends yii\db\Command
+{
+    private function recordSql()
+    {
+        if ($this->db instanceof ReviewTrackingConnection) {
+            $this->db->executedSql[] = preg_replace('/\s+/', ' ', trim($this->getRawSql()));
+        }
+    }
+
+    public function execute()
+    {
+        $this->recordSql();
+        return parent::execute();
+    }
+
+    public function queryScalar()
+    {
+        $this->recordSql();
+        return parent::queryScalar();
+    }
+}
+
 new Application([
     'id' => 'administrator-review-service-test',
     'basePath' => dirname(__DIR__),
     'components' => [
-        'db' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
+        'db' => [
+            'class' => ReviewTrackingConnection::class,
+            'commandClass' => ReviewTrackingCommand::class,
+            'dsn' => 'sqlite::memory:',
+        ],
     ],
 ]);
 Yii::$app->errorHandler->unregister();
@@ -94,6 +125,16 @@ function reviewExpectException($class, callable $callback, $message)
         return $exception;
     }
     reviewAssert(false, $message . ' No exception was thrown.');
+}
+
+function reviewSqlIndex(array $statements, $fragment)
+{
+    foreach ($statements as $index => $statement) {
+        if (strpos($statement, $fragment) !== false) {
+            return $index;
+        }
+    }
+    return null;
 }
 
 function generationContext(array $overrides = [])
@@ -227,9 +268,27 @@ $service->claim($takeoverReview['reviewId'], 303);
 $takenOver = $service->resolve($takeoverReview['reviewId'], 404, 'acceptable', 'explicit takeover', 'none', null, true);
 reviewAssert((int)$takenOver['reviewed_by'] === 404, 'An explicit takeover should transfer review ownership before resolution.');
 
+$db->executedSql = [];
 $resolved = $service->resolve($flagged['reviewId'], 101, 'generation_defect', 'corrected', 'superseded', 'job-2');
 reviewAssert($resolved['status'] === 'resolved', 'A claimed review should resolve.');
 reviewAssert($resolved['superseded_by_job_id'] === 'job-2', 'A superseded review should retain its replacement job id.');
+$queryJobLockIndex = reviewSqlIndex($db->executedSql, 'UPDATE query_jobs SET id=id');
+$generationReadIndex = reviewSqlIndex($db->executedSql, 'SELECT g.id FROM ai_report_reviews r INNER JOIN ai_report_generations g');
+$generationLockIndex = reviewSqlIndex($db->executedSql, 'UPDATE ai_report_generations SET id=id');
+$validationIndex = reviewSqlIndex($db->executedSql, 'SELECT q.id FROM query_jobs q');
+$terminalUpdateIndex = reviewSqlIndex($db->executedSql, 'UPDATE `ai_report_reviews` SET');
+reviewAssert($queryJobLockIndex !== null, 'Supersession must lock the replacement query job row.');
+reviewAssert($generationReadIndex !== null, 'Supersession must read the reviewed generation with current-read semantics after locking the query job.');
+reviewAssert($generationLockIndex !== null, 'Supersession must lock the reviewed generation row.');
+reviewAssert(
+    $queryJobLockIndex < $generationReadIndex
+        && $generationReadIndex < $generationLockIndex
+        && $generationLockIndex < $validationIndex
+        && $validationIndex < $terminalUpdateIndex,
+    'Supersession locks must precede invariant validation and the conditional terminal update.'
+);
+$serviceSource = file_get_contents(__DIR__ . '/../services/AdministratorReviewService.php');
+reviewAssert(strpos($serviceSource, ' FOR UPDATE') !== false, 'MySQL supersession validation must use a current locking read rather than a repeatable-read snapshot.');
 reviewExpectException(DomainException::class, static function () use ($service, $flagged): void {
     $service->resolve($flagged['reviewId'], 101, 'acceptable', 'again');
 }, 'A resolved review must not be resolved twice.');

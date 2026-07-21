@@ -251,10 +251,13 @@ class AdministratorReviewService
             $supersededByJobId,
             $takeover
         ): array {
-            if ($advisoryState === 'superseded'
-                && !$this->isCompletedReplacementJob($reviewId, (string)$supersededByJobId)
-            ) {
-                throw new InvalidArgumentException('superseded_review_requires_completed_owned_job');
+            if ($advisoryState === 'superseded') {
+                $this->lockReplacementQueryJob((string)$supersededByJobId);
+                $generationId = $this->reviewGenerationIdForUpdate($reviewId);
+                $this->lockGenerationRow($generationId);
+                if (!$this->isCompletedReplacementJob($reviewId, (string)$supersededByJobId)) {
+                    throw new InvalidArgumentException('superseded_review_requires_completed_owned_job');
+                }
             }
 
             $now = gmdate('Y-m-d H:i:s');
@@ -287,6 +290,39 @@ class AdministratorReviewService
         });
     }
 
+    private function lockReplacementQueryJob(string $queryJobId): void
+    {
+        // UPDATE-to-self acquires a transaction-held InnoDB row lock and an
+        // early SQLite write reservation without changing execution status.
+        $this->db->createCommand(
+            'UPDATE query_jobs SET id=id WHERE id = :queryJobId',
+            [':queryJobId' => $queryJobId]
+        )->execute();
+    }
+
+    private function reviewGenerationIdForUpdate(string $reviewId): string
+    {
+        $generationId = $this->db->createCommand(
+            'SELECT g.id
+             FROM ai_report_reviews r
+             INNER JOIN ai_report_generations g ON g.id = r.generation_id
+             WHERE r.id = :reviewId' . $this->lockingReadSuffix(),
+            [':reviewId' => $reviewId]
+        )->queryScalar();
+        if ($generationId === false) {
+            throw new DomainException('review_not_resolvable');
+        }
+        return (string)$generationId;
+    }
+
+    private function lockGenerationRow(string $generationId): void
+    {
+        $this->db->createCommand(
+            'UPDATE ai_report_generations SET id=id WHERE id = :generationId',
+            [':generationId' => $generationId]
+        )->execute();
+    }
+
     private function isCompletedReplacementJob(string $reviewId, string $queryJobId): bool
     {
         return $this->db->createCommand(
@@ -298,9 +334,16 @@ class AdministratorReviewService
                AND q.status = 'completed'
                AND g.user_id IS NOT NULL
                AND q.user_id = g.user_id
-               AND (g.query_job_id IS NULL OR q.id <> g.query_job_id)",
+               AND (g.query_job_id IS NULL OR q.id <> g.query_job_id)" . $this->lockingReadSuffix(),
             [':reviewId' => $reviewId, ':queryJobId' => $queryJobId]
         )->queryScalar() !== false;
+    }
+
+    private function lockingReadSuffix(): string
+    {
+        return in_array($this->db->getDriverName(), ['mysql', 'mysqli'], true)
+            ? ' FOR UPDATE'
+            : '';
     }
 
     public function purgeExpired(int $days, DateTimeImmutable $now): int
