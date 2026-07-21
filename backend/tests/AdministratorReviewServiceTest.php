@@ -152,6 +152,20 @@ $child = $service->recordGeneration(generationContext([
 reviewAssert($child['conversationId'] === $plain['conversationId'], 'An owned child must inherit its parent conversation.');
 $childParent = $db->createCommand('SELECT parent_generation_id FROM ai_report_generations WHERE id = :id', [':id' => $child['generationId']])->queryScalar();
 reviewAssert($childParent === $plain['generationId'], 'The owned parent generation must be persisted.');
+
+$anonymousRoot = $service->recordGeneration(generationContext(['userId' => null]));
+$beforeAnonymousChild = (int)$db->createCommand('SELECT COUNT(*) FROM ai_report_generations')->queryScalar();
+reviewExpectException(DomainException::class, static function () use ($service, $anonymousRoot): void {
+    $service->recordGeneration(generationContext([
+        'userId' => null,
+        'parentGenerationId' => $anonymousRoot['generationId'],
+    ]));
+}, 'An anonymous request must not claim an anonymous parent conversation.');
+reviewAssert(
+    (int)$db->createCommand('SELECT COUNT(*) FROM ai_report_generations')->queryScalar() === $beforeAnonymousChild,
+    'Rejected anonymous parent linkage must not persist a child generation.'
+);
+
 reviewExpectException(DomainException::class, static function () use ($service, $plain): void {
     $service->recordGeneration(generationContext(['userId' => 8, 'parentGenerationId' => $plain['generationId']]));
 }, 'A generation must not inherit an unowned parent conversation.');

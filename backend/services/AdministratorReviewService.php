@@ -216,9 +216,9 @@ class AdministratorReviewService
         )->queryOne();
         $requestedUserId = $context['userId'] ?? null;
         $owned = $parent !== false
-            && (($parent['user_id'] === null && $requestedUserId === null)
-                || ($parent['user_id'] !== null && $requestedUserId !== null
-                    && (int)$parent['user_id'] === (int)$requestedUserId));
+            && $parent['user_id'] !== null
+            && $requestedUserId !== null
+            && (int)$parent['user_id'] === (int)$requestedUserId;
         if (!$owned) {
             throw new DomainException('parent_generation_not_owned');
         }
