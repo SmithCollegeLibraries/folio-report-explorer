@@ -272,6 +272,9 @@ $retryMigrationPath = $retryMigrationDir . '/035_budget_year_fund_report.sql';
 file_put_contents($retryMigrationPath, file_get_contents($migrationDir . '/035_budget_year_fund_report.sql'));
 $retryDatabase = new MigrationServiceRetryTestDatabase();
 $migrationAppearsApplied = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
+if (PHP_VERSION_ID < 80100) {
+    $migrationAppearsApplied->setAccessible(true);
+}
 assertMigrationTrue(
     $migrationAppearsApplied->invoke(null, $retryDatabase, '039_ask_ai_report_review.sql'),
     'Migration 039 should look applied only when both report persistence tables exist.'

@@ -94,6 +94,8 @@ $cache = new ReflectionProperty(app\services\SettingsService::class, 'cache');
 if (PHP_VERSION_ID < 80100) {
     $cache->setAccessible(true);
 }
+$retentionEnvironment = getenv('AI_REPORT_REVIEW_RETENTION_DAYS');
+putenv('AI_REPORT_REVIEW_RETENTION_DAYS');
 foreach ([[null, 90], [0, 1], [-5, 1], [3651, 3650], [180, 180]] as $case) {
     list($configured, $expected) = $case;
     $cache->setValue(null, $configured === null ? [] : ['ai_report_review_retention_days' => $configured]);
@@ -103,6 +105,11 @@ foreach ([[null, 90], [0, 1], [-5, 1], [3651, 3650], [180, 180]] as $case) {
     );
 }
 $cache->setValue(null, null);
+if ($retentionEnvironment === false) {
+    putenv('AI_REPORT_REVIEW_RETENTION_DAYS');
+} else {
+    putenv('AI_REPORT_REVIEW_RETENTION_DAYS=' . $retentionEnvironment);
+}
 $params = file_get_contents($paramsPath);
 assertAskSchemaContains("'aiReportReviewRetentionDays' => SettingsService::getAiReportReviewRetentionDays()", $params, 'Application params must expose review retention.');
 
