@@ -344,4 +344,35 @@ assertSameValue('legacy_fallback', $overrideResult['route'] ?? null, 'Emergency 
 assertSameValue('family_compiler_failed', $overrideResult['routeReason'] ?? null, 'Emergency override should preserve the family_compiler_failed route reason.');
 assertSameValue('SELECT legacy_fallback_stub', $overrideResult['sql'] ?? null, 'Emergency override should return the injected legacy fallback SQL payload.');
 
+$exploratoryCompilerFallback = $helper->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Available',
+            'requested_outputs' => ['title'],
+        ],
+    ],
+    'family_contract_supported:inventory_library_location_listing',
+    'Show available Smith College items',
+    'Smith College',
+    ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+    function (): array {
+        throw new InvalidArgumentException('compiler rejected status-like library scope');
+    },
+    function (): array {
+        return ['sql' => 'SELECT unused_legacy'];
+    },
+    function (): array {
+        return [
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'sql' => 'SELECT id FROM inventory.item__t',
+        ];
+    }
+);
+assertSameValue('exploratory', $exploratoryCompilerFallback['mode'] ?? null, 'A known-family compiler fallback must remain exploratory.');
+assertSameValue('inventory_library_location_listing', $exploratoryCompilerFallback['_askEvidence']['queryFamily'] ?? null, 'A known-family compiler fallback must retain its validated family key.');
+
 fwrite(STDOUT, "GeminiService family compiler fallback test passed\n");

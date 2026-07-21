@@ -70,6 +70,11 @@ class ExploratorySqlRepairService
             'failureCategory' => $failure->getSafeCategory(),
             'unmetRequirements' => array_values($unmetRequirements),
             'suggestions' => self::recoverySuggestions($failure->getSafeViolations()),
+            '_askEvidence' => [
+                'initialSql' => $initialSql,
+                'finalSql' => self::nullableSql($failure->getCandidateSql()),
+                'repairAttempts' => $repairAttempts,
+            ],
         ];
     }
 

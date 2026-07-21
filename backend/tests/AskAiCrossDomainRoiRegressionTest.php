@@ -367,7 +367,11 @@ roiRegressionAssertSame(
     $exhausted['suggestions'] ?? null,
     'Exhausted recovery should provide actionable suggestions.'
 );
-roiRegressionAssertNoSqlLeak($exhausted, $rejectedCandidates);
+$ordinaryExhausted = $exhausted;
+unset($ordinaryExhausted['_askEvidence']);
+roiRegressionAssertNoSqlLeak($ordinaryExhausted, $rejectedCandidates);
+roiRegressionAssertSame($rejectedCandidates[0], $exhausted['_askEvidence']['initialSql'] ?? null, 'Trusted exhausted evidence must retain the initial rejected candidate for structural persistence.');
+roiRegressionAssertSame($rejectedCandidates[2], $exhausted['_askEvidence']['finalSql'] ?? null, 'Trusted exhausted evidence must retain the last rejected candidate for structural persistence.');
 
 fwrite(STDOUT, "Ask AI cross-domain ROI regression test passed\n");
 }

@@ -487,6 +487,12 @@ class FolioQueryController extends Controller
             if (!is_array($repairResult)) {
                 $repairResult = [];
             }
+            $previousEvidence = is_array($previousResult['_askEvidence'] ?? null)
+                ? $previousResult['_askEvidence']
+                : [];
+            $repairEvidence = is_array($repairResult['_askEvidence'] ?? null)
+                ? $repairResult['_askEvidence']
+                : [];
             unset($previousResult['semanticValidation']);
             $result = array_replace($previousResult, $repairResult);
             if (!array_key_exists('sql', $repairResult)) {
@@ -501,6 +507,15 @@ class FolioQueryController extends Controller
             );
             $result['mode'] = 'exploratory';
             $result['route'] = 'exploratory';
+            if ($previousEvidence !== [] || $repairEvidence !== []) {
+                $result['_askEvidence'] = array_merge($previousEvidence, $repairEvidence, [
+                    'initialSql' => $previousEvidence['initialSql']
+                        ?? $repairEvidence['initialSql']
+                        ?? null,
+                    'finalSql' => isset($result['sql']) ? (string)$result['sql'] : ($repairEvidence['finalSql'] ?? null),
+                    'repairAttempts' => $result['repairAttempts'],
+                ]);
+            }
 
             if (!isset($result['sql'])) {
                 $failureCategory = (string)($result['validationSummary']['failureCategory']
@@ -626,6 +641,15 @@ class FolioQueryController extends Controller
             if (array_key_exists($field, $result)) {
                 $response[$field] = $result[$field];
             }
+        }
+
+        if (is_array($result['_askEvidence'] ?? null)) {
+            $response['_askEvidence'] = array_merge($result['_askEvidence'], [
+                'finalSql' => isset($result['sql'])
+                    ? (string)$result['sql']
+                    : ($result['_askEvidence']['finalSql'] ?? null),
+                'repairAttempts' => $repairAttempts,
+            ]);
         }
 
         if ($semanticExhaustion) {

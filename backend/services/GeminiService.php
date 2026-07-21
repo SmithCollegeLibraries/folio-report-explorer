@@ -2005,6 +2005,14 @@ GUIDANCE;
         return $result;
     }
 
+    private static function withKnownFamilyEvidence(array $result, string $familyKey): array
+    {
+        $familyKey = trim($familyKey);
+        return self::withAskEvidence($result, [
+            'queryFamily' => $familyKey === '' ? null : $familyKey,
+        ]);
+    }
+
     /**
      * Create a stable prompt fingerprint for telemetry without logging prompt text.
      */
@@ -3293,7 +3301,8 @@ PROMPT;
         $prompt,
         $campus,
         array $telemetryContext,
-        $familyResultBuilder = null
+        $familyResultBuilder = null,
+        $exploratoryFallbackFactory = null
     ): array {
         $recoveredIntent = self::recoverPromptScopedFamilySlotsWithProvenance(
             $intent,
@@ -3316,10 +3325,16 @@ PROMPT;
                 $slotValidation['errors'] ?? [],
                 (string)$prompt
             )) {
-                return self::generateExploratorySqlResponse(
-                    (string)$prompt,
-                    $campus,
-                    'inventory_listing_unscoped_missing_library'
+                $fallback = $exploratoryFallbackFactory === null
+                    ? self::generateExploratorySqlResponse(
+                        (string)$prompt,
+                        $campus,
+                        'inventory_listing_unscoped_missing_library'
+                    )
+                    : $exploratoryFallbackFactory();
+                return self::withKnownFamilyEvidence(
+                    $fallback,
+                    (string)($intent['familyKey'] ?? $queryFamily['familyKey'] ?? '')
                 );
             }
 
@@ -4754,7 +4769,8 @@ PROMPT;
         $campus,
         array $telemetryContext,
         $compiler = null,
-        $legacyFallbackFactory = null
+        $legacyFallbackFactory = null,
+        $exploratoryFallbackFactory = null
     ): array {
         if ($compiler === null) {
             $compiler = function (array $payload, string $reason): array {
@@ -4780,7 +4796,8 @@ PROMPT;
                     $telemetryContext,
                     $e,
                     (string)$prompt,
-                    $campus
+                    $campus,
+                    $exploratoryFallbackFactory
                 );
             }
 
@@ -4808,7 +4825,7 @@ PROMPT;
                 'attempts' => $telemetryContext['attempts'] ?? null,
                 'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
             ] + $telemetryContext);
-            return $fallback;
+            return self::withKnownFamilyEvidence($fallback, $familyKey);
         }
     }
 
@@ -4817,7 +4834,8 @@ PROMPT;
         array $telemetryContext,
         \Throwable $error,
         string $prompt = '',
-        $campus = null
+        $campus = null,
+        $exploratoryFallbackFactory = null
     ): array {
         $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
         $library = trim((string)($slots['library'] ?? ''));
@@ -4828,13 +4846,18 @@ PROMPT;
             )
             || self::valueLooksLikeItemStatus($library)
         ) {
-            $response = self::generateExploratorySqlResponse(
-                $prompt,
-                $campus,
-                'inventory_listing_unscoped_compiler_failed'
-            );
+            $response = $exploratoryFallbackFactory === null
+                ? self::generateExploratorySqlResponse(
+                    $prompt,
+                    $campus,
+                    'inventory_listing_unscoped_compiler_failed'
+                )
+                : $exploratoryFallbackFactory();
             $response['message'] = 'This looks like a campus-scoped inventory request, not a library or location request. I can still try to build and run the query, but the results may be incomplete or inaccurate. Review the SQL and results before using them.';
-            return $response;
+            return self::withKnownFamilyEvidence(
+                $response,
+                (string)($normalizedPayload['familyKey'] ?? '')
+            );
         }
 
         $routeReason = 'inventory_listing_compiler_failed';

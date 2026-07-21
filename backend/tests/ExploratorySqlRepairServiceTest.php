@@ -131,6 +131,9 @@ assertSameValue(
 assertFalseValue(isset($exhausted['result']), 'Exhaustion must not expose an unvalidated result.');
 assertFalseValue(isset($exhausted['candidateSql']), 'Exhaustion must not expose candidate SQL.');
 assertFalseValue(isset($exhausted['message']), 'Exhaustion must not expose an internal exception message.');
+assertSameValue('SELECT internal_candidate_1', $exhausted['_askEvidence']['initialSql'] ?? null, 'Exhausted trusted evidence must retain the initial rejected candidate.');
+assertSameValue('SELECT internal_candidate_3', $exhausted['_askEvidence']['finalSql'] ?? null, 'Exhausted trusted evidence must retain the last rejected candidate.');
+assertSameValue(2, $exhausted['_askEvidence']['repairAttempts'] ?? null, 'Exhausted trusted evidence must retain the bounded repair count.');
 
 $policyCalls = 0;
 try {
@@ -228,10 +231,14 @@ assertSameValue(
     $semanticOutcome['unmetRequirements'],
     'Recovery should contain stable keys and user-readable labels only.'
 );
+$ordinarySemanticOutcome = $semanticOutcome;
+unset($ordinarySemanticOutcome['_askEvidence']);
 assertFalseValue(
-    strpos(json_encode($semanticOutcome), 'private_candidate_') !== false,
-    'Recovery must not expose rejected SQL.'
+    strpos(json_encode($ordinarySemanticOutcome), 'private_candidate_') !== false,
+    'Recovery fields outside the trusted envelope must not expose rejected SQL.'
 );
+assertSameValue('SELECT private_candidate_1', $semanticOutcome['_askEvidence']['initialSql'] ?? null, 'Trusted semantic exhaustion evidence must retain the first candidate.');
+assertSameValue('SELECT private_candidate_3', $semanticOutcome['_askEvidence']['finalSql'] ?? null, 'Trusted semantic exhaustion evidence must retain the last candidate.');
 assertFalseValue(
     strpos(json_encode($semanticOutcome), 'raw semantic evidence') !== false,
     'Recovery must not expose internal evidence.'

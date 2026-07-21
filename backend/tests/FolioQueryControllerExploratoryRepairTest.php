@@ -190,6 +190,12 @@ namespace {
             'assumptions' => [['key' => 'purchase_date_basis', 'value' => 'payment_date']],
             'attemptedPlan' => 'Aggregate investment before joining circulation.',
             'suggestions' => ['Use a shorter reporting window.'],
+            '_askEvidence' => [
+                'initialSql' => 'SELECT original_column FROM inventory.instance__t',
+                'finalSql' => 'SELECT missing_column FROM inventory.instance__t',
+                'repairAttempts' => 2,
+                'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+            ],
         ],
         'Compare investment and circulation ROI',
         'Smith College',
@@ -206,6 +212,8 @@ namespace {
     repairAssertSame('exhausted', $exhausted['validationSummary']['status'] ?? null, 'Exhaustion should expose its validation status.');
     repairAssertSame('missing_column', $exhausted['validationSummary']['failureCategory'] ?? null, 'Ordinary database exhaustion should retain its existing safe database category.');
     repairAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion should report the actual repair count.');
+    repairAssertSame('SELECT original_column FROM inventory.instance__t', $exhausted['_askEvidence']['initialSql'] ?? null, 'Controller exhaustion must retain trusted initial candidate evidence until finalization.');
+    repairAssertSame('bundle-hash', $exhausted['_askEvidence']['referenceBundleMetadata']['hash'] ?? null, 'Controller exhaustion must retain trusted provenance until finalization.');
     repairAssertSame(
         'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
         $exhausted['message'] ?? null,
@@ -511,6 +519,11 @@ namespace {
             'key' => 'purchase_date_basis',
             'label' => 'Use the resolved purchase date basis.',
         ]],
+        '_askEvidence' => [
+            'initialSql' => 'SELECT purchase_count FROM purchase_data',
+            'finalSql' => 'SELECT spend FROM invoice.invoices__t',
+            'repairAttempts' => 2,
+        ],
     ], 'Build ROI', 12, []);
     repairAssertSame('semantic_conformance', $capturingReview->received['confidenceEvidence']['validatorStage'] ?? null, 'Persistence must receive the internal validator stage.');
     repairAssertSame('semantic_coverage_gap', $capturingReview->received['confidenceEvidence']['failureCategory'] ?? null, 'Persistence must receive the internal failure category.');
@@ -518,9 +531,16 @@ namespace {
     repairAssertSame('generation-1', $finalized['generationId'] ?? null, 'Persisted Ask outcomes must return their generation identifier.');
     repairAssertSame('conversation-1', $finalized['conversationId'] ?? null, 'Persisted Ask outcomes must return their conversation identifier.');
     repairAssertSame(true, $finalized['reviewRequired'] ?? null, 'Exhausted outcomes must be flagged for review.');
+    repairAssertSame(null, $capturingReview->received['generatedSql'] ?? null, 'Exhausted rejected SQL must never be persisted as executable generated SQL.');
+    repairAssertSame(true, is_array($capturingReview->received['initialStructure'] ?? null), 'Persistence must receive the exhausted initial candidate structure.');
+    repairAssertSame(true, is_array($capturingReview->received['finalStructure'] ?? null), 'Persistence must receive the exhausted last-candidate structure.');
+    repairAssertSame(true, $capturingReview->received['materialRepair'] ?? null, 'Persistence must classify a structurally changed exhausted repair.');
     repairAssertSame(false, isset($finalized['validationSummary']['validatorStage']), 'Ordinary responses must omit internal validator stages.');
     repairAssertSame(false, isset($finalized['validationSummary']['failureCategory']), 'Ordinary responses must omit internal failure categories.');
     repairAssertSame(false, isset($finalized['unmetRequirements']), 'Ordinary responses must omit internal requirement keys.');
+    repairAssertSame(false, isset($finalized['_askEvidence']), 'Ordinary exhausted responses must omit the trusted evidence envelope.');
+    repairAssertNotContains('purchase_count FROM purchase_data', json_encode($finalized), 'Ordinary exhausted responses must not contain the initial rejected SQL.');
+    repairAssertNotContains('spend FROM invoice.invoices__t', json_encode($finalized), 'Ordinary exhausted responses must not contain the last rejected SQL.');
 
     $capturingReview->failure = new RuntimeException('database unavailable');
     $safeSql = $finalize->invoke($finalizingController, [
@@ -550,6 +570,52 @@ namespace {
     repairAssertSame('trusted_exploratory_family', $capturingReview->received['queryFamily'] ?? null, 'Persistence must receive the trusted generation family.');
     repairAssertSame('trusted-model', $capturingReview->received['provenance']['modelName'] ?? null, 'Persistence must receive trusted generation provenance.');
     repairAssertSame(false, isset($safeSql['_askEvidence']), 'Ordinary responses must not expose trusted internal candidate or provenance fields.');
+
+    $provenancePreflightCalls = 0;
+    $provenanceRepair = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT broken FROM inventory.item__t',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'repairAttempts' => 0,
+            '_askEvidence' => [
+                'initialSql' => 'SELECT original FROM inventory.item__t',
+                'finalSql' => 'SELECT broken FROM inventory.item__t',
+                'repairAttempts' => 0,
+                'queryFamily' => 'inventory_library_location_listing',
+                'compilerVersion' => 'family_compiler_v1',
+                'modelName' => 'trusted-model',
+                'promptVersion' => 'trusted-prompt.v1',
+                'schemaMetadata' => ['version' => 'schema-v1'],
+                'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+            ],
+        ],
+        'Show available items',
+        'Smith College',
+        function () use (&$provenancePreflightCalls): array {
+            $provenancePreflightCalls++;
+            return $provenancePreflightCalls === 1
+                ? ['error' => 'column "broken" does not exist']
+                : ['rows' => 1];
+        },
+        function (): array {
+            return [
+                'sql' => 'SELECT id FROM inventory.item__t',
+                'repairAttempts' => 1,
+                '_askEvidence' => [
+                    'finalSql' => 'SELECT id FROM inventory.item__t',
+                    'repairAttempts' => 1,
+                ],
+            ];
+        }
+    );
+    repairAssertSame('inventory_library_location_listing', $provenanceRepair['_askEvidence']['queryFamily'] ?? null, 'Controller repair must preserve the older trusted family key.');
+    repairAssertSame('bundle-hash', $provenanceRepair['_askEvidence']['referenceBundleMetadata']['hash'] ?? null, 'Controller repair must preserve older trusted reference provenance.');
+    repairAssertSame('family_compiler_v1', $provenanceRepair['_askEvidence']['compilerVersion'] ?? null, 'Controller repair must preserve older trusted compiler provenance.');
+    repairAssertSame('SELECT original FROM inventory.item__t', $provenanceRepair['_askEvidence']['initialSql'] ?? null, 'Controller repair must preserve the genuine original candidate.');
+    repairAssertSame('SELECT id FROM inventory.item__t', $provenanceRepair['_askEvidence']['finalSql'] ?? null, 'Controller repair must update the genuine final candidate.');
+    repairAssertSame(1, $provenanceRepair['_askEvidence']['repairAttempts'] ?? null, 'Controller repair must update the actual repair count.');
 
     $freshSemanticPreflightCalls = 0;
     $staleSemanticRepairCalls = 0;

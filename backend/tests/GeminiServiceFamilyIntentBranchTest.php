@@ -136,6 +136,32 @@ assertSameValue('test-model', $canonicalEvidence['_askEvidence']['modelName'] ??
 assertSameValue('family_slot_prompt.v1', $canonicalEvidence['_askEvidence']['promptVersion'] ?? null, 'Canonical family results must retain prompt provenance.');
 assertSameValue('2026-07-21T00:00:00Z', $canonicalEvidence['_askEvidence']['schemaMetadata']['version'] ?? null, 'Canonical family results must retain schema provenance.');
 
+$routerFallback = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'requested_outputs' => ['title'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_library_location_listing'],
+    'Show available Smith College items',
+    'Smith College',
+    ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+    null,
+    function (): array {
+        return [
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'sql' => 'SELECT id FROM inventory.item__t',
+        ];
+    }
+);
+assertSameValue('exploratory', $routerFallback['mode'] ?? null, 'A known-family router fallback must remain exploratory.');
+assertSameValue('inventory_library_location_listing', $routerFallback['_askEvidence']['queryFamily'] ?? null, 'A known-family router fallback must retain its validated family key.');
+
 $receivedPayload = null;
 $result = $familyBranch->invoke(
     null,

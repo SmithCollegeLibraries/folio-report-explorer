@@ -148,6 +148,9 @@ final class AskGenerationEvidenceService
             ['limited', 'partial'],
             true
         );
+        $generatedSql = in_array($validationStatus, ['exhausted', 'rejected'], true)
+            ? null
+            : $finalSql;
 
         return [
             'originalQuestion' => (string)($requestContext['prompt'] ?? $requestContext['originalQuestion'] ?? ''),
@@ -171,8 +174,8 @@ final class AskGenerationEvidenceService
                     ?? null
             ),
             'validationStatus' => $validationStatus,
-            'generatedSql' => $finalSql,
-            'sqlHash' => $finalSql === null ? null : hash('sha256', $finalSql),
+            'generatedSql' => $generatedSql,
+            'sqlHash' => $generatedSql === null ? null : hash('sha256', $generatedSql),
             'assumptions' => $assumptions,
             'userNotice' => self::userNotice($result),
             'confidenceEvidence' => $confidenceEvidence,
