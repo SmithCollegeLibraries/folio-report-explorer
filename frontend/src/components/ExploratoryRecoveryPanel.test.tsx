@@ -34,7 +34,8 @@ describe('ExploratoryRecoveryPanel', () => {
 
     expect(screen.getByRole('heading', { name: 'The request is preserved' })).toBeInTheDocument();
     expect(screen.getByText('Aggregate paid invoice distributions and circulation before comparing ROI.')).toBeInTheDocument();
-    expect(screen.getByText('Unknown table')).toBeInTheDocument();
+    expect(screen.queryByText(/safe failure category/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/missing table/i)).not.toBeInTheDocument();
     expect(screen.getByText('Return on investment')).toBeInTheDocument();
     expect(screen.getByText('ROI is checkouts per dollar, with cost per checkout as a companion measure.')).toBeInTheDocument();
     expect(screen.queryByText(/Generated SQL/i)).not.toBeInTheDocument();
@@ -63,9 +64,9 @@ describe('ExploratoryRecoveryPanel', () => {
       <ExploratoryRecoveryPanel
         response={{
           ...response,
-          unmetRequirements: [
-            { key: 'purchase_date_basis', label: 'Confirm which purchase date defines the reporting window.' },
-            { key: 'spend_grain', label: 'Aggregate spending before joining item-level circulation.' },
+          recoveryItems: [
+            'The report uses the requested campus scope.',
+            'Aggregate spending before joining item-level circulation.',
           ],
           validationSummary: {
             status: 'exhausted',
@@ -80,10 +81,12 @@ describe('ExploratoryRecoveryPanel', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'What still needs to be resolved' })).toBeInTheDocument();
-    expect(screen.getByText('Confirm which purchase date defines the reporting window.')).toBeInTheDocument();
+    expect(screen.getByText('The report uses the requested campus scope.')).toBeInTheDocument();
     expect(screen.getByText('Aggregate spending before joining item-level circulation.')).toBeInTheDocument();
     expect(screen.queryByText(/safe failure category/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/semantic conformance failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/missing table/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/semantic conformance/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalledWith('Compare investment and circulation ROI');

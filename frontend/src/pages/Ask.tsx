@@ -1057,8 +1057,6 @@ export default function Ask() {
     const freeText = option ? '' : clarificationFreeText.trim();
     if (!option && !freeText) return;
     const allowExploratory = option?.resolvedFilter?.allowExploratory === true;
-    const refineExploratory = option?.resolvedFilter?.allowExploratory === false
-      && nlResult.needsExploratoryApproval;
 
     await saveClarificationResolutionBestEffort(saveClarificationResolution, {
       originalQuestion,
@@ -1078,12 +1076,6 @@ export default function Ask() {
         shouldExecute: true,
         allowExploratory: true,
       });
-      return;
-    }
-
-    if (refineExploratory) {
-      setNlResult(null);
-      setPrompt(originalQuestion);
       return;
     }
 
@@ -1583,43 +1575,27 @@ export default function Ask() {
 
       {nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
         <div className="mx-auto max-w-3xl p-4 xl:px-6">
-          <div className={`border rounded-lg p-4 ${
-            nlResult.needsExploratoryApproval
-              ? 'border-sky-200 bg-sky-50'
-              : 'border-amber-200 bg-amber-50'
-          }`}>
-            <div className={`text-sm font-semibold mb-1 ${
-              nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-            }`}>
-              {nlResult.needsExploratoryApproval ? 'One detail needed' : 'Clarification needed'}
+          <div className="border rounded-lg p-4 border-amber-200 bg-amber-50">
+            <div className="text-sm font-semibold mb-1 text-amber-900">
+              Clarification needed
             </div>
-            <div className={`text-sm mb-3 ${
-              nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-            }`}>
+            <div className="text-sm mb-3 text-amber-900">
               {nlResult.question || 'Which option did you mean?'}
             </div>
             {nlResult.message && (
-              <div className={`text-sm mb-3 ${
-                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-              }`}>
+              <div className="text-sm mb-3 text-amber-900">
                 {nlResult.message}
               </div>
             )}
             {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
-              <div className={`mb-3 rounded-md border bg-white px-3 py-2 ${
-                nlResult.needsExploratoryApproval ? 'border-sky-200' : 'border-amber-200'
-              }`}>
-                <div className={`text-xs font-semibold uppercase tracking-wide ${
-                  nlResult.needsExploratoryApproval ? 'text-sky-800' : 'text-amber-800'
-                }`}>
+              <div className="mb-3 rounded-md border bg-white px-3 py-2 border-amber-200">
+                <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
                   Resolver checks
                 </div>
                 <ul className="mt-1 space-y-1 text-xs text-gray-700">
                   {formatResolverTrace(nlResult.resolverTrace).map((line) => (
                     <li key={line} className="flex gap-2">
-                      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
-                        nlResult.needsExploratoryApproval ? 'bg-sky-500' : 'bg-amber-500'
-                      }`} />
+                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
                       <span>{line}</span>
                     </li>
                   ))}
@@ -1636,11 +1612,7 @@ export default function Ask() {
                 <button
                   key={option.id}
                   onClick={() => handleClarificationChoice(option)}
-                  className={`w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors ${
-                    nlResult.needsExploratoryApproval
-                      ? 'border-sky-200 hover:bg-sky-100'
-                      : 'border-amber-200 hover:bg-amber-100'
-                  }`}
+                  className="w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors border-amber-200 hover:bg-amber-100"
                 >
                   <span>{option.label}</span>
                   {option.recommended && (
@@ -2034,43 +2006,27 @@ export default function Ask() {
 
         {showRightPaneClarifications && nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
           <div className="max-w-4xl mx-auto p-6">
-            <div className={`border rounded-lg p-4 ${
-              nlResult.needsExploratoryApproval
-                ? 'border-sky-200 bg-sky-50'
-                : 'border-amber-200 bg-amber-50'
-            }`}>
-              <div className={`text-sm font-semibold mb-1 ${
-                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-              }`}>
-                {nlResult.needsExploratoryApproval ? 'One detail needed' : 'Clarification needed'}
+            <div className="border rounded-lg p-4 border-amber-200 bg-amber-50">
+              <div className="text-sm font-semibold mb-1 text-amber-900">
+                Clarification needed
               </div>
-              <div className={`text-sm mb-3 ${
-                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-              }`}>
+              <div className="text-sm mb-3 text-amber-900">
                 {nlResult.question || 'Which option did you mean?'}
               </div>
               {nlResult.message && (
-                <div className={`text-sm mb-3 ${
-                  nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-                }`}>
+                <div className="text-sm mb-3 text-amber-900">
                   {nlResult.message}
                 </div>
               )}
               {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
-                <div className={`mb-3 rounded-md border bg-white px-3 py-2 ${
-                  nlResult.needsExploratoryApproval ? 'border-sky-200' : 'border-amber-200'
-                }`}>
-                  <div className={`text-xs font-semibold uppercase tracking-wide ${
-                    nlResult.needsExploratoryApproval ? 'text-sky-800' : 'text-amber-800'
-                  }`}>
+                <div className="mb-3 rounded-md border bg-white px-3 py-2 border-amber-200">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
                     Resolver checks
                   </div>
                   <ul className="mt-1 space-y-1 text-xs text-gray-700">
                     {formatResolverTrace(nlResult.resolverTrace).map((line) => (
                       <li key={line} className="flex gap-2">
-                        <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
-                          nlResult.needsExploratoryApproval ? 'bg-sky-500' : 'bg-amber-500'
-                        }`} />
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
                         <span>{line}</span>
                       </li>
                     ))}
@@ -2087,11 +2043,7 @@ export default function Ask() {
                   <button
                     key={option.id}
                     onClick={() => handleClarificationChoice(option)}
-                    className={`w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors ${
-                      nlResult.needsExploratoryApproval
-                        ? 'border-sky-200 hover:bg-sky-100'
-                        : 'border-amber-200 hover:bg-amber-100'
-                    }`}
+                    className="w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors border-amber-200 hover:bg-amber-100"
                   >
                     <span>{option.label}</span>
                     {option.recommended && (

@@ -182,9 +182,9 @@ namespace {
     repairAssertSame('missing_column', $exhausted['validationSummary']['failureCategory'] ?? null, 'Ordinary database exhaustion should retain its existing safe database category.');
     repairAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion should report the actual repair count.');
     repairAssertSame(
-        'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
+        'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
         $exhausted['message'] ?? null,
-        'Ordinary database exhaustion should retain its existing generic recovery message.'
+        'Ordinary database exhaustion should use novice-facing recovery copy.'
     );
     repairAssertSame(false, isset($exhausted['unmetRequirements']), 'Ordinary database exhaustion should not acquire semantic requirement fields.');
     repairAssertSame('Compare investment and circulation ROI', $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should preserve the original question.');
@@ -242,9 +242,9 @@ namespace {
     repairAssertSame('semantic_conformance', $semanticExhausted['validationSummary']['validatorStage'] ?? null, 'Controller recovery should preserve the semantic validator stage.');
     repairAssertSame('assumption_mismatch', $semanticExhausted['validationSummary']['failureCategory'] ?? null, 'Controller recovery should preserve the safe semantic category.');
     repairAssertSame(
-        "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption.",
+        'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
         $semanticExhausted['message'] ?? null,
-        'Controller recovery should preserve the reassuring semantic exhaustion message.'
+        'Controller recovery should use novice-facing recovery copy.'
     );
     repairAssertSame(
         [['key' => 'purchase_date_basis', 'label' => 'Use the resolved purchase date basis.']],

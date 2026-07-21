@@ -118,7 +118,7 @@ namespace {
     assertSameValue(false, $softFailure['needsExploratoryApproval'] ?? false, 'Soft Ask failures should not require exploratory approval.');
     assertSameValue('ask_generation_recovery', $softFailure['routeReason'] ?? null, 'Soft Ask failures should expose a stable recovery route reason.');
     assertSameValue('AI-assisted query', $softFailure['exploratoryNotice']['title'] ?? null, 'Soft Ask recovery should return advisory notice metadata.');
-    assertContainsText('could not produce fully validated SQL', $softFailure['exploratoryNotice']['message'] ?? '', 'Soft Ask recovery should use staff-facing advisory copy.');
+    assertContainsText('could not build a report I could safely run', $softFailure['exploratoryNotice']['message'] ?? '', 'Soft Ask recovery should use novice-facing recovery copy.');
     assertSameValue('exploratory', $softFailure['mode'] ?? null, 'Soft Ask recovery should be labeled exploratory.');
     assertSameValue(null, $softFailure['errorType'] ?? null, 'Generation recovery should remain distinct from SQL repair exhaustion.');
 

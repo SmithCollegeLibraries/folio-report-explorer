@@ -353,7 +353,6 @@ export interface NlResponse {
   warnings?: string[];
   suggestions?: string[];
   needsClarification?: boolean;
-  needsExploratoryApproval?: boolean;
   mode?: 'canonical' | 'exploratory' | string;
   message?: string;
   repeatabilityWarning?: string;
@@ -364,7 +363,7 @@ export interface NlResponse {
   validationSummary?: ValidationSummary;
   semanticContractApplicable?: boolean;
   semanticValidation?: SemanticValidation;
-  unmetRequirements?: SemanticRequirementLabel[];
+  recoveryItems?: string[];
   recoveryContext?: RecoveryContext;
   attemptedPlan?: string;
   clarificationType?: string;

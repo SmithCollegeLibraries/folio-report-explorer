@@ -8,6 +8,7 @@ use app\exceptions\DatabaseQueryCancelledException;
 use app\exceptions\ExploratorySqlValidationException;
 
 require_once __DIR__ . '/ClarificationService.php';
+require_once __DIR__ . '/AskResponseContractService.php';
 require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
 require_once __DIR__ . '/ExploratoryRoiSqlCompilerService.php';
 require_once __DIR__ . '/HardenedPhysicalRoiSqlCompilerService.php';
@@ -154,7 +155,7 @@ class GeminiService
                 'modelClarificationFallbackReason' => $referenceResolution['modelClarificationFallbackReason'] ?? null,
                 'dataSource' => null,
             ]);
-            return $referenceResolution;
+            return AskResponseContractService::normalizeMode($referenceResolution);
         }
 
         $effectivePrompt = ReferenceResolverService::appendGuidanceToPrompt((string)$prompt, $referenceResolution);
@@ -174,7 +175,7 @@ class GeminiService
                 'clarificationKey' => $clarification['clarificationKey'] ?? null,
                 'dataSource' => null,
             ]);
-            return $clarification;
+            return AskResponseContractService::normalizeMode($clarification);
         }
 
         if ($allowExploratory) {
@@ -191,7 +192,7 @@ class GeminiService
                 ];
             }
 
-            return $primary;
+            return AskResponseContractService::normalizeMode($primary);
         }
 
         // Route on the raw user prompt, not the resolver-augmented prompt: the
@@ -211,7 +212,7 @@ class GeminiService
                 ];
             }
 
-            return $primary;
+            return AskResponseContractService::normalizeMode($primary);
         }
 
         $primaryMode = self::resolvePrimaryModeForPrompt((string)$prompt, $campus);
@@ -233,7 +234,7 @@ class GeminiService
         }
 
         if (!self::shouldRunShadowForUser($userId, $effectivePrompt)) {
-            return $primary;
+            return AskResponseContractService::normalizeMode($primary);
         }
 
         $shadowMode = $primaryMode === 'intent' ? 'legacy' : 'intent';
@@ -259,7 +260,7 @@ class GeminiService
             ], true);
         }
 
-        return $primary;
+        return AskResponseContractService::normalizeMode($primary);
     }
 
     private static function generateExploratorySqlResponse(string $prompt, $campus = null, string $reason = 'unsupported_query_family'): array
@@ -431,7 +432,6 @@ class GeminiService
             'route' => 'exploratory_recovery',
             'routeReason' => $reason,
             'needsClarification' => false,
-            'needsExploratoryApproval' => false,
             'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
             'assumptions' => $context['assumptions'] ?? [],
             'attemptedPlan' => $context['attemptedPlan'] ?? '',
@@ -444,9 +444,7 @@ class GeminiService
                 'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
                 'validatorStage' => $outcome['validatorStage'] ?? 'response_validation',
                 'failureCategory' => $outcome['failureCategory'] ?? 'validation_failure',
-                'message' => ($outcome['validatorStage'] ?? null) === 'semantic_conformance'
-                    ? "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption."
-                    : 'I could not produce SQL that passed validation within the automatic repair limit.',
+                'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
             ],
             'recoveryContext' => [
                 'originalQuestion' => (string)($context['originalQuestion'] ?? ''),
@@ -464,7 +462,6 @@ class GeminiService
         $primary['route'] = 'exploratory_legacy_freeform';
         $primary['routeReason'] = $reason;
         $primary['needsClarification'] = false;
-        $primary['needsExploratoryApproval'] = false;
         $primary['exploratoryNotice'] = self::buildExploratoryNotice($reason);
 
         return $primary;

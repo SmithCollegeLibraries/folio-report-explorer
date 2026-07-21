@@ -596,12 +596,9 @@ class FolioQueryController extends Controller
         $semanticExhaustion = $validatorStage === 'semantic_conformance';
         $response = [
             'needsClarification' => false,
-            'needsExploratoryApproval' => false,
             'mode' => 'exploratory',
             'errorType' => 'sql_repair_exhausted',
-            'message' => $semanticExhaustion
-                ? "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption."
-                : 'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
+            'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
             'route' => 'exploratory_recovery',
             'routeReason' => 'sql_repair_exhausted',
             'validationSummary' => [
@@ -1743,12 +1740,11 @@ class FolioQueryController extends Controller
 
         return [
             'needsClarification' => false,
-            'needsExploratoryApproval' => false,
             'mode' => 'exploratory',
-            'message' => 'I could not produce fully validated SQL for this request. Review the details below, then refine the request or try again.',
+            'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
             'exploratoryNotice' => [
                 'title' => 'AI-assisted query',
-                'message' => 'I could not produce fully validated SQL for this request. Review the details below, then refine the request or try again.',
+                'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
                 'detail' => 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
                 'reason' => $routeReason,
             ],
@@ -1791,7 +1787,6 @@ class FolioQueryController extends Controller
 
         return [
             'needsClarification' => false,
-            'needsExploratoryApproval' => false,
             'mode' => 'exploratory',
             'errorType' => 'postgres_connectivity',
             'message' => $message,

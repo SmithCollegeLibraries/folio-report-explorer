@@ -593,7 +593,7 @@ repairAssertSame(2, $semanticPreflightExhaustion['repairAttempts'] ?? null, 'Sem
 repairAssertSame(false, isset($semanticPreflightExhaustion['sql']), 'Semantic exhaustion after preflight must not expose rejected SQL.');
 repairAssertSame('semantic_conformance', $semanticPreflightExhaustion['validationSummary']['validatorStage'] ?? null, 'Recovery should identify semantic conformance as the exhausted stage.');
 repairAssertSame(true, count($semanticPreflightExhaustion['unmetRequirements'] ?? []) > 0, 'Recovery should return safe unmet semantic requirements.');
-repairAssertContains("I couldn't produce a report that matched every checked requirement", $semanticPreflightExhaustion['validationSummary']['message'] ?? '', 'Semantic exhaustion should use the checked-requirements recovery message.');
+repairAssertContains('I could not build a report I could safely run', $semanticPreflightExhaustion['validationSummary']['message'] ?? '', 'Semantic exhaustion should use novice-facing recovery copy.');
 repairAssertSame(false, strpos(json_encode($semanticPreflightExhaustion), semanticallyFlawedRoiSql()) !== false, 'Semantic recovery must not leak the rejected SQL candidate.');
 $semanticTelemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
 repairAssertSame(false, strpos($semanticTelemetry, semanticallyFlawedRoiSql()) !== false, 'Semantic telemetry must not expose rejected SQL.');

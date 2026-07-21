@@ -273,7 +273,6 @@ describe('Ask error formatting', () => {
   it('does not treat advisory exploratory results as blocking clarifications', () => {
     expect(AskPage.shouldShowBlockingClarification?.({
       needsClarification: false,
-      needsExploratoryApproval: false,
       mode: 'exploratory',
       exploratoryNotice: {
         title: 'AI-assisted query',
