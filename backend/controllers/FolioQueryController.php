@@ -437,10 +437,13 @@ class FolioQueryController extends Controller
 
             if ($this->isAskPostgresConnectivityFailure($error)) {
                 $this->logExploratoryTerminalOutcome($result, $prompt, 'connectivity_failure', 'database_connectivity');
-                return $this->buildAskPostgresConnectivityRecovery(
-                    $prompt,
-                    $campus,
-                    'ask_sql_preflight_recovery'
+                return $this->attachTrustedAskEvidence(
+                    $this->buildAskPostgresConnectivityRecovery(
+                        $prompt,
+                        $campus,
+                        'ask_sql_preflight_recovery'
+                    ),
+                    $result
                 );
             }
             if ($this->isAskPreflightCancellationFailure($error)) {
@@ -449,11 +452,14 @@ class FolioQueryController extends Controller
             }
             if ($this->isAskPreflightPolicyFailure($error)) {
                 $this->logExploratoryTerminalOutcome($result, $prompt, 'policy_blocked', 'policy_blocked');
-                return $this->buildAskContinuationFromFailure(
-                    new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.'),
-                    $prompt,
-                    $campus,
-                    'ask_sql_preflight_recovery'
+                return $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure(
+                        new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.'),
+                        $prompt,
+                        $campus,
+                        'ask_sql_preflight_recovery'
+                    ),
+                    $result
                 );
             }
 
@@ -1739,7 +1745,10 @@ class FolioQueryController extends Controller
             ]);
         } catch (\InvalidArgumentException $e) {
             return $this->finalizeAskResponse(
-                $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                    isset($result) && is_array($result) ? $result : []
+                ),
                 $prompt,
                 $userId,
                 ['initialSql' => $initialSql ?? null]
@@ -1747,7 +1756,10 @@ class FolioQueryController extends Controller
         } catch (\RuntimeException $e) {
             if ($e instanceof \app\exceptions\DatabaseQueryCancelledException) {
                 return $this->finalizeAskResponse(
-                    $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                    $this->attachTrustedAskEvidence(
+                        $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                        isset($result) && is_array($result) ? $result : []
+                    ),
                     $prompt,
                     $userId,
                     ['initialSql' => $initialSql ?? null]
@@ -1767,7 +1779,10 @@ class FolioQueryController extends Controller
                 ], $prompt, $userId, ['initialSql' => $initialSql ?? null]);
             }
             return $this->finalizeAskResponse(
-                $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                    isset($result) && is_array($result) ? $result : []
+                ),
                 $prompt,
                 $userId,
                 ['initialSql' => $initialSql ?? null]
@@ -1798,6 +1813,30 @@ class FolioQueryController extends Controller
         );
         unset($result['semanticValidation'], $result['_askEvidence']);
         return AskResponseContractService::toUserResponse($result);
+    }
+
+    private function attachTrustedAskEvidence(array $response, array $generatedResult): array
+    {
+        $evidence = is_array($generatedResult['_askEvidence'] ?? null)
+            ? $generatedResult['_askEvidence']
+            : [];
+        if ($evidence === []) {
+            return $response;
+        }
+
+        if (!isset($evidence['finalSql']) && isset($generatedResult['sql'])) {
+            $evidence['finalSql'] = (string)$generatedResult['sql'];
+        }
+        if (!isset($evidence['repairAttempts']) && array_key_exists('repairAttempts', $generatedResult)) {
+            $evidence['repairAttempts'] = $this->clampExploratoryRepairAttempts(
+                $generatedResult['repairAttempts']
+            );
+        }
+        $response['_askEvidence'] = array_merge(
+            $evidence,
+            is_array($response['_askEvidence'] ?? null) ? $response['_askEvidence'] : []
+        );
+        return $response;
     }
 
     protected function administratorReviewService()

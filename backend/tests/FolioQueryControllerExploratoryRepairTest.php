@@ -85,6 +85,7 @@ namespace {
         }
     }
 
+    require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
     require_once __DIR__ . '/../controllers/FolioQueryController.php';
 
     final class CapturingAdministratorReviewService
@@ -616,6 +617,87 @@ namespace {
     repairAssertSame('SELECT original FROM inventory.item__t', $provenanceRepair['_askEvidence']['initialSql'] ?? null, 'Controller repair must preserve the genuine original candidate.');
     repairAssertSame('SELECT id FROM inventory.item__t', $provenanceRepair['_askEvidence']['finalSql'] ?? null, 'Controller repair must update the genuine final candidate.');
     repairAssertSame(1, $provenanceRepair['_askEvidence']['repairAttempts'] ?? null, 'Controller repair must update the actual repair count.');
+
+    $postGenerationEvidence = [
+        'initialSql' => 'SELECT id FROM inventory.item__t',
+        'finalSql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+        'repairAttempts' => 1,
+        'queryFamily' => 'inventory_library_location_listing',
+        'compilerVersion' => 'family_compiler_v1',
+        'modelName' => 'trusted-model',
+        'promptVersion' => 'trusted-prompt.v1',
+        'schemaMetadata' => ['version' => 'schema-v1'],
+        'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+    ];
+
+    foreach (['connectivity', 'policy'] as $postGenerationOutcome) {
+        Yii::$app->response->statusCode = 200;
+        $recovery = $validateAndRepair->invoke(
+            $controller,
+            [
+                'sql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+                'mode' => 'exploratory',
+                'route' => 'exploratory_legacy_freeform',
+                'repairAttempts' => 1,
+                '_askEvidence' => $postGenerationEvidence,
+            ],
+            'Show available items',
+            'Smith College',
+            function () use ($postGenerationOutcome): array {
+                return $postGenerationOutcome === 'connectivity'
+                    ? ['error' => 'SQLSTATE[08006] [7] timeout expired']
+                    : ['error' => 'SQLSTATE[42501]: permission denied'];
+            }
+        );
+        $outcomeRecorder = new CapturingAdministratorReviewService();
+        $outcomeController = new TestableFolioQueryController('folio-query', null);
+        $outcomeController->reviewService = $outcomeRecorder;
+        $outcomeFinalize = new ReflectionMethod($outcomeController, 'finalizeAskResponse');
+        $finalizedOutcome = $outcomeFinalize->invoke(
+            $outcomeController,
+            $recovery,
+            'Show available items',
+            12,
+            []
+        );
+        repairAssertSame('bundle-hash', $outcomeRecorder->received['provenance']['referenceBundleMetadata']['hash'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must retain reference provenance.');
+        repairAssertSame('inventory_library_location_listing', $outcomeRecorder->received['queryFamily'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must retain family evidence.');
+        repairAssertSame(true, is_array($outcomeRecorder->received['finalStructure'] ?? null), ucfirst($postGenerationOutcome) . ' recovery persistence must retain final candidate structure.');
+        repairAssertSame(false, isset($finalizedOutcome['_askEvidence']), ucfirst($postGenerationOutcome) . ' recovery must strip the internal envelope after persistence.');
+        repairAssertSame(false, isset($finalizedOutcome['sql']), ucfirst($postGenerationOutcome) . ' recovery must not expose generated SQL.');
+        repairAssertSame($postGenerationOutcome === 'policy' ? 403 : 200, Yii::$app->response->statusCode, ucfirst($postGenerationOutcome) . ' recovery must preserve its response status.');
+    }
+
+    Yii::$app->response->statusCode = 200;
+    $continuation = new ReflectionMethod($controller, 'buildAskContinuationFromFailure');
+    $cancellationRecovery = $continuation->invoke(
+        $controller,
+        new \app\exceptions\DatabaseQueryCancelledException(),
+        'Show available items',
+        'Smith College'
+    );
+    $attachEvidence = new ReflectionMethod($controller, 'attachTrustedAskEvidence');
+    $cancellationRecovery = $attachEvidence->invoke($controller, $cancellationRecovery, [
+        'sql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+        '_askEvidence' => $postGenerationEvidence,
+    ]);
+    $cancellationRecorder = new CapturingAdministratorReviewService();
+    $cancellationController = new TestableFolioQueryController('folio-query', null);
+    $cancellationController->reviewService = $cancellationRecorder;
+    $cancellationFinalize = new ReflectionMethod($cancellationController, 'finalizeAskResponse');
+    $finalizedCancellation = $cancellationFinalize->invoke(
+        $cancellationController,
+        $cancellationRecovery,
+        'Show available items',
+        12,
+        []
+    );
+    repairAssertSame('trusted-model', $cancellationRecorder->received['provenance']['modelName'] ?? null, 'Cancellation recovery persistence must retain model provenance.');
+    repairAssertSame('family_compiler_v1', $cancellationRecorder->received['provenance']['compilerVersion'] ?? null, 'Cancellation recovery persistence must retain compiler provenance.');
+    repairAssertSame(true, is_array($cancellationRecorder->received['finalStructure'] ?? null), 'Cancellation recovery persistence must retain final candidate structure.');
+    repairAssertSame(false, isset($finalizedCancellation['_askEvidence']), 'Cancellation recovery must strip the internal envelope after persistence.');
+    repairAssertSame(false, isset($finalizedCancellation['sql']), 'Cancellation recovery must not expose generated SQL.');
+    repairAssertSame(503, Yii::$app->response->statusCode, 'Cancellation recovery must preserve its 503 response status.');
 
     $freshSemanticPreflightCalls = 0;
     $staleSemanticRepairCalls = 0;
