@@ -630,6 +630,45 @@ namespace {
         'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
     ];
 
+    Yii::$app->response->statusCode = 200;
+    $ordinaryDatabaseRecovery = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+            'mode' => 'canonical',
+            'route' => 'canonical',
+            'repairAttempts' => 1,
+            '_askEvidence' => $postGenerationEvidence,
+        ],
+        'Show available items',
+        'Smith College',
+        function (): array {
+            return ['error' => 'column "holdings_record_id" does not exist'];
+        }
+    );
+    $ordinaryRecoveryRecorder = new CapturingAdministratorReviewService();
+    $ordinaryRecoveryController = new TestableFolioQueryController('folio-query', null);
+    $ordinaryRecoveryController->reviewService = $ordinaryRecoveryRecorder;
+    $ordinaryRecoveryFinalize = new ReflectionMethod($ordinaryRecoveryController, 'finalizeAskResponse');
+    $finalizedOrdinaryRecovery = $ordinaryRecoveryFinalize->invoke(
+        $ordinaryRecoveryController,
+        $ordinaryDatabaseRecovery,
+        'Show available items',
+        12,
+        []
+    );
+    repairAssertSame('inventory_library_location_listing', $ordinaryRecoveryRecorder->received['queryFamily'] ?? null, 'Ordinary database recovery persistence must retain family evidence.');
+    repairAssertSame('trusted-model', $ordinaryRecoveryRecorder->received['provenance']['modelName'] ?? null, 'Ordinary database recovery persistence must retain model provenance.');
+    repairAssertSame('trusted-prompt.v1', $ordinaryRecoveryRecorder->received['provenance']['promptVersion'] ?? null, 'Ordinary database recovery persistence must retain prompt provenance.');
+    repairAssertSame('schema-v1', $ordinaryRecoveryRecorder->received['provenance']['schemaMetadata']['version'] ?? null, 'Ordinary database recovery persistence must retain schema provenance.');
+    repairAssertSame('bundle-hash', $ordinaryRecoveryRecorder->received['provenance']['referenceBundleMetadata']['hash'] ?? null, 'Ordinary database recovery persistence must retain reference provenance.');
+    repairAssertSame('family_compiler_v1', $ordinaryRecoveryRecorder->received['provenance']['compilerVersion'] ?? null, 'Ordinary database recovery persistence must retain compiler provenance.');
+    repairAssertSame(true, is_array($ordinaryRecoveryRecorder->received['finalStructure'] ?? null), 'Ordinary database recovery persistence must retain final candidate structure.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['_askEvidence']), 'Ordinary database recovery must strip the internal envelope after persistence.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['sql']), 'Ordinary database recovery must not expose generated SQL.');
+    repairAssertSame(200, Yii::$app->response->statusCode, 'Ordinary database recovery must preserve its HTTP 200 status.');
+    repairAssertSame('I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.', $finalizedOrdinaryRecovery['message'] ?? null, 'Ordinary database recovery must preserve its continuation copy.');
+
     foreach (['connectivity', 'policy'] as $postGenerationOutcome) {
         Yii::$app->response->statusCode = 200;
         $recovery = $validateAndRepair->invoke(

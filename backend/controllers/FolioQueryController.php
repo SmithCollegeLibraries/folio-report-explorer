@@ -464,11 +464,14 @@ class FolioQueryController extends Controller
             }
 
             if (!$this->isExploratoryRepairEligible($result)) {
-                return $this->buildAskContinuationFromFailure(
-                    new \RuntimeException('Generated query failed database validation.'),
-                    $prompt,
-                    $campus,
-                    'ask_sql_preflight_recovery'
+                return $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure(
+                        new \RuntimeException('Generated query failed database validation.'),
+                        $prompt,
+                        $campus,
+                        'ask_sql_preflight_recovery'
+                    ),
+                    $result
                 );
             }
 
