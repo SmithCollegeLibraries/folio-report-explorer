@@ -75,7 +75,7 @@ class ExploratorySqlAnalysisService
 
     public static function structuralSignature(string $sql): array
     {
-        $analysis = self::analyze($sql);
+        $analysis = self::normalizeCteIdentities(self::analyze($sql));
         $sourceAliases = self::signatureSourceAliases($analysis['sourceAliases'] ?? []);
         $outputAliases = self::canonicalOutputAliases($analysis['selectItems'] ?? [], $sourceAliases);
 
@@ -104,13 +104,85 @@ class ExploratorySqlAnalysisService
         return $values;
     }
 
+    private static function normalizeCteIdentities(array $analysis): array
+    {
+        $identities = [];
+        $position = 0;
+        foreach (array_keys($analysis['ctes'] ?? []) as $name) {
+            $position++;
+            $identities[$name] = 'cte@' . $position;
+        }
+        if ($identities === []) {
+            return $analysis;
+        }
+
+        $analysis['sourceAliases'] = self::replaceCteSources(
+            $analysis['sourceAliases'] ?? [],
+            $identities
+        );
+        $analysis['joins'] = self::replaceCteJoinSources($analysis['joins'] ?? [], $identities);
+
+        $normalizedCtes = [];
+        foreach ($analysis['ctes'] as $name => $cte) {
+            $cte['dependencies'] = array_map(static function (string $dependency) use ($identities): string {
+                return $identities[$dependency] ?? $dependency;
+            }, $cte['dependencies'] ?? []);
+            $cte['sourceAliases'] = self::replaceCteSources($cte['sourceAliases'] ?? [], $identities);
+            $cte['joins'] = self::replaceCteJoinSources($cte['joins'] ?? [], $identities);
+            $normalizedCtes[$identities[$name]] = $cte;
+        }
+        $analysis['ctes'] = $normalizedCtes;
+        return $analysis;
+    }
+
+    private static function replaceCteSources(array $sourceAliases, array $identities): array
+    {
+        foreach ($sourceAliases as &$binding) {
+            if (($binding['kind'] ?? '') === 'cte' && isset($identities[$binding['source'] ?? ''])) {
+                $binding['source'] = $identities[$binding['source']];
+            }
+        }
+        unset($binding);
+        return $sourceAliases;
+    }
+
+    private static function replaceCteJoinSources(array $joins, array $identities): array
+    {
+        foreach ($joins as &$join) {
+            if (($join['sourceKind'] ?? '') === 'cte' && isset($identities[$join['source'] ?? ''])) {
+                $join['source'] = $identities[$join['source']];
+            }
+        }
+        unset($join);
+        return $joins;
+    }
+
     private static function signatureTables(array $analysis): array
     {
-        $tables = $analysis['tables'] ?? [];
-        foreach ($analysis['ctes'] ?? [] as $cte) {
-            $tables = array_merge($tables, $cte['tables'] ?? []);
+        $tables = self::relationOccurrences(
+            $analysis['tables'] ?? [],
+            $analysis['sourceAliases'] ?? []
+        );
+        foreach ($analysis['ctes'] ?? [] as $identity => $cte) {
+            foreach (self::relationOccurrences(
+                $cte['tables'] ?? [],
+                $cte['sourceAliases'] ?? []
+            ) as $table) {
+                $tables[] = $identity . ':' . $table;
+            }
         }
         return self::sortedUnique($tables);
+    }
+
+    private static function relationOccurrences(array $tables, array $sourceAliases): array
+    {
+        $occurrences = [];
+        foreach (self::signatureSourceAliases($sourceAliases) as $binding) {
+            if (($binding['kind'] ?? '') === 'table') {
+                $occurrences[] = $binding['source'];
+            }
+        }
+        return $occurrences === [] ? $tables : $occurrences;
     }
 
     private static function signatureSourceAliases(array $sourceAliases): array

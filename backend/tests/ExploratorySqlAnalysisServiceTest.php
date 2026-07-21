@@ -509,6 +509,13 @@ analysisAssertSame(
     ExploratorySqlAnalysisService::materiallyDifferent($instanceCteSql, $loanCteSql),
     'A physical-table change inside a CTE must be material.'
 );
+$renamedInstanceCteSql = 'WITH renamed_rows AS (SELECT instance.id FROM inventory.instance__t instance) '
+    . 'SELECT renamed_rows.id FROM renamed_rows';
+analysisAssertSame(
+    false,
+    ExploratorySqlAnalysisService::materiallyDifferent($instanceCteSql, $renamedInstanceCteSql),
+    'A pure CTE rename with all references updated must remain equivalent.'
+);
 $activeCteSql = "WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance "
     . "WHERE instance.status = 'active') SELECT source_rows.id FROM source_rows";
 $inactiveCteSql = "WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance "
@@ -611,6 +618,32 @@ analysisAssertSame(
     true,
     ExploratorySqlAnalysisService::materiallyDifferent($selfJoinSql, $collapsedSelfJoinSql),
     'Repeated physical sources must retain distinct relation-instance identities.'
+);
+
+$singleUnreferencedSourceSql = 'SELECT * FROM inventory.instance__t a';
+$repeatedUnreferencedSourceSql = 'SELECT * FROM inventory.instance__t a, inventory.instance__t b';
+$renamedRepeatedUnreferencedSourceSql = 'SELECT * FROM inventory.instance__t first_instance, '
+    . 'inventory.instance__t second_instance';
+analysisAssertSame(
+    false,
+    ExploratorySqlAnalysisService::analyze($repeatedUnreferencedSourceSql)['ambiguous'],
+    'A repeated direct source without expression references must remain deterministic.'
+);
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent(
+        $singleUnreferencedSourceSql,
+        $repeatedUnreferencedSourceSql
+    ),
+    'An unreferenced repeated relation occurrence must be material.'
+);
+analysisAssertSame(
+    false,
+    ExploratorySqlAnalysisService::materiallyDifferent(
+        $repeatedUnreferencedSourceSql,
+        $renamedRepeatedUnreferencedSourceSql
+    ),
+    'Alias-only renames of unreferenced repeated sources must remain equivalent.'
 );
 
 fwrite(STDOUT, "ExploratorySqlAnalysisService test passed\n");
