@@ -66,6 +66,7 @@ final class AskGenerationEvidenceService
             ? $requestContext['semanticContract']
             : [];
         $validationStatus = self::validationStatus(
+            $internalEvidence,
             $result,
             $validationSummary,
             $semanticValidation,
@@ -206,13 +207,17 @@ final class AskGenerationEvidenceService
     }
 
     private static function validationStatus(
+        array $internalEvidence,
         array $result,
         array $validationSummary,
         array $semanticValidation,
         ?string $finalSql
     ): ?string {
         $status = self::nullableString(
-            $validationSummary['status'] ?? $result['validationStatus'] ?? null
+            $internalEvidence['validationStatus']
+                ?? $validationSummary['status']
+                ?? $result['validationStatus']
+                ?? null
         );
         if ($status !== null) {
             return $status;

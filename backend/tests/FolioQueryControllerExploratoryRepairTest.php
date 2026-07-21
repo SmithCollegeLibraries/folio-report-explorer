@@ -663,9 +663,19 @@ namespace {
     repairAssertSame('schema-v1', $ordinaryRecoveryRecorder->received['provenance']['schemaMetadata']['version'] ?? null, 'Ordinary database recovery persistence must retain schema provenance.');
     repairAssertSame('bundle-hash', $ordinaryRecoveryRecorder->received['provenance']['referenceBundleMetadata']['hash'] ?? null, 'Ordinary database recovery persistence must retain reference provenance.');
     repairAssertSame('family_compiler_v1', $ordinaryRecoveryRecorder->received['provenance']['compilerVersion'] ?? null, 'Ordinary database recovery persistence must retain compiler provenance.');
+    repairAssertSame('rejected', $ordinaryRecoveryRecorder->received['validationStatus'] ?? null, 'Ordinary database recovery persistence must record the failed candidate as rejected.');
+    repairAssertSame(true, $ordinaryRecoveryRecorder->received['reviewRequired'] ?? null, 'Ordinary database recovery must require administrator review.');
+    repairAssertSame(true, in_array('unable_to_validate', $ordinaryRecoveryRecorder->received['reviewReasons'] ?? [], true), 'Ordinary database recovery must include the unable-to-validate review reason.');
+    repairAssertSame(null, $ordinaryRecoveryRecorder->received['generatedSql'] ?? null, 'Ordinary database recovery must not persist rejected SQL as executable.');
+    repairAssertSame(null, $ordinaryRecoveryRecorder->received['sqlHash'] ?? null, 'Ordinary database recovery must not persist a rejected SQL hash.');
+    repairAssertSame(true, is_array($ordinaryRecoveryRecorder->received['initialStructure'] ?? null), 'Ordinary database recovery persistence must retain initial candidate structure.');
     repairAssertSame(true, is_array($ordinaryRecoveryRecorder->received['finalStructure'] ?? null), 'Ordinary database recovery persistence must retain final candidate structure.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['_askEvidence']), 'Ordinary database recovery must strip the internal envelope after persistence.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['sql']), 'Ordinary database recovery must not expose generated SQL.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['validationStatus']), 'Ordinary database recovery must not expose validator status.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['validationSummary']), 'Ordinary database recovery must not expose validator details.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['failureCategory']), 'Ordinary database recovery must not expose validator category.');
+    repairAssertSame(true, $finalizedOrdinaryRecovery['reviewRequired'] ?? null, 'Ordinary database recovery may expose only the designed review signal.');
     repairAssertSame(200, Yii::$app->response->statusCode, 'Ordinary database recovery must preserve its HTTP 200 status.');
     repairAssertSame('I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.', $finalizedOrdinaryRecovery['message'] ?? null, 'Ordinary database recovery must preserve its continuation copy.');
 

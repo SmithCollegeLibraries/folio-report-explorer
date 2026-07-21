@@ -22,6 +22,19 @@ evidenceAssertSame('canonical', $canonical['mode'], 'Canonical family mode must 
 evidenceAssertSame('deterministic', $canonical['executionMode'], 'Canonical families must persist deterministic execution mode.');
 evidenceAssertSame('validated', $canonical['validationStatus'], 'A surviving canonical SQL candidate must be validated.');
 
+$trustedRejected = AskGenerationEvidenceService::build([
+    'route' => 'exploratory_recovery',
+    'mode' => 'exploratory',
+    '_askEvidence' => [
+        'finalSql' => 'SELECT 1 AS total',
+        'validationStatus' => 'rejected',
+    ],
+], ['prompt' => 'Count titles']);
+evidenceAssertSame('rejected', $trustedRejected['validationStatus'], 'Trusted internal rejection must override final-candidate validation inference.');
+evidenceAssertSame(null, $trustedRejected['generatedSql'], 'A trusted rejected candidate must not persist as executable SQL.');
+evidenceAssertSame(null, $trustedRejected['sqlHash'], 'A trusted rejected candidate must not persist an executable SQL hash.');
+evidenceAssertSame(true, is_array($trustedRejected['finalStructure']), 'A trusted rejected candidate may retain structural evidence.');
+
 $ordinary = AskGenerationEvidenceService::build([
     'route' => 'exploratory_legacy_freeform',
     'routeReason' => 'unsupported_query_family',

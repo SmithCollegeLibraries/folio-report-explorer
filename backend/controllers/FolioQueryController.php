@@ -464,6 +464,10 @@ class FolioQueryController extends Controller
             }
 
             if (!$this->isExploratoryRepairEligible($result)) {
+                $result['_askEvidence'] = array_merge(
+                    is_array($result['_askEvidence'] ?? null) ? $result['_askEvidence'] : [],
+                    ['validationStatus' => 'rejected']
+                );
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskContinuationFromFailure(
                         new \RuntimeException('Generated query failed database validation.'),
