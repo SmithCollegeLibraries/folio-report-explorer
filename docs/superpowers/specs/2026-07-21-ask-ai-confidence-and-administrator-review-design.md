@@ -73,16 +73,18 @@ The obsolete `needsExploratoryApproval` response flag must be retired from backe
 
 ## Compatibility Vocabulary
 
-This design adds no fourth execution-status enum. Its user-facing outcomes are derived from existing pipeline fields plus a single administrator-review decision.
+This design does not add another query-job execution status. It retains existing route and validation vocabulary, introduces a persisted generation-level `execution_mode`, normalizes deterministic backend responses to emit `mode: canonical`, and adds one administrator-review decision.
 
-| User-facing outcome | Response `mode` | Persisted `executionMode` | Existing route | `validationSummary.status` | `reviewRequired` | Execute |
+| User-facing outcome | Required response `mode` | Persisted `execution_mode` in `ai_report_generations` | Existing route/HTTP outcome | `validationSummary.status` | `reviewRequired` | Execute |
 |---|---|---|---|---|---|---|
-| Verified deterministic | `canonical` | `deterministic` | `builder_intent` with `family_contract_supported:*` | `validated` | `false` | Yes |
-| AI-assisted | `exploratory` | `exploratory` | normally `exploratory_legacy_freeform` | `validated` | `false` | Yes |
-| AI-assisted, review flagged | `exploratory` | `exploratory` | normally `exploratory_legacy_freeform` | `validated` | `true` | Yes |
-| Unable to execute safely | existing applicable mode | matching persisted mode | existing recovery or blocked route | `exhausted` or `rejected` | `true` | No |
+| Verified deterministic | `canonical` — new backend normalization | `deterministic` — new persisted field | `builder_intent` with `family_contract_supported:*` | `validated` | `false` | Yes |
+| AI-assisted | `exploratory` — already emitted | `exploratory` — new persisted field | normally `exploratory_legacy_freeform` | `validated` | `false` | Yes |
+| AI-assisted, review flagged | `exploratory` — already emitted | `exploratory` — new persisted field | normally `exploratory_legacy_freeform` | `validated` | `true` | Yes |
+| Clarification required | absent/null | null | `clarification` with `needsClarification: true` | absent | `false` | No |
+| Policy blocked | absent/null | null | HTTP 403; early policy responses currently have no route | absent | `false` | No |
+| Unable to execute after generation/repair | applicable mode or null | `exploratory`, `deterministic`, or null according to the attempted path | existing recovery route | `exhausted` or `rejected` | `true` | No |
 
-`route` and `routeReason` continue to explain how processing occurred. `validationSummary.status` continues to describe whether the candidate passed execution validation. `reviewRequired` is a boolean decision, not a confidence enum and not an execution state. Review reasons are stable internal keys stored with the administrator review item.
+`route` and `routeReason` continue to explain how processing occurred when the response has entered routed generation. `validationSummary.status` continues to describe whether a generated candidate passed execution validation; it is absent when no candidate reached validation. The backend must begin emitting `mode: canonical` for successful deterministic query-family results because only `mode: exploratory` is emitted today. `execution_mode` is a greenfield column in `ai_report_generations`, aligned with but not dependent on the unimplemented 2026-07-14 semantic-layer design. `reviewRequired` is a new boolean decision, not a confidence enum and not an execution state. Review reasons are stable internal keys stored with the administrator review item.
 
 The current hardened physical ROI compiler remains an exploratory compiled fallback with compiler version `physical_roi_v2`; it is not reclassified as a canonical query family by this design. Therefore the verified deterministic tier initially applies only to the existing five query families. Finance, ROI, and other cross-domain analysis normally remain AI-assisted or AI-assisted with review until separately promoted through approved canonical artifacts.
 
@@ -287,7 +289,7 @@ This design introduces two MySQL-backed records rather than overloading `query_j
 
 `ai_report_generations` persists the trusted server-side outcome of each accepted Ask AI request, including clarification, blocked, recovery, and validated outcomes. Its schema includes:
 
-- UUID primary key and nullable linked `query_job_id`;
+- UUID primary key, stable `conversation_id`, nullable `parent_generation_id`, and nullable linked `query_job_id`;
 - nullable `user_id`, prompt fingerprint, original question, and follow-up context;
 - response mode, persisted execution mode, route, route reason, and validation status;
 - generated SQL and SQL hash when a candidate survived generation;
@@ -310,6 +312,10 @@ This design introduces two MySQL-backed records rather than overloading `query_j
 Query execution status remains exclusively in `query_jobs.status`; `cautioned` and `superseded` are review/advisory states and never become query-job execution statuses.
 
 The `/api/nl` boundary writes the generation record and, when required, its review record through `AdministratorReviewService`. The response includes an opaque generation identifier. When the frontend later submits the query for execution, it passes that identifier; the execution controller verifies ownership and SQL hash, links the resulting query job, and copies trusted provenance into `query_jobs.metadata`. Provenance is never reconstructed from client-supplied fields.
+
+If an owned generation identifier is valid but the submitted SQL hash differs, the controller treats the request as an intentional user-edited derivative rather than falsely attaching the original provenance. It runs the normal safety, policy, and preflight checks, creates a child generation with route reason `user_edited_sql`, sets review reason `user_modified_sql`, and links the query job to that child. An unknown or unowned generation identifier is rejected for an NL-sourced execution and cannot be used to claim another generation's provenance.
+
+Conversation linkage does not rely on prompt fingerprint similarity. The first Ask AI request receives a server-generated `conversation_id`. A follow-up or assumption correction creates a new generation with the same `conversation_id` and `parent_generation_id` set to the generation it refines. A fresh rerun may share the conversation id while referencing the immediately preceding generation as its parent. Prompt fingerprints remain search and telemetry aids, not relationship keys.
 
 The local database writes are best effort and wrapped so review persistence cannot turn a safe report into a user-visible failure. A persistence failure emits protected operational telemetry. “Asynchronous review” means administrator work is decoupled from report approval and execution; this design does not require a separate worker merely to insert a review row. Administrator claim/update operations use the repository's existing atomic conditional-update pattern so two administrators cannot claim the same pending item.
 
@@ -368,7 +374,7 @@ No review disposition automatically changes prompts, defaults, contracts, traini
 
 ### Retention and deletion
 
-- Add configurable `AI_REPORT_REVIEW_RETENTION_DAYS`, defaulting to 90 days.
+- Add the snake-case runtime setting `ai_report_review_retention_days`, defaulting to 90 days and exposed through the existing settings/params configuration pattern.
 - Deleting a query-history job also deletes its linked generation and review records through the existing history-deletion service, including single and batch deletion paths.
 - Unlinked generation failures and their reviews are deleted 90 days after creation by the same retention policy.
 - Resolved or dismissed reviews are deleted 90 days after resolution; aggregate metrics retain no prompt or SQL content.
@@ -411,13 +417,16 @@ No review disposition automatically changes prompts, defaults, contracts, traini
 13. Administrator review does not silently mutate historical results.
 14. Review persistence unavailability does not block safe report execution.
 15. Ask AI does not redirect nontechnical users into Builder or Schema Explorer as a required recovery step.
-16. Existing `mode`, `executionMode`, `route`, `routeReason`, and `validationSummary.status` retain their defined meanings; user outcomes are derived through the compatibility mapping rather than parallel enums.
+16. Existing `route`, `routeReason`, exploratory `mode`, and `validationSummary.status` retain their defined meanings; canonical response mode and persisted `execution_mode` are introduced exactly as shown in the compatibility mapping rather than being treated as existing fields.
 17. The hardened physical ROI compiler remains exploratory and cannot be presented as a canonical verified family.
 18. Model self-ratings do not influence confidence classification.
 19. A materially changed repair is detected from structural signatures rather than attempt count or raw SQL inequality.
 20. Review and generation provenance is persisted server-side and linked to query jobs without trusting client-supplied provenance.
 21. `needsExploratoryApproval` is absent from production responses, frontend types, rendering branches, and active tests.
 22. Existing clarification, user-feedback, and reference-review records keep their current responsibilities and do not become disconnected duplicate review queues.
+23. Clarification and policy-blocked outcomes map explicitly without fabricated validation statuses or execution modes.
+24. Edited SQL cannot inherit mismatched generation provenance; it receives a linked derivative generation and administrator review.
+25. Follow-ups, corrections, and reruns use server-issued conversation and parent-generation identifiers rather than prompt similarity as their relationship key.
 
 ## Testing Strategy
 
@@ -475,6 +484,9 @@ Compatibility and integration tests must also prove:
 - repaired candidates with changed relations, joins, scope, grain, measures, outputs, or ordering are materially changed;
 - generation and review records persist the required provenance, including explicit nulls for unavailable artifacts;
 - the opaque generation identifier links only an owned matching-SQL execution job;
+- an owned SQL-hash mismatch creates a validated `user_edited_sql` child generation and review rather than inheriting the original provenance;
+- an unknown or unowned generation identifier cannot be used for an NL-sourced execution;
+- follow-ups, assumption corrections, and reruns retain `conversation_id` and the correct `parent_generation_id`;
 - administrator claim is atomic and review endpoints enforce administrator authorization;
 - caution and supersession leave `query_jobs.status` unchanged;
 - review persistence failure does not block a safe result;
