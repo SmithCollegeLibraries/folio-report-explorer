@@ -524,6 +524,18 @@ export function buildQueryReuseResolvedContext(selectedCampus: string): Record<s
   return { campus };
 }
 
+export function buildGeneratedQuerySubmitOptions(
+  result: Pick<NlResponse, 'generationId' | 'sql'>,
+  outputMode: 'table' | 'file',
+  resolvedContext: Record<string, string>,
+) {
+  return {
+    outputMode,
+    resolvedContext,
+    ...(result.generationId ? { generationId: result.generationId } : {}),
+  };
+}
+
 export function formatQueryReuseMatchReason(reason: string): string {
   const labels: Record<string, string> = {
     completed_successfully: 'Previous run completed successfully',
@@ -716,10 +728,11 @@ export default function Ask() {
       sql: result.sql,
       dataSource: result.dataSource || 'folio',
       nlPrompt: questionText,
-      options: {
-        outputMode: outputPref === 'full' ? 'file' : 'table',
-        resolvedContext: buildQueryReuseResolvedContext(selectedCampus),
-      },
+      options: buildGeneratedQuerySubmitOptions(
+        result,
+        outputPref === 'full' ? 'file' : 'table',
+        buildQueryReuseResolvedContext(selectedCampus),
+      ),
     });
   };
 
@@ -745,6 +758,7 @@ export default function Ask() {
           score?: number;
         };
         resolvedContext?: Record<string, string>;
+        generationId?: string;
       };
     }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
     onSuccess: (data) => {
@@ -2337,7 +2351,16 @@ export default function Ask() {
                         )}
                         {!isRunning ? (
                           <button
-                            onClick={() => nlResult.sql && execMut.mutate({ sql: nlResult.sql, dataSource: nlResult.dataSource || 'folio' })}
+                            onClick={() => nlResult.sql && execMut.mutate({
+                              sql: nlResult.sql,
+                              dataSource: nlResult.dataSource || 'folio',
+                              nlPrompt: history[0]?.prompt || prompt,
+                              options: buildGeneratedQuerySubmitOptions(
+                                nlResult,
+                                outputPref === 'full' ? 'file' : 'table',
+                                buildQueryReuseResolvedContext(selectedCampus),
+                              ),
+                            })}
                             disabled={execMut.isPending || !nlResult.sql}
                             className="flex items-center gap-1 bg-green-600 text-white text-xs px-3 py-1 rounded hover:bg-green-700 disabled:opacity-50"
                           >

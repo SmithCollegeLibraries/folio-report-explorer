@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildCurrentAskFollowUpContext, buildHistoryFollowUpContext, buildQueryFeedbackInput } from './Ask';
+import {
+  buildCurrentAskFollowUpContext,
+  buildGeneratedQuerySubmitOptions,
+  buildHistoryFollowUpContext,
+  buildQueryFeedbackInput,
+} from './Ask';
 import type { NlResponse } from '../types';
 
 describe('Ask follow-up context helpers', () => {
@@ -55,6 +60,18 @@ describe('Ask follow-up context helpers', () => {
       dataSource: 'folio',
       resultAccuracy: 'inaccurate',
       feedbackNote: 'Missing fund filter',
+    });
+  });
+
+  it('keeps the server generation ID on generated query submissions and reruns', () => {
+    expect(buildGeneratedQuerySubmitOptions(
+      { sql: 'SELECT 1', generationId: 'generation-123' },
+      'table',
+      { campus: 'Smith College' },
+    )).toEqual({
+      outputMode: 'table',
+      resolvedContext: { campus: 'Smith College' },
+      generationId: 'generation-123',
     });
   });
 });

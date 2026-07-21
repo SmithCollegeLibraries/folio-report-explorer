@@ -85,6 +85,74 @@ class AdministratorReviewService
         });
     }
 
+    /**
+     * Resolve an owned Ask generation for execution, creating a reviewed child
+     * when the submitted SQL no longer matches the server-stored SQL hash.
+     *
+     * @return array{generation:AiReportGeneration,edited:bool}
+     */
+    public function resolveExecutionGeneration(string $generationId, int $userId, string $normalizedSql): array
+    {
+        $generation = AiReportGeneration::findOne(['id' => $generationId]);
+        if ($generation === null || $generation->user_id === null || (int)$generation->user_id !== $userId) {
+            throw new DomainException('generation_not_owned');
+        }
+
+        $storedHash = (string)$generation->sql_hash;
+        $submittedHash = hash('sha256', $normalizedSql);
+        if ($storedHash !== '' && hash_equals($storedHash, $submittedHash)) {
+            return ['generation' => $generation, 'edited' => false];
+        }
+
+        return [
+            'generation' => $this->createEditedChild($generation, $normalizedSql),
+            'edited' => true,
+        ];
+    }
+
+    /**
+     * Link a saved query job and copy only server-trusted Ask provenance into
+     * its metadata.
+     */
+    public function linkExecutionGeneration(AiReportGeneration $generation, string $queryJobId): void
+    {
+        $this->db->transaction(function () use ($generation, $queryJobId): void {
+            $metadataJson = $this->db->createCommand(
+                'SELECT metadata FROM query_jobs WHERE id = :id',
+                [':id' => $queryJobId]
+            )->queryScalar();
+            $metadata = is_string($metadataJson) ? json_decode($metadataJson, true) : [];
+            if (!is_array($metadata)) {
+                $metadata = [];
+            }
+
+            $metadata['askAiProvenance'] = [
+                'generationId' => (string)$generation->id,
+                'conversationId' => (string)$generation->conversation_id,
+                'parentGenerationId' => $generation->parent_generation_id === null
+                    ? null
+                    : (string)$generation->parent_generation_id,
+                'route' => $generation->route,
+                'routeReason' => $generation->route_reason,
+                'executionMode' => $generation->execution_mode,
+                'validationStatus' => $generation->validation_status,
+                'reviewRequired' => (bool)$generation->review_required,
+                'reviewReasons' => $this->decodeJsonList($generation->review_reasons_json),
+                'provenance' => $this->decodeJsonObject($generation->provenance_json),
+            ];
+
+            $now = gmdate('Y-m-d H:i:s');
+            $this->db->createCommand()->update('query_jobs', [
+                'metadata' => $this->encodeJson($metadata),
+            ], ['id' => $queryJobId])->execute();
+            $this->db->createCommand()->update('ai_report_generations', [
+                'query_job_id' => $queryJobId,
+                'linked_at' => $now,
+                'updated_at' => $now,
+            ], ['id' => (string)$generation->id])->execute();
+        });
+    }
+
     public function claim(string $reviewId, int $administratorId): array
     {
         $now = gmdate('Y-m-d H:i:s');
@@ -226,6 +294,38 @@ class AdministratorReviewService
         return $parent;
     }
 
+    private function createEditedChild(AiReportGeneration $parent, string $normalizedSql): AiReportGeneration
+    {
+        $record = $this->recordGeneration([
+            'userId' => (int)$parent->user_id,
+            'parentGenerationId' => (string)$parent->id,
+            'promptFingerprint' => (string)$parent->prompt_fingerprint,
+            'originalQuestion' => (string)$parent->original_question,
+            'followUpContext' => $this->decodeNullableJson($parent->follow_up_context),
+            'responseMode' => $parent->response_mode,
+            'executionMode' => $parent->execution_mode,
+            'route' => $parent->route,
+            'routeReason' => 'user_edited_sql',
+            'validationStatus' => 'validated',
+            'generatedSql' => $normalizedSql,
+            'sqlHash' => hash('sha256', $normalizedSql),
+            'assumptions' => $this->decodeNullableJson($parent->assumptions_json),
+            'userNotice' => $this->decodeNullableJson($parent->user_notice_json),
+            'confidenceEvidence' => $this->decodeJsonObject($parent->confidence_evidence_json),
+            'initialStructure' => $this->decodeNullableJson($parent->initial_structure_json),
+            'finalStructure' => $this->decodeNullableJson($parent->final_structure_json),
+            'provenance' => $this->decodeJsonObject($parent->provenance_json),
+            'reviewRequired' => true,
+            'reviewReasons' => ['user_modified_sql'],
+        ]);
+
+        $child = AiReportGeneration::findOne(['id' => $record['generationId']]);
+        if ($child === null) {
+            throw new RuntimeException('edited_generation_not_found');
+        }
+        return $child;
+    }
+
     /**
      * Return an existing row when a retry races with another review insert.
      */
@@ -332,6 +432,27 @@ class AdministratorReviewService
             throw new InvalidArgumentException('invalid_generation_json: ' . json_last_error_msg());
         }
         return $encoded;
+    }
+
+    private function decodeNullableJson($value)
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        $decoded = json_decode((string)$value, true);
+        return json_last_error() === JSON_ERROR_NONE ? $decoded : null;
+    }
+
+    private function decodeJsonObject($value): array
+    {
+        $decoded = $this->decodeNullableJson($value);
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function decodeJsonList($value): array
+    {
+        $decoded = $this->decodeNullableJson($value);
+        return is_array($decoded) ? array_values($decoded) : [];
     }
 
     private function stableJsonValue($value)

@@ -346,6 +346,10 @@ export interface SemanticValidation {
 
 export interface NlResponse {
   errorType?: string;
+  generationId?: string;
+  conversationId?: string;
+  reviewRequired?: boolean;
+  reviewNotice?: { title: string; message: string };
   sql?: string;
   explanation?: string;
   reportDisclosures?: string[];

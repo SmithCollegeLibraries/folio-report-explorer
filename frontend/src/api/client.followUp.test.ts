@@ -199,6 +199,24 @@ describe('API client follow-up context', () => {
     });
   });
 
+  it('passes the opaque generation ID when submitting generated SQL', async () => {
+    const { submitQuery } = await import('./client');
+    post.mockResolvedValueOnce({ data: { jobId: 'new-job', status: 'pending' } });
+
+    await submitQuery('SELECT 1', {}, 'nl', 'Show one', 'folio', {
+      generationId: 'generation-123',
+    });
+
+    expect(post).toHaveBeenCalledWith('/query/submit', {
+      sql: 'SELECT 1',
+      params: {},
+      source: 'nl',
+      name: 'Show one',
+      dataSource: 'folio',
+      generationId: 'generation-123',
+    });
+  });
+
   it('records query reuse review decisions', async () => {
     const { recordQueryReuseDecision } = await import('./client');
     post.mockResolvedValueOnce({ data: { ok: true } });

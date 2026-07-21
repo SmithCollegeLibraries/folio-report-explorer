@@ -384,6 +384,7 @@ export async function submitQuery(
       score?: number;
     };
     resolvedContext?: Record<string, string>;
+    generationId?: string;
   },
 ): Promise<JobSubmitResponse> {
   const { data } = await api.post('/query/submit', {
@@ -395,6 +396,7 @@ export async function submitQuery(
     ...(options?.outputMode ? { outputMode: options.outputMode } : {}),
     ...(options?.queryReuse ? { queryReuse: options.queryReuse } : {}),
     ...(options?.resolvedContext ? { resolvedContext: options.resolvedContext } : {}),
+    ...(options?.generationId ? { generationId: options.generationId } : {}),
     ...(name ? { name } : {}),
   });
   return data;

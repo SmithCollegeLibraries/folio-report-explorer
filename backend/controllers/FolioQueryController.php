@@ -1203,6 +1203,7 @@ class FolioQueryController extends Controller
     public function actionQuerySubmit()
     {
         $body = Yii::$app->request->getBodyParams();
+        $executionGeneration = null;
 
         $sql = $body['sql'] ?? null;
         $params = $body['params'] ?? [];
@@ -1272,6 +1273,25 @@ class FolioQueryController extends Controller
             }
         }
 
+        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
+        if ((string)$source === 'nl' && $generationId !== '') {
+            $userId = $this->getCurrentUserId();
+            if ($userId === null) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'This generated query is not available for execution.'];
+            }
+            try {
+                $executionGeneration = $this->administratorReviewService()->resolveExecutionGeneration(
+                    $generationId,
+                    $userId,
+                    $sql
+                );
+            } catch (\DomainException $exception) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'This generated query is not available for execution.'];
+            }
+        }
+
         // Enforce LIMIT for table mode; export mode gets its own cap in export worker.
         if ($outputMode !== 'file') {
             $maxRows = (int) Yii::$app->params['maxQueryRows'];
@@ -1306,6 +1326,13 @@ class FolioQueryController extends Controller
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
             return ['error' => 'Failed to create job', 'details' => $job->errors];
+        }
+
+        if ($executionGeneration !== null) {
+            $this->administratorReviewService()->linkExecutionGeneration(
+                $executionGeneration['generation'],
+                (string)$job->id
+            );
         }
 
         Yii::$app->response->statusCode = 202;

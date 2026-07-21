@@ -1,0 +1,218 @@
+<?php
+
+defined('YII_ENV') or define('YII_ENV', 'test');
+defined('YII_DEBUG') or define('YII_DEBUG', true);
+error_reporting(E_ALL & ~E_DEPRECATED & ~E_USER_DEPRECATED);
+
+require __DIR__ . '/../vendor/autoload.php';
+require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
+
+use app\controllers\FolioQueryController;
+use app\services\AdministratorReviewService;
+use yii\web\Application;
+use yii\web\IdentityInterface;
+
+final class GenerationLinkIdentity implements IdentityInterface
+{
+    private $id;
+
+    public function __construct($id) { $this->id = (int)$id; }
+    public static function findIdentity($id) { return new self($id); }
+    public static function findIdentityByAccessToken($token, $type = null) { return null; }
+    public function getId() { return $this->id; }
+    public function getAuthKey() { return null; }
+    public function validateAuthKey($authKey) { return false; }
+}
+
+new Application([
+    'id' => 'folio-query-generation-link-test',
+    'basePath' => dirname(__DIR__),
+    'components' => [
+        'db' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
+        'request' => ['cookieValidationKey' => 'generation-link-test'],
+        'user' => ['identityClass' => GenerationLinkIdentity::class, 'enableSession' => false],
+    ],
+    'params' => ['maxQueryRows' => 100],
+]);
+Yii::$app->errorHandler->unregister();
+Yii::$app->user->setIdentity(new GenerationLinkIdentity(7));
+
+$db = Yii::$app->db;
+$db->createCommand(<<<'SQL'
+CREATE TABLE query_jobs (
+    id VARCHAR(36) PRIMARY KEY,
+    sql_text TEXT NOT NULL,
+    sql_hash VARCHAR(64),
+    params TEXT,
+    source VARCHAR(20),
+    data_source VARCHAR(20),
+    name TEXT,
+    user_id INTEGER,
+    status VARCHAR(20),
+    progress_message VARCHAR(255),
+    output_mode VARCHAR(20),
+    export_file_path VARCHAR(500),
+    estimated_rows INTEGER,
+    estimated_cost DECIMAL(20, 4),
+    pg_backend_pid INTEGER,
+    metadata TEXT,
+    result_columns TEXT,
+    result_rows TEXT,
+    row_count INTEGER,
+    execution_time_ms INTEGER,
+    error_message TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    started_at DATETIME,
+    completed_at DATETIME
+)
+SQL
+)->execute();
+$db->createCommand(<<<'SQL'
+CREATE TABLE ai_report_generations (
+    id VARCHAR(36) PRIMARY KEY,
+    conversation_id VARCHAR(36) NOT NULL,
+    parent_generation_id VARCHAR(36),
+    query_job_id VARCHAR(36),
+    user_id INTEGER,
+    prompt_fingerprint VARCHAR(16) NOT NULL,
+    original_question TEXT NOT NULL,
+    follow_up_context TEXT,
+    response_mode VARCHAR(32),
+    execution_mode VARCHAR(32),
+    route VARCHAR(128),
+    route_reason VARCHAR(255),
+    validation_status VARCHAR(32),
+    generated_sql TEXT,
+    sql_hash VARCHAR(64),
+    assumptions_json TEXT,
+    user_notice_json TEXT,
+    confidence_evidence_json TEXT NOT NULL,
+    initial_structure_json TEXT,
+    final_structure_json TEXT,
+    provenance_json TEXT NOT NULL,
+    review_required INTEGER NOT NULL DEFAULT 0,
+    review_reasons_json TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    linked_at DATETIME,
+    updated_at DATETIME NOT NULL
+)
+SQL
+)->execute();
+$db->createCommand(<<<'SQL'
+CREATE TABLE ai_report_reviews (
+    id VARCHAR(36) PRIMARY KEY,
+    generation_id VARCHAR(36) NOT NULL UNIQUE,
+    status VARCHAR(20) NOT NULL,
+    disposition VARCHAR(40),
+    advisory_state VARCHAR(20) NOT NULL,
+    superseded_by_job_id VARCHAR(36),
+    administrator_notes TEXT,
+    reviewed_by INTEGER,
+    claimed_at DATETIME,
+    resolved_at DATETIME,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL
+)
+SQL
+)->execute();
+
+function generationLinkAssert($condition, $message)
+{
+    if (!$condition) {
+        fwrite(STDERR, $message . "\n");
+        exit(1);
+    }
+}
+
+function seedGeneration(AdministratorReviewService $service, $userId, $sql, array $overrides = [])
+{
+    return $service->recordGeneration(array_replace([
+        'userId' => $userId,
+        'promptFingerprint' => '0123456789abcdef',
+        'originalQuestion' => 'Show the report',
+        'mode' => 'exploratory',
+        'executionMode' => 'exploratory',
+        'route' => 'gemini',
+        'routeReason' => 'long_tail',
+        'validationStatus' => 'validated',
+        'generatedSql' => $sql,
+        'sqlHash' => hash('sha256', $sql),
+        'confidenceEvidence' => ['classification' => 'reviewable'],
+        'provenance' => ['model' => 'gemini-2.5-pro', 'schemaArtifact' => 'schema-v4'],
+        'reviewRequired' => false,
+        'reviewReasons' => [],
+    ], $overrides));
+}
+
+function submitGenerationLinkedQuery(array $body)
+{
+    Yii::$app->request->setBodyParams($body);
+    Yii::$app->response->statusCode = 200;
+    return (new FolioQueryController('folio-query', Yii::$app))->actionQuerySubmit();
+}
+
+$service = new AdministratorReviewService($db);
+$exactSql = 'SELECT 1 AS exact_value';
+$exact = seedGeneration($service, 7, $exactSql);
+$exactResult = submitGenerationLinkedQuery([
+    'sql' => $exactSql,
+    'source' => 'nl',
+    'dataSource' => 'local',
+    'generationId' => $exact['generationId'],
+    'provenance' => ['model' => 'client-forged'],
+]);
+generationLinkAssert(Yii::$app->response->statusCode === 202, 'An owned exact generation should submit successfully.');
+$exactRow = $db->createCommand('SELECT * FROM ai_report_generations WHERE id = :id', [':id' => $exact['generationId']])->queryOne();
+generationLinkAssert(
+    $exactRow['query_job_id'] === $exactResult['jobId'],
+    'The exact trusted generation must link to the saved job. Linked: ' . var_export($exactRow['query_job_id'], true)
+        . '; job: ' . var_export($exactResult['jobId'] ?? null, true)
+);
+generationLinkAssert($exactRow['linked_at'] !== null, 'The exact trusted generation must record its link time.');
+$exactMetadata = json_decode((string)$db->createCommand('SELECT metadata FROM query_jobs WHERE id = :id', [':id' => $exactResult['jobId']])->queryScalar(), true);
+generationLinkAssert(($exactMetadata['askAiProvenance']['generationId'] ?? null) === $exact['generationId'], 'Job metadata must identify the trusted server generation.');
+generationLinkAssert(($exactMetadata['askAiProvenance']['provenance']['model'] ?? null) === 'gemini-2.5-pro', 'Job metadata must copy server-stored provenance.');
+generationLinkAssert(($exactMetadata['askAiProvenance']['provenance']['model'] ?? null) !== 'client-forged', 'Job metadata must ignore client provenance.');
+
+$editedParent = seedGeneration($service, 7, 'SELECT 2 AS original_value');
+$editedResult = submitGenerationLinkedQuery([
+    'sql' => 'SELECT 3 AS edited_value',
+    'source' => 'nl',
+    'dataSource' => 'local',
+    'generationId' => $editedParent['generationId'],
+]);
+$editedChild = $db->createCommand(
+    'SELECT * FROM ai_report_generations WHERE parent_generation_id = :parentId',
+    [':parentId' => $editedParent['generationId']]
+)->queryOne();
+generationLinkAssert($editedChild !== false, 'Edited SQL must create a derivative generation.');
+generationLinkAssert($editedChild['conversation_id'] === $editedParent['conversationId'], 'An edited derivative must retain the trusted conversation.');
+generationLinkAssert($editedChild['route_reason'] === 'user_edited_sql', 'An edited derivative must use the user_edited_sql route reason.');
+generationLinkAssert((int)$editedChild['review_required'] === 1, 'An edited derivative must require review.');
+generationLinkAssert($editedChild['query_job_id'] === $editedResult['jobId'], 'The job must link to the edited derivative, not its parent.');
+generationLinkAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_reviews WHERE generation_id = :id', [':id' => $editedChild['id']])->queryScalar() === 1, 'An edited derivative must create its review row.');
+
+foreach (['unknown-generation', seedGeneration($service, 8, 'SELECT 4')['generationId']] as $unownedId) {
+    $beforeJobs = (int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar();
+    $blocked = submitGenerationLinkedQuery([
+        'sql' => 'SELECT 4',
+        'source' => 'nl',
+        'dataSource' => 'local',
+        'generationId' => $unownedId,
+    ]);
+    generationLinkAssert(Yii::$app->response->statusCode === 403, 'Unknown and other-user generation IDs must be forbidden for NL execution.');
+    generationLinkAssert(($blocked['error'] ?? null) === 'This generated query is not available for execution.', 'Forbidden generation responses must use safe copy.');
+    generationLinkAssert((int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar() === $beforeJobs, 'A forbidden generation must not create a job.');
+}
+
+foreach (['manual', 'builder'] as $source) {
+    $result = submitGenerationLinkedQuery([
+        'sql' => 'SELECT 5',
+        'source' => $source,
+        'dataSource' => 'local',
+        'generationId' => 'ignored-for-non-nl',
+    ]);
+    generationLinkAssert(Yii::$app->response->statusCode === 202 && !empty($result['jobId']), ucfirst($source) . ' submissions must remain unchanged.');
+}
+
+fwrite(STDOUT, "FolioQueryController generation link test passed\n");
