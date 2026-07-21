@@ -4499,6 +4499,13 @@ class FolioQueryController extends Controller
         $offset       = (int) (Yii::$app->request->get('offset', 0));
         $statusFilter = Yii::$app->request->get('status', 'all');
         $mineOnly     = filter_var(Yii::$app->request->get('mine', false), FILTER_VALIDATE_BOOLEAN);
+        $advisoryReviewSubquery = "(SELECT r2.id
+            FROM ai_report_generations g2
+            INNER JOIN ai_report_reviews r2 ON r2.generation_id = g2.id
+            WHERE g2.query_job_id = qj.id
+              AND r2.advisory_state IN ('cautioned', 'superseded')
+            ORDER BY r2.updated_at DESC, r2.id DESC
+            LIMIT 1)";
 
         $query = QueryJob::find()
             ->select([
@@ -4509,8 +4516,7 @@ class FolioQueryController extends Controller
             ])
             ->alias('qj')
             ->leftJoin('users u', 'u.id = qj.user_id')
-            ->leftJoin('ai_report_generations g', 'g.query_job_id = qj.id')
-            ->leftJoin('ai_report_reviews r', 'r.generation_id = g.id')
+            ->leftJoin('ai_report_reviews r', 'r.id = ' . $advisoryReviewSubquery)
             ->orderBy(['qj.completed_at' => SORT_DESC, 'qj.created_at' => SORT_DESC])
             ->limit(min($limit, 100))
             ->offset($offset);
@@ -4572,11 +4578,18 @@ class FolioQueryController extends Controller
                         'message' => 'A reporting specialist identified an important limitation in this result.',
                     ];
                 } elseif (($job['reviewAdvisoryState'] ?? null) === 'superseded') {
-                    $item['reviewAdvisory'] = [
-                        'state' => 'superseded',
-                        'message' => 'A corrected version of this report is available.',
-                        'supersededByJobId' => $job['reviewSupersededByJobId'],
-                    ];
+                    if (!empty($job['reviewSupersededByJobId'])) {
+                        $item['reviewAdvisory'] = [
+                            'state' => 'superseded',
+                            'message' => 'A corrected version of this report is available.',
+                            'supersededByJobId' => $job['reviewSupersededByJobId'],
+                        ];
+                    } else {
+                        $item['reviewAdvisory'] = [
+                            'state' => 'superseded',
+                            'message' => 'A corrected version of this report was created, but it is no longer available in your history.',
+                        ];
+                    }
                 }
 
                 return $item;

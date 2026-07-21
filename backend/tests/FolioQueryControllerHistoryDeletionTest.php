@@ -48,6 +48,7 @@ new Application([
         'folioDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
     ],
 ]);
+Yii::$app->db->createCommand('PRAGMA foreign_keys = ON')->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE users (
@@ -78,7 +79,9 @@ CREATE TABLE ai_report_reviews (
     generation_id VARCHAR(36) NOT NULL,
     advisory_state VARCHAR(20) NOT NULL DEFAULT 'none',
     superseded_by_job_id VARCHAR(36) NULL,
-    administrator_notes TEXT NULL
+    administrator_notes TEXT NULL,
+    updated_at DATETIME NOT NULL,
+    FOREIGN KEY (superseded_by_job_id) REFERENCES query_jobs(id) ON DELETE SET NULL
 )
 SQL)->execute();
 
@@ -155,7 +158,15 @@ function historyDeletionJob($id, $ownerId, $status, $completedAt = null)
     ])->execute();
 }
 
-function historyDeletionReview($jobId, $userId, $state, $supersededByJobId = null, $suffix = null)
+function historyDeletionReview(
+    $jobId,
+    $userId,
+    $state,
+    $supersededByJobId = null,
+    $suffix = null,
+    $updatedAt = '2026-07-19 10:00:00',
+    $reviewId = null
+)
 {
     $suffix = $suffix ?: $state;
     $generationId = 'generation-' . $suffix;
@@ -169,11 +180,12 @@ function historyDeletionReview($jobId, $userId, $state, $supersededByJobId = nul
         'confidence_evidence_json' => '{"private":"evidence"}',
     ])->execute();
     Yii::$app->db->createCommand()->insert('ai_report_reviews', [
-        'id' => 'review-' . $suffix,
+        'id' => $reviewId ?: 'review-' . $suffix,
         'generation_id' => $generationId,
         'advisory_state' => $state,
         'superseded_by_job_id' => $supersededByJobId,
         'administrator_notes' => 'PRIVATE NOTES ' . $suffix,
+        'updated_at' => $updatedAt,
     ])->execute();
     return $generationId;
 }
@@ -185,11 +197,16 @@ function invokeHistoryDeletion($id)
     return $controller->actionDeleteHistoryJob($id);
 }
 
-function queryHistoryItems(array $queryParams = [])
+function queryHistoryResponse(array $queryParams = [])
 {
     Yii::$app->request->setQueryParams($queryParams);
     $controller = new FolioQueryController('folio-query', Yii::$app);
-    $response = $controller->actionQueryHistory();
+    return $controller->actionQueryHistory();
+}
+
+function queryHistoryItems(array $queryParams = [])
+{
+    $response = queryHistoryResponse($queryParams);
     $items = [];
     foreach ($response['items'] as $item) {
         $items[$item['jobId']] = $item;
@@ -274,6 +291,43 @@ $ordinaryHistoryPayload = json_encode([$advisoryItems[$cautionedId], $advisoryIt
 foreach (['PRIVATE QUESTION', 'PRIVATE_', 'private', 'PRIVATE NOTES', 'administrator_notes', 'confidence_evidence'] as $secret) {
     historyDeletionAssert(strpos($ordinaryHistoryPayload, $secret) === false, 'Ordinary history must not expose review notes or generation evidence.');
 }
+
+$missingReplacementId = '8f4a4aa0-5301-4222-8333-123456789abc';
+$deletedReplacementId = '8f4a4aa0-5302-4222-8333-123456789abc';
+historyDeletionJob($missingReplacementId, 7, 'completed', '2026-07-19 08:00:00');
+historyDeletionJob($deletedReplacementId, 7, 'completed', '2026-07-19 08:01:00');
+historyDeletionReview($missingReplacementId, 7, 'superseded', $deletedReplacementId, 'missing-replacement');
+$deletedReplacementResponse = invokeHistoryDeletion($deletedReplacementId);
+historyDeletionAssert(($deletedReplacementResponse['success'] ?? false) === true, 'The superseding replacement fixture should be deleted.');
+$missingReplacementAdvisory = queryHistoryItems()[$missingReplacementId]['reviewAdvisory'];
+historyDeletionAssert($missingReplacementAdvisory === [
+    'state' => 'superseded',
+    'message' => 'A corrected version of this report was created, but it is no longer available in your history.',
+], 'Superseded history must not claim that a deleted replacement remains available.');
+
+$jobCountBeforeMultipleReviews = queryHistoryResponse()['total'];
+$multiReviewId = '8f4a4aa0-5201-4222-8333-123456789abc';
+$multiReplacementId = '8f4a4aa0-5202-4222-8333-123456789abc';
+historyDeletionJob($multiReviewId, 7, 'completed', '2026-07-20 12:00:00');
+historyDeletionJob($multiReplacementId, 7, 'completed', '2026-07-19 09:00:00');
+historyDeletionReview($multiReviewId, 7, 'cautioned', null, 'multi-old', '2026-07-19 11:00:00', 'review-multi-old');
+historyDeletionReview($multiReviewId, 7, 'cautioned', null, 'multi-tie-a', '2026-07-20 11:00:00', 'review-multi-a');
+historyDeletionReview($multiReviewId, 7, 'superseded', $multiReplacementId, 'multi-tie-z', '2026-07-20 11:00:00', 'review-multi-z');
+$multipleReviewResponse = queryHistoryResponse();
+$multiReviewItems = array_values(array_filter($multipleReviewResponse['items'], static function ($item) use ($multiReviewId) {
+    return $item['jobId'] === $multiReviewId;
+}));
+historyDeletionAssert($multipleReviewResponse['total'] === $jobCountBeforeMultipleReviews + 2, 'History total must count query jobs rather than linked reviews.');
+historyDeletionAssert(count($multiReviewItems) === 1, 'History must return one item for a job with multiple linked reviews.');
+historyDeletionAssert($multiReviewItems[0]['reviewAdvisory'] === [
+    'state' => 'superseded',
+    'message' => 'A corrected version of this report is available.',
+    'supersededByJobId' => $multiReplacementId,
+], 'History must deterministically choose the latest advisory and break updated-at ties by stable descending review id.');
+$firstJobPage = queryHistoryResponse(['limit' => 1, 'offset' => 0]);
+$secondJobPage = queryHistoryResponse(['limit' => 1, 'offset' => 1]);
+historyDeletionAssert($firstJobPage['items'][0]['jobId'] === $multiReviewId, 'The newest job should occupy the first one-item history page.');
+historyDeletionAssert($secondJobPage['items'][0]['jobId'] !== $multiReviewId, 'A duplicated review must not make the same job occupy the next history page.');
 
 $activeItems = queryHistoryItems(['status' => 'active']);
 historyDeletionAssert(isset($activeItems['8f4a4aa0-4003-4222-8333-123456789abc']), 'The active history filter should include cancelling jobs.');

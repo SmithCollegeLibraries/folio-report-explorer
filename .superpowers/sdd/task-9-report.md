@@ -72,3 +72,52 @@ Syntax and whitespace verification covered all modified PHP files with `php -l` 
 - `backend/tests/FolioQueryControllerHistoryDeletionTest.php`
 - `backend/tests/AskAiReviewRetentionTest.php`
 - `.superpowers/sdd/task-9-report.md`
+
+## Important Findings Follow-up: Cardinality and Honest Supersession
+
+Two review findings were addressed in a separate TDD cycle.
+
+### RED
+
+The one-to-many history join inflated totals and allowed one query job to occupy multiple pagination positions:
+
+```text
+History total must count query jobs rather than linked reviews.
+```
+
+The superseded mapper also claimed a correction remained available after its replacement job had been deleted and the foreign key had set `superseded_by_job_id` to null:
+
+```text
+Superseded history must not claim that a deleted replacement remains available.
+```
+
+### Fix
+
+- Replaced direct generation/review fan-out joins with a correlated canonical-review join that returns at most one review per query job.
+- Restricted canonical candidates to `cautioned` and `superseded`, choosing deterministically by `updated_at DESC, id DESC`.
+- Preserved job-based totals, limits, and offsets without `DISTINCT` or post-pagination deduplication.
+- Kept normal supersession copy and `supersededByJobId` when the replacement exists.
+- When the replacement link is null, retained state `superseded`, omitted `supersededByJobId`, and returned: `A corrected version of this report was created, but it is no longer available in your history.`
+- Continued selecting only advisory state and replacement id; notes, evidence, and execution status remain untouched.
+
+### GREEN
+
+Focused verification:
+
+```text
+Query history deletion service test passed
+Folio query controller history deletion test passed
+Ask AI review retention test passed
+```
+
+The history regression now creates three linked reviews for one job, including equal `updated_at` values, and proves one returned item, job-based total, distinct one-item pages, and stable descending-id tie-break behavior. It also deletes a replacement query job under SQLite foreign-key enforcement and verifies the resulting null-link advisory.
+
+The full backend PHP suite exited 0 again. The FOLIO PostgreSQL integration check remained skipped because connection environment variables were unavailable. The same pre-existing PHP 8.5 reflection deprecations and `ReferenceResolverService` fixture warnings remain.
+
+### Follow-up Self-review
+
+- The correlated scalar subquery is valid in both the SQLite regression harness and the production MySQL query shape; it is bounded to one review id with an explicit stable order.
+- `count()`, `LIMIT`, and `OFFSET` now operate on query-job cardinality because every remaining join is at most one row per job.
+- A missing replacement cannot produce either availability copy or a null `supersededByJobId` key.
+- Existing non-null supersession behavior, safe advisory allowlist, `completed` status, deletion authorization, and privacy assertions remain covered.
+- The follow-up changes remain PHP 7.2-compatible and do not touch unrelated dirty files.
