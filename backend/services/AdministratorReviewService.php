@@ -179,6 +179,47 @@ class AdministratorReviewService
         ?string $supersededByJobId = null,
         bool $takeover = false
     ): array {
+        return $this->complete(
+            $reviewId,
+            $administratorId,
+            'resolved',
+            $disposition,
+            $notes,
+            $advisoryState,
+            $supersededByJobId,
+            $takeover
+        );
+    }
+
+    public function dismiss(
+        string $reviewId,
+        int $administratorId,
+        string $disposition,
+        string $notes,
+        bool $takeover = false
+    ): array {
+        return $this->complete(
+            $reviewId,
+            $administratorId,
+            'dismissed',
+            $disposition,
+            $notes,
+            'none',
+            null,
+            $takeover
+        );
+    }
+
+    private function complete(
+        string $reviewId,
+        int $administratorId,
+        string $terminalStatus,
+        string $disposition,
+        string $notes,
+        string $advisoryState,
+        ?string $supersededByJobId,
+        bool $takeover
+    ): array {
         $dispositions = [
             'acceptable',
             'assumption_change',
@@ -200,33 +241,66 @@ class AdministratorReviewService
             throw new InvalidArgumentException('superseding_job_requires_superseded_state');
         }
 
-        $now = gmdate('Y-m-d H:i:s');
-        $values = [
-            'status' => 'resolved',
-            'disposition' => $disposition,
-            'advisory_state' => $advisoryState,
-            'superseded_by_job_id' => $supersededByJobId,
-            'administrator_notes' => $notes,
-            'resolved_at' => $now,
-            'updated_at' => $now,
-        ];
-        if ($takeover) {
-            $values['reviewed_by'] = $administratorId;
-        }
-        $condition = [
-            'id' => $reviewId,
-            'status' => 'in_review',
-        ];
-        if (!$takeover) {
-            $condition['reviewed_by'] = $administratorId;
-        }
-        $affected = $this->db->createCommand()->update('ai_report_reviews', $values, $condition)->execute();
+        return $this->db->transaction(function () use (
+            $reviewId,
+            $administratorId,
+            $terminalStatus,
+            $disposition,
+            $notes,
+            $advisoryState,
+            $supersededByJobId,
+            $takeover
+        ): array {
+            if ($advisoryState === 'superseded'
+                && !$this->isCompletedReplacementJob($reviewId, (string)$supersededByJobId)
+            ) {
+                throw new InvalidArgumentException('superseded_review_requires_completed_owned_job');
+            }
 
-        if ($affected !== 1) {
-            throw new DomainException('review_not_resolvable');
-        }
+            $now = gmdate('Y-m-d H:i:s');
+            $values = [
+                'status' => $terminalStatus,
+                'disposition' => $disposition,
+                'advisory_state' => $advisoryState,
+                'superseded_by_job_id' => $supersededByJobId,
+                'administrator_notes' => $notes,
+                'resolved_at' => $now,
+                'updated_at' => $now,
+            ];
+            if ($takeover) {
+                $values['reviewed_by'] = $administratorId;
+            }
+            $condition = [
+                'id' => $reviewId,
+                'status' => 'in_review',
+            ];
+            if (!$takeover) {
+                $condition['reviewed_by'] = $administratorId;
+            }
+            $affected = $this->db->createCommand()->update('ai_report_reviews', $values, $condition)->execute();
 
-        return $this->reviewRow($reviewId);
+            if ($affected !== 1) {
+                throw new DomainException('review_not_resolvable');
+            }
+
+            return $this->reviewRow($reviewId);
+        });
+    }
+
+    private function isCompletedReplacementJob(string $reviewId, string $queryJobId): bool
+    {
+        return $this->db->createCommand(
+            "SELECT q.id
+             FROM query_jobs q
+             INNER JOIN ai_report_reviews r ON r.id = :reviewId
+             INNER JOIN ai_report_generations g ON g.id = r.generation_id
+             WHERE q.id = :queryJobId
+               AND q.status = 'completed'
+               AND g.user_id IS NOT NULL
+               AND q.user_id = g.user_id
+               AND (g.query_job_id IS NULL OR q.id <> g.query_job_id)",
+            [':reviewId' => $reviewId, ':queryJobId' => $queryJobId]
+        )->queryScalar() !== false;
     }
 
     public function purgeExpired(int $days, DateTimeImmutable $now): int

@@ -79,7 +79,7 @@ class FolioQueryController extends Controller
             'class' => \yii\filters\Cors::class,
             'cors' => [
                 'Origin' => ['*'],
-                'Access-Control-Request-Method' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+                'Access-Control-Request-Method' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
                 'Access-Control-Request-Headers' => ['*'],
                 'Access-Control-Allow-Credentials' => false,
                 'Access-Control-Max-Age' => 86400,
@@ -121,11 +121,25 @@ class FolioQueryController extends Controller
                             'local-alloc-delete', 'local-alloc-copy-year',
                             'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
                             'admin-widget-create', 'admin-widget-update', 'admin-widget-delete',
+                            'report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update',
                         ],
                         'roles' => ['@'],
                         'matchCallback' => function ($rule, $action) {
                             $identity = $this->getAppIdentity();
                             return $identity && $identity->isAdmin();
+                        },
+                    ],
+                    // Stable API denial for authenticated non-administrators.
+                    [
+                        'allow' => false,
+                        'actions' => [
+                            'report-review-list', 'report-review-detail',
+                            'report-review-claim', 'report-review-update',
+                        ],
+                        'roles' => ['@'],
+                        'denyCallback' => function ($rule, $action) {
+                            Yii::$app->response->statusCode = 403;
+                            Yii::$app->response->data = ['error' => 'Forbidden'];
                         },
                     ],
                     // Any authenticated user
@@ -206,6 +220,28 @@ class FolioQueryController extends Controller
             return false;
         }
         return true;
+    }
+
+    /**
+     * Enforce administrator access in every environment and return stable API copy.
+     * Authentication still runs through AccessControl in production, while this
+     * guard owns the role check and stable response in every environment.
+     *
+     * @return array|null
+     */
+    private function requireAdministrator(): ?array
+    {
+        $user = Yii::$app->user;
+        $identity = $user->identity;
+        if (!$user->isGuest
+            && ($identity instanceof User || $identity instanceof DummyIdentity)
+            && $identity->isAdmin()
+        ) {
+            return null;
+        }
+
+        Yii::$app->response->statusCode = 403;
+        return ['error' => 'Forbidden'];
     }
 
     /**
@@ -1876,6 +1912,274 @@ class FolioQueryController extends Controller
     protected function administratorReviewService()
     {
         return new AdministratorReviewService();
+    }
+
+    /**
+     * GET /api/admin/report-reviews
+     */
+    public function actionReportReviewList()
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        $limit = max(1, min(100, (int)Yii::$app->request->get('limit', 25)));
+        $offset = max(0, (int)Yii::$app->request->get('offset', 0));
+        $allowedStatuses = ['pending', 'in_review', 'resolved', 'dismissed'];
+        $allowedDispositions = $this->reportReviewDispositions();
+        $status = strtolower(trim((string)Yii::$app->request->get('status', 'pending')));
+        if (!in_array($status, $allowedStatuses, true)) {
+            $status = 'pending';
+        }
+        $disposition = strtolower(trim((string)Yii::$app->request->get('disposition', '')));
+
+        $query = (new \yii\db\Query())
+            ->from(['r' => 'ai_report_reviews'])
+            ->innerJoin(['g' => 'ai_report_generations'], 'g.id = r.generation_id')
+            ->where(['r.status' => $status]);
+        if (in_array($disposition, $allowedDispositions, true)) {
+            $query->andWhere(['r.disposition' => $disposition]);
+        }
+
+        $total = (int)(clone $query)->count('*', Yii::$app->db);
+        $rows = $query
+            ->select($this->reportReviewSummarySelect())
+            ->orderBy(['r.created_at' => SORT_ASC, 'r.id' => SORT_ASC])
+            ->limit($limit)
+            ->offset($offset)
+            ->all(Yii::$app->db);
+
+        return [
+            'items' => array_map([$this, 'mapReportReviewSummary'], $rows),
+            'pagination' => [
+                'limit' => $limit,
+                'offset' => $offset,
+                'total' => $total,
+            ],
+        ];
+    }
+
+    /**
+     * GET /api/admin/report-reviews/<id>
+     */
+    public function actionReportReviewDetail($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        $row = $this->reportReviewDetailRow((string)$id);
+        if ($row === null) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Review not found'];
+        }
+
+        return $this->mapReportReviewDetail($row);
+    }
+
+    /**
+     * POST /api/admin/report-reviews/<id>/claim
+     */
+    public function actionReportReviewClaim($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        try {
+            $this->administratorReviewService()->claim((string)$id, (int)$this->getCurrentUserId());
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Review is no longer available to claim'];
+        }
+
+        return $this->actionReportReviewDetail((string)$id);
+    }
+
+    /**
+     * PATCH /api/admin/report-reviews/<id>
+     */
+    public function actionReportReviewUpdate($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        if (!is_array($body) || ($body !== [] && array_keys($body) === range(0, count($body) - 1))) {
+            return $this->invalidReportReviewUpdate('Request body must be a JSON object');
+        }
+        $status = strtolower(trim((string)($body['status'] ?? '')));
+        $disposition = strtolower(trim((string)($body['disposition'] ?? '')));
+        $advisoryState = strtolower(trim((string)($body['advisoryState'] ?? 'none')));
+        $supersededByJobId = isset($body['supersededByJobId'])
+            ? trim((string)$body['supersededByJobId'])
+            : null;
+        $notes = trim((string)($body['notes'] ?? ''));
+        if (array_key_exists('takeover', $body) && !is_bool($body['takeover'])) {
+            return $this->invalidReportReviewUpdate('takeover must be a boolean');
+        }
+        $takeover = $body['takeover'] ?? false;
+
+        if (!in_array($status, ['resolved', 'dismissed'], true)) {
+            return $this->invalidReportReviewUpdate('status must be resolved or dismissed');
+        }
+        if (!in_array($disposition, $this->reportReviewDispositions(), true)) {
+            return $this->invalidReportReviewUpdate('A valid disposition is required');
+        }
+        if (!in_array($advisoryState, ['none', 'cautioned', 'superseded'], true)) {
+            return $this->invalidReportReviewUpdate('Invalid advisory state');
+        }
+        if ($status === 'dismissed' && $advisoryState !== 'none') {
+            return $this->invalidReportReviewUpdate('Dismissed reviews cannot change report advisory state');
+        }
+        if ($advisoryState === 'superseded') {
+            if ($supersededByJobId === null || $supersededByJobId === '') {
+                return $this->invalidReportReviewUpdate('A superseded review requires a replacement job');
+            }
+        } elseif ($supersededByJobId !== null && $supersededByJobId !== '') {
+            return $this->invalidReportReviewUpdate('A replacement job is allowed only for supersession');
+        } else {
+            $supersededByJobId = null;
+        }
+
+        try {
+            if ($status === 'dismissed') {
+                $this->administratorReviewService()->dismiss(
+                    (string)$id,
+                    (int)$this->getCurrentUserId(),
+                    $disposition,
+                    $notes,
+                    $takeover
+                );
+            } else {
+                $this->administratorReviewService()->resolve(
+                    (string)$id,
+                    (int)$this->getCurrentUserId(),
+                    $disposition,
+                    $notes,
+                    $advisoryState,
+                    $supersededByJobId,
+                    $takeover
+                );
+            }
+        } catch (\InvalidArgumentException $exception) {
+            return $this->invalidReportReviewUpdate('Invalid review update');
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Review is no longer available to update'];
+        }
+
+        return $this->actionReportReviewDetail((string)$id);
+    }
+
+    private function invalidReportReviewUpdate(string $message): array
+    {
+        Yii::$app->response->statusCode = 422;
+        return ['error' => 'Invalid review update', 'detail' => $message];
+    }
+
+    private function reportReviewDispositions(): array
+    {
+        return [
+            'acceptable',
+            'assumption_change',
+            'deterministic_candidate',
+            'generation_defect',
+            'data_unavailable',
+            'specialist_interpretation',
+        ];
+    }
+
+    private function reportReviewSummarySelect(): array
+    {
+        return [
+            'id' => 'r.id',
+            'generationId' => 'r.generation_id',
+            'status' => 'r.status',
+            'disposition' => 'r.disposition',
+            'advisoryState' => 'r.advisory_state',
+            'supersededByJobId' => 'r.superseded_by_job_id',
+            'reviewedBy' => 'r.reviewed_by',
+            'claimedAt' => 'r.claimed_at',
+            'resolvedAt' => 'r.resolved_at',
+            'createdAt' => 'r.created_at',
+            'updatedAt' => 'r.updated_at',
+            'question' => 'g.original_question',
+            'queryJobId' => 'g.query_job_id',
+            'userId' => 'g.user_id',
+            'executionMode' => 'g.execution_mode',
+            'route' => 'g.route',
+            'routeReason' => 'g.route_reason',
+            'validationStatus' => 'g.validation_status',
+            'reviewReasonsJson' => 'g.review_reasons_json',
+        ];
+    }
+
+    private function reportReviewDetailRow(string $id): ?array
+    {
+        $select = array_merge($this->reportReviewSummarySelect(), [
+            'administratorNotes' => 'r.administrator_notes',
+            'conversationId' => 'g.conversation_id',
+            'parentGenerationId' => 'g.parent_generation_id',
+            'followUpContextJson' => 'g.follow_up_context',
+            'responseMode' => 'g.response_mode',
+            'generatedSql' => 'g.generated_sql',
+            'sqlHash' => 'g.sql_hash',
+            'assumptionsJson' => 'g.assumptions_json',
+            'userNoticeJson' => 'g.user_notice_json',
+            'confidenceEvidenceJson' => 'g.confidence_evidence_json',
+            'initialStructureJson' => 'g.initial_structure_json',
+            'finalStructureJson' => 'g.final_structure_json',
+            'provenanceJson' => 'g.provenance_json',
+            'generationCreatedAt' => 'g.created_at',
+            'linkedAt' => 'g.linked_at',
+        ]);
+        $row = (new \yii\db\Query())
+            ->select($select)
+            ->from(['r' => 'ai_report_reviews'])
+            ->innerJoin(['g' => 'ai_report_generations'], 'g.id = r.generation_id')
+            ->where(['r.id' => $id])
+            ->one(Yii::$app->db);
+
+        return $row === false ? null : $row;
+    }
+
+    private function mapReportReviewSummary(array $row): array
+    {
+        $row['reviewedBy'] = $row['reviewedBy'] === null ? null : (int)$row['reviewedBy'];
+        $row['userId'] = $row['userId'] === null ? null : (int)$row['userId'];
+        $row['reviewReasons'] = $this->decodeReportReviewJson($row['reviewReasonsJson'], []);
+        unset($row['reviewReasonsJson']);
+        return $row;
+    }
+
+    private function mapReportReviewDetail(array $row): array
+    {
+        $row = $this->mapReportReviewSummary($row);
+        $jsonFields = [
+            'followUpContextJson' => ['followUpContext', null],
+            'assumptionsJson' => ['assumptions', []],
+            'userNoticeJson' => ['userNotice', null],
+            'confidenceEvidenceJson' => ['confidenceEvidence', []],
+            'initialStructureJson' => ['initialStructure', null],
+            'finalStructureJson' => ['finalStructure', null],
+            'provenanceJson' => ['provenance', []],
+        ];
+        foreach ($jsonFields as $source => $mapping) {
+            $row[$mapping[0]] = $this->decodeReportReviewJson($row[$source], $mapping[1]);
+            unset($row[$source]);
+        }
+        return $row;
+    }
+
+    private function decodeReportReviewJson($value, $fallback)
+    {
+        if ($value === null || $value === '') {
+            return $fallback;
+        }
+        $decoded = json_decode((string)$value, true);
+        return json_last_error() === JSON_ERROR_NONE ? $decoded : $fallback;
     }
 
     private function buildAskContinuationFromFailure(

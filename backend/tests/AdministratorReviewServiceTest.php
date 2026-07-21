@@ -22,6 +22,13 @@ Yii::$app->errorHandler->unregister();
 $db = Yii::$app->db;
 $db->createCommand('PRAGMA foreign_keys = ON')->execute();
 $db->createCommand(<<<'SQL'
+CREATE TABLE query_jobs (
+    id VARCHAR(36) PRIMARY KEY,
+    user_id INTEGER NULL,
+    status VARCHAR(20) NOT NULL
+)
+SQL)->execute();
+$db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
     id VARCHAR(36) PRIMARY KEY,
     conversation_id VARCHAR(36) NOT NULL,
@@ -202,6 +209,18 @@ reviewExpectException(InvalidArgumentException::class, static function () use ($
 reviewExpectException(DomainException::class, static function () use ($service, $flagged): void {
     $service->resolve($flagged['reviewId'], 202, 'acceptable', 'takeover without claim');
 }, 'Resolve must reject a different administrator unless ownership has been transferred.');
+
+$db->createCommand()->batchInsert('query_jobs', ['id', 'user_id', 'status'], [
+    ['job-running', 7, 'running'],
+    ['job-unrelated', 8, 'completed'],
+    ['job-2', 7, 'completed'],
+])->execute();
+reviewExpectException(InvalidArgumentException::class, static function () use ($service, $flagged): void {
+    $service->resolve($flagged['reviewId'], 101, 'generation_defect', 'not complete', 'superseded', 'job-running');
+}, 'Supersession must require a completed replacement job.');
+reviewExpectException(InvalidArgumentException::class, static function () use ($service, $flagged): void {
+    $service->resolve($flagged['reviewId'], 101, 'generation_defect', 'wrong owner', 'superseded', 'job-unrelated');
+}, 'Supersession must reject an unrelated user’s completed job.');
 
 $takeoverReview = $service->recordGeneration(generationContext(['reviewRequired' => true]));
 $service->claim($takeoverReview['reviewId'], 303);
