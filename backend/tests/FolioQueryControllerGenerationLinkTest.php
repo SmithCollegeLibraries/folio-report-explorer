@@ -12,6 +12,17 @@ use app\services\AdministratorReviewService;
 use yii\web\Application;
 use yii\web\IdentityInterface;
 
+final class GenerationLinkPreflightDb extends yii\db\Connection
+{
+    public $commandCount = 0;
+
+    public function createCommand($sql = null, $params = [])
+    {
+        $this->commandCount++;
+        return parent::createCommand($sql, $params);
+    }
+}
+
 final class GenerationLinkIdentity implements IdentityInterface
 {
     private $id;
@@ -29,10 +40,15 @@ new Application([
     'basePath' => dirname(__DIR__),
     'components' => [
         'db' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
+        'folioDb' => ['class' => GenerationLinkPreflightDb::class, 'dsn' => 'sqlite::memory:'],
         'request' => ['cookieValidationKey' => 'generation-link-test'],
         'user' => ['identityClass' => GenerationLinkIdentity::class, 'enableSession' => false],
     ],
-    'params' => ['maxQueryRows' => 100],
+    'params' => [
+        'maxQueryRows' => 100,
+        'queryTimeoutMs' => 1800000,
+        'derivedPath' => dirname(__DIR__) . '/data/folio_derived_tables.json',
+    ],
 ]);
 Yii::$app->errorHandler->unregister();
 Yii::$app->user->setIdentity(new GenerationLinkIdentity(7));
@@ -191,6 +207,53 @@ generationLinkAssert($editedChild['route_reason'] === 'user_edited_sql', 'An edi
 generationLinkAssert((int)$editedChild['review_required'] === 1, 'An edited derivative must require review.');
 generationLinkAssert($editedChild['query_job_id'] === $editedResult['jobId'], 'The job must link to the edited derivative, not its parent.');
 generationLinkAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_reviews WHERE generation_id = :id', [':id' => $editedChild['id']])->queryScalar() === 1, 'An edited derivative must create its review row.');
+
+$beforeJobs = (int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar();
+Yii::$app->folioDb->commandCount = 0;
+$unknownPolicyBlocked = submitGenerationLinkedQuery([
+    'sql' => 'DELETE FROM inventory.items',
+    'source' => 'nl',
+    'dataSource' => 'folio',
+    'generationId' => 'unknown-policy-generation',
+]);
+generationLinkAssert(Yii::$app->response->statusCode === 403, 'Unknown generation ownership must be checked before SQL policy.');
+generationLinkAssert(($unknownPolicyBlocked['error'] ?? null) === 'This generated query is not available for execution.', 'Unknown generation ownership must return the stable generation 403 even for blocked SQL.');
+generationLinkAssert(Yii::$app->folioDb->commandCount === 0, 'Unknown generation ownership must not reach FOLIO preflight.');
+generationLinkAssert((int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar() === $beforeJobs, 'Unknown policy-blocked generation input must not create a job.');
+
+$otherUserPreflight = seedGeneration($service, 8, 'SELECT 6 AS preflight_value');
+$beforeJobs = (int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar();
+Yii::$app->folioDb->commandCount = 0;
+$otherUserPreflightBlocked = submitGenerationLinkedQuery([
+    'sql' => 'SELECT 6 AS preflight_value',
+    'source' => 'nl',
+    'dataSource' => 'folio',
+    'generationId' => $otherUserPreflight['generationId'],
+]);
+generationLinkAssert(Yii::$app->response->statusCode === 403, 'Other-user generation ownership must be checked before FOLIO preflight.');
+generationLinkAssert(($otherUserPreflightBlocked['error'] ?? null) === 'This generated query is not available for execution.', 'Other-user generation ownership must win over preflight errors.');
+generationLinkAssert(Yii::$app->folioDb->commandCount === 0, 'Other-user generation ownership must not issue preflight commands.');
+generationLinkAssert((int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar() === $beforeJobs, 'Other-user preflight input must not create a job.');
+
+$validPolicyGeneration = seedGeneration($service, 7, 'DELETE FROM inventory.items');
+$validPolicyBlocked = submitGenerationLinkedQuery([
+    'sql' => 'DELETE FROM inventory.items',
+    'source' => 'nl',
+    'dataSource' => 'folio',
+    'generationId' => $validPolicyGeneration['generationId'],
+]);
+generationLinkAssert(($validPolicyBlocked['error'] ?? null) === 'This query is blocked by reporting data policy.', 'A valid owned generation must still reach normal SQL policy validation.');
+
+$validPreflightGeneration = seedGeneration($service, 7, 'SELECT 7 AS preflight_value');
+Yii::$app->folioDb->commandCount = 0;
+$validPreflightBlocked = submitGenerationLinkedQuery([
+    'sql' => 'SELECT 7 AS preflight_value',
+    'source' => 'nl',
+    'dataSource' => 'folio',
+    'generationId' => $validPreflightGeneration['generationId'],
+]);
+generationLinkAssert(Yii::$app->response->statusCode === 422, 'A valid owned generation must still reach FOLIO preflight behavior.');
+generationLinkAssert(Yii::$app->folioDb->commandCount > 0, 'A valid owned generation must issue FOLIO preflight commands.');
 
 foreach (['unknown-generation', seedGeneration($service, 8, 'SELECT 4')['generationId']] as $unownedId) {
     $beforeJobs = (int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar();

@@ -1237,6 +1237,25 @@ class FolioQueryController extends Controller
 
         $sql = SqlBuilderService::normalizeForExecution($sql);
 
+        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
+        if ((string)$source === 'nl' && $generationId !== '') {
+            $userId = $this->getCurrentUserId();
+            if ($userId === null) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'This generated query is not available for execution.'];
+            }
+            try {
+                $executionGeneration = $this->administratorReviewService()->resolveExecutionGeneration(
+                    $generationId,
+                    $userId,
+                    $sql
+                );
+            } catch (\DomainException $exception) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'This generated query is not available for execution.'];
+            }
+        }
+
         // Safety validation
         try {
             SqlBuilderService::validateSafety($sql);
@@ -1270,25 +1289,6 @@ class FolioQueryController extends Controller
                 if ($isLarge) {
                     $outputMode = 'file';
                 }
-            }
-        }
-
-        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
-        if ((string)$source === 'nl' && $generationId !== '') {
-            $userId = $this->getCurrentUserId();
-            if ($userId === null) {
-                Yii::$app->response->statusCode = 403;
-                return ['error' => 'This generated query is not available for execution.'];
-            }
-            try {
-                $executionGeneration = $this->administratorReviewService()->resolveExecutionGeneration(
-                    $generationId,
-                    $userId,
-                    $sql
-                );
-            } catch (\DomainException $exception) {
-                Yii::$app->response->statusCode = 403;
-                return ['error' => 'This generated query is not available for execution.'];
             }
         }
 
