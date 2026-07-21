@@ -45,10 +45,23 @@ class QueryHistoryDeletionService
             throw new DomainException('Stop this query before deleting it from history.');
         }
 
-        $this->removeExport($job);
-        if (!$job->delete()) {
-            throw new RuntimeException('History row could not be deleted.');
-        }
+        $db = QueryJob::getDb();
+        $db->transaction(function () use ($db, $job): void {
+            $generationIds = $db->createCommand(
+                'SELECT id FROM ai_report_generations WHERE query_job_id = :jobId',
+                [':jobId' => $job->id]
+            )->queryColumn();
+
+            if ($generationIds !== []) {
+                $db->createCommand()->delete('ai_report_reviews', ['generation_id' => $generationIds])->execute();
+                $db->createCommand()->delete('ai_report_generations', ['id' => $generationIds])->execute();
+            }
+
+            $this->removeExport($job);
+            if (!$job->delete()) {
+                throw new RuntimeException('History row could not be deleted.');
+            }
+        });
     }
 
     private function removeExport(QueryJob $job): void

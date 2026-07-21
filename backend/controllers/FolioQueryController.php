@@ -4446,6 +4446,8 @@ class FolioQueryController extends Controller
             return ['error' => 'User not found'];
         }
 
+        $reviewService = new AdministratorReviewService(Yii::$app->db);
+        $reviewService->purgeUserContent((int) $id);
         $user->delete();
         return ['success' => true];
     }
@@ -4499,9 +4501,16 @@ class FolioQueryController extends Controller
         $mineOnly     = filter_var(Yii::$app->request->get('mine', false), FILTER_VALIDATE_BOOLEAN);
 
         $query = QueryJob::find()
-            ->select(['qj.*', 'u.email AS runBy'])
+            ->select([
+                'qj.*',
+                'u.email AS runBy',
+                'r.advisory_state AS reviewAdvisoryState',
+                'r.superseded_by_job_id AS reviewSupersededByJobId',
+            ])
             ->alias('qj')
             ->leftJoin('users u', 'u.id = qj.user_id')
+            ->leftJoin('ai_report_generations g', 'g.query_job_id = qj.id')
+            ->leftJoin('ai_report_reviews r', 'r.generation_id = g.id')
             ->orderBy(['qj.completed_at' => SORT_DESC, 'qj.created_at' => SORT_DESC])
             ->limit(min($limit, 100))
             ->offset($offset);
@@ -4539,7 +4548,7 @@ class FolioQueryController extends Controller
                     || ($userId !== null && (int) $job['user_id'] === (int) $userId);
                 $terminal = in_array($job['status'], ['completed', 'failed', 'cancelled'], true);
                 $canDelete = $authorized && $terminal;
-                return [
+                $item = [
                     'jobId'           => $job['id'],
                     'name'            => $job['name'] ?? null,
                     'status'          => $job['status'],
@@ -4556,6 +4565,21 @@ class FolioQueryController extends Controller
                     'runBy'           => $job['runBy'] ?? null,
                     'canDelete'       => $canDelete,
                 ];
+
+                if (($job['reviewAdvisoryState'] ?? null) === 'cautioned') {
+                    $item['reviewAdvisory'] = [
+                        'state' => 'cautioned',
+                        'message' => 'A reporting specialist identified an important limitation in this result.',
+                    ];
+                } elseif (($job['reviewAdvisoryState'] ?? null) === 'superseded') {
+                    $item['reviewAdvisory'] = [
+                        'state' => 'superseded',
+                        'message' => 'A corrected version of this report is available.',
+                        'supersededByJobId' => $job['reviewSupersededByJobId'],
+                    ];
+                }
+
+                return $item;
             }, $jobs),
         ];
     }
