@@ -500,4 +500,117 @@ analysisAssertSame(
     'Unsupported analysis must stay explicitly ambiguous in its signature.'
 );
 
+$instanceCteSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance) '
+    . 'SELECT source_rows.id FROM source_rows';
+$loanCteSql = 'WITH source_rows AS (SELECT loan.id FROM circulation.loan__t loan) '
+    . 'SELECT source_rows.id FROM source_rows';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($instanceCteSql, $loanCteSql),
+    'A physical-table change inside a CTE must be material.'
+);
+$activeCteSql = "WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance "
+    . "WHERE instance.status = 'active') SELECT source_rows.id FROM source_rows";
+$inactiveCteSql = "WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance "
+    . "WHERE instance.status = 'inactive') SELECT source_rows.id FROM source_rows";
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($activeCteSql, $inactiveCteSql),
+    'A predicate change inside a CTE must be material.'
+);
+$countedCteSql = 'WITH source_rows AS (SELECT COUNT(instance.id) AS amount '
+    . 'FROM inventory.instance__t instance) SELECT source_rows.amount FROM source_rows';
+$summedCteSql = 'WITH source_rows AS (SELECT SUM(instance.id) AS amount '
+    . 'FROM inventory.instance__t instance) SELECT source_rows.amount FROM source_rows';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($countedCteSql, $summedCteSql),
+    'A measure change inside a CTE must be material.'
+);
+$joinedCteSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance '
+    . 'JOIN inventory.holdings_record__t holdings ON holdings.instance_id = instance.id) '
+    . 'SELECT source_rows.id FROM source_rows';
+$changedCteJoinSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance '
+    . 'JOIN inventory.holdings_record__t holdings ON holdings.id = instance.id) '
+    . 'SELECT source_rows.id FROM source_rows';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($joinedCteSql, $changedCteJoinSql),
+    'A join-predicate change inside a CTE must be material.'
+);
+$cteIdOutputSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance) '
+    . 'SELECT * FROM source_rows';
+$cteStatusOutputSql = 'WITH source_rows AS (SELECT instance.status FROM inventory.instance__t instance) '
+    . 'SELECT * FROM source_rows';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($cteIdOutputSql, $cteStatusOutputSql),
+    'An output change inside a CTE must be material.'
+);
+$cteGroupIdSql = 'WITH source_rows AS (SELECT COUNT(*) AS amount FROM inventory.instance__t instance '
+    . 'GROUP BY instance.id) SELECT source_rows.amount FROM source_rows';
+$cteGroupStatusSql = 'WITH source_rows AS (SELECT COUNT(*) AS amount FROM inventory.instance__t instance '
+    . 'GROUP BY instance.status) SELECT source_rows.amount FROM source_rows';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($cteGroupIdSql, $cteGroupStatusSql),
+    'A grouping-grain change inside a CTE must be material.'
+);
+$cteLimitOneSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance LIMIT 1) '
+    . 'SELECT source_rows.id FROM source_rows';
+$cteLimitNineSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance LIMIT 9) '
+    . 'SELECT source_rows.id FROM source_rows';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($cteLimitOneSql, $cteLimitNineSql),
+    'A LIMIT change inside a CTE must be material.'
+);
+$cteAscendingSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance '
+    . 'ORDER BY instance.id ASC) SELECT source_rows.id FROM source_rows';
+$cteDescendingSql = 'WITH source_rows AS (SELECT instance.id FROM inventory.instance__t instance '
+    . 'ORDER BY instance.id DESC) SELECT source_rows.id FROM source_rows';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($cteAscendingSql, $cteDescendingSql),
+    'An ordering change inside a CTE must be material.'
+);
+
+$havingOneSql = 'SELECT instance.status, COUNT(*) AS amount FROM inventory.instance__t instance '
+    . 'GROUP BY instance.status HAVING COUNT(*) > 1';
+$havingNineSql = 'SELECT instance.status, COUNT(*) AS amount FROM inventory.instance__t instance '
+    . 'GROUP BY instance.status HAVING COUNT(*) > 9';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($havingOneSql, $havingNineSql),
+    'A HAVING predicate change must be material.'
+);
+$havingAnalysis = ExploratorySqlAnalysisService::analyze($havingOneSql);
+analysisAssertSame(
+    'count (*) > 1',
+    $havingAnalysis['predicates']['having'],
+    'HAVING expressions must remain inspectable structural evidence.'
+);
+analysisAssertSame(
+    true,
+    $havingAnalysis['ambiguous'],
+    'HAVING atoms unsupported by semantic predicate analysis must fail closed.'
+);
+
+$selfJoinSql = 'SELECT a.id FROM inventory.instance__t a '
+    . 'JOIN inventory.instance__t b ON a.id = b.id';
+$renamedSelfJoinSql = 'SELECT first_instance.id FROM inventory.instance__t first_instance '
+    . 'JOIN inventory.instance__t second_instance ON first_instance.id = second_instance.id';
+$collapsedSelfJoinSql = 'SELECT a.id FROM inventory.instance__t a '
+    . 'JOIN inventory.instance__t b ON a.id = a.id';
+analysisAssertSame(
+    false,
+    ExploratorySqlAnalysisService::materiallyDifferent($selfJoinSql, $renamedSelfJoinSql),
+    'Alias-only renames in a self-join must remain equivalent.'
+);
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($selfJoinSql, $collapsedSelfJoinSql),
+    'Repeated physical sources must retain distinct relation-instance identities.'
+);
+
 fwrite(STDOUT, "ExploratorySqlAnalysisService test passed\n");
