@@ -421,4 +421,83 @@ analysisAssertSame(
 analysisAssertSame('id', $ordinarySourceGrammar['orderBy'][0]['expression'], 'Unquoted ORDER BY must remain a clause boundary.');
 analysisAssertSame('DESC', $ordinarySourceGrammar['orderBy'][0]['direction'], 'Unquoted ordering direction must remain unchanged.');
 
+$structuralBase = 'SELECT i.title, COUNT(*) AS loans FROM inventory.instance__t i '
+    . 'GROUP BY i.title ORDER BY loans DESC';
+$structuralAliasOnly = 'select inst.title, count(*) as total_loans from inventory.instance__t inst '
+    . 'group by inst.title order by total_loans desc';
+analysisAssertSame(
+    false,
+    ExploratorySqlAnalysisService::materiallyDifferent($structuralBase, $structuralAliasOnly),
+    'Formatting and alias-only changes must have the same structural signature.'
+);
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($structuralBase, $structuralBase . ' LIMIT 10'),
+    'A LIMIT change must be material.'
+);
+$structuralNewJoin = 'SELECT i.title, COUNT(l.id) FROM inventory.instance__t i '
+    . 'JOIN circulation.loan__t l ON l.item_id = i.id GROUP BY i.title';
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::materiallyDifferent($structuralBase, $structuralNewJoin),
+    'A join change must be material.'
+);
+
+$structuralVariants = [
+    [
+        "SELECT i.title, COUNT(*) AS loans FROM inventory.instance__t i WHERE i.status = 'active' "
+            . 'GROUP BY i.title ORDER BY loans DESC',
+        'A predicate change must be material.',
+    ],
+    [
+        'SELECT i.title, i.status, COUNT(*) AS loans FROM inventory.instance__t i '
+            . 'GROUP BY i.title, i.status ORDER BY loans DESC',
+        'A grouping-grain change must be material.',
+    ],
+    [
+        'SELECT i.title, SUM(i.edition) AS loans FROM inventory.instance__t i '
+            . 'GROUP BY i.title ORDER BY loans DESC',
+        'A measure change must be material.',
+    ],
+    [
+        'SELECT i.id, COUNT(*) AS loans FROM inventory.instance__t i '
+            . 'GROUP BY i.title ORDER BY loans DESC',
+        'An output change must be material.',
+    ],
+    [
+        'SELECT i.title, COUNT(*) AS loans FROM inventory.instance__t i '
+            . 'GROUP BY i.title ORDER BY loans ASC',
+        'An ordering change must be material.',
+    ],
+];
+foreach ($structuralVariants as [$variantSql, $variantMessage]) {
+    analysisAssertSame(
+        true,
+        ExploratorySqlAnalysisService::materiallyDifferent($structuralBase, $variantSql),
+        $variantMessage
+    );
+}
+
+$structuralSignature = ExploratorySqlAnalysisService::structuralSignature($structuralBase);
+analysisAssertSame(
+    ['tables', 'joins', 'predicates', 'groupBy', 'measures', 'outputs', 'orderBy', 'limit', 'ambiguous'],
+    array_keys($structuralSignature),
+    'Structural signatures must expose every deterministic comparison dimension.'
+);
+analysisAssertSame(
+    ['inventory.instance__t.title', 'count (*)'],
+    $structuralSignature['outputs'],
+    'Output expressions must replace source aliases with physical relation names.'
+);
+analysisAssertSame(
+    [['expression' => 'count (*)', 'direction' => 'DESC']],
+    $structuralSignature['orderBy'],
+    'ORDER BY output aliases must resolve to their canonical expressions.'
+);
+analysisAssertSame(
+    true,
+    ExploratorySqlAnalysisService::structuralSignature('SELECT 1 UNION SELECT 2')['ambiguous'],
+    'Unsupported analysis must stay explicitly ambiguous in its signature.'
+);
+
 fwrite(STDOUT, "ExploratorySqlAnalysisService test passed\n");

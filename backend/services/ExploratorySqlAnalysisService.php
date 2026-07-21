@@ -73,6 +73,169 @@ class ExploratorySqlAnalysisService
         ];
     }
 
+    public static function structuralSignature(string $sql): array
+    {
+        $analysis = self::analyze($sql);
+        $sourceAliases = $analysis['sourceAliases'] ?? [];
+        $outputAliases = self::canonicalOutputAliases($analysis['selectItems'] ?? [], $sourceAliases);
+
+        return [
+            'tables' => self::sortedUnique($analysis['tables'] ?? []),
+            'joins' => self::canonicalJoins($analysis['joins'] ?? [], $sourceAliases),
+            'predicates' => self::canonicalPredicates($analysis['predicates'] ?? [], $sourceAliases),
+            'groupBy' => self::canonicalExpressionSet($analysis['groupBy'] ?? [], $sourceAliases),
+            'measures' => self::measureExpressions($analysis['selectItems'] ?? [], $sourceAliases),
+            'outputs' => self::outputExpressions($analysis['selectItems'] ?? [], $sourceAliases),
+            'orderBy' => self::canonicalOrderBy($analysis['orderBy'] ?? [], $sourceAliases, $outputAliases),
+            'limit' => $analysis['limit'] ?? null,
+            'ambiguous' => !empty($analysis['ambiguous']),
+        ];
+    }
+
+    public static function materiallyDifferent(string $initialSql, string $finalSql): bool
+    {
+        return self::structuralSignature($initialSql) !== self::structuralSignature($finalSql);
+    }
+
+    private static function sortedUnique(array $values): array
+    {
+        $values = array_values(array_unique($values));
+        sort($values, SORT_STRING);
+        return $values;
+    }
+
+    private static function canonicalJoins(array $joins, array $sourceAliases): array
+    {
+        $canonical = [];
+        foreach ($joins as $join) {
+            $canonical[] = [
+                'type' => $join['type'] ?? null,
+                'source' => $join['source'] ?? null,
+                'sourceKind' => $join['sourceKind'] ?? null,
+                'predicate' => self::canonicalExpression((string)($join['predicate'] ?? ''), $sourceAliases),
+            ];
+        }
+        usort($canonical, static function (array $left, array $right): int {
+            return strcmp(json_encode($left), json_encode($right));
+        });
+        return $canonical;
+    }
+
+    private static function canonicalPredicates(array $predicates, array $sourceAliases): array
+    {
+        $where = $predicates['where'] ?? null;
+        if ($where === null || $where === '') {
+            return [];
+        }
+
+        try {
+            $tokens = SqlSelectStructureService::tokenizeForAnalysis($where);
+        } catch (\InvalidArgumentException $exception) {
+            return [self::canonicalExpression($where, $sourceAliases)];
+        }
+        $parts = [];
+        $start = 0;
+        $base = self::baseDepth($tokens);
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) === $base && self::isKeyword($token, 'AND')) {
+                $parts[] = array_slice($tokens, $start, $index - $start);
+                $start = $index + 1;
+            }
+        }
+        $parts[] = array_slice($tokens, $start);
+
+        $expressions = array_map(static function (array $part) use ($sourceAliases): string {
+            return self::canonicalTokenExpression($part, $sourceAliases);
+        }, $parts);
+        return self::sortedUnique($expressions);
+    }
+
+    private static function canonicalExpressionSet(array $expressions, array $sourceAliases): array
+    {
+        return self::sortedUnique(self::canonicalExpressions($expressions, $sourceAliases));
+    }
+
+    private static function canonicalExpressions(array $expressions, array $sourceAliases): array
+    {
+        return array_map(static function ($expression) use ($sourceAliases): string {
+            return self::canonicalExpression((string)$expression, $sourceAliases);
+        }, $expressions);
+    }
+
+    private static function measureExpressions(array $selectItems, array $sourceAliases): array
+    {
+        $measures = [];
+        foreach ($selectItems as $item) {
+            if (!empty($item['aggregate'])) {
+                $measures[] = self::canonicalExpression((string)($item['expression'] ?? ''), $sourceAliases);
+            }
+        }
+        return $measures;
+    }
+
+    private static function outputExpressions(array $selectItems, array $sourceAliases): array
+    {
+        return array_map(static function (array $item) use ($sourceAliases): string {
+            return self::canonicalExpression((string)($item['expression'] ?? ''), $sourceAliases);
+        }, $selectItems);
+    }
+
+    private static function canonicalOutputAliases(array $selectItems, array $sourceAliases): array
+    {
+        $aliases = [];
+        foreach ($selectItems as $item) {
+            if (($item['alias'] ?? null) !== null) {
+                $aliases[$item['alias']] = self::canonicalExpression(
+                    (string)($item['expression'] ?? ''),
+                    $sourceAliases
+                );
+            }
+        }
+        return $aliases;
+    }
+
+    private static function canonicalOrderBy(array $orderBy, array $sourceAliases, array $outputAliases): array
+    {
+        $canonical = [];
+        foreach ($orderBy as $item) {
+            $expression = (string)($item['expression'] ?? '');
+            $canonicalExpression = $outputAliases[$expression]
+                ?? self::canonicalExpression($expression, $sourceAliases);
+            $canonical[] = [
+                'expression' => $canonicalExpression,
+                'direction' => $item['direction'] ?? 'ASC',
+            ];
+        }
+        return $canonical;
+    }
+
+    private static function canonicalExpression(string $expression, array $sourceAliases): string
+    {
+        try {
+            $tokens = SqlSelectStructureService::tokenizeForAnalysis($expression);
+        } catch (\InvalidArgumentException $exception) {
+            return trim($expression);
+        }
+        return self::canonicalTokenExpression($tokens, $sourceAliases);
+    }
+
+    private static function canonicalTokenExpression(array $tokens, array $sourceAliases): string
+    {
+        foreach ($tokens as $index => &$token) {
+            if (($token['kind'] ?? '') !== 'identifier'
+                || ($tokens[$index + 1]['value'] ?? '') !== '.') {
+                continue;
+            }
+            $alias = $token['value'];
+            if (isset($sourceAliases[$alias]['source'])) {
+                $token['value'] = $sourceAliases[$alias]['source'];
+                $token['quoted'] = false;
+            }
+        }
+        unset($token);
+        return self::expressionText($tokens);
+    }
+
     private static function parseCtes(array $tokens): array
     {
         $result = ['ctes' => [], 'finalTokens' => $tokens, 'ambiguous' => false];
