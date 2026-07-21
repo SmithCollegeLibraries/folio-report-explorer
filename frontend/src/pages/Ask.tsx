@@ -260,11 +260,9 @@ export function formatResolverTrace(trace: ResolverTraceEntry[] | undefined): st
       if (!label) return '';
       const status = typeof entry.status === 'string' ? entry.status.trim() : '';
       const detail = typeof entry.detail === 'string' ? entry.detail.trim() : '';
-      const technicalDetail = typeof entry.technicalDetail === 'string' ? entry.technicalDetail.trim() : '';
-      const suffix = technicalDetail ? ` (${technicalDetail})` : '';
-      if (detail) return `${label}: ${detail}${suffix}`;
+      if (detail) return `${label}: ${detail}`;
       if (status === 'no_match') return `${label}: no match`;
-      if (status === 'found') return `${label}${suffix}`;
+      if (status === 'found') return label;
       return status ? `${label}: ${status}` : label;
     })
     .filter((line): line is string => line.length > 0);

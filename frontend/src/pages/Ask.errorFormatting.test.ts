@@ -150,7 +150,7 @@ describe('Ask error formatting', () => {
     expect(input?.items?.[0].selectedValue).toBe('SC Rare Book Collection Reference');
   });
 
-  it('formats resolver trace entries for visible clarification context', () => {
+  it('formats safe resolver trace context without technical schema details', () => {
     const lines = AskPage.formatResolverTrace?.([
       {
         label: 'Checked locations, libraries, campuses, funds, material types, and other report filters for "Riverside"',
@@ -166,8 +166,9 @@ describe('Ask error formatting', () => {
 
     expect(lines).toEqual([
       'Checked locations, libraries, campuses, funds, material types, and other report filters for "Riverside": no match',
-      'Found possible match in contributor/author fields: Riverside Press (inventory.contributor__t.name)',
+      'Found possible match in contributor/author fields: Riverside Press',
     ]);
+    expect(lines?.join(' ')).not.toContain('inventory.contributor__t.name');
   });
 
   it('uses user-facing loading copy for resolver checks before SQL generation', () => {
