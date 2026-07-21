@@ -21,6 +21,11 @@ use app\services\ReferenceCacheRefreshService;
 use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
 use app\services\SqlSelectStructureService;
+use app\services\AdministratorReviewService;
+use app\services\AskConfidenceClassificationService;
+use app\services\AskGenerationEvidenceService;
+use app\services\AskResponseContractService;
+use app\services\AskUserExplanationService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -32,6 +37,11 @@ use app\models\DummyIdentity;
 use Firebase\JWT\JWT;
 
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
+require_once __DIR__ . '/../services/AdministratorReviewService.php';
+require_once __DIR__ . '/../services/AskConfidenceClassificationService.php';
+require_once __DIR__ . '/../services/AskGenerationEvidenceService.php';
+require_once __DIR__ . '/../services/AskResponseContractService.php';
+require_once __DIR__ . '/../services/AskUserExplanationService.php';
 
 /**
  * FolioQueryController — REST API for the FOLIO Report Explorer.
@@ -1623,7 +1633,11 @@ class FolioQueryController extends Controller
                     'nl2sql.prompt_block'
                 );
                 Yii::$app->response->statusCode = 403;
-                return ['error' => 'Queries about patron personal information or individual patron records are not supported. This system provides aggregate and operational library reporting only.'];
+                return $this->finalizeAskResponse([
+                    'error' => 'Queries about patron personal information or individual patron records are not supported. This system provides aggregate and operational library reporting only.',
+                    'route' => 'blocked',
+                    'routeReason' => 'ask_policy_block',
+                ], $prompt, $userId, ['policyBlocked' => true]);
             }
         }
 
@@ -1649,7 +1663,14 @@ class FolioQueryController extends Controller
                     409 => 'History job is not completed.',
                 ];
                 Yii::$app->response->statusCode = $status;
-                return ['error' => $messages[$status] ?? 'Invalid follow-up context.'];
+                return $this->finalizeAskResponse([
+                    'error' => $messages[$status] ?? 'Invalid follow-up context.',
+                    'route' => 'follow_up_context_rejected',
+                    'routeReason' => 'invalid_follow_up_context',
+                ], $prompt, $userId, [
+                    'followUpContext' => null,
+                    'parentGenerationId' => $body['parentGenerationId'] ?? null,
+                ]);
             }
 
             $effectivePrompt = $followUpContext !== null
@@ -1657,6 +1678,7 @@ class FolioQueryController extends Controller
                 : $prompt;
 
             $result = GeminiService::generateSqlWithShadow($effectivePrompt, $campus ?: null, $userId, $allowExploratory);
+            $initialSql = isset($result['sql']) ? (string)$result['sql'] : null;
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
             }
@@ -1685,12 +1707,27 @@ class FolioQueryController extends Controller
                 }
             }
 
-            return $result;
+            return $this->finalizeAskResponse($result, $prompt, $userId, [
+                'campus' => $campus ?: null,
+                'followUpContext' => $followUpContext,
+                'parentGenerationId' => $body['parentGenerationId'] ?? null,
+                'initialSql' => $initialSql,
+            ]);
         } catch (\InvalidArgumentException $e) {
-            return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
+            return $this->finalizeAskResponse(
+                $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                $prompt,
+                $userId,
+                ['initialSql' => $initialSql ?? null]
+            );
         } catch (\RuntimeException $e) {
             if ($e instanceof \app\exceptions\DatabaseQueryCancelledException) {
-                return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
+                return $this->finalizeAskResponse(
+                    $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                    $prompt,
+                    $userId,
+                    ['initialSql' => $initialSql ?? null]
+                );
             }
             if (GeminiService::isAiTimeoutMessage($e->getMessage())) {
                 Yii::warning(
@@ -1698,13 +1735,50 @@ class FolioQueryController extends Controller
                     'nl2sql.timeout'
                 );
                 Yii::$app->response->statusCode = 504;
-                return [
+                return $this->finalizeAskResponse([
                     'errorType' => 'ai_timeout',
                     'error' => 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.',
-                ];
+                    'route' => 'ai_timeout',
+                    'routeReason' => 'ai_provider_timeout',
+                ], $prompt, $userId, ['initialSql' => $initialSql ?? null]);
             }
-            return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
+            return $this->finalizeAskResponse(
+                $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                $prompt,
+                $userId,
+                ['initialSql' => $initialSql ?? null]
+            );
         }
+    }
+
+    private function finalizeAskResponse(array $result, string $prompt, $userId, array $context): array
+    {
+        $result = AskResponseContractService::normalizeMode($result);
+        $evidence = AskGenerationEvidenceService::build($result, $context + ['prompt' => $prompt]);
+        $classification = AskConfidenceClassificationService::classify($evidence);
+        try {
+            $record = $this->administratorReviewService()->recordGeneration(
+                $evidence + $classification + ['userId' => $userId]
+            );
+            $result['generationId'] = $record['generationId'];
+            $result['conversationId'] = $record['conversationId'];
+        } catch (\Throwable $exception) {
+            Yii::warning('Ask review persistence failed: ' . get_class($exception), 'nl2sql.review');
+        }
+        $result['reviewRequired'] = $classification['reviewRequired'];
+        $result['reviewNotice'] = AskUserExplanationService::notice(
+            (string)($result['mode'] ?? ''),
+            (bool)$classification['reviewRequired'],
+            $classification['reviewReasons'],
+            is_array($result['assumptions'] ?? null) ? $result['assumptions'] : []
+        );
+        unset($result['semanticValidation']);
+        return AskResponseContractService::toUserResponse($result);
+    }
+
+    protected function administratorReviewService()
+    {
+        return new AdministratorReviewService();
     }
 
     private function buildAskContinuationFromFailure(

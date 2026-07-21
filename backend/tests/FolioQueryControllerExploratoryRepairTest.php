@@ -87,6 +87,31 @@ namespace {
 
     require_once __DIR__ . '/../controllers/FolioQueryController.php';
 
+    final class CapturingAdministratorReviewService
+    {
+        public $received;
+        public $failure;
+
+        public function recordGeneration(array $context): array
+        {
+            $this->received = $context;
+            if ($this->failure !== null) {
+                throw $this->failure;
+            }
+            return ['generationId' => 'generation-1', 'conversationId' => 'conversation-1'];
+        }
+    }
+
+    final class TestableFolioQueryController extends \app\controllers\FolioQueryController
+    {
+        public $reviewService;
+
+        protected function administratorReviewService()
+        {
+            return $this->reviewService;
+        }
+    }
+
     Yii::$app = (object) [
         'response' => (object) ['statusCode' => 200, 'format' => null],
         'user' => (object) ['isGuest' => true, 'id' => null, 'identity' => null],
@@ -469,6 +494,48 @@ namespace {
     );
     repairAssertSame(1, $validatedPreflightCalls, 'Semantically validated SQL should reach database preflight.');
     repairAssertSame('SELECT purchase_count FROM purchase_data ORDER BY purchase_count DESC', $validatedResult['sql'] ?? null, 'Validated applicable SQL should be returned after preflight.');
+
+    $capturingReview = new CapturingAdministratorReviewService();
+    $finalizingController = new TestableFolioQueryController('folio-query', null);
+    $finalizingController->reviewService = $capturingReview;
+    $finalize = new ReflectionMethod($finalizingController, 'finalizeAskResponse');
+    $finalized = $finalize->invoke($finalizingController, [
+        'mode' => 'exploratory',
+        'route' => 'exploratory_recovery',
+        'validationSummary' => [
+            'status' => 'exhausted',
+            'validatorStage' => 'semantic_conformance',
+            'failureCategory' => 'semantic_coverage_gap',
+        ],
+        'unmetRequirements' => [[
+            'key' => 'purchase_date_basis',
+            'label' => 'Use the resolved purchase date basis.',
+        ]],
+    ], 'Build ROI', 12, []);
+    repairAssertSame('semantic_conformance', $capturingReview->received['confidenceEvidence']['validatorStage'] ?? null, 'Persistence must receive the internal validator stage.');
+    repairAssertSame('semantic_coverage_gap', $capturingReview->received['confidenceEvidence']['failureCategory'] ?? null, 'Persistence must receive the internal failure category.');
+    repairAssertSame(['purchase_date_basis'], $capturingReview->received['confidenceEvidence']['unmetRequirementKeys'] ?? null, 'Persistence must receive internal requirement keys.');
+    repairAssertSame('generation-1', $finalized['generationId'] ?? null, 'Persisted Ask outcomes must return their generation identifier.');
+    repairAssertSame('conversation-1', $finalized['conversationId'] ?? null, 'Persisted Ask outcomes must return their conversation identifier.');
+    repairAssertSame(true, $finalized['reviewRequired'] ?? null, 'Exhausted outcomes must be flagged for review.');
+    repairAssertSame(false, isset($finalized['validationSummary']['validatorStage']), 'Ordinary responses must omit internal validator stages.');
+    repairAssertSame(false, isset($finalized['validationSummary']['failureCategory']), 'Ordinary responses must omit internal failure categories.');
+    repairAssertSame(false, isset($finalized['unmetRequirements']), 'Ordinary responses must omit internal requirement keys.');
+
+    $capturingReview->failure = new RuntimeException('database unavailable');
+    $safeSql = $finalize->invoke($finalizingController, [
+        'mode' => 'exploratory',
+        'route' => 'exploratory_legacy_freeform',
+        'sql' => 'SELECT title FROM inventory.instance__t',
+        'validationSummary' => ['status' => 'validated'],
+        'semanticValidation' => [
+            'status' => 'validated',
+            'checkedRequirements' => [['key' => 'private_semantic_rule']],
+        ],
+    ], 'Show titles', 12, []);
+    repairAssertSame('SELECT title FROM inventory.instance__t', $safeSql['sql'] ?? null, 'Persistence failure must not strip otherwise safe SQL.');
+    repairAssertSame(false, isset($safeSql['generationId']), 'Identifiers must only be returned when persistence succeeds.');
+    repairAssertSame(false, isset($safeSql['semanticValidation']), 'Ordinary validated responses must not expose internal semantic requirement keys.');
 
     $freshSemanticPreflightCalls = 0;
     $staleSemanticRepairCalls = 0;

@@ -62,9 +62,11 @@ namespace {
     class Yii
     {
         public static $app;
+        public static $warnings = [];
 
         public static function warning($message, $category = 'application')
         {
+            self::$warnings[] = ['message' => $message, 'category' => $category];
         }
     }
 
@@ -97,6 +99,27 @@ namespace {
     }
 
     require_once $controllerPath;
+
+    final class PolicyCapturingReviewService
+    {
+        public $received;
+
+        public function recordGeneration(array $context): array
+        {
+            $this->received = $context;
+            return ['generationId' => 'policy-generation', 'conversationId' => 'policy-conversation'];
+        }
+    }
+
+    final class PolicyFinalizingController extends \app\controllers\FolioQueryController
+    {
+        public $reviewService;
+
+        protected function administratorReviewService()
+        {
+            return $this->reviewService;
+        }
+    }
 
     Yii::$app = (object) [
         'response' => new FakeAskContinuationResponse(),
@@ -147,6 +170,34 @@ namespace {
 
     assertSameValue(403, Yii::$app->response->statusCode, 'Security and patron-PII policy failures should remain blocked.');
     assertContainsText('aggregate', $policyFailure['error'] ?? '', 'Policy blocks should offer an allowed aggregate-reporting alternative.');
+
+    $policyRecorder = new PolicyCapturingReviewService();
+    $policyController = new PolicyFinalizingController('folio-query', null);
+    $policyController->reviewService = $policyRecorder;
+    $finalize = new ReflectionMethod($policyController, 'finalizeAskResponse');
+    $finalizedPolicy = $finalize->invoke(
+        $policyController,
+        $policyFailure,
+        'List all patron emails',
+        17,
+        ['policyBlocked' => true]
+    );
+    assertSameValue(false, $policyRecorder->received['reviewRequired'] ?? null, 'Policy outcomes must be recorded without creating administrator review work.');
+    assertSameValue(true, $policyRecorder->received['policyBlocked'] ?? null, 'Persistence must receive trusted policy-block evidence.');
+    assertSameValue('policy-generation', $finalizedPolicy['generationId'] ?? null, 'Recorded policy outcomes must return their generation identifier.');
+    assertSameValue(false, $finalizedPolicy['reviewRequired'] ?? null, 'Ordinary policy responses must disclose that no review is required.');
+
+    $clarificationRecorder = new PolicyCapturingReviewService();
+    $policyController->reviewService = $clarificationRecorder;
+    $finalizedClarification = $finalize->invoke($policyController, [
+        'route' => 'clarification',
+        'routeReason' => 'ambiguous_reporting_meaning',
+        'needsClarification' => true,
+        'clarificationQuestion' => 'Which reporting meaning do you want?',
+    ], 'Show unused books', 17, []);
+    assertSameValue(false, $clarificationRecorder->received['reviewRequired'] ?? null, 'Clarification outcomes must be recorded without administrator review.');
+    assertSameValue(null, $clarificationRecorder->received['executionMode'] ?? null, 'Clarifications must not acquire an execution mode.');
+    assertSameValue(false, $finalizedClarification['reviewRequired'] ?? null, 'Clarification responses must not be review flagged.');
 
     $controllerSource = file_get_contents($controllerPath);
     assertContainsText(
