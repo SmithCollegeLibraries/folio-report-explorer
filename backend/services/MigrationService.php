@@ -246,7 +246,7 @@ class MigrationService
 
     private static function databaseAppearsCurrent($db): bool
     {
-        foreach (['users', 'query_jobs', 'report_templates', 'ai_clarification_events', 'ai_query_feedback', 'folio_reference_tables'] as $table) {
+        foreach (['users', 'query_jobs', 'report_templates', 'ai_clarification_events', 'ai_query_feedback', 'folio_reference_tables', 'ai_report_generations', 'ai_report_reviews'] as $table) {
             if ($db->schema->getTableSchema($table, true) === null) {
                 return false;
             }
@@ -337,6 +337,8 @@ class MigrationService
                 return self::budgetYearFundReportFiscalYearOptionsAppearComplete($db);
             case '037_budget_year_fund_report_payment_distributions.sql':
                 return self::budgetYearFundReportPaymentDistributionsAppearComplete($db);
+            case '039_ask_ai_report_review.sql':
+                return self::hasTable($db, 'ai_report_generations') && self::hasTable($db, 'ai_report_reviews');
         }
 
         return false;

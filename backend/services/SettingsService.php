@@ -89,6 +89,16 @@ class SettingsService
         return $default;
     }
 
+    public static function getAiReportReviewRetentionDays()
+    {
+        $days = (int) self::get(
+            'ai_report_review_retention_days',
+            'AI_REPORT_REVIEW_RETENTION_DAYS',
+            90
+        );
+        return max(1, min(3650, $days));
+    }
+
     /**
      * Return the masked version for display (hide passwords).
      */
@@ -141,6 +151,7 @@ class SettingsService
                 ),
                 FILTER_VALIDATE_BOOLEAN
             ),
+            'ai_report_review_retention_days' => self::getAiReportReviewRetentionDays(),
         ];
         return $display;
     }

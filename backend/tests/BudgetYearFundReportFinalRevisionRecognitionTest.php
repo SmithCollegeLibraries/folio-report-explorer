@@ -124,7 +124,16 @@ class FinalRevisionSchema
 {
     public function getTableSchema(string $table, bool $refresh = false)
     {
-        $tables = ['users', 'query_jobs', 'report_templates', 'ai_clarification_events', 'ai_query_feedback', 'folio_reference_tables'];
+        $tables = [
+            'users',
+            'query_jobs',
+            'report_templates',
+            'ai_clarification_events',
+            'ai_query_feedback',
+            'folio_reference_tables',
+            'ai_report_generations',
+            'ai_report_reviews',
+        ];
         if (!in_array($table, $tables, true)) {
             return null;
         }
