@@ -66,8 +66,17 @@ $outcome = ExploratorySqlRepairService::run(
 );
 
 assertSameValue('validated', $outcome['status'], 'A repairable first failure should be repaired.');
-assertSameValue(['sql' => 'SELECT id FROM inventory.item__t'], $outcome['result'], 'The validated attempt result should be returned.');
+assertSameValue('SELECT id FROM inventory.item__t', $outcome['result']['sql'] ?? null, 'The validated attempt result should be returned.');
 assertSameValue(1, $outcome['repairAttempts'], 'One repair should be recorded.');
+assertSameValue(
+    [
+        'initialSql' => 'SELECT bad_column FROM inventory.item__t',
+        'finalSql' => 'SELECT id FROM inventory.item__t',
+        'repairAttempts' => 1,
+    ],
+    $outcome['result']['_askEvidence'] ?? null,
+    'A repaired result must retain the genuine initial candidate, final candidate, and repair count as trusted internal evidence.'
+);
 assertSameValue(2, $calls, 'Only initial generation and one repair should run.');
 assertSameValue(
     [
@@ -184,6 +193,8 @@ assertSameValue(2, $preflightOutcome['repairAttempts'], 'A successful remaining 
 assertSameValue(1, $preflightCalls, 'One used repair should leave only one repair call available.');
 assertSameValue(2, $preflightContexts[0]['repairNumber'], 'The remaining repair should preserve shared repair numbering.');
 assertSameValue('database_preflight', $preflightContexts[0]['validatorStage'], 'The remaining repair should receive the preflight stage.');
+assertSameValue('SELECT missing FROM inventory.item__t', $preflightOutcome['result']['_askEvidence']['initialSql'] ?? null, 'A supplied preflight failure candidate must become the initial trusted candidate when no older candidate is available.');
+assertSameValue('SELECT id FROM inventory.item__t', $preflightOutcome['result']['_askEvidence']['finalSql'] ?? null, 'A successful preflight repair must retain its final candidate.');
 
 $semanticViolations = [[
     'key' => 'purchase_date_basis',

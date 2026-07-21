@@ -15,18 +15,29 @@ class ExploratorySqlRepairService
         ?ExploratorySqlValidationException $initialFailure = null
     ): array {
         $repairAttempts = max(0, min(self::MAX_REPAIR_ATTEMPTS, $repairAttemptsUsed));
+        $initialSql = self::contextInitialSql($context);
         $attemptContext = self::sanitizeContext($context);
         $failure = $initialFailure;
 
         if ($failure === null) {
             try {
-                return self::validatedOutcome($attempt(self::withFailureContext($attemptContext, 0, null)), $repairAttempts);
+                return self::validatedOutcome(
+                    $attempt(self::withFailureContext($attemptContext, 0, null)),
+                    $repairAttempts,
+                    $initialSql
+                );
             } catch (ExploratorySqlValidationException $exception) {
                 self::assertRepairable($exception);
                 $failure = $exception;
+                if ($initialSql === null) {
+                    $initialSql = self::nullableSql($exception->getCandidateSql());
+                }
             }
         } else {
             self::assertRepairable($failure);
+            if ($initialSql === null) {
+                $initialSql = self::nullableSql($failure->getCandidateSql());
+            }
         }
 
         while ($repairAttempts < self::MAX_REPAIR_ATTEMPTS) {
@@ -35,7 +46,8 @@ class ExploratorySqlRepairService
             try {
                 return self::validatedOutcome(
                     $attempt(self::withFailureContext($attemptContext, $repairAttempts, $failure)),
-                    $repairAttempts
+                    $repairAttempts,
+                    $initialSql
                 );
             } catch (ExploratorySqlValidationException $exception) {
                 self::assertRepairable($exception);
@@ -99,13 +111,44 @@ class ExploratorySqlRepairService
         ]);
     }
 
-    private static function validatedOutcome(array $result, int $repairAttempts): array
+    private static function validatedOutcome(
+        array $result,
+        int $repairAttempts,
+        ?string $initialSql
+    ): array
     {
+        $finalSql = self::nullableSql($result['sql'] ?? null);
+        $existingEvidence = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
+        $result['_askEvidence'] = array_merge($existingEvidence, [
+            'initialSql' => $initialSql ?? $finalSql,
+            'finalSql' => $finalSql,
+            'repairAttempts' => $repairAttempts,
+        ]);
+
         return [
             'status' => 'validated',
             'result' => $result,
             'repairAttempts' => $repairAttempts,
         ];
+    }
+
+    private static function contextInitialSql(array $context): ?string
+    {
+        $internalEvidence = is_array($context['_askEvidence'] ?? null)
+            ? $context['_askEvidence']
+            : [];
+        return self::nullableSql($internalEvidence['initialSql'] ?? $context['initialSql'] ?? null);
+    }
+
+    private static function nullableSql($sql): ?string
+    {
+        if (!is_string($sql)) {
+            return null;
+        }
+        $sql = trim($sql);
+        return $sql === '' ? null : $sql;
     }
 
     private static function assertRepairable(ExploratorySqlValidationException $exception): void

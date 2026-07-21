@@ -160,7 +160,13 @@ class Yii
     public static $logs = [];
     public static $aliases = [];
 
-    public static function getAlias($alias) { return self::$aliases[$alias] ?? (__DIR__ . '/../data/settings.json'); }
+    public static function getAlias($alias)
+    {
+        if ($alias === '@app/data/reference_cache.json') {
+            return __DIR__ . '/../data/reference_cache.json';
+        }
+        return self::$aliases[$alias] ?? (__DIR__ . '/../data/settings.json');
+    }
     public static function info($message, $category = null) { self::$logs[] = ['level' => 'info', 'message' => $message, 'category' => $category]; }
     public static function warning($message, $category = null) { self::$logs[] = ['level' => 'warning', 'message' => $message, 'category' => $category]; }
 }
@@ -168,6 +174,7 @@ class Yii
 Yii::$app = (object)['params' => [
     'aiProvider' => 'gemini',
     'geminiApiKey' => 'test-key',
+    'geminiModel' => 'test-model',
     'geminiMaxRetries' => 1,
     'nl2sqlForceLegacy' => false,
     'nl2sqlHardenedPhysicalRoi' => true,
@@ -256,6 +263,14 @@ Yii::$logs = [];
 $repaired = GeminiService::generateSqlWithShadow('Show item identifiers for inventory.', 'Smith College', null, true);
 repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $repaired['sql'] ?? null, 'A bad initial table should be replaced by the valid repair candidate.');
 repairAssertSame(1, $repaired['repairAttempts'] ?? null, 'One automatic repair should be reported.');
+repairAssertSame('SELECT mt.id FROM inventory.missing_table__t mt', $repaired['_askEvidence']['initialSql'] ?? null, 'Gemini exploratory repair must retain the genuine pre-repair candidate.');
+repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $repaired['_askEvidence']['finalSql'] ?? null, 'Gemini exploratory repair must retain the validated final candidate.');
+repairAssertSame(1, $repaired['_askEvidence']['repairAttempts'] ?? null, 'Gemini exploratory repair evidence must retain the actual repair count.');
+repairAssertSame('test-model', $repaired['_askEvidence']['modelName'] ?? null, 'Gemini generation must propagate the trusted configured model name.');
+repairAssertSame(GeminiService::LEGACY_PROMPT_VERSION, $repaired['_askEvidence']['promptVersion'] ?? null, 'Gemini generation must propagate the trusted prompt version.');
+repairAssertSame('test', $repaired['_askEvidence']['schemaMetadata']['version'] ?? null, 'Gemini generation must propagate the trusted schema version.');
+repairAssertSame('2026-06-11T15:41:49+00:00', $repaired['_askEvidence']['referenceBundleMetadata']['version'] ?? null, 'Gemini generation must propagate the server-side reference bundle version.');
+repairAssertSame(64, strlen((string)($repaired['_askEvidence']['referenceBundleMetadata']['hash'] ?? '')), 'Gemini generation must propagate a SHA-256 reference bundle hash.');
 repairAssertSame('validated', $repaired['validationSummary']['status'] ?? null, 'Successful exploratory SQL should be marked validated.');
 repairAssertSame(0, count($repaired['assumptions'] ?? []), 'Unrelated exploratory requests should not receive ROI assumptions.');
 repairAssertSame(false, isset($repaired['semanticValidation']), 'Non-applicable exploratory requests should not display a false semantic checklist.');

@@ -9,6 +9,7 @@ use app\exceptions\ExploratorySqlValidationException;
 
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/AskResponseContractService.php';
+require_once __DIR__ . '/ReferenceJsonBundleService.php';
 require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
 require_once __DIR__ . '/ExploratoryRoiSqlCompilerService.php';
 require_once __DIR__ . '/HardenedPhysicalRoiSqlCompilerService.php';
@@ -138,6 +139,7 @@ class GeminiService
      */
     public static function generateSqlWithShadow($prompt, $campus = null, $userId = null, $allowExploratory = false)
     {
+        $referenceBundleMetadata = self::buildReferenceBundleMetadata();
         $referenceResolution = ReferenceResolverService::resolvePrompt((string)$prompt, $userId);
         self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt((string)$prompt));
         if (!empty($referenceResolution['needsClarification'])) {
@@ -155,7 +157,10 @@ class GeminiService
                 'modelClarificationFallbackReason' => $referenceResolution['modelClarificationFallbackReason'] ?? null,
                 'dataSource' => null,
             ]);
-            return AskResponseContractService::normalizeMode($referenceResolution);
+            return AskResponseContractService::normalizeMode(self::withAskEvidence(
+                $referenceResolution,
+                ['referenceBundleMetadata' => $referenceBundleMetadata]
+            ));
         }
 
         $effectivePrompt = ReferenceResolverService::appendGuidanceToPrompt((string)$prompt, $referenceResolution);
@@ -175,7 +180,10 @@ class GeminiService
                 'clarificationKey' => $clarification['clarificationKey'] ?? null,
                 'dataSource' => null,
             ]);
-            return AskResponseContractService::normalizeMode($clarification);
+            return AskResponseContractService::normalizeMode(self::withAskEvidence(
+                $clarification,
+                ['referenceBundleMetadata' => $referenceBundleMetadata]
+            ));
         }
 
         if ($allowExploratory) {
@@ -192,7 +200,10 @@ class GeminiService
                 ];
             }
 
-            return AskResponseContractService::normalizeMode($primary);
+            return AskResponseContractService::normalizeMode(self::withAskEvidence(
+                $primary,
+                ['referenceBundleMetadata' => $referenceBundleMetadata]
+            ));
         }
 
         // Route on the raw user prompt, not the resolver-augmented prompt: the
@@ -212,7 +223,10 @@ class GeminiService
                 ];
             }
 
-            return AskResponseContractService::normalizeMode($primary);
+            return AskResponseContractService::normalizeMode(self::withAskEvidence(
+                $primary,
+                ['referenceBundleMetadata' => $referenceBundleMetadata]
+            ));
         }
 
         $primaryMode = self::resolvePrimaryModeForPrompt((string)$prompt, $campus);
@@ -234,7 +248,10 @@ class GeminiService
         }
 
         if (!self::shouldRunShadowForUser($userId, $effectivePrompt)) {
-            return AskResponseContractService::normalizeMode($primary);
+            return AskResponseContractService::normalizeMode(self::withAskEvidence(
+                $primary,
+                ['referenceBundleMetadata' => $referenceBundleMetadata]
+            ));
         }
 
         $shadowMode = $primaryMode === 'intent' ? 'legacy' : 'intent';
@@ -260,7 +277,10 @@ class GeminiService
             ], true);
         }
 
-        return AskResponseContractService::normalizeMode($primary);
+        return AskResponseContractService::normalizeMode(self::withAskEvidence(
+            $primary,
+            ['referenceBundleMetadata' => $referenceBundleMetadata]
+        ));
     }
 
     private static function generateExploratorySqlResponse(string $prompt, $campus = null, string $reason = 'unsupported_query_family'): array
@@ -329,6 +349,16 @@ class GeminiService
                         $compiledFallback,
                         $semanticContract
                     );
+                    $compiledFallback = self::withAskEvidence(
+                        $compiledFallback,
+                        array_merge(
+                            is_array($outcome['_askEvidence'] ?? null) ? $outcome['_askEvidence'] : [],
+                            [
+                                'finalSql' => $compiledFallback['sql'] ?? null,
+                                'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
+                            ]
+                        )
+                    );
                     $outcome = [
                         'status' => 'validated',
                         'result' => $compiledFallback,
@@ -354,7 +384,15 @@ class GeminiService
                 (string)($outcome['failureCategory'] ?? 'validation_failure'),
                 (int)($outcome['repairAttempts'] ?? 0)
             );
-            return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
+            $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
+            return self::withAskEvidence(
+                self::buildExploratoryRecoveryResponse($context, $outcome, $reason),
+                [
+                    'modelName' => self::getAiModel(),
+                    'promptVersion' => self::LEGACY_PROMPT_VERSION,
+                    'schemaMetadata' => self::schemaMetadata(self::buildSchemaTelemetry($schemaContext)),
+                ]
+            );
         }
 
         $primary = self::decorateExploratoryResponse($outcome['result'], $reason);
@@ -363,6 +401,13 @@ class GeminiService
             $assumptions,
             (int)$outcome['repairAttempts']
         );
+        $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
+        $primary = self::withAskEvidence($primary, [
+            'modelName' => self::getAiModel(),
+            'promptVersion' => self::LEGACY_PROMPT_VERSION,
+            'schemaMetadata' => self::schemaMetadata(self::buildSchemaTelemetry($schemaContext)),
+            'compilerVersion' => $primary['compilerVersion'] ?? null,
+        ]);
 
         self::logRouteSelection('exploratory_legacy_freeform', $reason, [
             'query' => [],
@@ -451,6 +496,9 @@ class GeminiService
             ],
             'repeatabilityWarning' => self::getExploratoryRepeatabilityWarning(),
             'exploratoryNotice' => self::buildExploratoryNotice($reason),
+            '_askEvidence' => is_array($outcome['_askEvidence'] ?? null)
+                ? $outcome['_askEvidence']
+                : [],
         ];
     }
 
@@ -1221,6 +1269,11 @@ PROMPT;
             'elapsedMs' => $requestResult['elapsedMs'] ?? null,
         ] + $schemaTelemetry);
 
+        $parsed = self::withAskEvidence($parsed, [
+            'modelName' => $model,
+            'promptVersion' => self::LEGACY_PROMPT_VERSION,
+            'schemaMetadata' => self::schemaMetadata($schemaTelemetry),
+        ]);
         return $parsed;
     }
 
@@ -1466,6 +1519,12 @@ PROMPT;
             'dataSource' => $dataSource,
             'route' => 'builder_intent',
             'routeReason' => 'intent_supported',
+            '_askEvidence' => [
+                'queryFamily' => null,
+                'modelName' => $model,
+                'promptVersion' => $promptVersion,
+                'schemaMetadata' => self::schemaMetadata($schemaTelemetry),
+            ],
         ];
     }
 
@@ -1903,6 +1962,47 @@ GUIDANCE;
             'schemaContextBytes' => strlen((string)$schemaContext),
             'schemaVersion' => $metadata['scraped_at'] ?? null,
         ];
+    }
+
+    private static function schemaMetadata(array $telemetry): array
+    {
+        return [
+            'version' => $telemetry['schemaVersion'] ?? null,
+            'contextHash' => $telemetry['schemaContextHash'] ?? null,
+            'contextBytes' => isset($telemetry['schemaContextBytes'])
+                ? (int)$telemetry['schemaContextBytes']
+                : null,
+        ];
+    }
+
+    private static function buildReferenceBundleMetadata(): ?array
+    {
+        try {
+            $bundle = ReferenceJsonBundleService::loadBundle();
+            if ($bundle === []) {
+                return null;
+            }
+            $encoded = json_encode($bundle, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($encoded === false) {
+                return null;
+            }
+            return [
+                'version' => isset($bundle['generated_at']) ? (string)$bundle['generated_at'] : null,
+                'hash' => hash('sha256', $encoded),
+            ];
+        } catch (\Throwable $exception) {
+            return null;
+        }
+    }
+
+    private static function withAskEvidence(array $result, array $evidence): array
+    {
+        $existing = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
+        unset($evidence['modelConfidence']);
+        $result['_askEvidence'] = array_merge($existing, $evidence);
+        return $result;
     }
 
     /**
@@ -3347,6 +3447,12 @@ PROMPT;
             'elapsedMs' => $telemetryContext['elapsedMs'] ?? null,
         ] + $telemetryContext);
 
+        $compiledFamily = self::withAskEvidence($compiledFamily, [
+            'queryFamily' => (string)($normalizedPayload['familyKey'] ?? $queryFamily['familyKey'] ?? ''),
+            'modelName' => $telemetryContext['model'] ?? null,
+            'promptVersion' => $telemetryContext['promptVersion'] ?? null,
+            'schemaMetadata' => self::schemaMetadata($telemetryContext),
+        ]);
         unset($compiledFamily['queryDefinition']);
         return $compiledFamily;
     }
@@ -5432,6 +5538,9 @@ PROMPT;
             ),
             'route' => $currentResult['route'] ?? 'exploratory',
             'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
+            '_askEvidence' => is_array($currentResult['_askEvidence'] ?? null)
+                ? $currentResult['_askEvidence']
+                : [],
         ];
         $failure = new ExploratorySqlValidationException(
             'database_preflight',
@@ -5560,7 +5669,11 @@ PROMPT;
         $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
         try {
-            return self::parseResponse($text);
+            return self::withAskEvidence(self::parseResponse($text), [
+                'modelName' => $model,
+                'promptVersion' => self::LEGACY_PROMPT_VERSION,
+                'schemaMetadata' => self::schemaMetadata(self::buildSchemaTelemetry($schemaContext)),
+            ]);
         } catch (\InvalidArgumentException $exception) {
             $candidateSql = '';
             try {

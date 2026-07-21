@@ -532,10 +532,24 @@ namespace {
             'status' => 'validated',
             'checkedRequirements' => [['key' => 'private_semantic_rule']],
         ],
+        '_askEvidence' => [
+            'initialSql' => 'SELECT id FROM inventory.item__t',
+            'finalSql' => 'SELECT title FROM inventory.instance__t',
+            'repairAttempts' => 1,
+            'queryFamily' => 'trusted_exploratory_family',
+            'modelName' => 'trusted-model',
+            'promptVersion' => 'trusted-prompt.v1',
+            'schemaMetadata' => ['version' => 'schema-v1'],
+            'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+        ],
     ], 'Show titles', 12, []);
     repairAssertSame('SELECT title FROM inventory.instance__t', $safeSql['sql'] ?? null, 'Persistence failure must not strip otherwise safe SQL.');
     repairAssertSame(false, isset($safeSql['generationId']), 'Identifiers must only be returned when persistence succeeds.');
     repairAssertSame(false, isset($safeSql['semanticValidation']), 'Ordinary validated responses must not expose internal semantic requirement keys.');
+    repairAssertSame(true, $capturingReview->received['materialRepair'] ?? null, 'Persistence must classify the genuine Gemini repair as material even without a controller repair.');
+    repairAssertSame('trusted_exploratory_family', $capturingReview->received['queryFamily'] ?? null, 'Persistence must receive the trusted generation family.');
+    repairAssertSame('trusted-model', $capturingReview->received['provenance']['modelName'] ?? null, 'Persistence must receive trusted generation provenance.');
+    repairAssertSame(false, isset($safeSql['_askEvidence']), 'Ordinary responses must not expose trusted internal candidate or provenance fields.');
 
     $freshSemanticPreflightCalls = 0;
     $staleSemanticRepairCalls = 0;

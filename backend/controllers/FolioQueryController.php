@@ -1772,7 +1772,7 @@ class FolioQueryController extends Controller
             $classification['reviewReasons'],
             is_array($result['assumptions'] ?? null) ? $result['assumptions'] : []
         );
-        unset($result['semanticValidation']);
+        unset($result['semanticValidation'], $result['_askEvidence']);
         return AskResponseContractService::toUserResponse($result);
     }
 

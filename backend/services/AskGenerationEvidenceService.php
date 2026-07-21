@@ -19,9 +19,15 @@ final class AskGenerationEvidenceService
 
     public static function build(array $result, array $requestContext): array
     {
+        $internalEvidence = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
         $route = self::nullableString($result['route'] ?? null);
         $compilerVersion = self::nullableString(
-            $result['compilerVersion'] ?? $requestContext['compilerVersion'] ?? null
+            $internalEvidence['compilerVersion']
+                ?? $result['compilerVersion']
+                ?? $requestContext['compilerVersion']
+                ?? null
         );
         $mode = self::nullableString($result['mode'] ?? null);
         if ($compilerVersion === 'physical_roi_v2') {
@@ -29,13 +35,15 @@ final class AskGenerationEvidenceService
         }
 
         $initialSql = self::candidateSql(
-            $requestContext['initialSql']
+            $internalEvidence['initialSql']
                 ?? $result['initialSql']
+                ?? $requestContext['initialSql']
                 ?? $result['initialCandidate']
                 ?? null
         );
         $finalSql = self::candidateSql(
-            $requestContext['finalSql']
+            $internalEvidence['finalSql']
+                ?? $requestContext['finalSql']
                 ?? $result['sql']
                 ?? $result['finalCandidate']
                 ?? null
@@ -68,7 +76,8 @@ final class AskGenerationEvidenceService
             || $route === 'blocked'
             || ($result['routeReason'] ?? null) === 'ask_policy_block';
         $repairAttempts = max(0, min(2, (int)(
-            $result['repairAttempts']
+            $internalEvidence['repairAttempts']
+                ?? $result['repairAttempts']
                 ?? $validationSummary['repairAttempts']
                 ?? $requestContext['repairAttempts']
                 ?? 0
@@ -93,20 +102,30 @@ final class AskGenerationEvidenceService
         $provenance = [
             'compilerVersion' => $compilerVersion,
             'modelName' => self::nullableString(
-                $result['modelName']
+                $internalEvidence['modelName']
+                    ?? $result['modelName']
                     ?? $result['model']
                     ?? $requestContext['modelName']
                     ?? $requestContext['model']
                     ?? null
             ),
             'promptVersion' => self::nullableString(
-                $result['promptVersion'] ?? $requestContext['promptVersion'] ?? null
+                $internalEvidence['promptVersion']
+                    ?? $result['promptVersion']
+                    ?? $requestContext['promptVersion']
+                    ?? null
             ),
             'referenceBundleMetadata' => self::nullableArray(
-                $result['referenceBundleMetadata'] ?? $requestContext['referenceBundleMetadata'] ?? null
+                $internalEvidence['referenceBundleMetadata']
+                    ?? $result['referenceBundleMetadata']
+                    ?? $requestContext['referenceBundleMetadata']
+                    ?? null
             ),
             'schemaMetadata' => self::nullableArray(
-                $result['schemaMetadata'] ?? $requestContext['schemaMetadata'] ?? null
+                $internalEvidence['schemaMetadata']
+                    ?? $result['schemaMetadata']
+                    ?? $requestContext['schemaMetadata']
+                    ?? null
             ),
             'semanticContractVersion' => self::nullableScalar(
                 $semanticValidation['contractVersion']
@@ -146,7 +165,10 @@ final class AskGenerationEvidenceService
             'route' => $route,
             'routeReason' => self::nullableString($result['routeReason'] ?? null),
             'queryFamily' => self::nullableString(
-                $result['queryFamily'] ?? $requestContext['queryFamily'] ?? null
+                $internalEvidence['queryFamily']
+                    ?? $result['queryFamily']
+                    ?? $requestContext['queryFamily']
+                    ?? null
             ),
             'validationStatus' => $validationStatus,
             'generatedSql' => $finalSql,

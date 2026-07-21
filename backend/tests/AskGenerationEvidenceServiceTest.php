@@ -96,6 +96,31 @@ evidenceAssertSame('exploratory', $physicalRoi['mode'], 'physical_roi_v2 must re
 evidenceAssertSame('exploratory', $physicalRoi['executionMode'], 'physical_roi_v2 must never be promoted to deterministic.');
 evidenceAssertSame('physical_roi_v2', $physicalRoi['provenance']['compilerVersion'], 'Compiler provenance must be retained.');
 
+$trustedInternal = AskGenerationEvidenceService::build([
+    'mode' => 'exploratory',
+    'route' => 'exploratory_legacy_freeform',
+    'sql' => 'SELECT title, COUNT(*) FROM inventory.instance__t GROUP BY title',
+    '_askEvidence' => [
+        'initialSql' => 'SELECT title FROM inventory.instance__t',
+        'finalSql' => 'SELECT title, COUNT(*) FROM inventory.instance__t GROUP BY title',
+        'repairAttempts' => 1,
+        'queryFamily' => 'trusted_family',
+        'modelName' => 'trusted-model',
+        'promptVersion' => 'trusted-prompt.v1',
+        'schemaMetadata' => ['version' => 'schema-v1'],
+        'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+    ],
+], [
+    'prompt' => 'Show grouped titles',
+    'initialSql' => 'SELECT title, COUNT(*) FROM inventory.instance__t GROUP BY title',
+    'queryFamily' => 'untrusted_request_family',
+]);
+evidenceAssertSame(true, $trustedInternal['materialRepair'], 'Trusted Gemini repair history must take precedence over the controller-observed final candidate.');
+evidenceAssertSame('trusted_family', $trustedInternal['queryFamily'], 'Trusted generation family must take precedence over request context.');
+evidenceAssertSame('trusted-model', $trustedInternal['provenance']['modelName'], 'Trusted model provenance must reach persistence evidence.');
+evidenceAssertSame(['version' => 'schema-v1'], $trustedInternal['provenance']['schemaMetadata'], 'Trusted schema metadata must reach persistence evidence.');
+evidenceAssertSame(['version' => 'bundle-v1', 'hash' => 'bundle-hash'], $trustedInternal['provenance']['referenceBundleMetadata'], 'Trusted reference bundle metadata must reach persistence evidence.');
+
 evidenceAssertSame(
     [
         'compilerVersion' => null,
