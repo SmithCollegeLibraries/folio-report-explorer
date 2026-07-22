@@ -269,6 +269,18 @@ describe('Ask error formatting', () => {
     expect(notice?.title).toBe('AI-assisted query');
     expect(notice?.message).toContain('verified report pattern');
     expect(notice?.message).not.toContain('canonical compiler');
+    expect(notice?.message).not.toMatch(/review (the )?(results and )?sql/i);
+  });
+
+  it('keeps SQL inspection optional in progress copy', () => {
+    const copy = AskPage.getAskProgressCopy?.('building_sql_after_clarification');
+
+    expect(copy?.steps.join(' ')).not.toMatch(/review (the )?sql/i);
+  });
+
+  it('offers reuse choices without assigning SQL review to the user', () => {
+    expect(AskPage.ASK_REUSE_CANDIDATE_MESSAGE).toContain('use the previous query');
+    expect(AskPage.ASK_REUSE_CANDIDATE_MESSAGE).not.toMatch(/review (the )?sql/i);
   });
 
   it('does not treat advisory exploratory results as blocking clarifications', () => {

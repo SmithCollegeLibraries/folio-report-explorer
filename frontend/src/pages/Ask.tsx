@@ -11,6 +11,7 @@ import ResultsModal from '../components/ResultsModal';
 import { ExploratoryAssumptionsPanel } from '../components/ExploratoryAssumptionsPanel';
 import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel';
 import { ExploratorySemanticValidationPanel } from '../components/ExploratorySemanticValidationPanel';
+import AskTrustNotice from '../components/AskTrustNotice';
 import { useToast } from '../components/ToastProvider';
 import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
@@ -57,9 +58,11 @@ export const ASK_RESOLVER_LOADING_STEPS = [
 export const ASK_SQL_GENERATION_LOADING_STEPS = [
   'Applying your selected clarification to the request',
   'Checking whether the request now has enough context for SQL generation',
-  'Starting AI SQL generation; review the SQL and results for accuracy',
+  'Starting AI SQL generation and preparing the result',
   'Automatically repairing SQL that does not pass validation',
 ];
+
+export const ASK_REUSE_CANDIDATE_MESSAGE = 'A similar question has been answered successfully before. You can use the previous query, edit it, or generate a new one.';
 
 export type AskProgressPhase = 'checking_request' | 'building_sql_after_clarification';
 
@@ -221,7 +224,7 @@ export function getExploratoryNoticeCopy(
   return {
     title: result.exploratoryNotice?.title?.trim() || 'AI-assisted query',
     message: result.exploratoryNotice?.message?.trim()
-      || 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+      || 'I could not match this request to a verified report pattern, so I built a best-effort query with the assumptions shown here.',
     detail: result.exploratoryNotice?.detail?.trim()
       || (result.mode === 'exploratory'
         ? 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.'
@@ -237,19 +240,6 @@ export function isExploratoryValidationHardStop(
   summary: NlResponse['validationSummary'] | null | undefined,
 ): boolean {
   return summary?.status === 'exhausted' || summary?.status === 'rejected';
-}
-
-function ExploratoryNoticePanel({ result }: { result: NlResponse | null }) {
-  const notice = getExploratoryNoticeCopy(result);
-  if (!notice) return null;
-
-  return (
-    <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-      <div className="font-semibold">{notice.title}</div>
-      <div className="mt-1">{notice.message}</div>
-      {notice.detail && <div className="mt-1 text-xs text-sky-800">{notice.detail}</div>}
-    </div>
-  );
 }
 
 export function formatResolverTrace(trace: ResolverTraceEntry[] | undefined): string[] {
@@ -1393,7 +1383,7 @@ export default function Ask() {
                   Previous successful query found
                 </div>
                 <p className="mt-1 text-sm text-folio-900">
-                  A similar question has been answered successfully before. Review the SQL below, edit it if needed, or generate new SQL instead.
+                  {ASK_REUSE_CANDIDATE_MESSAGE}
                 </p>
               </div>
               <span className="shrink-0 rounded border border-folio-200 bg-white px-2 py-1 text-xs font-medium text-folio-700">
@@ -2099,7 +2089,12 @@ export default function Ask() {
 
         {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && !isExploratoryValidationHardStop(nlResult.validationSummary) && (
           <div className="mx-auto w-full max-w-6xl p-3 space-y-3">
-            <ExploratoryNoticePanel result={nlResult} />
+            <AskTrustNotice
+              mode={nlResult.mode}
+              reviewRequired={nlResult.reviewRequired}
+              reviewNotice={nlResult.reviewNotice}
+              assumptions={nlResult.assumptions}
+            />
             {nlResult.mode === 'exploratory'
               && ((nlResult.assumptions?.length ?? 0) > 0 || (nlResult.reportDisclosures?.length ?? 0) > 0)
               && (

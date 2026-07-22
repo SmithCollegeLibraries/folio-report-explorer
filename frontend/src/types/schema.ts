@@ -771,6 +771,11 @@ export interface HistoryItem {
   completedAt: string | null;
   runBy: string | null;
   canDelete: boolean;
+  reviewAdvisory?: {
+    state: 'cautioned' | 'superseded';
+    message: string;
+    supersededByJobId?: string;
+  };
 }
 
 export interface HistoryResponse {
