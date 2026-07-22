@@ -49,4 +49,17 @@ askResponseAssertSame(
 );
 askResponseAssertSame(false, isset($user['needsExploratoryApproval']), 'User responses should omit obsolete approval state.');
 
+$ordinaryRecovery = AskResponseContractService::toUserResponse([
+    'mode' => 'exploratory',
+    'route' => 'exploratory_recovery',
+    'recoveryContext' => ['originalQuestion' => 'Show title for instance number in0001.'],
+    'suggestions' => ['Keep each requested identifier exactly as supplied.'],
+    '_askEvidence' => [
+        'explicitReportRequest' => ['identifiers' => ['instance_hrid' => ['in0001']]],
+        'explicitReportRequestProvenance' => 'server_extracted',
+    ],
+]);
+askResponseAssertSame(false, isset($ordinaryRecovery['_askEvidence']), 'Ordinary responses must not expose internal explicit-value evidence.');
+askResponseAssertSame('Show title for instance number in0001.', $ordinaryRecovery['recoveryContext']['originalQuestion'] ?? null, 'Ordinary recovery context must retain the raw user question.');
+
 fwrite(STDOUT, "Ask response contract service test passed\n");

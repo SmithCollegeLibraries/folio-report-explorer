@@ -214,7 +214,8 @@ class GeminiService
             $primary = self::generateExploratorySqlResponse(
                 (string)$effectivePrompt,
                 $campus,
-                'user_requested_exploratory_generation'
+                'user_requested_exploratory_generation',
+                (string)$prompt
             );
 
             if (!empty($referenceResolution['guidanceLines'])) {
@@ -238,7 +239,12 @@ class GeminiService
             $exploratoryReason = self::promptRequiresLegacyFreeform($effectivePrompt)
                 ? 'canonical_path_unavailable_for_marc_source_records'
                 : 'unsupported_query_family';
-            $primary = self::generateExploratorySqlResponse((string)$effectivePrompt, $campus, $exploratoryReason);
+            $primary = self::generateExploratorySqlResponse(
+                (string)$effectivePrompt,
+                $campus,
+                $exploratoryReason,
+                (string)$prompt
+            );
 
             if (!empty($referenceResolution['guidanceLines'])) {
                 $primary['referenceResolver'] = [
@@ -257,6 +263,10 @@ class GeminiService
         $primary = $primaryMode === 'intent'
             ? self::generateSql($effectivePrompt, $campus, false, true)
             : self::generateSql($effectivePrompt, $campus, true, false);
+        $primary = self::rejectRoutedCandidateMissingExplicitValues(
+            $primary,
+            (string)$prompt
+        );
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
             $primary['routeReason'] = !empty(Yii::$app->params['nl2sqlForceLegacy'])
@@ -307,8 +317,16 @@ class GeminiService
         ));
     }
 
-    private static function generateExploratorySqlResponse(string $prompt, $campus = null, string $reason = 'unsupported_query_family'): array
+    private static function generateExploratorySqlResponse(
+        string $prompt,
+        $campus = null,
+        string $reason = 'unsupported_query_family',
+        ?string $originalPrompt = null
+    ): array
     {
+        $originalPrompt = $originalPrompt === null
+            ? ExplicitReportRequestService::removeGuidance($prompt)
+            : $originalPrompt;
         $assumptions = ExploratoryQueryDefaultsService::resolve($prompt);
         $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
         $useHardenedPhysicalRoi = self::useHardenedPhysicalRoi();
@@ -320,7 +338,8 @@ class GeminiService
             ['physicalRoiPolicyVersion' => $useHardenedPhysicalRoi ? 'v2' : 'legacy']
         );
         $context = [
-            'originalQuestion' => $prompt,
+            'originalQuestion' => $originalPrompt,
+            'generationPrompt' => $prompt,
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
@@ -3479,6 +3498,14 @@ PROMPT;
             return $compiledFamily;
         }
 
+        $explicitValidation = self::explicitReportValueValidation(
+            (string)($compiledFamily['sql'] ?? ''),
+            (string)$prompt
+        );
+        if ($explicitValidation !== null) {
+            return self::buildExplicitValuesNoResultResponse($compiledFamily);
+        }
+
         self::logRouteSelection('builder_intent', $routeReason, [
             'intentVersion' => QueryIntentService::CONTRACT_VERSION,
             'query' => [
@@ -5672,7 +5699,9 @@ PROMPT;
         }
 
         $model = self::getAiModel();
-        $question = (string)($context['originalQuestion'] ?? '');
+        $question = trim((string)($context['generationPrompt'] ?? '')) !== ''
+            ? (string)$context['generationPrompt']
+            : (string)($context['originalQuestion'] ?? '');
         $schemaContext = FolioSchemaService::buildSchemaContext($question);
         $assumptionGuidance = ExploratoryQueryDefaultsService::buildPromptGuidance(
             is_array($context['assumptions'] ?? null) ? $context['assumptions'] : []
@@ -5776,13 +5805,8 @@ PROMPT;
 
     private static function validateExplicitReportValues(string $sql, string $prompt): void
     {
-        $request = ExplicitReportRequestService::extract($prompt);
-        if (empty($request['applicable']) || !empty($request['needsClarification'])) {
-            return;
-        }
-
-        $validation = ExplicitReportRequestService::validateCandidate($sql, $request);
-        if (!empty($validation['valid'])) {
+        $validation = self::explicitReportValueValidation($sql, $prompt);
+        if ($validation === null) {
             return;
         }
 
@@ -5794,7 +5818,7 @@ PROMPT;
                 'key' => 'explicit_identifier_' . $position,
                 'category' => 'explicit_values',
                 'label' => 'Explicit report identifier',
-                'guidance' => 'Preserve every server-extracted explicit identifier in the SQL filter.',
+                'guidance' => 'Keep every requested identifier exactly as supplied.',
             ];
         }
         foreach (($validation['missingFields'] ?? []) as $unusedField) {
@@ -5803,7 +5827,7 @@ PROMPT;
                 'key' => 'explicit_output_' . $position,
                 'category' => 'explicit_values',
                 'label' => 'Requested report output',
-                'guidance' => 'Return every server-extracted requested output field with its supported alias.',
+                'guidance' => 'Keep every requested output field in the report.',
             ];
         }
         if (empty($validation['limitValid'])) {
@@ -5811,7 +5835,7 @@ PROMPT;
                 'key' => 'explicit_limit',
                 'category' => 'explicit_values',
                 'label' => 'Explicit report limit',
-                'guidance' => 'Preserve the server-extracted LIMIT value exactly.',
+                'guidance' => 'Keep the requested result limit exactly.',
             ];
         }
 
@@ -5824,6 +5848,47 @@ PROMPT;
             null,
             $violations
         );
+    }
+
+    private static function explicitReportValueValidation(string $sql, string $prompt): ?array
+    {
+        $request = ExplicitReportRequestService::extract($prompt);
+        if (empty($request['applicable']) || !empty($request['needsClarification'])) {
+            return null;
+        }
+
+        $validation = ExplicitReportRequestService::validateCandidate($sql, $request);
+        return !empty($validation['valid']) ? null : $validation;
+    }
+
+    private static function buildExplicitValuesNoResultResponse(array $candidate): array
+    {
+        return [
+            'mode' => 'exploratory',
+            'exploratory' => true,
+            'route' => 'explicit_values_unmet',
+            'routeReason' => 'explicit_values_unmet',
+            'needsClarification' => false,
+            'message' => 'I could not build a report that preserves every value you supplied exactly. Please retry or simplify the request.',
+            'suggestions' => ['Retry the request with the same identifiers and fields.'],
+            'validationSummary' => [
+                'status' => 'rejected',
+                'message' => 'The generated report did not preserve every requested value.',
+            ],
+            '_askEvidence' => is_array($candidate['_askEvidence'] ?? null)
+                ? $candidate['_askEvidence']
+                : [],
+        ];
+    }
+
+    private static function rejectRoutedCandidateMissingExplicitValues(array $candidate, string $prompt): array
+    {
+        if (!isset($candidate['sql'])
+            || self::explicitReportValueValidation((string)$candidate['sql'], $prompt) === null) {
+            return $candidate;
+        }
+
+        return self::buildExplicitValuesNoResultResponse($candidate);
     }
 
     private static function runExploratorySqlAttempt(array $context, callable $attempt): array

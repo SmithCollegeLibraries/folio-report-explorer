@@ -57,6 +57,24 @@ $uuidRequest = ExplicitReportRequestService::extract('For instance ID 550e8400-e
 explicitAssertSame(['550e8400-e29b-41d4-a716-446655440000'], $uuidRequest['identifiers']['instance_id'], 'UUID instance identifiers require an explicit instance ID label.');
 explicitAssertSame(['550e8400-e29b-41d4-a716-446655440001'], $uuidRequest['identifiers']['item_id'], 'UUID item identifiers require an explicit item ID label.');
 
+$uppercaseUuid = 'ABCDEFAB-CDEF-CDEF-CDEF-ABCDEFABCDEF';
+$uppercaseUuidRequest = ExplicitReportRequestService::extract('For instance ID ' . $uppercaseUuid . ', show title.');
+explicitAssertSame([$uppercaseUuid], $uppercaseUuidRequest['identifiers']['instance_id'], 'Explicit UUID spelling and case must be preserved exactly.');
+
+$alphabeticBarcode = ExplicitReportRequestService::extract('For barcode ABCD-EFGH, show title.');
+explicitAssertSame(['ABCD-EFGH'], $alphabeticBarcode['identifiers']['item_barcode'], 'Explicitly labelled alphabetic barcodes must be preserved.');
+explicitAssertSame(['title'], $alphabeticBarcode['requestedFields'], 'Identifier labels must not become requested output fields.');
+
+$identifierOnlyPrompt = ExplicitReportRequestService::extract('For barcode 32101012345678, show title.');
+explicitAssertSame(['title'], $identifierOnlyPrompt['requestedFields'], 'Fields must be extracted only from output-request language.');
+
+$overflowPrompt = 'For instance numbers ' . implode(', ', array_map(function ($number): string {
+    return 'in' . str_pad((string)$number, 4, '0', STR_PAD_LEFT);
+}, range(1, 501))) . ', show title.';
+$overflowRequest = ExplicitReportRequestService::extract($overflowPrompt);
+explicitAssertTrue($overflowRequest['needsClarification'], 'More than 500 explicit identifiers must request clarification.');
+explicitAssertSame(500, count($overflowRequest['identifiers']['instance_hrid'] ?? []), 'Overflow handling must cap retained identifiers at 500.');
+
 $ordinaryNumbers = ExplicitReportRequestService::extract('Show spending for 2024 with a $20.00 threshold and top 10 results.');
 explicitAssertFalse($ordinaryNumbers['applicable'], 'Years, currency, and unlabeled numeric tokens must not become identifiers.');
 explicitAssertSame([], $ordinaryNumbers['identifiers'], 'Unlabeled numeric tokens must not produce identifiers.');
@@ -78,5 +96,18 @@ $missingField = ExplicitReportRequestService::validateCandidate(
     $request
 );
 explicitAssertSame(['publication_date'], $missingField['missingFields'], 'Omitted supported output fields must be reported.');
+
+$unboundIdentifier = ExplicitReportRequestService::validateCandidate(
+    "SELECT 'in0001' AS note, inst.title FROM inventory.instance__t inst WHERE inst.title = 'unrelated' LIMIT 20",
+    ExplicitReportRequestService::extract('For instance number in0001, show title. Limit 20.')
+);
+explicitAssertFalse($unboundIdentifier['valid'], 'An identifier literal outside its supported filter column must not satisfy validation.');
+explicitAssertSame(['in0001'], $unboundIdentifier['missingIdentifiers'], 'Identifier validation must require the matching entity filter.');
+
+$lowercaseUuidCandidate = ExplicitReportRequestService::validateCandidate(
+    "SELECT inst.title FROM inventory.instance__t inst WHERE inst.id = 'abcdefab-cdef-cdef-cdef-abcdefabcdef'",
+    $uppercaseUuidRequest
+);
+explicitAssertFalse($lowercaseUuidCandidate['valid'], 'A changed UUID case must not satisfy exact-preservation validation.');
 
 fwrite(STDOUT, "ExplicitReportRequestService test passed\n");

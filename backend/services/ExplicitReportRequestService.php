@@ -35,7 +35,7 @@ final class ExplicitReportRequestService
             self::extractAnchoredValues(
                 $prompt,
                 '/\b(?:item\s+)?barcodes?\b\s*(?:are|is|of|:|=)?\s*/i',
-                '/^(?:[a-z0-9_-]*[0-9][a-z0-9_-]*)$/i'
+                '/^[a-z0-9_-]+$/i'
             )
         );
         self::appendIdentifiers(
@@ -104,22 +104,29 @@ final class ExplicitReportRequestService
         return $guidance === '' ? $prompt : $prompt . "\n\n" . $guidance;
     }
 
+    public static function removeGuidance(string $prompt): string
+    {
+        $marker = "\n\nEXPLICIT REPORT VALUES — preserve exactly:\n";
+        $position = strpos($prompt, $marker);
+        return $position === false ? $prompt : substr($prompt, 0, $position);
+    }
+
     public static function validateCandidate(string $sql, array $request): array
     {
-        $literals = self::sqlStringLiterals($sql);
+        $analysis = ExploratorySqlAnalysisService::analyze($sql);
         $missingIdentifiers = [];
-        foreach (($request['identifiers'] ?? []) as $values) {
+        foreach (($request['identifiers'] ?? []) as $kind => $values) {
             if (!is_array($values)) {
                 continue;
             }
             foreach ($values as $value) {
-                if (!in_array(self::normalizeIdentifier((string)$value), $literals, true)) {
+                if (!self::hasIdentifierFilter($analysis, (string)$kind, (string)$value)) {
                     $missingIdentifiers[] = (string)$value;
                 }
             }
         }
 
-        $outputAliases = self::outputAliases($sql);
+        $outputAliases = self::outputAliases($analysis);
         $missingFields = [];
         foreach (($request['requestedFields'] ?? []) as $field) {
             if (!in_array((string)$field, $outputAliases, true)) {
@@ -155,7 +162,7 @@ final class ExplicitReportRequestService
         $offset = 0;
         while (preg_match('/\G\s*(?:,|;|\band\b)?\s*(?:"([^"]+)"|\'([^\']+)\'|([a-z0-9_-]+))\s*/i', $tail, $match, 0, $offset) === 1) {
             $value = $match[1] !== '' ? $match[1] : ($match[2] !== '' ? $match[2] : $match[3]);
-            if (preg_match($valuePattern, $value) !== 1) {
+            if (self::isValueSequenceTerminator($value) || preg_match($valuePattern, $value) !== 1) {
                 break;
             }
             $values[] = self::normalizeIdentifier($value);
@@ -179,9 +186,16 @@ final class ExplicitReportRequestService
     private static function requestedFields(string $prompt): array
     {
         $positions = [];
-        foreach (self::OUTPUT_PATTERNS as $field => $pattern) {
-            if (preg_match($pattern, $prompt, $match, PREG_OFFSET_CAPTURE) === 1) {
-                $positions[$field] = $match[0][1];
+        if (preg_match_all('/\b(?:show|include|return|display|provide|generate)\b([^.!?]*)/i', $prompt, $clauses, PREG_OFFSET_CAPTURE) !== false) {
+            foreach ($clauses[1] as $clause) {
+                foreach (self::OUTPUT_PATTERNS as $field => $pattern) {
+                    if (preg_match($pattern, $clause[0], $match, PREG_OFFSET_CAPTURE) === 1) {
+                        $position = $clause[1] + $match[0][1];
+                        if (!isset($positions[$field]) || $position < $positions[$field]) {
+                            $positions[$field] = $position;
+                        }
+                    }
+                }
             }
         }
         asort($positions, SORT_NUMERIC);
@@ -222,25 +236,16 @@ final class ExplicitReportRequestService
 
     private static function normalizeIdentifier(string $value): string
     {
-        $value = trim($value);
-        return preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $value) === 1
-            ? strtolower($value)
-            : $value;
+        return trim($value);
     }
 
-    private static function sqlStringLiterals(string $sql): array
+    private static function isValueSequenceTerminator(string $value): bool
     {
-        preg_match_all("/'((?:''|[^'])*)'/", $sql, $matches);
-        $literals = [];
-        foreach ($matches[1] as $literal) {
-            $literals[] = self::normalizeIdentifier(str_replace("''", "'", $literal));
-        }
-        return array_values(array_unique($literals));
+        return preg_match('/^(?:and|show|include|return|display|provide|generate|list|limit|where|with)$/i', $value) === 1;
     }
 
-    private static function outputAliases(string $sql): array
+    private static function outputAliases(array $analysis): array
     {
-        $analysis = ExploratorySqlAnalysisService::analyze($sql);
         $aliases = [];
         foreach (($analysis['selectItems'] ?? []) as $item) {
             $alias = strtolower(trim((string)($item['alias'] ?? '')));
@@ -249,6 +254,43 @@ final class ExplicitReportRequestService
             }
         }
         return array_values(array_unique($aliases));
+    }
+
+    private static function hasIdentifierFilter(array $analysis, string $kind, string $value): bool
+    {
+        foreach (($analysis['predicates']['literalPredicates'] ?? []) as $predicate) {
+            if (!self::predicateMatchesIdentifierKind($analysis, $predicate, $kind)) {
+                continue;
+            }
+            foreach (($predicate['values'] ?? []) as $candidateValue) {
+                if (self::normalizeIdentifier((string)$candidateValue) === self::normalizeIdentifier($value)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static function predicateMatchesIdentifierKind(array $analysis, array $predicate, string $kind): bool
+    {
+        $expected = [
+            'instance_hrid' => ['table' => 'inventory.instance__t', 'column' => 'hrid'],
+            'item_barcode' => ['table' => 'inventory.item__t', 'column' => 'barcode'],
+            'instance_id' => ['table' => 'inventory.instance__t', 'column' => 'id'],
+            'item_id' => ['table' => 'inventory.item__t', 'column' => 'id'],
+        ][$kind] ?? null;
+        if ($expected === null || !empty($predicate['negated'])) {
+            return false;
+        }
+
+        $parts = explode('.', strtolower((string)($predicate['column'] ?? '')));
+        $column = array_pop($parts);
+        $alias = array_pop($parts);
+        if ($column !== $expected['column'] || $alias === null) {
+            return false;
+        }
+
+        return strtolower((string)($analysis['sourceAliases'][$alias]['source'] ?? '')) === $expected['table'];
     }
 
     private static function limitMatches(string $sql, $requestedLimit): bool

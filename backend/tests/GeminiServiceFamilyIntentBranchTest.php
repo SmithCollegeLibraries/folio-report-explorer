@@ -136,6 +136,34 @@ assertSameValue('test-model', $canonicalEvidence['_askEvidence']['modelName'] ??
 assertSameValue('family_slot_prompt.v1', $canonicalEvidence['_askEvidence']['promptVersion'] ?? null, 'Canonical family results must retain prompt provenance.');
 assertSameValue('2026-07-21T00:00:00Z', $canonicalEvidence['_askEvidence']['schemaMetadata']['version'] ?? null, 'Canonical family results must retain schema provenance.');
 
+$explicitFamilyCandidate = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Josten Library',
+            'requested_outputs' => ['title'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_library_location_listing'],
+    'For instance number in0001, show title in Josten Library.',
+    'Smith College',
+    ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+    function (): array {
+        return [
+            'sql' => 'SELECT inst.title FROM inventory.instance__t inst',
+            'dataSource' => 'folio',
+            'route' => 'builder_intent',
+            'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+            'queryDefinition' => ['tables' => [], 'columns' => [], 'filters' => [], 'joins' => []],
+        ];
+    }
+);
+assertSameValue(false, isset($explicitFamilyCandidate['sql']), 'A routed family candidate that omits an explicit identifier must return a safe no-result response.');
+assertSameValue('explicit_values_unmet', $explicitFamilyCandidate['routeReason'] ?? null, 'Explicit-value omissions must have a stable safe family outcome.');
+
 $routerFallback = $familyBranch->invoke(
     null,
     [

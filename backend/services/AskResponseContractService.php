@@ -33,6 +33,7 @@ final class AskResponseContractService
             unset($result['validationSummary']['failureCategory']);
             unset($result['validationSummary']['validatorStage']);
         }
+        unset($result['_askEvidence']);
         return $result;
     }
 }

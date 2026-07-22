@@ -84,6 +84,9 @@ class ExploratorySqlRepairService
             'originalQuestion' => is_string($context['originalQuestion'] ?? null)
                 ? $context['originalQuestion']
                 : '',
+            'generationPrompt' => is_string($context['generationPrompt'] ?? null)
+                ? $context['generationPrompt']
+                : '',
             'campus' => is_string($context['campus'] ?? null)
                 ? $context['campus']
                 : null,

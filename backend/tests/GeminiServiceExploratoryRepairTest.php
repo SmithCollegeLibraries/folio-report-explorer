@@ -493,6 +493,19 @@ repairAssertSame($exhaustedPrompt, $exhausted['recoveryContext']['originalQuesti
 repairAssertSame('unknown_table', $exhausted['validationSummary']['failureCategory'] ?? null, 'Recovery should expose only the safe failure category.');
 repairAssertSame('exhausted', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Repair exhaustion should emit a terminal exhausted outcome.');
 
+$explicitRecoveryPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
+TestTransport::$responses = [
+    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+];
+Yii::$logs = [];
+$explicitRecovery = GeminiService::generateSqlWithShadow($explicitRecoveryPrompt, null, null, true);
+repairAssertSame(false, isset($explicitRecovery['sql']), 'Exhausted explicit-value generation must not return an invalid SQL candidate.');
+repairAssertSame($explicitRecoveryPrompt, $explicitRecovery['recoveryContext']['originalQuestion'] ?? null, 'Recovery context must retain the raw user question, not server guidance.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT VALUES') !== false, 'Exhausted ordinary responses must not expose server-authored explicit-value guidance.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Exhausted ordinary responses must not expose SQL-oriented repair guidance.');
+
 TestTransport::$responses = [
     geminiText(semanticallyFlawedRoiSql()),
     geminiText(semanticallyFlawedRoiSql()),
