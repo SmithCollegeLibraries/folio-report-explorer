@@ -5895,8 +5895,9 @@ PROMPT;
         array $candidate
     ): array {
         $candidate['repairAttempts'] = (int)($candidate['repairAttempts'] ?? 0);
+        $rawPrompt = ExplicitReportRequestService::removeGuidance($prompt);
         $repaired = self::repairExploratorySqlAfterPreflight(
-            $prompt,
+            $rawPrompt,
             $campus,
             $candidate,
             'Explicit report values were not preserved.'

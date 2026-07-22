@@ -57,6 +57,10 @@ $uuidRequest = ExplicitReportRequestService::extract('For instance ID 550e8400-e
 explicitAssertSame(['550e8400-e29b-41d4-a716-446655440000'], $uuidRequest['identifiers']['instance_id'], 'UUID instance identifiers require an explicit instance ID label.');
 explicitAssertSame(['550e8400-e29b-41d4-a716-446655440001'], $uuidRequest['identifiers']['item_id'], 'UUID item identifiers require an explicit item ID label.');
 
+$pluralUuidRequest = ExplicitReportRequestService::extract('For instance IDs 550e8400-e29b-41d4-a716-446655440000 and item IDs 550e8400-e29b-41d4-a716-446655440001, show title.');
+explicitAssertSame(['550e8400-e29b-41d4-a716-446655440000'], $pluralUuidRequest['identifiers']['instance_id'], 'Plural instance ID anchors must extract explicit UUIDs.');
+explicitAssertSame(['550e8400-e29b-41d4-a716-446655440001'], $pluralUuidRequest['identifiers']['item_id'], 'Plural item ID anchors must extract explicit UUIDs.');
+
 $uppercaseUuid = 'ABCDEFAB-CDEF-CDEF-CDEF-ABCDEFABCDEF';
 $uppercaseUuidRequest = ExplicitReportRequestService::extract('For instance ID ' . $uppercaseUuid . ', show title.');
 explicitAssertSame([$uppercaseUuid], $uppercaseUuidRequest['identifiers']['instance_id'], 'Explicit UUID spelling and case must be preserved exactly.');
@@ -70,6 +74,9 @@ explicitAssertSame(['title'], $identifierOnlyPrompt['requestedFields'], 'Fields 
 
 $fieldBeforeIdentifier = ExplicitReportRequestService::extract('Show title for barcode ABCD-EFGH.');
 explicitAssertSame(['title'], $fieldBeforeIdentifier['requestedFields'], 'Output fields must stop before an identifier filter phrase.');
+
+$filteredByIdentifier = ExplicitReportRequestService::extract('Show title filtered by barcode ABCD-EFGH.');
+explicitAssertSame(['title'], $filteredByIdentifier['requestedFields'], 'Output fields must stop before a filtered-by identifier phrase.');
 
 $overflowPrompt = 'For instance numbers ' . implode(', ', array_map(function ($number): string {
     return 'in' . str_pad((string)$number, 4, '0', STR_PAD_LEFT);

@@ -43,7 +43,7 @@ final class ExplicitReportRequestService
             'instance_id',
             self::extractAnchoredValues(
                 $prompt,
-                '/\binstance\s+id\b\s*(?:are|is|of|:|=)?\s*/i',
+                '/\binstance\s+ids?\b\s*(?:are|is|of|:|=)?\s*/i',
                 '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i'
             )
         );
@@ -52,7 +52,7 @@ final class ExplicitReportRequestService
             'item_id',
             self::extractAnchoredValues(
                 $prompt,
-                '/\bitem\s+id\b\s*(?:are|is|of|:|=)?\s*/i',
+                '/\bitem\s+ids?\b\s*(?:are|is|of|:|=)?\s*/i',
                 '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i'
             )
         );
@@ -205,7 +205,7 @@ final class ExplicitReportRequestService
 
     private static function outputTextBeforeIdentifierFilter(string $text): string
     {
-        $pattern = '/\b(?:for|where|with|using|matching)\s+(?:an?\s+)?(?:instance\s*(?:numbers?|hrids?|id)|item\s+id|(?:item\s+)?barcodes?)\b/i';
+        $pattern = '/\b(?:for|where|with|using|matching|filtered\s+by)\s+(?:an?\s+)?(?:instance\s*(?:numbers?|hrids?|ids?)|item\s+ids?|(?:item\s+)?barcodes?)\b/i';
         if (preg_match($pattern, $text, $match, PREG_OFFSET_CAPTURE) !== 1) {
             return $text;
         }
