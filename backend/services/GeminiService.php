@@ -263,9 +263,10 @@ class GeminiService
         $primary = $primaryMode === 'intent'
             ? self::generateSql($effectivePrompt, $campus, false, true)
             : self::generateSql($effectivePrompt, $campus, true, false);
-        $primary = self::rejectRoutedCandidateMissingExplicitValues(
+        $primary = self::repairRoutedCandidateMissingExplicitValues(
             $primary,
-            (string)$prompt
+            (string)$prompt,
+            $campus
         );
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
@@ -3359,7 +3360,8 @@ PROMPT;
         $campus,
         array $telemetryContext,
         $familyResultBuilder = null,
-        $exploratoryFallbackFactory = null
+        $exploratoryFallbackFactory = null,
+        $explicitRepairFactory = null
     ): array {
         $recoveredIntent = self::recoverPromptScopedFamilySlotsWithProvenance(
             $intent,
@@ -3503,7 +3505,19 @@ PROMPT;
             (string)$prompt
         );
         if ($explicitValidation !== null) {
-            return self::buildExplicitValuesNoResultResponse($compiledFamily);
+            $repair = $explicitRepairFactory === null
+                ? function (string $repairPrompt, $repairCampus, array $candidate): array {
+                    return self::repairRoutedCandidateAfterExplicitFailure(
+                        $repairPrompt,
+                        $repairCampus,
+                        $candidate
+                    );
+                }
+                : $explicitRepairFactory;
+            return self::withKnownFamilyEvidence(
+                $repair((string)$prompt, $campus, $compiledFamily),
+                (string)($normalizedPayload['familyKey'] ?? $queryFamily['familyKey'] ?? '')
+            );
         }
 
         self::logRouteSelection('builder_intent', $routeReason, [
@@ -5861,34 +5875,36 @@ PROMPT;
         return !empty($validation['valid']) ? null : $validation;
     }
 
-    private static function buildExplicitValuesNoResultResponse(array $candidate): array
-    {
-        return [
-            'mode' => 'exploratory',
-            'exploratory' => true,
-            'route' => 'explicit_values_unmet',
-            'routeReason' => 'explicit_values_unmet',
-            'needsClarification' => false,
-            'message' => 'I could not build a report that preserves every value you supplied exactly. Please retry or simplify the request.',
-            'suggestions' => ['Retry the request with the same identifiers and fields.'],
-            'validationSummary' => [
-                'status' => 'rejected',
-                'message' => 'The generated report did not preserve every requested value.',
-            ],
-            '_askEvidence' => is_array($candidate['_askEvidence'] ?? null)
-                ? $candidate['_askEvidence']
-                : [],
-        ];
-    }
-
-    private static function rejectRoutedCandidateMissingExplicitValues(array $candidate, string $prompt): array
+    private static function repairRoutedCandidateMissingExplicitValues(
+        array $candidate,
+        string $prompt,
+        $campus
+    ): array
     {
         if (!isset($candidate['sql'])
             || self::explicitReportValueValidation((string)$candidate['sql'], $prompt) === null) {
             return $candidate;
         }
 
-        return self::buildExplicitValuesNoResultResponse($candidate);
+        return self::repairRoutedCandidateAfterExplicitFailure($prompt, $campus, $candidate);
+    }
+
+    private static function repairRoutedCandidateAfterExplicitFailure(
+        string $prompt,
+        $campus,
+        array $candidate
+    ): array {
+        $candidate['repairAttempts'] = (int)($candidate['repairAttempts'] ?? 0);
+        $repaired = self::repairExploratorySqlAfterPreflight(
+            $prompt,
+            $campus,
+            $candidate,
+            'Explicit report values were not preserved.'
+        );
+        return self::withAskEvidence(
+            $repaired,
+            is_array($candidate['_askEvidence'] ?? null) ? $candidate['_askEvidence'] : []
+        );
     }
 
     private static function runExploratorySqlAttempt(array $context, callable $attempt): array

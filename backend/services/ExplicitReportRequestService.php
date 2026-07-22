@@ -188,8 +188,9 @@ final class ExplicitReportRequestService
         $positions = [];
         if (preg_match_all('/\b(?:show|include|return|display|provide|generate)\b([^.!?]*)/i', $prompt, $clauses, PREG_OFFSET_CAPTURE) !== false) {
             foreach ($clauses[1] as $clause) {
+                $outputText = self::outputTextBeforeIdentifierFilter($clause[0]);
                 foreach (self::OUTPUT_PATTERNS as $field => $pattern) {
-                    if (preg_match($pattern, $clause[0], $match, PREG_OFFSET_CAPTURE) === 1) {
+                    if (preg_match($pattern, $outputText, $match, PREG_OFFSET_CAPTURE) === 1) {
                         $position = $clause[1] + $match[0][1];
                         if (!isset($positions[$field]) || $position < $positions[$field]) {
                             $positions[$field] = $position;
@@ -200,6 +201,15 @@ final class ExplicitReportRequestService
         }
         asort($positions, SORT_NUMERIC);
         return array_keys($positions);
+    }
+
+    private static function outputTextBeforeIdentifierFilter(string $text): string
+    {
+        $pattern = '/\b(?:for|where|with|using|matching)\s+(?:an?\s+)?(?:instance\s*(?:numbers?|hrids?|id)|item\s+id|(?:item\s+)?barcodes?)\b/i';
+        if (preg_match($pattern, $text, $match, PREG_OFFSET_CAPTURE) !== 1) {
+            return $text;
+        }
+        return substr($text, 0, $match[0][1]);
     }
 
     private static function extractLimit(string $prompt): ?int
@@ -258,20 +268,25 @@ final class ExplicitReportRequestService
 
     private static function hasIdentifierFilter(array $analysis, string $kind, string $value): bool
     {
-        foreach (($analysis['predicates']['literalPredicates'] ?? []) as $predicate) {
-            if (!self::predicateMatchesIdentifierKind($analysis, $predicate, $kind)) {
-                continue;
-            }
-            foreach (($predicate['values'] ?? []) as $candidateValue) {
-                if (self::normalizeIdentifier((string)$candidateValue) === self::normalizeIdentifier($value)) {
-                    return true;
+        foreach (self::analysisScopes($analysis) as $scope) {
+            foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
+                if (!self::predicateMatchesIdentifierKind($scope, $predicate, $kind)) {
+                    continue;
                 }
+                foreach (($predicate['values'] ?? []) as $candidateValue) {
+                    if (self::normalizeIdentifier((string)$candidateValue) === self::normalizeIdentifier($value)) {
+                        return true;
+                    }
+                }
+            }
+            if (self::hasUnqualifiedIdentifierFilter($scope, $kind, $value)) {
+                return true;
             }
         }
         return false;
     }
 
-    private static function predicateMatchesIdentifierKind(array $analysis, array $predicate, string $kind): bool
+    private static function predicateMatchesIdentifierKind(array $scope, array $predicate, string $kind): bool
     {
         $expected = [
             'instance_hrid' => ['table' => 'inventory.instance__t', 'column' => 'hrid'],
@@ -279,7 +294,9 @@ final class ExplicitReportRequestService
             'instance_id' => ['table' => 'inventory.instance__t', 'column' => 'id'],
             'item_id' => ['table' => 'inventory.item__t', 'column' => 'id'],
         ][$kind] ?? null;
-        if ($expected === null || !empty($predicate['negated'])) {
+        if ($expected === null
+            || !empty($predicate['negated'])
+            || !in_array(strtoupper((string)($predicate['operator'] ?? '')), ['=', 'IN'], true)) {
             return false;
         }
 
@@ -290,7 +307,50 @@ final class ExplicitReportRequestService
             return false;
         }
 
-        return strtolower((string)($analysis['sourceAliases'][$alias]['source'] ?? '')) === $expected['table'];
+        return strtolower((string)($scope['sourceAliases'][$alias]['source'] ?? '')) === $expected['table'];
+    }
+
+    private static function analysisScopes(array $analysis): array
+    {
+        $scopes = [$analysis];
+        foreach (($analysis['ctes'] ?? []) as $cte) {
+            if (is_array($cte)) {
+                $scopes[] = $cte;
+            }
+        }
+        return $scopes;
+    }
+
+    private static function hasUnqualifiedIdentifierFilter(array $scope, string $kind, string $value): bool
+    {
+        $expected = [
+            'instance_hrid' => ['table' => 'inventory.instance__t', 'column' => 'hrid'],
+            'item_barcode' => ['table' => 'inventory.item__t', 'column' => 'barcode'],
+            'instance_id' => ['table' => 'inventory.instance__t', 'column' => 'id'],
+            'item_id' => ['table' => 'inventory.item__t', 'column' => 'id'],
+        ][$kind] ?? null;
+        if ($expected === null || !self::scopeHasOnlyExpectedTable($scope, $expected['table'])) {
+            return false;
+        }
+
+        $where = (string)($scope['predicates']['where'] ?? '');
+        $column = preg_quote($expected['column'], '/');
+        $literal = preg_quote(str_replace("'", "''", self::normalizeIdentifier($value)), '/');
+        $equals = '/(?<!\.)\b' . $column . '\s*=\s*\'' . $literal . '\'/i';
+        $inList = '/(?<!\.)\b' . $column . '\s+IN\s*\([^)]*\'' . $literal . '\'/i';
+        return preg_match($equals, $where) === 1 || preg_match($inList, $where) === 1;
+    }
+
+    private static function scopeHasOnlyExpectedTable(array $scope, string $expectedTable): bool
+    {
+        $tables = [];
+        foreach (($scope['sourceAliases'] ?? []) as $binding) {
+            if (($binding['kind'] ?? '') === 'table') {
+                $tables[] = strtolower((string)($binding['source'] ?? ''));
+            }
+        }
+        $tables = array_values(array_unique($tables));
+        return $tables === [$expectedTable];
     }
 
     private static function limitMatches(string $sql, $requestedLimit): bool

@@ -136,6 +136,7 @@ assertSameValue('test-model', $canonicalEvidence['_askEvidence']['modelName'] ??
 assertSameValue('family_slot_prompt.v1', $canonicalEvidence['_askEvidence']['promptVersion'] ?? null, 'Canonical family results must retain prompt provenance.');
 assertSameValue('2026-07-21T00:00:00Z', $canonicalEvidence['_askEvidence']['schemaMetadata']['version'] ?? null, 'Canonical family results must retain schema provenance.');
 
+$familyRepairCalls = 0;
 $explicitFamilyCandidate = $familyBranch->invoke(
     null,
     [
@@ -159,10 +160,23 @@ $explicitFamilyCandidate = $familyBranch->invoke(
             'routeReason' => 'family_contract_supported:inventory_library_location_listing',
             'queryDefinition' => ['tables' => [], 'columns' => [], 'filters' => [], 'joins' => []],
         ];
+    },
+    null,
+    function (string $prompt, $campus, array $candidate) use (&$familyRepairCalls): array {
+        $familyRepairCalls++;
+        return [
+            'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001'",
+            'dataSource' => 'folio',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+            'repairAttempts' => 1,
+        ];
     }
 );
-assertSameValue(false, isset($explicitFamilyCandidate['sql']), 'A routed family candidate that omits an explicit identifier must return a safe no-result response.');
-assertSameValue('explicit_values_unmet', $explicitFamilyCandidate['routeReason'] ?? null, 'Explicit-value omissions must have a stable safe family outcome.');
+assertSameValue(1, $familyRepairCalls, 'A routed family candidate that omits an explicit identifier must enter the existing repair seam.');
+assertSameValue(1, $explicitFamilyCandidate['repairAttempts'] ?? null, 'Routed-family explicit repair must report the shared repair count.');
+assertSameValue("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001'", $explicitFamilyCandidate['sql'] ?? null, 'Routed-family explicit repair must return the validated repaired candidate.');
 
 $routerFallback = $familyBranch->invoke(
     null,

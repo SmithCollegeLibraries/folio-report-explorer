@@ -68,6 +68,9 @@ explicitAssertSame(['title'], $alphabeticBarcode['requestedFields'], 'Identifier
 $identifierOnlyPrompt = ExplicitReportRequestService::extract('For barcode 32101012345678, show title.');
 explicitAssertSame(['title'], $identifierOnlyPrompt['requestedFields'], 'Fields must be extracted only from output-request language.');
 
+$fieldBeforeIdentifier = ExplicitReportRequestService::extract('Show title for barcode ABCD-EFGH.');
+explicitAssertSame(['title'], $fieldBeforeIdentifier['requestedFields'], 'Output fields must stop before an identifier filter phrase.');
+
 $overflowPrompt = 'For instance numbers ' . implode(', ', array_map(function ($number): string {
     return 'in' . str_pad((string)$number, 4, '0', STR_PAD_LEFT);
 }, range(1, 501))) . ', show title.';
@@ -109,5 +112,28 @@ $lowercaseUuidCandidate = ExplicitReportRequestService::validateCandidate(
     $uppercaseUuidRequest
 );
 explicitAssertFalse($lowercaseUuidCandidate['valid'], 'A changed UUID case must not satisfy exact-preservation validation.');
+
+foreach ([
+    "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid <> 'in0001'",
+    "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid >= 'in0001'",
+] as $nonMembershipSql) {
+    $nonMembership = ExplicitReportRequestService::validateCandidate(
+        $nonMembershipSql,
+        ExplicitReportRequestService::extract('For instance number in0001, show title.')
+    );
+    explicitAssertFalse($nonMembership['valid'], 'Exclusion and range predicates must not satisfy explicit identifier membership.');
+}
+
+$cteIdentifier = ExplicitReportRequestService::validateCandidate(
+    "WITH filtered AS (SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001') SELECT filtered.title FROM filtered",
+    ExplicitReportRequestService::extract('For instance number in0001, show title.')
+);
+explicitAssertTrue($cteIdentifier['valid'], 'A positive identifier predicate inside a CTE must satisfy validation.');
+
+$unqualifiedIdentifier = ExplicitReportRequestService::validateCandidate(
+    "SELECT title FROM inventory.instance__t WHERE hrid = 'in0001'",
+    ExplicitReportRequestService::extract('For instance number in0001, show title.')
+);
+explicitAssertTrue($unqualifiedIdentifier['valid'], 'An unqualified identifier predicate on one unambiguous relation must satisfy validation.');
 
 fwrite(STDOUT, "ExplicitReportRequestService test passed\n");
