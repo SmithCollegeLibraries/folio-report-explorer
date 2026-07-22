@@ -22,6 +22,10 @@ final class AskGenerationEvidenceService
         $internalEvidence = is_array($result['_askEvidence'] ?? null)
             ? $result['_askEvidence']
             : [];
+        $explicitReportRequest = is_array($internalEvidence['explicitReportRequest'] ?? null)
+            && ($internalEvidence['explicitReportRequestProvenance'] ?? null) === 'server_extracted'
+            ? $internalEvidence['explicitReportRequest']
+            : null;
         $route = self::nullableString($result['route'] ?? null);
         $compilerVersion = self::nullableString(
             $internalEvidence['compilerVersion']
@@ -99,6 +103,9 @@ final class AskGenerationEvidenceService
             ),
             'repairAttempts' => $repairAttempts,
         ];
+        if ($explicitReportRequest !== null) {
+            $confidenceEvidence['explicitReportRequest'] = $explicitReportRequest;
+        }
 
         $provenance = [
             'compilerVersion' => $compilerVersion,
@@ -135,6 +142,9 @@ final class AskGenerationEvidenceService
                     ?? null
             ),
         ];
+        if ($explicitReportRequest !== null) {
+            $provenance['explicitReportRequestProvenance'] = 'server_extracted';
+        }
 
         $crossDomain = self::truthyEvidence($result, $requestContext, 'crossDomain') || $physicalRoi;
         $proxyLinkage = self::truthyEvidence($result, $requestContext, 'proxyLinkage') || $physicalRoi;

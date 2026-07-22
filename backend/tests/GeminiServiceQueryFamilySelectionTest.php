@@ -126,6 +126,13 @@ assertSameValue(
     'Instance-HRID list prompts with publisher output should not route onto the deterministic library/location listing family.'
 );
 
+$explicitInstanceFieldsPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
+assertSameValue(
+    null,
+    $familyResolver->invoke(null, $explicitInstanceFieldsPrompt, 'Smith College'),
+    'Explicit instance-value prompts must retain their exploratory routing rather than changing query-family selection.'
+);
+
 $slotPrompt = $promptBuilder->invoke(null, 'inventory_contributor_campus_item_barcode', 'Smith College');
 assertContainsText(
     'Supported match policies: ["case_insensitive_contains","exact_phrase"]',

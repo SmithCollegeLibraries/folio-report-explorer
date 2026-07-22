@@ -308,6 +308,23 @@ repairAssertSame(4, $repairTelemetryCount, 'Bad-then-valid generation should emi
 $terminalOutcomes = terminalTelemetryOutcomes();
 repairAssertSame(0, count($terminalOutcomes), 'Static/model validation must not emit terminal validated before database preflight.');
 
+TestTransport::$responses = [
+    geminiText("SELECT inst.hrid AS instance_hrid, inst.title, item.barcode FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiText("SELECT inst.hrid AS instance_hrid, inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001', 'in0002') LIMIT 20"),
+];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$explicitValuesResult = GeminiService::generateSqlWithShadow(
+    'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.',
+    null,
+    null,
+    true
+);
+repairAssertSame(1, $explicitValuesResult['repairAttempts'] ?? null, 'An explicit-value omission must enter the existing bounded repair path.');
+repairAssertContains('EXPLICIT REPORT VALUES', json_encode(TestTransport::$requests[0]), 'The generation prompt must include server-authored explicit-value guidance.');
+repairAssertSame(['in0001', 'in0002'], $explicitValuesResult['_askEvidence']['explicitReportRequest']['identifiers']['instance_hrid'] ?? null, 'Server-extracted explicit identifiers must remain trusted Ask evidence.');
+repairAssertSame(['title', 'barcode', 'publication_date'], $explicitValuesResult['_askEvidence']['explicitReportRequest']['requestedFields'] ?? null, 'Server-extracted requested fields must remain trusted Ask evidence.');
+
 Yii::$logs = [];
 $logValidationFailure = new ReflectionMethod(GeminiService::class, 'logValidationFailure');
 $logValidationFailure->invoke(null, 'legacy_sql_parse', [

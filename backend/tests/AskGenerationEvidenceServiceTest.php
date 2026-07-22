@@ -134,6 +134,23 @@ evidenceAssertSame('trusted-model', $trustedInternal['provenance']['modelName'],
 evidenceAssertSame(['version' => 'schema-v1'], $trustedInternal['provenance']['schemaMetadata'], 'Trusted schema metadata must reach persistence evidence.');
 evidenceAssertSame(['version' => 'bundle-v1', 'hash' => 'bundle-hash'], $trustedInternal['provenance']['referenceBundleMetadata'], 'Trusted reference bundle metadata must reach persistence evidence.');
 
+$explicitEvidence = AskGenerationEvidenceService::build([
+    'mode' => 'exploratory',
+    'route' => 'exploratory_legacy_freeform',
+    'sql' => 'SELECT title FROM inventory.instance__t',
+    '_askEvidence' => [
+        'explicitReportRequest' => [
+            'applicable' => true,
+            'identifiers' => ['instance_hrid' => ['in0001']],
+            'requestedFields' => ['title'],
+            'limit' => 20,
+        ],
+        'explicitReportRequestProvenance' => 'server_extracted',
+    ],
+], ['prompt' => 'Show title for instance number in0001. Limit 20.']);
+evidenceAssertSame('server_extracted', $explicitEvidence['provenance']['explicitReportRequestProvenance'] ?? null, 'Only server-created explicit-value provenance may reach review evidence.');
+evidenceAssertSame(['in0001'], $explicitEvidence['confidenceEvidence']['explicitReportRequest']['identifiers']['instance_hrid'] ?? null, 'Server-extracted explicit identifiers must reach confidence evidence.');
+
 evidenceAssertSame(
     [
         'compilerVersion' => null,

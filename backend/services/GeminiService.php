@@ -16,6 +16,7 @@ require_once __DIR__ . '/HardenedPhysicalRoiSqlCompilerService.php';
 require_once __DIR__ . '/ExploratorySemanticContractService.php';
 require_once __DIR__ . '/ExploratorySqlRepairService.php';
 require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
+require_once __DIR__ . '/ExplicitReportRequestService.php';
 require_once __DIR__ . '/../exceptions/ExploratorySqlValidationException.php';
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
@@ -140,6 +141,8 @@ class GeminiService
     public static function generateSqlWithShadow($prompt, $campus = null, $userId = null, $allowExploratory = false)
     {
         $referenceBundleMetadata = self::buildReferenceBundleMetadata();
+        $explicitReportRequest = ExplicitReportRequestService::extract((string)$prompt);
+        $explicitEvidence = self::explicitReportRequestEvidence($explicitReportRequest);
         $referenceResolution = ReferenceResolverService::resolvePrompt((string)$prompt, $userId);
         self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt((string)$prompt));
         if (!empty($referenceResolution['needsClarification'])) {
@@ -159,11 +162,32 @@ class GeminiService
             ]);
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $referenceResolution,
-                ['referenceBundleMetadata' => $referenceBundleMetadata]
+                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+            ));
+        }
+
+        if (!empty($explicitReportRequest['needsClarification'])) {
+            $clarification = [
+                'needsClarification' => true,
+                'clarificationType' => 'too_many_explicit_identifiers',
+                'clarificationKey' => 'explicit_report_values.too_many_identifiers',
+                'question' => 'This report names more than 500 identifiers. Please split it into smaller reports so every value can be preserved exactly.',
+                'inputType' => 'free_text',
+                'freeTextAllowed' => true,
+                'options' => [],
+                'warnings' => [],
+                'suggestions' => [],
+                'route' => 'clarification',
+                'routeReason' => 'too_many_explicit_identifiers',
+            ];
+            return AskResponseContractService::normalizeMode(self::withAskEvidence(
+                $clarification,
+                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
             ));
         }
 
         $effectivePrompt = ReferenceResolverService::appendGuidanceToPrompt((string)$prompt, $referenceResolution);
+        $effectivePrompt = ExplicitReportRequestService::appendGuidance($effectivePrompt, $explicitReportRequest);
 
         $clarification = ClarificationService::detectPromptAmbiguity(
             (string)$effectivePrompt,
@@ -182,7 +206,7 @@ class GeminiService
             ]);
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $clarification,
-                ['referenceBundleMetadata' => $referenceBundleMetadata]
+                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
             ));
         }
 
@@ -202,7 +226,7 @@ class GeminiService
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
-                ['referenceBundleMetadata' => $referenceBundleMetadata]
+                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
             ));
         }
 
@@ -225,7 +249,7 @@ class GeminiService
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
-                ['referenceBundleMetadata' => $referenceBundleMetadata]
+                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
             ));
         }
 
@@ -250,7 +274,7 @@ class GeminiService
         if (!self::shouldRunShadowForUser($userId, $effectivePrompt)) {
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
-                ['referenceBundleMetadata' => $referenceBundleMetadata]
+                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
             ));
         }
 
@@ -279,7 +303,7 @@ class GeminiService
 
         return AskResponseContractService::normalizeMode(self::withAskEvidence(
             $primary,
-            ['referenceBundleMetadata' => $referenceBundleMetadata]
+            array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
         ));
     }
 
@@ -348,6 +372,10 @@ class GeminiService
                     $compiledFallback = self::validateCompiledExploratoryFallback(
                         $compiledFallback,
                         $semanticContract
+                    );
+                    self::validateExplicitReportValues(
+                        (string)($compiledFallback['sql'] ?? ''),
+                        (string)($context['originalQuestion'] ?? '')
                     );
                     $compiledFallback = self::withAskEvidence(
                         $compiledFallback,
@@ -2003,6 +2031,16 @@ GUIDANCE;
         unset($evidence['modelConfidence']);
         $result['_askEvidence'] = array_merge($existing, $evidence);
         return $result;
+    }
+
+    private static function explicitReportRequestEvidence(array $request): array
+    {
+        return empty($request['applicable'])
+            ? []
+            : [
+                'explicitReportRequest' => $request,
+                'explicitReportRequestProvenance' => 'server_extracted',
+            ];
     }
 
     private static function withKnownFamilyEvidence(array $result, string $familyKey): array
@@ -5736,6 +5774,58 @@ PROMPT;
         return 'invalid_select_shape';
     }
 
+    private static function validateExplicitReportValues(string $sql, string $prompt): void
+    {
+        $request = ExplicitReportRequestService::extract($prompt);
+        if (empty($request['applicable']) || !empty($request['needsClarification'])) {
+            return;
+        }
+
+        $validation = ExplicitReportRequestService::validateCandidate($sql, $request);
+        if (!empty($validation['valid'])) {
+            return;
+        }
+
+        $violations = [];
+        $position = 0;
+        foreach (($validation['missingIdentifiers'] ?? []) as $unusedValue) {
+            $position++;
+            $violations[] = [
+                'key' => 'explicit_identifier_' . $position,
+                'category' => 'explicit_values',
+                'label' => 'Explicit report identifier',
+                'guidance' => 'Preserve every server-extracted explicit identifier in the SQL filter.',
+            ];
+        }
+        foreach (($validation['missingFields'] ?? []) as $unusedField) {
+            $position++;
+            $violations[] = [
+                'key' => 'explicit_output_' . $position,
+                'category' => 'explicit_values',
+                'label' => 'Requested report output',
+                'guidance' => 'Return every server-extracted requested output field with its supported alias.',
+            ];
+        }
+        if (empty($validation['limitValid'])) {
+            $violations[] = [
+                'key' => 'explicit_limit',
+                'category' => 'explicit_values',
+                'label' => 'Explicit report limit',
+                'guidance' => 'Preserve the server-extracted LIMIT value exactly.',
+            ];
+        }
+
+        throw new ExploratorySqlValidationException(
+            'explicit_values',
+            'explicit_values_missing',
+            $sql,
+            true,
+            'The SQL candidate did not preserve all explicit report values.',
+            null,
+            $violations
+        );
+    }
+
     private static function runExploratorySqlAttempt(array $context, callable $attempt): array
     {
         $startedAt = microtime(true);
@@ -5790,6 +5880,10 @@ PROMPT;
             if (($semanticValidation['status'] ?? null) === 'validated') {
                 $result['semanticValidation'] = $semanticValidation;
             }
+            self::validateExplicitReportValues(
+                (string)($result['sql'] ?? ''),
+                (string)($context['originalQuestion'] ?? '')
+            );
             $checkedRequirements = is_array($semanticValidation['checkedRequirements'] ?? null)
                 ? $semanticValidation['checkedRequirements']
                 : [];
