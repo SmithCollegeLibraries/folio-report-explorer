@@ -793,6 +793,83 @@ export interface HistorySuggestionsResponse {
   warnings?: string[];
 }
 
+// ─── Administrator Ask AI report reviews ───────────────────────────
+
+export type ReportReviewStatus = 'pending' | 'in_review' | 'resolved' | 'dismissed';
+export type ReportReviewDisposition =
+  | 'acceptable'
+  | 'assumption_change'
+  | 'deterministic_candidate'
+  | 'generation_defect'
+  | 'data_unavailable'
+  | 'specialist_interpretation';
+export type ReportReviewAdvisoryState = 'none' | 'cautioned' | 'superseded';
+
+export interface ReportReviewFilters {
+  status: ReportReviewStatus;
+  disposition?: ReportReviewDisposition | '';
+  limit?: number;
+  offset?: number;
+}
+
+export interface ReportReviewSummary {
+  id: string;
+  generationId: string;
+  status: ReportReviewStatus;
+  disposition: ReportReviewDisposition | null;
+  advisoryState: ReportReviewAdvisoryState;
+  supersededByJobId: string | null;
+  reviewedBy: number | null;
+  claimedAt: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  question: string;
+  queryJobId: string | null;
+  userId: number | null;
+  executionMode: string | null;
+  route: string | null;
+  routeReason: string | null;
+  validationStatus: string | null;
+  reviewReasons: string[];
+}
+
+export interface ReportReviewListResponse {
+  items: ReportReviewSummary[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+  };
+}
+
+export interface ReportReviewDetail extends ReportReviewSummary {
+  administratorNotes: string | null;
+  conversationId: string;
+  parentGenerationId: string | null;
+  followUpContext: Record<string, unknown> | null;
+  responseMode: string | null;
+  generatedSql: string | null;
+  sqlHash: string | null;
+  assumptions: unknown[];
+  userNotice: Record<string, unknown> | null;
+  confidenceEvidence: Record<string, unknown>;
+  initialStructure: Record<string, unknown> | null;
+  finalStructure: Record<string, unknown> | null;
+  provenance: Record<string, unknown>;
+  generationCreatedAt: string;
+  linkedAt: string | null;
+}
+
+export interface ReportReviewUpdate {
+  status: 'resolved' | 'dismissed';
+  disposition: ReportReviewDisposition;
+  notes?: string;
+  advisoryState?: ReportReviewAdvisoryState;
+  supersededByJobId?: string;
+  takeover?: boolean;
+}
+
 export interface QueryReuseCandidate {
   jobId: string;
   previousPrompt: string;

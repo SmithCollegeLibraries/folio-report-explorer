@@ -3,7 +3,7 @@ import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import {
   Database, Wrench, MessageSquare, FileBarChart, Bookmark, Settings,
   LayoutDashboard, Brain, History as HistoryIcon, Users as UsersIcon,
-  LogOut, ChevronDown, BookOpen, ShieldCheck, Menu, X, Terminal,
+  LogOut, ChevronDown, BookOpen, ShieldCheck, Menu, X, Terminal, ClipboardCheck,
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import Explorer from './pages/Explorer';
@@ -18,6 +18,7 @@ import History from './pages/History';
 import Console from './pages/Console';
 import UsersPage from './pages/Users';
 import LocalDataPage from './pages/LocalData.tsx';
+import ReportReviews from './pages/ReportReviews';
 import AuthCallback from './pages/AuthCallback';
 import AuthPending from './pages/AuthPending';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -40,6 +41,7 @@ const libraryItems = [
 ];
 
 const adminItems = [
+  { to: '/report-reviews', label: 'AI Report Review', icon: ClipboardCheck, desc: 'Review uncertain Ask AI reports' },
   { to: '/training',label: 'AI Training',   icon: Brain,         desc: 'Tune AI query generation' },
   { to: '/local-data',label: 'Local Data',  icon: Database,      desc: 'Manage ACRL and allocations' },
   { to: '/users',   label: 'Users',         icon: UsersIcon,     desc: 'Manage user access' },
@@ -343,6 +345,7 @@ export default function App() {
           <Route path="/local-data" element={<ProtectedRoute adminOnly><LocalDataPage /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
           <Route path="/setup" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
+          <Route path="/report-reviews" element={<ProtectedRoute adminOnly><ReportReviews /></ProtectedRoute>} />
         </Routes>
       </main>
       </div>
