@@ -29,27 +29,109 @@ final class ReferenceIntentService
         'material_type',
     ];
 
+    private const HARD_PUNCTUATION = ['.', ';', ':', '!', '?'];
+
     public static function extract(string $prompt): array
     {
         if (trim($prompt) === '') {
             return [];
         }
 
-        $matchText = self::normalizePunctuationForMatching($prompt);
+        $tokens = self::lex($prompt);
+        $qualifiers = self::qualifiers($tokens);
+        $claims = [];
         $intents = [];
-        $consumed = [];
+        $materialAtoms = [];
+        $genericVideo = [];
 
-        foreach (self::extractLocationIntents($prompt, $matchText) as $intent) {
-            $intents[] = $intent;
-            $consumed[] = [$intent['_offset'], $intent['_end']];
+        for ($index = count($qualifiers) - 1; $index >= 0; $index--) {
+            $qualifier = $qualifiers[$index];
+            if (self::overlaps($qualifier['start'], $qualifier['end'], $claims)) {
+                continue;
+            }
+
+            $prefix = self::isPrefixQualifier($qualifier, $tokens);
+            $valueSpan = $prefix
+                ? self::prefixValueSpan($qualifier, $tokens, $claims)
+                : self::suffixValueSpan($qualifier, $qualifiers, $index, $tokens);
+            if ($valueSpan === null) {
+                continue;
+            }
+
+            list($valueStart, $valueEnd) = $valueSpan;
+            $parts = self::splitQualifiedValues(
+                $tokens,
+                $valueStart,
+                $valueEnd,
+                $qualifier['plural'],
+                $qualifier['dimension']
+            );
+            if ($parts === []) {
+                continue;
+            }
+
+            if ($qualifier['dimension'] === 'material_type') {
+                $accepted = [];
+                $acceptedGeneric = [];
+                foreach ($parts as $part) {
+                    $atom = self::materialAtom($prompt, $part[0], $part[1]);
+                    if ($atom === null) {
+                        continue;
+                    }
+                    if ($atom['generic']) {
+                        $acceptedGeneric[] = [$atom['offset'], $atom['end']];
+                    } else {
+                        $accepted[] = $atom;
+                    }
+                }
+
+                if ($accepted === [] && $acceptedGeneric === []) {
+                    continue;
+                }
+
+                foreach ($accepted as $atom) {
+                    $materialAtoms[] = $atom;
+                }
+                foreach ($acceptedGeneric as $range) {
+                    $genericVideo[] = $range;
+                }
+            } else {
+                foreach ($parts as $part) {
+                    $spanStart = $part[0];
+                    $spanEnd = $part[1];
+                    if (
+                        !$prefix
+                        && !$qualifier['plural']
+                        && $qualifier['dimension'] !== 'location'
+                    ) {
+                        $spanEnd = $qualifier['end'];
+                    }
+
+                    $intents[] = self::namedIntent(
+                        $qualifier['dimension'],
+                        substr($prompt, $spanStart, $spanEnd - $spanStart),
+                        $spanStart,
+                        $spanEnd
+                    );
+                }
+            }
+
+            $claimStart = $prefix ? $qualifier['start'] : $valueStart;
+            $claimEnd = $prefix ? $valueEnd : $qualifier['end'];
+            $claims[] = [$claimStart, $claimEnd];
         }
 
-        foreach (self::extractNamedDimensionIntents($prompt, $matchText, $consumed) as $intent) {
-            $intents[] = $intent;
-            $consumed[] = [$intent['_offset'], $intent['_end']];
+        foreach (self::unqualifiedKnownMaterials($prompt, $tokens, $claims) as $atom) {
+            $materialAtoms[] = $atom;
         }
 
-        $materialIntent = self::extractMaterialIntent($prompt, $matchText, $consumed);
+        $materialIntent = self::materialIntent(
+            $prompt,
+            $tokens,
+            $claims,
+            $materialAtoms,
+            $genericVideo
+        );
         if ($materialIntent !== null) {
             $intents[] = $materialIntent;
         }
@@ -57,7 +139,6 @@ final class ReferenceIntentService
         usort($intents, function (array $left, array $right): int {
             $leftOrder = array_search($left['dimension'], self::DIMENSION_ORDER, true);
             $rightOrder = array_search($right['dimension'], self::DIMENSION_ORDER, true);
-
             if ($leftOrder === $rightOrder) {
                 return $left['_offset'] <=> $right['_offset'];
             }
@@ -93,7 +174,6 @@ final class ReferenceIntentService
             if (!is_string($term) || !isset(self::MATERIAL_SELECTORS[$term])) {
                 continue;
             }
-
             foreach (self::MATERIAL_SELECTORS[$term] as $name) {
                 if (!in_array($name, $names, true)) {
                     $names[] = $name;
@@ -104,669 +184,922 @@ final class ReferenceIntentService
         return $names;
     }
 
-    private static function normalizePunctuationForMatching(string $prompt): string
+    private static function lex(string $prompt): array
     {
-        $normalized = preg_replace_callback(
-            '/[^\pL\pN\s\/&\'\-\.,;:!?]/u',
-            function (array $match): string {
-                return str_repeat(' ', strlen($match[0]));
-            },
-            $prompt
-        );
-
-        return is_string($normalized) ? $normalized : $prompt;
-    }
-
-    private static function extractLocationIntents(string $prompt, string $matchText): array
-    {
-        $intents = [];
-        $ranges = [];
-        self::appendLocationIntentsForQualifiers(
-            $prompt,
-            $matchText,
-            '/\b(locations?|collections?)\b/iu',
-            $intents,
-            $ranges
-        );
-        self::appendLocationIntentsForQualifiers(
-            $prompt,
-            $matchText,
-            '/\b(stacks|rooms?|shelving)\b/iu',
-            $intents,
-            $ranges
-        );
-
-        return $intents;
-    }
-
-    private static function appendLocationIntentsForQualifiers(
-        string $prompt,
-        string $matchText,
-        string $pattern,
-        array &$intents,
-        array &$ranges
-    ): void {
         if (!preg_match_all(
-            $pattern,
-            $matchText,
+            '/[\pL\pN]+(?:[\'’][\pL\pN]+)*(?:(?:[-\/])[\pL\pN]+)*|[&]|[,.;:!?]/u',
+            $prompt,
             $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
-        )) {
-            return;
-        }
-
-        $prefixMatches = [];
-        $structuralEnds = [];
-        foreach ($matches as $index => $match) {
-            $qualifierOffset = $match[1][1];
-            $qualifierEnd = $qualifierOffset + strlen($match[1][0]);
-            if (self::overlaps($qualifierOffset, $qualifierEnd, $ranges)) {
-                continue;
-            }
-
-            $valueOffset = self::skipWhitespace($matchText, $qualifierEnd);
-            $following = substr($matchText, $valueOffset);
-            if (
-                $following === ''
-                || preg_match('/^[.,;:!?\n]/u', $following)
-                || preg_match(
-                    '/^(?:and|or|at|in|from|for|with|within|inside|near|on|by|held)\b/iu',
-                    $following
-                )
-                || preg_match(
-                    '/^(?:locations?|collections?|stacks|rooms?|shelving)\b/iu',
-                    $following
-                )
-            ) {
-                continue;
-            }
-
-            $valueEnd = self::nextClauseOffset($matchText, $valueOffset);
-            if (isset($matches[$index + 1])) {
-                $nextOffset = $matches[$index + 1][1][1];
-                $nextEnd = $nextOffset + strlen($matches[$index + 1][1][0]);
-                $nextFollowing = substr(
-                    $matchText,
-                    self::skipWhitespace($matchText, $nextEnd)
-                );
-                $sameQualifier = strtolower($match[1][0])
-                    === strtolower($matches[$index + 1][1][0]);
-                if (
-                    $sameQualifier
-                    || (
-                        $nextFollowing !== ''
-                        && !preg_match('/^[.,;:!?\n]/u', $nextFollowing)
-                    )
-                ) {
-                    $valueEnd = min($valueEnd, $nextOffset);
-                }
-            }
-
-            $capture = substr($matchText, $valueOffset, $valueEnd - $valueOffset);
-            $capture = self::trimLocationValue($capture);
-            $plural = self::isPluralQualifier($match[1][0]);
-            $values = self::qualifiedValues($capture, $valueOffset, $plural);
-            foreach ($values as $value) {
-                list($offset, $length) = $value;
-                if (
-                    $length === 0
-                    || self::overlaps($offset, $offset + $length, $ranges)
-                ) {
-                    continue;
-                }
-
-                $intents[] = self::namedIntent(
-                    'location',
-                    substr($prompt, $offset, $length),
-                    $offset,
-                    $offset + $length
-                );
-                $ranges[] = [$offset, $offset + $length];
-            }
-            if ($values !== []) {
-                $prefixMatches[$index] = true;
-                $structuralEnds[] = $qualifierEnd;
-            }
-        }
-
-        foreach ($matches as $index => $match) {
-            if (isset($prefixMatches[$index])) {
-                continue;
-            }
-
-            $qualifierOffset = $match[1][1];
-            $qualifierEnd = $qualifierOffset + strlen($match[1][0]);
-            if (self::overlaps($qualifierOffset, $qualifierEnd, $ranges)) {
-                continue;
-            }
-
-            $following = substr(
-                $matchText,
-                self::skipWhitespace($matchText, $qualifierEnd)
-            );
-            if (
-                $following !== ''
-                && !preg_match(
-                    '/^(?:[.,;:!?\n]|and\b|or\b|at\b|in\b|from\b|for\b|'
-                        . 'with\b|within\b|inside\b|near\b|on\b|by\b|held\b)/iu',
-                    $following
-                )
-            ) {
-                continue;
-            }
-
-            $plural = self::isPluralQualifier($match[1][0]);
-            $valueStart = $plural
-                ? self::previousClauseOffset($matchText, $qualifierOffset)
-                : self::previousPunctuationOffset($matchText, $qualifierOffset);
-            if ($structuralEnds !== []) {
-                $valueStart = max($valueStart, max($structuralEnds));
-            }
-
-            $values = self::qualifiedValues(
-                substr($matchText, $valueStart, $qualifierOffset - $valueStart),
-                $valueStart,
-                $plural
-            );
-            foreach ($values as $value) {
-                list($offset, $length) = $value;
-                if (
-                    $length === 0
-                    || self::overlaps($offset, $offset + $length, $ranges)
-                ) {
-                    continue;
-                }
-
-                $intents[] = self::namedIntent(
-                    'location',
-                    substr($prompt, $offset, $length),
-                    $offset,
-                    $offset + $length
-                );
-                $ranges[] = [$offset, $offset + $length];
-            }
-            if ($values !== []) {
-                $structuralEnds[] = $qualifierEnd;
-            }
-        }
-    }
-
-    private static function extractNamedDimensionIntents(
-        string $prompt,
-        string $matchText,
-        array $consumed
-    ): array {
-        $intents = [];
-        $ranges = $consumed;
-        $pattern = '/\b(service\s+points?|librar(?:y|ies)|campus(?:es)?|institutions?)\b/iu';
-        if (!preg_match_all(
-            $pattern,
-            $matchText,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+            PREG_OFFSET_CAPTURE
         )) {
             return [];
         }
 
-        foreach ($matches as $index => $match) {
-            $qualifier = strtolower(preg_replace('/\s+/u', ' ', $match[1][0]));
-            if (strpos($qualifier, 'service point') === 0) {
+        $tokens = [];
+        foreach ($matches[0] as $match) {
+            $raw = $match[0];
+            $tokens[] = [
+                'raw' => $raw,
+                'norm' => self::lower($raw),
+                'start' => $match[1],
+                'end' => $match[1] + strlen($raw),
+                'punctuation' => strlen($raw) === 1
+                    && strpos(',.;:!?', $raw) !== false,
+            ];
+        }
+
+        return $tokens;
+    }
+
+    private static function qualifiers(array $tokens): array
+    {
+        $qualifiers = [];
+        $count = count($tokens);
+        for ($index = 0; $index < $count; $index++) {
+            $word = $tokens[$index]['norm'];
+            $dimension = null;
+            $plural = false;
+            $endIndex = $index + 1;
+
+            if (
+                $word === 'service'
+                && isset($tokens[$index + 1])
+                && in_array($tokens[$index + 1]['norm'], ['point', 'points'], true)
+            ) {
                 $dimension = 'service_point';
-            } elseif (strpos($qualifier, 'librar') === 0) {
+                $plural = $tokens[$index + 1]['norm'] === 'points';
+                $endIndex = $index + 2;
+            } elseif (
+                $word === 'material'
+                && isset($tokens[$index + 1])
+                && in_array($tokens[$index + 1]['norm'], ['type', 'types'], true)
+            ) {
+                $dimension = 'material_type';
+                $plural = $tokens[$index + 1]['norm'] === 'types';
+                $endIndex = $index + 2;
+            } elseif (in_array($word, ['location', 'locations'], true)) {
+                $dimension = 'location';
+                $plural = $word === 'locations';
+            } elseif (in_array($word, ['collection', 'collections'], true)) {
+                $dimension = 'location';
+                $plural = $word === 'collections';
+            } elseif (in_array($word, ['stack', 'stacks'], true)) {
+                $dimension = 'location';
+                $plural = $word === 'stacks';
+            } elseif (in_array($word, ['room', 'rooms'], true)) {
+                $dimension = 'location';
+                $plural = $word === 'rooms';
+            } elseif ($word === 'shelving') {
+                $dimension = 'location';
+            } elseif (in_array($word, ['library', 'libraries'], true)) {
                 $dimension = 'library';
-            } elseif (strpos($qualifier, 'campus') === 0) {
+                $plural = $word === 'libraries';
+            } elseif (in_array($word, ['campus', 'campuses'], true)) {
                 $dimension = 'campus';
-            } else {
+                $plural = $word === 'campuses';
+            } elseif (in_array($word, ['institution', 'institutions'], true)) {
                 $dimension = 'institution';
+                $plural = $word === 'institutions';
+            } elseif (in_array($word, ['format', 'formats'], true)) {
+                $dimension = 'material_type';
+                $plural = $word === 'formats';
             }
 
-            $qualifierOffset = $match[1][1];
-            $end = $qualifierOffset + strlen($match[1][0]);
-            $nameStart = self::previousPunctuationOffset($matchText, $qualifierOffset);
-            if ($index > 0) {
-                $previousEnd = $matches[$index - 1][1][1]
-                    + strlen($matches[$index - 1][1][0]);
-                $nameStart = max($nameStart, $previousEnd);
+            if ($dimension === null) {
+                continue;
             }
-            foreach ($consumed as $range) {
-                if ($range[1] <= $qualifierOffset) {
-                    $nameStart = max($nameStart, $range[1]);
+
+            $qualifiers[] = [
+                'dimension' => $dimension,
+                'plural' => $plural,
+                'keyword' => $word,
+                'token_start' => $index,
+                'token_end' => $endIndex,
+                'start' => $tokens[$index]['start'],
+                'end' => $tokens[$endIndex - 1]['end'],
+            ];
+            $index = $endIndex - 1;
+        }
+
+        return $qualifiers;
+    }
+
+    private static function isPrefixQualifier(array $qualifier, array $tokens): bool
+    {
+        $next = $qualifier['token_end'];
+        if (!isset($tokens[$next]) || $tokens[$next]['punctuation']) {
+            return false;
+        }
+        if (
+            self::isConnector($tokens[$next]['norm'])
+            || self::isBoundaryPreposition($tokens[$next]['norm'])
+        ) {
+            return false;
+        }
+
+        if ($qualifier['dimension'] === 'location') {
+            return true;
+        }
+
+        return $qualifier['dimension'] !== 'material_type' && $qualifier['plural'];
+    }
+
+    private static function prefixValueSpan(
+        array $qualifier,
+        array $tokens,
+        array $claims
+    ): ?array {
+        $startIndex = $qualifier['token_end'];
+        if (!isset($tokens[$startIndex])) {
+            return null;
+        }
+
+        $start = $tokens[$startIndex]['start'];
+        $end = self::nextHardBoundary($tokens, $startIndex);
+        foreach ($claims as $claim) {
+            if ($claim[0] >= $start) {
+                $end = min($end, $claim[0]);
+            }
+        }
+
+        if (!$qualifier['plural'] && $qualifier['dimension'] === 'location') {
+            foreach ($tokens as $token) {
+                if ($token['start'] < $start || $token['start'] >= $end) {
+                    continue;
+                }
+                if ($token['norm'] === ',') {
+                    $end = $token['start'];
+                    break;
                 }
             }
+        }
 
-            list($nameOffset, $nameLength) = self::trimLeadingQualifiedValue(
-                substr($matchText, $nameStart, $qualifierOffset - $nameStart),
-                $nameStart
+        if ($qualifier['dimension'] === 'location') {
+            $end = self::locationMaterialBoundary($tokens, $start, $end);
+        }
+
+        list($start, $end) = self::trimSpan($tokens, $start, $end, false);
+
+        return $start < $end ? [$start, $end] : null;
+    }
+
+    private static function suffixValueSpan(
+        array $qualifier,
+        array $qualifiers,
+        int $qualifierIndex,
+        array $tokens
+    ): ?array {
+        if (
+            self::isEmbeddedInPrefixLocation(
+                $qualifier,
+                $qualifiers,
+                $qualifierIndex,
+                $tokens
+            )
+        ) {
+            return null;
+        }
+
+        $start = self::previousHardBoundary($tokens, $qualifier['token_start']);
+        $end = $qualifier['start'];
+
+        if (
+            !$qualifier['plural']
+            && $qualifier['dimension'] !== 'material_type'
+        ) {
+            $start = max(
+                $start,
+                self::previousCommaBoundary($tokens, $qualifier['token_start'])
             );
+        }
+
+        for ($index = $qualifierIndex - 1; $index >= 0; $index--) {
+            $previous = $qualifiers[$index];
+            if ($previous['end'] <= $start) {
+                break;
+            }
+            if ($previous['end'] >= $end) {
+                continue;
+            }
             if (
-                $nameLength === 0
-                || self::overlaps($nameOffset, $end, $ranges)
+                $qualifier['dimension'] === 'location'
+                && $previous['dimension'] !== 'location'
             ) {
                 continue;
             }
 
-            $intents[] = self::namedIntent(
-                $dimension,
-                substr($prompt, $nameOffset, $end - $nameOffset),
-                $nameOffset,
-                $end
-            );
-            $ranges[] = [$nameOffset, $end];
+            $between = self::tokensInSpan($tokens, $previous['end'], $end);
+            $separatorEnd = self::lastStructuralSeparatorEnd($between);
+            if ($separatorEnd !== null) {
+                $start = $separatorEnd;
+                break;
+            }
         }
 
-        return $intents;
+        list($start, $end) = self::trimSpan($tokens, $start, $end, true);
+
+        return $start < $end ? [$start, $end] : null;
     }
 
-    private static function extractMaterialIntent(
-        string $prompt,
-        string $matchText,
-        array $consumed
-    ): ?array {
-        $knownPatterns = [
-            'vhs' => '/\bvhs(?:\s+tapes?)?\b/iu',
-            'dvd' => '/\b(?:dvds?(?:\s*(?:\/|-|and)\s*blu[\s-]*rays?)?|blu[\s-]*rays?)\b/iu',
-            'film' => '/\bfilms?\b/iu',
-        ];
-        $termOffsets = [];
-        $knownRanges = [];
-        $firstMatch = null;
+    private static function isEmbeddedInPrefixLocation(
+        array $qualifier,
+        array $qualifiers,
+        int $qualifierIndex,
+        array $tokens
+    ): bool {
+        for ($index = $qualifierIndex - 1; $index >= 0; $index--) {
+            $previous = $qualifiers[$index];
+            if (
+                $previous['dimension'] !== 'location'
+                || $previous['end'] >= $qualifier['start']
+            ) {
+                continue;
+            }
+            if (
+                self::previousHardBoundary($tokens, $qualifier['token_start'])
+                > $previous['end']
+            ) {
+                return false;
+            }
 
-        foreach ($knownPatterns as $term => $pattern) {
-            if (!preg_match_all(
-                $pattern,
-                $matchText,
-                $matches,
-                PREG_SET_ORDER | PREG_OFFSET_CAPTURE
-            )) {
+            if (!self::isPrefixQualifier($previous, $tokens)) {
+                return false;
+            }
+
+            $between = self::tokensInSpan(
+                $tokens,
+                $previous['end'],
+                $qualifier['start']
+            );
+            if (
+                $qualifier['dimension'] !== 'location'
+                && self::lastStructuralSeparatorEnd($between) === null
+            ) {
+                return true;
+            }
+
+            return $qualifier['dimension'] === 'location'
+                && !in_array($qualifier['keyword'], ['location', 'locations'], true);
+        }
+
+        return false;
+    }
+
+    private static function lastStructuralSeparatorEnd(array $tokens): ?int
+    {
+        $end = null;
+        foreach ($tokens as $token) {
+            if (
+                $token['norm'] === ','
+                || self::isConnector($token['norm'])
+                || self::isBoundaryPreposition($token['norm'])
+            ) {
+                $end = $token['end'];
+            }
+        }
+
+        return $end;
+    }
+
+    private static function splitQualifiedValues(
+        array $tokens,
+        int $start,
+        int $end,
+        bool $plural,
+        string $dimension
+    ): array {
+        $valueTokens = self::tokensInSpan($tokens, $start, $end);
+        if ($valueTokens === []) {
+            return [];
+        }
+
+        $hasComma = false;
+        foreach ($valueTokens as $token) {
+            if ($token['norm'] === ',') {
+                $hasComma = true;
+                break;
+            }
+        }
+
+        if ($hasComma) {
+            return self::commaChunks($valueTokens);
+        }
+
+        $splitConnectors = $plural;
+        if (!$splitConnectors && $dimension === 'material_type') {
+            $splitConnectors = self::singularMaterialListIsExplicit($valueTokens);
+        }
+
+        if (!$splitConnectors) {
+            return [[$valueTokens[0]['start'], $valueTokens[count($valueTokens) - 1]['end']]];
+        }
+
+        $chunks = [];
+        $chunkStart = 0;
+        foreach ($valueTokens as $index => $token) {
+            if (!self::isConnector($token['norm'])) {
+                continue;
+            }
+            self::appendTokenChunk($chunks, $valueTokens, $chunkStart, $index);
+            $chunkStart = $index + 1;
+        }
+        self::appendTokenChunk($chunks, $valueTokens, $chunkStart, count($valueTokens));
+
+        return $chunks;
+    }
+
+    private static function commaChunks(array $tokens): array
+    {
+        $chunks = [];
+        $chunkStart = 0;
+        foreach ($tokens as $index => $token) {
+            if ($token['norm'] !== ',') {
+                continue;
+            }
+            self::appendTokenChunk($chunks, $tokens, $chunkStart, $index);
+            $chunkStart = $index + 1;
+        }
+        self::appendTokenChunk($chunks, $tokens, $chunkStart, count($tokens));
+
+        return $chunks;
+    }
+
+    private static function appendTokenChunk(
+        array &$chunks,
+        array $tokens,
+        int $start,
+        int $end
+    ): void {
+        while ($start < $end && self::isConnector($tokens[$start]['norm'])) {
+            $start++;
+        }
+        while ($end > $start && self::isConnector($tokens[$end - 1]['norm'])) {
+            $end--;
+        }
+        if ($start >= $end) {
+            return;
+        }
+
+        $chunks[] = [$tokens[$start]['start'], $tokens[$end - 1]['end']];
+    }
+
+    private static function singularMaterialListIsExplicit(array $tokens): bool
+    {
+        foreach ($tokens as $token) {
+            if ($token['norm'] === 'and/or') {
+                return true;
+            }
+        }
+
+        foreach ($tokens as $index => $token) {
+            if (!self::isConnector($token['norm'])) {
+                continue;
+            }
+            $left = array_slice($tokens, 0, $index);
+            $right = array_slice($tokens, $index + 1);
+            if (
+                self::exactKnownMaterialTokens($left) !== null
+                || self::exactKnownMaterialTokens($right) !== null
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function materialAtom(
+        string $prompt,
+        int $start,
+        int $end
+    ): ?array {
+        $raw = trim(substr($prompt, $start, $end - $start));
+        if ($raw === '') {
+            return null;
+        }
+        $normalized = self::normalizeTerm($raw);
+        if (self::isGenericVideoTerm($normalized)) {
+            return [
+                'term' => null,
+                'offset' => $start,
+                'end' => $end,
+                'generic' => true,
+            ];
+        }
+        if (in_array($normalized, ['all', 'material', 'materials'], true)) {
+            return null;
+        }
+
+        $known = self::knownMaterialTerm($normalized);
+
+        return [
+            'term' => $known === null ? $normalized : $known,
+            'offset' => $start,
+            'end' => $end,
+            'generic' => false,
+        ];
+    }
+
+    private static function unqualifiedKnownMaterials(
+        string $prompt,
+        array $tokens,
+        array $claims
+    ): array {
+        $atoms = [];
+        $count = count($tokens);
+        for ($index = 0; $index < $count; $index++) {
+            $token = $tokens[$index];
+            if (self::overlaps($token['start'], $token['end'], $claims)) {
                 continue;
             }
 
-            foreach ($matches as $match) {
-                $offset = $match[0][1];
-                $end = $offset + strlen($match[0][0]);
-                if (self::overlaps($offset, $end, $consumed)) {
-                    continue;
-                }
-
-                if (!isset($termOffsets[$term])) {
-                    $termOffsets[$term] = $offset;
-                }
-                $knownRanges[] = [$offset, $end];
-                if ($firstMatch === null || $offset < $firstMatch[0]) {
-                    $firstMatch = [$offset, $end];
-                }
+            $endIndex = $index + 1;
+            $term = self::knownMaterialTerm($token['norm']);
+            if (
+                $token['norm'] === 'vhs'
+                && isset($tokens[$index + 1])
+                && in_array($tokens[$index + 1]['norm'], ['tape', 'tapes'], true)
+                && !self::overlaps(
+                    $tokens[$index + 1]['start'],
+                    $tokens[$index + 1]['end'],
+                    $claims
+                )
+            ) {
+                $term = 'vhs';
+                $endIndex = $index + 2;
+            } elseif (
+                in_array($token['norm'], ['dvd', 'dvds'], true)
+                && isset($tokens[$index + 2])
+                && in_array($tokens[$index + 1]['norm'], ['and', '&'], true)
+                && in_array($tokens[$index + 2]['norm'], ['blu-ray', 'bluray'], true)
+                && !self::overlaps(
+                    $tokens[$index + 2]['start'],
+                    $tokens[$index + 2]['end'],
+                    $claims
+                )
+            ) {
+                $term = 'dvd';
+                $endIndex = $index + 3;
             }
+
+            if ($term === null) {
+                continue;
+            }
+
+            $atoms[] = [
+                'term' => $term,
+                'offset' => $token['start'],
+                'end' => $tokens[$endIndex - 1]['end'],
+                'generic' => false,
+            ];
+            $index = $endIndex - 1;
         }
 
-        $unknownTerms = [];
-        if (preg_match_all(
-            '/\b(formats?|material\s+types?)\b/iu',
-            $matchText,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
-        )) {
-            foreach ($matches as $index => $match) {
-                $qualifierOffset = $match[1][1];
-                $plural = self::isPluralQualifier($match[1][0]);
-                $candidateStart = $plural
-                    ? self::previousClauseOffset($matchText, $qualifierOffset)
-                    : self::previousPunctuationOffset(
-                        $matchText,
-                        $qualifierOffset
-                    );
-                if ($index > 0) {
-                    $previousEnd = $matches[$index - 1][1][1]
-                        + strlen($matches[$index - 1][1][0]);
-                    $candidateStart = max($candidateStart, $previousEnd);
-                }
+        return $atoms;
+    }
 
-                foreach ($consumed as $range) {
-                    if ($range[1] <= $qualifierOffset) {
-                        $candidateStart = max($candidateStart, $range[1]);
-                    }
-                }
+    private static function materialIntent(
+        string $prompt,
+        array $tokens,
+        array $claims,
+        array $atoms,
+        array $genericVideo
+    ): ?array {
+        if ($atoms !== []) {
+            usort($atoms, function (array $left, array $right): int {
+                return $left['offset'] <=> $right['offset'];
+            });
 
-                $values = self::qualifiedValues(
-                    substr(
-                        $matchText,
-                        $candidateStart,
-                        $qualifierOffset - $candidateStart
-                    ),
-                    $candidateStart,
-                    $plural,
-                    true
-                );
-                foreach ($values as $value) {
-                    list($offset, $length) = $value;
-                    $end = $offset + $length;
-                    if (
-                        $length === 0
-                        || self::overlaps($offset, $end, $consumed)
-                        || self::overlaps($offset, $end, $knownRanges)
-                    ) {
-                        continue;
-                    }
-
-                    $term = preg_replace(
-                        '/\s+/u',
-                        ' ',
-                        strtolower(substr($matchText, $offset, $length))
-                    );
-                    if (!is_string($term)) {
-                        continue;
-                    }
-                    $term = trim($term);
-                    if (
-                        in_array(
-                            $term,
-                            [
-                                'video',
-                                'videos',
-                                'all',
-                                'material',
-                                'materials',
-                                'vhs',
-                                'dvd',
-                                'dvds',
-                                'film',
-                                'films',
-                            ],
-                            true
-                        )
-                        || isset($unknownTerms[$term])
-                    ) {
-                        continue;
-                    }
-
-                    $unknownTerms[$term] = [$offset, $end];
-                    if ($firstMatch === null || $offset < $firstMatch[0]) {
-                        $firstMatch = [$offset, $end];
-                    }
+            $known = [];
+            $unknown = [];
+            foreach ($atoms as $atom) {
+                $term = $atom['term'];
+                if (in_array($term, ['vhs', 'dvd', 'film'], true)) {
+                    $known[$term] = true;
+                } elseif (!isset($unknown[$term])) {
+                    $unknown[$term] = $atom['offset'];
                 }
             }
-        }
 
-        if ($firstMatch !== null) {
             $terms = [];
             foreach (['vhs', 'dvd', 'film'] as $term) {
-                if (isset($termOffsets[$term])) {
+                if (isset($known[$term])) {
                     $terms[] = $term;
                 }
             }
-
-            uasort($unknownTerms, function (array $left, array $right): int {
-                return $left[0] <=> $right[0];
-            });
-            foreach (array_keys($unknownTerms) as $term) {
+            asort($unknown);
+            foreach (array_keys($unknown) as $term) {
                 $terms[] = $term;
             }
 
+            $first = $atoms[0];
+
             return [
                 'dimension' => 'material_type',
-                'span' => substr($prompt, $firstMatch[0], $firstMatch[1] - $firstMatch[0]),
+                'span' => substr($prompt, $first['offset'], $first['end'] - $first['offset']),
                 'terms' => $terms,
                 'selector' => null,
                 'provenance' => 'explicit_prompt',
                 'explicit' => true,
-                '_offset' => $firstMatch[0],
-                '_end' => $firstMatch[1],
+                '_offset' => $first['offset'],
+                '_end' => $first['end'],
             ];
         }
 
-        if (self::containsUnconsumedPattern(
-            '/\ball\s+materials?\b/iu',
-            $matchText,
-            $consumed
-        )) {
+        if (self::containsAllMaterials($tokens, $claims)) {
             return null;
         }
 
-        $videoMatch = self::firstUnconsumedMatch(
-            '/\bvideos?(?:\s+(?:materials?|formats?))?\b/iu',
-            $matchText,
-            $consumed
-        );
-        if ($videoMatch === null) {
+        foreach ($tokens as $index => $token) {
+            if (
+                !in_array($token['norm'], ['video', 'videos'], true)
+                || self::overlaps($token['start'], $token['end'], $claims)
+            ) {
+                continue;
+            }
+            $genericVideo[] = [$token['start'], $token['end']];
+            break;
+        }
+
+        if ($genericVideo === []) {
             return null;
         }
+        usort($genericVideo, function (array $left, array $right): int {
+            return $left[0] <=> $right[0];
+        });
+        $first = $genericVideo[0];
 
         return [
             'dimension' => 'material_type',
-            'span' => substr($prompt, $videoMatch[0], $videoMatch[1] - $videoMatch[0]),
+            'span' => substr($prompt, $first[0], $first[1] - $first[0]),
             'terms' => [],
             'selector' => 'physical_video',
             'provenance' => 'documented_default',
             'explicit' => false,
-            '_offset' => $videoMatch[0],
-            '_end' => $videoMatch[1],
+            '_offset' => $first[0],
+            '_end' => $first[1],
         ];
     }
 
-    private static function trimLeadingQualifiedValue(
-        string $capture,
-        int $offset,
-        bool $formatIntro = false
-    ): array {
-        $leadingLength = strlen($capture) - strlen(ltrim($capture));
-        $capture = ltrim($capture);
-        $offset += $leadingLength;
-
-        if (preg_match('/^(?:,\s*)?(?:and|or)\b\s*/iu', $capture, $leading)) {
-            $offset += strlen($leading[0]);
-            $capture = substr($capture, strlen($leading[0]));
-        } elseif (preg_match('/^,\s*/u', $capture, $leading)) {
-            $offset += strlen($leading[0]);
-            $capture = substr($capture, strlen($leading[0]));
-        }
-
-        if (preg_match_all(
-            '/\b(?:held\s+by|at|in|from|for|with|within|inside|near|on|by)\s+/iu',
-            $capture,
-            $boundaries,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
-        )) {
-            $last = end($boundaries);
-            $boundaryEnd = $last[0][1] + strlen($last[0][0]);
-            $offset += $boundaryEnd;
-            $capture = substr($capture, $boundaryEnd);
-        }
-
-        if (preg_match(
-            '/^(?:(?:what|which|who|where)\b\s*)'
-                . '(?:(?:is|are|was|were|does|do|did|uses?|has|have|had|'
-                . 'holds?|contains?|serves?|manages?|owns?)\b\s*)*'
-                . '(?:the\b\s*)?/iu',
-            $capture,
-            $interrogative
-        )) {
-            $offset += strlen($interrogative[0]);
-            $capture = substr($capture, strlen($interrogative[0]));
-        } elseif (preg_match(
-            '/^(?:(?:is|are|was|were|does|do|did|has|have|had)\b\s*)'
-                . '(?:the\b\s*)?/iu',
-            $capture,
-            $interrogative
-        )) {
-            $offset += strlen($interrogative[0]);
-            $capture = substr($capture, strlen($interrogative[0]));
-        }
-
-        $prefixWords = $formatIntro
-            ? 'show|find|list|display|get|give|report|please|'
-                . 'all|the|of|items?|this|can|be'
-            : 'show|find|list|display|get|give|report|please|'
-                . 'all|the|of|items?';
-        $prefixPattern = '/^(?:(?:' . $prefixWords . ')\b\s*)+/iu';
-        if (preg_match($prefixPattern, $capture, $prefix, PREG_OFFSET_CAPTURE)) {
-            $offset += strlen($prefix[0][0]);
-            $capture = substr($capture, strlen($prefix[0][0]));
-        }
-
-        $length = strlen(rtrim($capture));
-
-        return [$offset, $length];
-    }
-
-    private static function trimLocationValue(string $capture): string
+    private static function containsAllMaterials(array $tokens, array $claims): bool
     {
-        $boundaries = [];
-        if (preg_match(
-            '/\s+\b(?:and|or)\s+(?=[^.,;:!?\n]*\b'
-                . '(?:service\s+points?|librar(?:y|ies)|campus(?:es)?|institutions?)\b)/iu',
-            $capture,
-            $dimensionBoundary,
-            PREG_OFFSET_CAPTURE
-        )) {
-            $boundaries[] = $dimensionBoundary[0][1];
-        }
-
-        if (preg_match(
-            '/\s+\b(?:and|or)\s+(?='
-                . '(?:vhs(?:\s+tapes?)?|'
-                . '(?:dvds?(?:\s*(?:\/|-|and)\s*blu[\s-]*rays?)?|blu[\s-]*rays?)|'
-                . 'films?|videos?(?:\s+(?:materials?|formats?))?)\b'
-                . '|[^.,;:!?\n]*\b(?:formats?|material\s+types?)\b)/iu',
-            $capture,
-            $materialBoundary,
-            PREG_OFFSET_CAPTURE
-        )) {
-            $boundaries[] = $materialBoundary[0][1];
-        }
-
-        if (preg_match(
-            '/\s+\b(?:held\s+by|at|in|from|for|with|within|inside|near|on)\s+/iu',
-            $capture,
-            $boundary,
-            PREG_OFFSET_CAPTURE
-        )) {
-            $boundaries[] = $boundary[0][1];
-        }
-
-        if ($boundaries !== []) {
-            $capture = substr($capture, 0, min($boundaries));
-        }
-
-        $capture = preg_replace('/(?:,\s*)?(?:and|or)?\s*$/iu', '', $capture);
-        if (!is_string($capture)) {
-            return '';
-        }
-
-        return rtrim($capture);
-    }
-
-    private static function qualifiedValues(
-        string $capture,
-        int $offset,
-        bool $plural,
-        bool $formatIntro = false
-    ): array {
-        list($valueOffset, $valueLength) = self::trimLeadingQualifiedValue(
-            $capture,
-            $offset,
-            $formatIntro
-        );
-        if ($valueLength === 0) {
-            return [];
-        }
-
-        $capture = substr($capture, $valueOffset - $offset, $valueLength);
-        if (!$plural) {
-            return [[$valueOffset, $valueLength]];
-        }
-
-        $parts = preg_split(
-            '/\s*,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+/iu',
-            $capture,
-            -1,
-            PREG_SPLIT_NO_EMPTY | PREG_SPLIT_OFFSET_CAPTURE
-        );
-        if (!is_array($parts)) {
-            return [];
-        }
-
-        $values = [];
-        foreach ($parts as $part) {
-            $leadingLength = strlen($part[0]) - strlen(ltrim($part[0]));
-            $value = trim($part[0]);
-            if ($value === '') {
+        foreach ($tokens as $index => $token) {
+            if (
+                $token['norm'] !== 'all'
+                || !isset($tokens[$index + 1])
+                || !in_array($tokens[$index + 1]['norm'], ['material', 'materials'], true)
+            ) {
                 continue;
             }
-
-            $values[] = [
-                $valueOffset + $part[1] + $leadingLength,
-                strlen($value),
-            ];
+            if (!self::overlaps($token['start'], $tokens[$index + 1]['end'], $claims)) {
+                return true;
+            }
         }
 
-        return $values;
+        return false;
     }
 
-    private static function isPluralQualifier(string $qualifier): bool
-    {
-        $normalized = strtolower(preg_replace('/\s+/u', ' ', trim($qualifier)));
+    private static function trimSpan(
+        array $tokens,
+        int $start,
+        int $end,
+        bool $stripScaffolding
+    ): array {
+        $spanTokens = self::tokensInSpan($tokens, $start, $end);
+        while (
+            $spanTokens !== []
+            && (
+                $spanTokens[0]['norm'] === ','
+                || self::isConnector($spanTokens[0]['norm'])
+            )
+        ) {
+            array_shift($spanTokens);
+        }
+        while (
+            $spanTokens !== []
+            && (
+                $spanTokens[count($spanTokens) - 1]['norm'] === ','
+                || self::isConnector($spanTokens[count($spanTokens) - 1]['norm'])
+                || self::isBoundaryPreposition(
+                    $spanTokens[count($spanTokens) - 1]['norm']
+                )
+            )
+        ) {
+            array_pop($spanTokens);
+        }
+        if ($spanTokens === []) {
+            return [$end, $end];
+        }
 
+        if ($stripScaffolding) {
+            $spanTokens = self::afterLastPreposition($spanTokens);
+            $spanTokens = self::afterScaffolding($spanTokens);
+        }
+        if ($spanTokens === []) {
+            return [$end, $end];
+        }
+
+        return [
+            $spanTokens[0]['start'],
+            $spanTokens[count($spanTokens) - 1]['end'],
+        ];
+    }
+
+    private static function afterLastPreposition(array $tokens): array
+    {
+        $boundary = null;
+        foreach ($tokens as $index => $token) {
+            if (self::isBoundaryPreposition($token['norm'])) {
+                $boundary = $index;
+            }
+            if (
+                $token['norm'] === 'held'
+                && isset($tokens[$index + 1])
+                && $tokens[$index + 1]['norm'] === 'by'
+            ) {
+                $boundary = $index + 1;
+            }
+        }
+
+        return $boundary === null ? $tokens : array_slice($tokens, $boundary + 1);
+    }
+
+    private static function afterScaffolding(array $tokens): array
+    {
+        $words = array_column($tokens, 'norm');
+        $count = count($words);
+        if ($count === 0) {
+            return [];
+        }
+
+        $verbs = [
+            'is', 'are', 'was', 'were', 'does', 'do', 'did', 'uses', 'use',
+            'has', 'have', 'had', 'holds', 'hold', 'contains', 'contain',
+            'serves', 'serve', 'manages', 'manage', 'owns', 'own',
+        ];
+        $commands = ['show', 'find', 'list', 'display', 'get', 'give', 'report'];
+        $index = 0;
+
+        if (in_array($words[0], ['what', 'which', 'who', 'where'], true)) {
+            $index = 1;
+            while (
+                $index < $count
+                && (
+                    in_array($words[$index], $verbs, true)
+                    || $words[$index] === 'the'
+                )
+            ) {
+                $index++;
+            }
+
+            return array_slice($tokens, $index);
+        }
+
+        if (
+            in_array($words[0], ['can', 'could', 'would', 'will', 'may'], true)
+            && ($words[1] ?? null) === 'you'
+            && in_array($words[2] ?? null, $commands, true)
+        ) {
+            $index = 3;
+            if (($words[$index] ?? null) === 'me') {
+                $index++;
+            }
+
+            return array_slice($tokens, $index);
+        }
+
+        if ($words[0] === 'how' && ($words[1] ?? null) === 'many') {
+            $index = 2;
+            while ($index < $count && !in_array($words[$index], $verbs, true)) {
+                $index++;
+            }
+            if ($index < $count) {
+                $index++;
+            }
+
+            return array_slice($tokens, $index);
+        }
+
+        if (in_array($words[0], ['does', 'do', 'did'], true)) {
+            return array_slice($tokens, 1);
+        }
+
+        if ($words[0] === 'tell' && ($words[1] ?? null) === 'me') {
+            return array_slice($tokens, 2);
+        }
+
+        if (in_array($words[0], $commands, true)) {
+            $index = 1;
+            if (($words[$index] ?? null) === 'me') {
+                $index++;
+            }
+            while (
+                $index < $count
+                && in_array(
+                    $words[$index],
+                    ['all', 'the', 'of', 'item', 'items', 'this', 'can', 'be'],
+                    true
+                )
+            ) {
+                $index++;
+            }
+
+            return array_slice($tokens, $index);
+        }
+
+        return $tokens;
+    }
+
+    private static function locationMaterialBoundary(
+        array $tokens,
+        int $start,
+        int $end
+    ): int {
+        $spanTokens = self::tokensInSpan($tokens, $start, $end);
+        foreach ($spanTokens as $index => $token) {
+            if (!$token['punctuation'] && !self::isConnector($token['norm'])) {
+                continue;
+            }
+            $following = array_slice($spanTokens, $index + 1);
+            while (
+                $following !== []
+                && (
+                    $following[0]['norm'] === ','
+                    || self::isConnector($following[0]['norm'])
+                )
+            ) {
+                array_shift($following);
+            }
+            if (
+                $following !== []
+                && (
+                    self::exactKnownMaterialTokens($following) !== null
+                    || in_array($following[0]['norm'], ['video', 'videos'], true)
+                )
+            ) {
+                return $token['start'];
+            }
+        }
+
+        return $end;
+    }
+
+    private static function exactKnownMaterialTokens(array $tokens): ?string
+    {
+        if ($tokens === []) {
+            return null;
+        }
+        $words = array_column($tokens, 'norm');
+        $normalized = implode(' ', $words);
+
+        return self::knownMaterialTerm($normalized);
+    }
+
+    private static function knownMaterialTerm(string $term): ?string
+    {
+        $term = preg_replace('/\s+/u', ' ', trim($term));
+        if (!is_string($term)) {
+            return null;
+        }
+        if (in_array($term, ['vhs', 'vhs tape', 'vhs tapes'], true)) {
+            return 'vhs';
+        }
+        if (
+            in_array(
+                $term,
+                [
+                    'dvd', 'dvds', 'blu-ray', 'blu-rays', 'bluray', 'blurays',
+                    'dvd/blu-ray', 'dvd/blu-rays', 'dvd and blu-ray',
+                    'dvd and blu-rays', 'dvd & blu-ray', 'dvd & blu-rays',
+                ],
+                true
+            )
+        ) {
+            return 'dvd';
+        }
+        if (in_array($term, ['film', 'films'], true)) {
+            return 'film';
+        }
+
+        return null;
+    }
+
+    private static function isGenericVideoTerm(string $term): bool
+    {
         return in_array(
-            $normalized,
-            ['locations', 'collections', 'rooms', 'formats', 'material types'],
+            $term,
+            [
+                'video', 'videos', 'video material', 'video materials',
+                'video format', 'video formats',
+            ],
             true
         );
     }
 
-    private static function skipWhitespace(string $text, int $offset): int
+    private static function normalizeTerm(string $term): string
     {
-        $remaining = substr($text, $offset);
-        if (preg_match('/^\s+/u', $remaining, $match)) {
-            return $offset + strlen($match[0]);
-        }
+        $term = self::lower(trim($term));
+        $term = preg_replace('/\s+/u', ' ', $term);
 
-        return $offset;
+        return is_string($term) ? $term : '';
     }
 
-    private static function nextClauseOffset(string $text, int $offset): int
+    private static function lower(string $value): string
     {
-        if (preg_match(
-            '/[.;:!?\n]/u',
-            $text,
-            $match,
-            PREG_OFFSET_CAPTURE,
-            $offset
-        )) {
-            return $match[0][1];
+        if (function_exists('mb_strtolower')) {
+            return mb_strtolower($value, 'UTF-8');
         }
 
-        return strlen($text);
+        return strtr(strtolower($value), [
+            'À' => 'à', 'Á' => 'á', 'Â' => 'â', 'Ã' => 'ã', 'Ä' => 'ä',
+            'Å' => 'å', 'Æ' => 'æ', 'Ç' => 'ç', 'È' => 'è', 'É' => 'é',
+            'Ê' => 'ê', 'Ë' => 'ë', 'Ì' => 'ì', 'Í' => 'í', 'Î' => 'î',
+            'Ï' => 'ï', 'Ð' => 'ð', 'Ñ' => 'ñ', 'Ò' => 'ò', 'Ó' => 'ó',
+            'Ô' => 'ô', 'Õ' => 'õ', 'Ö' => 'ö', 'Ø' => 'ø', 'Ù' => 'ù',
+            'Ú' => 'ú', 'Û' => 'û', 'Ü' => 'ü', 'Ý' => 'ý', 'Þ' => 'þ',
+            'Ā' => 'ā', 'Ă' => 'ă', 'Ą' => 'ą', 'Ć' => 'ć', 'Ĉ' => 'ĉ',
+            'Ċ' => 'ċ', 'Č' => 'č', 'Ď' => 'ď', 'Đ' => 'đ', 'Ē' => 'ē',
+            'Ĕ' => 'ĕ', 'Ė' => 'ė', 'Ę' => 'ę', 'Ě' => 'ě', 'Ĝ' => 'ĝ',
+            'Ğ' => 'ğ', 'Ġ' => 'ġ', 'Ģ' => 'ģ', 'Ĥ' => 'ĥ', 'Ħ' => 'ħ',
+            'Ĩ' => 'ĩ', 'Ī' => 'ī', 'Ĭ' => 'ĭ', 'Į' => 'į', 'İ' => 'i',
+            'Ĵ' => 'ĵ', 'Ķ' => 'ķ', 'Ĺ' => 'ĺ', 'Ļ' => 'ļ', 'Ľ' => 'ľ',
+            'Ŀ' => 'ŀ', 'Ł' => 'ł', 'Ń' => 'ń', 'Ņ' => 'ņ', 'Ň' => 'ň',
+            'Ŋ' => 'ŋ', 'Ō' => 'ō', 'Ŏ' => 'ŏ', 'Ő' => 'ő', 'Œ' => 'œ',
+            'Ŕ' => 'ŕ', 'Ŗ' => 'ŗ', 'Ř' => 'ř', 'Ś' => 'ś', 'Ŝ' => 'ŝ',
+            'Ş' => 'ş', 'Š' => 'š', 'Ţ' => 'ţ', 'Ť' => 'ť', 'Ŧ' => 'ŧ',
+            'Ũ' => 'ũ', 'Ū' => 'ū', 'Ŭ' => 'ŭ', 'Ů' => 'ů', 'Ű' => 'ű',
+            'Ų' => 'ų', 'Ŵ' => 'ŵ', 'Ŷ' => 'ŷ', 'Ÿ' => 'ÿ', 'Ź' => 'ź',
+            'Ż' => 'ż', 'Ž' => 'ž',
+        ]);
     }
 
-    private static function previousClauseOffset(string $text, int $offset): int
+    private static function nextHardBoundary(array $tokens, int $startIndex): int
     {
-        $prefix = substr($text, 0, $offset);
-        $positions = [];
-        foreach (['.', ';', ':', '!', '?', "\n"] as $punctuation) {
-            $position = strrpos($prefix, $punctuation);
-            if ($position !== false) {
-                $positions[] = $position + 1;
+        foreach ($tokens as $index => $token) {
+            if ($index < $startIndex) {
+                continue;
+            }
+            if (in_array($token['norm'], self::HARD_PUNCTUATION, true)) {
+                return $token['start'];
             }
         }
 
-        return $positions === [] ? 0 : max($positions);
-    }
-
-    private static function previousPunctuationOffset(string $text, int $offset): int
-    {
-        $prefix = substr($text, 0, $offset);
-        if (preg_match('/[.,;:!?\n]\s*$/u', $prefix, $match, PREG_OFFSET_CAPTURE)) {
-            return $match[0][1] + strlen($match[0][0]);
+        if ($tokens === []) {
+            return 0;
         }
 
-        $positions = [];
-        foreach (['.', ',', ';', ':', '!', '?', "\n"] as $punctuation) {
-            $position = strrpos($prefix, $punctuation);
-            if ($position !== false) {
-                $positions[] = $position + 1;
+        return $tokens[count($tokens) - 1]['end'];
+    }
+
+    private static function previousHardBoundary(array $tokens, int $endIndex): int
+    {
+        $start = 0;
+        for ($index = 0; $index < $endIndex; $index++) {
+            if (in_array($tokens[$index]['norm'], self::HARD_PUNCTUATION, true)) {
+                $start = $tokens[$index]['end'];
             }
         }
 
-        return $positions === [] ? 0 : max($positions);
+        return $start;
+    }
+
+    private static function previousCommaBoundary(array $tokens, int $endIndex): int
+    {
+        $start = 0;
+        for ($index = 0; $index < $endIndex; $index++) {
+            if ($tokens[$index]['norm'] === ',') {
+                $start = $tokens[$index]['end'];
+            }
+        }
+
+        return $start;
+    }
+
+    private static function tokensInSpan(array $tokens, int $start, int $end): array
+    {
+        return array_values(array_filter(
+            $tokens,
+            function (array $token) use ($start, $end): bool {
+                return $token['start'] >= $start && $token['end'] <= $end;
+            }
+        ));
+    }
+
+    private static function isConnector(string $word): bool
+    {
+        return in_array($word, ['and', 'or', 'and/or'], true);
+    }
+
+    private static function isBoundaryPreposition(string $word): bool
+    {
+        return in_array(
+            $word,
+            [
+                'at', 'in', 'from', 'for', 'with', 'within', 'inside',
+                'near', 'on', 'by', 'about',
+            ],
+            true
+        );
     }
 
     private static function namedIntent(
@@ -785,39 +1118,6 @@ final class ReferenceIntentService
             '_offset' => $offset,
             '_end' => $end,
         ];
-    }
-
-    private static function containsUnconsumedPattern(
-        string $pattern,
-        string $text,
-        array $consumed
-    ): bool {
-        return self::firstUnconsumedMatch($pattern, $text, $consumed) !== null;
-    }
-
-    private static function firstUnconsumedMatch(
-        string $pattern,
-        string $text,
-        array $consumed
-    ): ?array {
-        if (!preg_match_all(
-            $pattern,
-            $text,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
-        )) {
-            return null;
-        }
-
-        foreach ($matches as $match) {
-            $offset = $match[0][1];
-            $end = $offset + strlen($match[0][0]);
-            if (!self::overlaps($offset, $end, $consumed)) {
-                return [$offset, $end];
-            }
-        }
-
-        return null;
     }
 
     private static function overlaps(int $start, int $end, array $ranges): bool

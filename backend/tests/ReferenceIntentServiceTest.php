@@ -478,6 +478,252 @@ assertIntentSame(
     'A singular format qualifier must not split a material name containing and.'
 );
 
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('Show items in location HC DVD, VHS.', 'location'),
+    'A comma must end a singular prefix location before a known material.'
+);
+assertIntentSame(
+    ['vhs'],
+    materialTerms('Show items in location HC DVD, VHS.'),
+    'A known material after a comma-delimited location must remain available.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('Show items in location HC DVD, Hillyer library.', 'location'),
+    'A comma must end a singular prefix location before a hierarchy reference.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Show items in location HC DVD, Hillyer library.', 'library'),
+    'A hierarchy reference after a comma-delimited location must remain available.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('Show items in location HC DVD, Betamax format.', 'location'),
+    'A comma must end a singular prefix location before a qualified material.'
+);
+assertIntentSame(
+    ['betamax'],
+    materialTerms('Show items in location HC DVD, Betamax format.'),
+    'A qualified material after a comma-delimited location must remain available.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('HC DVD location and Hillyer library', 'location'),
+    'A suffix location must retain its value before a hierarchy reference.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('HC DVD location and Hillyer library', 'library'),
+    'A suffix location qualifier must not leak into a following hierarchy span.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('HC DVD location and Betamax format', 'location'),
+    'A suffix location must retain its value before a qualified material.'
+);
+assertIntentSame(
+    ['betamax'],
+    materialTerms('HC DVD location and Betamax format'),
+    'A suffix location qualifier must not leak into a following material span.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension(
+        'HC DVD and SC Art Video locations and Smith campus',
+        'location'
+    ),
+    'A shared suffix location qualifier must consume its complete structure.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension(
+        'HC DVD and SC Art Video locations and Smith campus',
+        'campus'
+    ),
+    'A shared suffix location qualifier must not leak into a following campus span.'
+);
+
+assertIntentSame(
+    ['Hillyer', 'Neilson'],
+    spansForDimension('Hillyer and Neilson libraries', 'library'),
+    'A shared suffix library qualifier must split each value.'
+);
+assertIntentSame(
+    ['Hillyer', 'Neilson', 'Smith College'],
+    spansForDimension(
+        'Hillyer, Neilson, and Smith College libraries',
+        'library'
+    ),
+    'A comma-structured shared library list must preserve every value in prompt order.'
+);
+assertIntentSame(
+    ['Smith', 'Mount Holyoke'],
+    spansForDimension('Smith and Mount Holyoke campuses', 'campus'),
+    'A shared suffix campus qualifier must split each value.'
+);
+assertIntentSame(
+    ['Hillyer', 'Neilson'],
+    spansForDimension('libraries Hillyer and Neilson', 'library'),
+    'A shared prefix library qualifier must split each value.'
+);
+assertIntentSame(
+    ['Campus Center library'],
+    spansForDimension('Campus Center library', 'library'),
+    'A hierarchy word inside a library name must remain part of the value.'
+);
+assertIntentSame(
+    ['Library Annex library'],
+    spansForDimension('Library Annex library', 'library'),
+    'A leading hierarchy word inside a library name must remain part of the value.'
+);
+assertIntentSame(
+    [],
+    spansForDimension('Smith College Campus Center library', 'campus'),
+    'An embedded campus word must not manufacture a campus intent.'
+);
+assertIntentSame(
+    ['Smith College Campus Center library'],
+    spansForDimension('Smith College Campus Center library', 'library'),
+    'A rightmost qualified hierarchy name must claim embedded qualifier words.'
+);
+
+assertIntentSame(
+    ['Research and Instruction Center', 'HC DVD', 'SC Music'],
+    spansForDimension(
+        'locations Research and Instruction Center, HC DVD, and SC Music',
+        'location'
+    ),
+    'Internal and must remain atomic inside a comma-delimited prefix location chunk.'
+);
+assertIntentSame(
+    ['Research and Instruction Center', 'HC DVD', 'SC Music'],
+    spansForDimension(
+        'Research and Instruction Center, HC DVD, and SC Music locations',
+        'location'
+    ),
+    'Internal and must remain atomic inside a comma-delimited suffix location chunk.'
+);
+assertIntentSame(
+    ['vhs', 'rock and roll', 'laser disc'],
+    materialTerms('Rock and Roll, laser disc, and VHS formats'),
+    'Internal and must remain atomic inside a comma-delimited material chunk.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension('locations HC DVD and/or SC Art Video', 'location'),
+    'And/or must split an explicit shared location list.'
+);
+assertIntentSame(
+    ['vhs', 'betamax'],
+    materialTerms('VHS and/or Betamax formats'),
+    'And/or must split an explicit shared material list.'
+);
+
+assertIntentSame(
+    ['vhs', 'betamax'],
+    materialTerms('VHS and Betamax format at Hillyer library'),
+    'An unambiguous singular qualified material list must retain every term.'
+);
+assertIntentSame(
+    ['vhs', 'betamax'],
+    materialTerms('Betamax and VHS format at Hillyer library'),
+    'Known-word position must not discard another singular-list material.'
+);
+assertIntentSame(
+    ['vhs', 'betamax', 'laser disc'],
+    materialTerms('VHS, Betamax, and laser disc format at Hillyer library'),
+    'A comma-structured singular qualified material list must retain every term.'
+);
+assertIntentSame(
+    ['super vhs'],
+    materialTerms('Super VHS format at Hillyer library'),
+    'A fully qualified compound must override its embedded VHS token.'
+);
+assertIntentSame(
+    ['vhs-c'],
+    materialTerms('VHS-C format at Hillyer library'),
+    'A fully qualified hyphenated compound must override its embedded VHS token.'
+);
+assertIntentSame(
+    ['dvd audio'],
+    materialTerms('DVD Audio format at Hillyer library'),
+    'A fully qualified compound must override its embedded DVD token.'
+);
+
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Tell me about Hillyer library', 'library'),
+    'Imperative scaffolding must not pollute a library value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Can you show me Hillyer library?', 'library'),
+    'Modal question scaffolding must not pollute a library value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('How many items does Hillyer library have?', 'library'),
+    'Count-question scaffolding must not pollute a library value.'
+);
+assertIntentSame(
+    [],
+    spansForDimension('Show me libraries with films', 'library'),
+    'A generic plural hierarchy category must not become an explicit reference.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('Show me libraries with films'),
+    'A generic hierarchy question must retain its explicit material term.'
+);
+
+$showVideoFormats = ReferenceIntentService::extract(
+    'Show me video formats at Hillyer library'
+);
+assertIntentSame(
+    [],
+    materialTerms('Show me video formats at Hillyer library'),
+    'Generic video formats must not become an explicit unknown material.'
+);
+assertIntentSame(
+    'physical_video',
+    $showVideoFormats[1]['selector'] ?? null,
+    'Generic video formats after imperative scaffolding must select physical video.'
+);
+$countVideoFormats = ReferenceIntentService::extract(
+    'How many video formats are at Hillyer library?'
+);
+assertIntentSame(
+    [],
+    materialTerms('How many video formats are at Hillyer library?'),
+    'Generic video formats in a count question must not become an explicit unknown material.'
+);
+assertIntentSame(
+    'physical_video',
+    $countVideoFormats[1]['selector'] ?? null,
+    'Generic video formats in a count question must select physical video.'
+);
+assertIntentSame(
+    ['All Saints library'],
+    spansForDimension('All Saints library', 'library'),
+    'A legitimate leading All must remain part of a library name.'
+);
+assertIntentSame(
+    ['The Library and Learning Commons'],
+    spansForDimension(
+        'The Library and Learning Commons location',
+        'location'
+    ),
+    'A legitimate leading The must remain part of a location name.'
+);
+
+assertIntentSame(
+    ['bétamax'],
+    materialTerms('Élodie library and BÉTAMAX format'),
+    'Unknown Unicode material terms must normalize case consistently.'
+);
+
 if ($intentTestFailures !== []) {
     fwrite(STDERR, implode("\n", $intentTestFailures));
     exit(1);
