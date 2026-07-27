@@ -54,12 +54,24 @@ $ordinaryRecovery = AskResponseContractService::toUserResponse([
     'route' => 'exploratory_recovery',
     'recoveryContext' => ['originalQuestion' => 'Show title for instance number in0001.'],
     'suggestions' => ['Keep each requested identifier exactly as supplied.'],
+    'referenceResolver' => [
+        'resolved' => true,
+        'guidanceLines' => [
+            "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'.",
+        ],
+    ],
     '_askEvidence' => [
         'explicitReportRequest' => ['identifiers' => ['instance_hrid' => ['in0001']]],
         'explicitReportRequestProvenance' => 'server_extracted',
     ],
 ]);
 askResponseAssertSame(false, isset($ordinaryRecovery['_askEvidence']), 'Ordinary responses must not expose internal explicit-value evidence.');
+askResponseAssertSame(false, isset($ordinaryRecovery['referenceResolver']), 'Ordinary responses must not expose internal resolver guidance.');
+askResponseAssertSame(
+    false,
+    strpos(json_encode($ordinaryRecovery), "inventory.material_type__t.name = 'E-Book'") !== false,
+    'Ordinary responses must not expose distinctive resolver schema predicates.'
+);
 askResponseAssertSame('Show title for instance number in0001.', $ordinaryRecovery['recoveryContext']['originalQuestion'] ?? null, 'Ordinary recovery context must retain the raw user question.');
 
 fwrite(STDOUT, "Ask response contract service test passed\n");

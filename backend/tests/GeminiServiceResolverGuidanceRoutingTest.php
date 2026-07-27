@@ -322,6 +322,11 @@ assertSameValue($routedRawQuestion, $routedRecovery['recoveryContext']['original
 $routedRecoveryJson = json_encode($routedRecovery);
 assertSameValue(false, strpos($routedRecoveryJson, 'Previous SQL:') !== false, 'Recovery must not expose follow-up generation context.');
 assertSameValue(false, strpos($routedRecoveryJson, 'Reference resolver guidance:') !== false, 'Recovery must not expose resolver guidance.');
+assertSameValue(
+    false,
+    strpos($routedRecoveryJson, "inventory.material_type__t.name = 'E-Book'") !== false,
+    'Recovery must not expose the resolver guidance predicate even when its wrapper heading is absent.'
+);
 assertSameValue(false, strpos($routedRecoveryJson, 'EXPLICIT REPORT VALUES') !== false, 'Recovery must not expose explicit-value guidance.');
 assertSameValue($routedRawQuestion, $routedTransport['rawQuestion'] ?? null, 'Routed transport must retain the exact raw question.');
 assertContainsText('Previous SQL:', $routedTransport['generationPrompt'] ?? '', 'Routed transport must retain follow-up generation context.');

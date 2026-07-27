@@ -43,8 +43,30 @@ namespace app\services {
     {
         public const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
         public static $preflightRepairCalls = [];
+        public static $generationCalls = [];
+        public static $generationResult = [];
+        public static $generationTransport = [];
 
         public static function isAiTimeoutMessage($message): bool { return false; }
+
+        public static function generateSqlWithShadow(
+            $rawQuestion,
+            $campus = null,
+            $userId = null,
+            $allowExploratory = false,
+            $generationPrompt = null,
+            ?array &$generationTransport = null
+        ): array {
+            self::$generationCalls[] = [
+                'rawQuestion' => $rawQuestion,
+                'campus' => $campus,
+                'userId' => $userId,
+                'allowExploratory' => $allowExploratory,
+                'generationPrompt' => $generationPrompt,
+            ];
+            $generationTransport = self::$generationTransport;
+            return self::$generationResult;
+        }
 
         public static function repairExploratorySqlAfterPreflight(
             string $originalQuestion,
@@ -67,6 +89,12 @@ namespace app\services {
                 'mode' => 'exploratory',
                 'route' => 'exploratory',
                 'routeReason' => 'unsupported_query_family',
+                'referenceResolver' => [
+                    'resolved' => true,
+                    'guidanceLines' => [
+                        "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'.",
+                    ],
+                ],
             ];
         }
     }
@@ -75,7 +103,22 @@ namespace app\services {
     class IndexRecommendationService {}
     class Nl2sqlRuntimePreflightService {}
     class ReferenceCacheRefreshService {}
-    class SqlPreflightService {}
+    class SqlPreflightService
+    {
+        public static $calls = [];
+        public static $results = [];
+
+        public static function estimateQueryComplexity($db, string $sql, int $timeoutMs, int $rowLimit, array $params): array
+        {
+            self::$calls[] = [
+                'sql' => $sql,
+                'timeoutMs' => $timeoutMs,
+                'rowLimit' => $rowLimit,
+                'params' => $params,
+            ];
+            return array_shift(self::$results) ?? [];
+        }
+    }
 }
 
 namespace Firebase\JWT { class JWT {} }
@@ -139,9 +182,26 @@ namespace {
         }
     }
 
+    final class TestRequest
+    {
+        private $body;
+
+        public function __construct(array $body)
+        {
+            $this->body = $body;
+        }
+
+        public function getBodyParams(): array
+        {
+            return $this->body;
+        }
+    }
+
     Yii::$app = (object) [
         'response' => (object) ['statusCode' => 200, 'format' => null],
         'user' => (object) ['isGuest' => true, 'id' => null, 'identity' => null],
+        'params' => ['queryTimeoutMs' => 30000],
+        'folioDb' => (object) [],
     ];
 
     $controller = new \app\controllers\FolioQueryController('folio-query', null);
@@ -934,6 +994,78 @@ namespace {
     );
     repairAssertSame(0, $excessiveRepairCalls, 'Excessive incoming repair counts must not permit another repair.');
     repairAssertSame(2, $excessiveAttempts['validationSummary']['repairAttempts'] ?? null, 'Excessive incoming repair counts should be clamped to two.');
+
+    $actionRawQuestion = 'Use invoice date instead.';
+    $actionGenerationPrompt = implode("\n\n", [
+        'This is a follow-up request to a previously generated library report.',
+        'Previous request: Show purchases and circulation ROI by call number.',
+        'Follow-up request: ' . $actionRawQuestion,
+        "Reference resolver guidance:\n- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'.",
+    ]);
+    \app\services\GeminiService::$generationCalls = [];
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    \app\services\GeminiService::$generationTransport = [
+        'rawQuestion' => $actionRawQuestion,
+        'generationPrompt' => $actionGenerationPrompt,
+    ];
+    \app\services\GeminiService::$generationResult = [
+        'sql' => 'SELECT broken_column FROM inventory.instance__t',
+        'mode' => 'exploratory',
+        'route' => 'exploratory_legacy_freeform',
+        'routeReason' => 'unsupported_query_family',
+        'repairAttempts' => 0,
+        'referenceResolver' => [
+            'resolved' => true,
+            'guidanceLines' => [
+                "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'.",
+            ],
+        ],
+    ];
+    \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$results = [
+        ['error' => 'column "broken_column" does not exist'],
+        ['rows' => 2, 'cost' => 3.0],
+    ];
+    Yii::$app->request = new TestRequest([
+        'prompt' => $actionRawQuestion,
+        'campus' => 'Smith College',
+        'includeSuggestions' => false,
+    ]);
+    $actionReview = new CapturingAdministratorReviewService();
+    $actionController = new TestableFolioQueryController('folio-query', null);
+    $actionController->reviewService = $actionReview;
+    $actionResponse = $actionController->actionNl();
+
+    repairAssertSame(1, count(\app\services\GeminiService::$generationCalls), 'actionNl should invoke generation exactly once.');
+    repairAssertSame(
+        $actionRawQuestion,
+        \app\services\GeminiService::$generationCalls[0]['rawQuestion'] ?? null,
+        'actionNl generation must receive the exact raw latest question.'
+    );
+    repairAssertSame(
+        $actionRawQuestion,
+        \app\services\GeminiService::$generationCalls[0]['generationPrompt'] ?? null,
+        'A non-follow-up action should initially generate from the unaugmented raw prompt.'
+    );
+    repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'actionNl should enter the default post-preflight repair seam once.');
+    repairAssertSame(
+        $actionRawQuestion,
+        \app\services\GeminiService::$preflightRepairCalls[0]['originalQuestion'] ?? null,
+        'actionNl post-preflight repair must retain the exact raw question.'
+    );
+    repairAssertSame(
+        $actionGenerationPrompt,
+        \app\services\GeminiService::$preflightRepairCalls[0]['generationPrompt'] ?? null,
+        'actionNl post-preflight repair must consume the augmented non-response generation transport.'
+    );
+    repairAssertSame(2, count(\app\services\SqlPreflightService::$calls), 'actionNl should preflight both the initial and repaired candidates.');
+    repairAssertSame('SELECT title FROM inventory.instance__t', $actionResponse['sql'] ?? null, 'actionNl should return the repaired SQL after successful re-preflight.');
+    repairAssertSame(false, isset($actionResponse['referenceResolver']), 'The finalized actionNl browser response must omit internal resolver guidance.');
+    repairAssertNotContains(
+        "inventory.material_type__t.name = 'E-Book'",
+        json_encode($actionResponse),
+        'The finalized actionNl browser response must omit the distinctive resolver schema predicate.'
+    );
 
     $controllerSource = file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');
     repairAssertSame(

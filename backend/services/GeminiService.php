@@ -238,12 +238,7 @@ class GeminiService
                 $rawQuestion
             );
 
-            if (!empty($referenceResolution['guidanceLines'])) {
-                $primary['referenceResolver'] = [
-                    'resolved' => true,
-                    'guidanceLines' => $referenceResolution['guidanceLines'],
-                ];
-            }
+            $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
@@ -266,12 +261,7 @@ class GeminiService
                 $rawQuestion
             );
 
-            if (!empty($referenceResolution['guidanceLines'])) {
-                $primary['referenceResolver'] = [
-                    'resolved' => true,
-                    'guidanceLines' => $referenceResolution['guidanceLines'],
-                ];
-            }
+            $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
@@ -296,12 +286,7 @@ class GeminiService
                 : 'primary_legacy_mode';
         }
 
-        if (!empty($referenceResolution['guidanceLines'])) {
-            $primary['referenceResolver'] = [
-                'resolved' => true,
-                'guidanceLines' => $referenceResolution['guidanceLines'],
-            ];
-        }
+        $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
 
         if (!self::shouldRunShadowForUser($userId, $rawQuestion)) {
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
@@ -2123,6 +2108,24 @@ GUIDANCE;
             : [];
         unset($evidence['modelConfidence']);
         $result['_askEvidence'] = array_merge($existing, $evidence);
+        return $result;
+    }
+
+    private static function withInternalReferenceResolverGuidance(
+        array $result,
+        array $referenceResolution
+    ): array {
+        if (
+            ($result['route'] ?? null) === 'exploratory_recovery'
+            || empty($referenceResolution['guidanceLines'])
+        ) {
+            return $result;
+        }
+
+        $result['referenceResolver'] = [
+            'resolved' => true,
+            'guidanceLines' => $referenceResolution['guidanceLines'],
+        ];
         return $result;
     }
 
@@ -5709,7 +5712,7 @@ PROMPT;
         $repairAttemptsUsed = (int)($currentResult['repairAttempts'] ?? 0);
         $assumptions = is_array($currentResult['assumptions'] ?? null)
             ? $currentResult['assumptions']
-            : ExploratoryQueryDefaultsService::resolve($originalQuestion);
+            : ExploratoryQueryDefaultsService::resolve($generationPrompt);
         $attemptedPlan = trim((string)($currentResult['attemptedPlan'] ?? $currentResult['explanation'] ?? ''));
         if ($attemptedPlan === '') {
             $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
@@ -5723,7 +5726,7 @@ PROMPT;
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
             'semanticContract' => ExploratorySemanticContractService::build(
-                $originalQuestion,
+                $generationPrompt,
                 is_string($campus) ? $campus : null,
                 $assumptions,
                 (string)($currentResult['routeReason'] ?? 'preflight_validation_failed'),

@@ -681,6 +681,52 @@ $semanticTelemetry = implode("\n", array_map(function ($record) { return (string
 repairAssertSame(false, strpos($semanticTelemetry, semanticallyFlawedRoiSql()) !== false, 'Semantic telemetry must not expose rejected SQL.');
 repairAssertSame(false, strpos($semanticTelemetry, roiPrompt()) !== false, 'Semantic telemetry must not expose the original prompt.');
 
+$terseFollowUp = 'Use invoice date instead.';
+$followUpGenerationPrompt = implode("\n\n", [
+    'This is a follow-up request to a previously generated library report.',
+    'Previous request: ' . roiPrompt(),
+    'Follow-up request: ' . $terseFollowUp,
+]);
+TestTransport::$responses = [geminiText(semanticallyFlawedRoiSql())];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$followUpSemanticExhaustion = GeminiService::repairExploratorySqlAfterPreflight(
+    $terseFollowUp,
+    'Smith College',
+    [
+        'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
+        'repairAttempts' => 1,
+        'routeReason' => 'unsupported_query_family',
+        'explanation' => 'Preserve the prior ROI report while changing its purchase date basis.',
+    ],
+    'ERROR: column ii.missing_column does not exist at character 15',
+    $followUpGenerationPrompt
+);
+repairAssertSame(1, count(TestTransport::$requests), 'A terse follow-up semantic rejection should use only the one remaining repair call.');
+repairAssertSame(2, $followUpSemanticExhaustion['repairAttempts'] ?? null, 'Terse follow-up semantic rejection must consume the remaining shared repair budget.');
+repairAssertSame(false, isset($followUpSemanticExhaustion['sql']), 'A repair that drops the augmented ROI semantics must be rejected.');
+repairAssertSame(
+    'semantic_conformance',
+    $followUpSemanticExhaustion['validationSummary']['validatorStage'] ?? null,
+    'Terse follow-up recovery should identify semantic conformance as the exhausted stage.'
+);
+$followUpAssumptions = [];
+foreach (($followUpSemanticExhaustion['assumptions'] ?? []) as $assumption) {
+    if (is_array($assumption) && isset($assumption['key'])) {
+        $followUpAssumptions[$assumption['key']] = $assumption['value'] ?? null;
+    }
+}
+repairAssertSame(
+    'invoice_date',
+    $followUpAssumptions['purchase_date_basis'] ?? null,
+    'Post-preflight assumptions must preserve the invoice-date correction from augmented generation context.'
+);
+repairAssertSame(
+    $terseFollowUp,
+    $followUpSemanticExhaustion['recoveryContext']['originalQuestion'] ?? null,
+    'Terse follow-up recovery must still expose only the raw latest question.'
+);
+
 Yii::$logs = [];
 try {
     GeminiService::repairExploratorySqlAfterPreflight(
