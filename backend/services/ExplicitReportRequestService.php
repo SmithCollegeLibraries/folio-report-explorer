@@ -104,13 +104,6 @@ final class ExplicitReportRequestService
         return $guidance === '' ? $prompt : $prompt . "\n\n" . $guidance;
     }
 
-    public static function removeGuidance(string $prompt): string
-    {
-        $marker = "\n\nEXPLICIT REPORT VALUES — preserve exactly:\n";
-        $position = strpos($prompt, $marker);
-        return $position === false ? $prompt : substr($prompt, 0, $position);
-    }
-
     public static function validateCandidate(string $sql, array $request): array
     {
         $analysis = ExploratorySqlAnalysisService::analyze($sql);

@@ -507,14 +507,19 @@ repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT 
 repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Exhausted ordinary responses must not expose SQL-oriented repair guidance.');
 
 $routedExplicitPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
+$routedReferencePrompt = $routedExplicitPrompt
+    . "\n\nReference resolver guidance:\n"
+    . "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'. "
+    . 'Do not apply this value to library or campus name columns.';
 $routedEffectivePrompt = \app\services\ExplicitReportRequestService::appendGuidance(
-    $routedExplicitPrompt,
+    $routedReferencePrompt,
     \app\services\ExplicitReportRequestService::extract($routedExplicitPrompt)
 );
 TestTransport::$responses = [
     geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
     geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
 ];
+TestTransport::$requests = [];
 Yii::$logs = [];
 $routedRepair = new ReflectionMethod(GeminiService::class, 'repairRoutedCandidateMissingExplicitValues');
 $routedExhausted = $routedRepair->invoke(
@@ -525,13 +530,18 @@ $routedExhausted = $routedRepair->invoke(
         'routeReason' => 'family_contract_supported:inventory_library_location_listing',
     ],
     $routedEffectivePrompt,
-    null
+    null,
+    $routedExplicitPrompt
 );
 repairAssertSame(2, $routedExhausted['repairAttempts'] ?? null, 'Routed-family explicit repair exhaustion must preserve the shared two-attempt maximum.');
 repairAssertSame(false, isset($routedExhausted['sql']), 'Routed-family explicit repair exhaustion must not return invalid SQL.');
 repairAssertSame($routedExplicitPrompt, $routedExhausted['recoveryContext']['originalQuestion'] ?? null, 'Routed-family exhaustion must retain only the raw user question.');
 repairAssertSame(false, strpos(json_encode($routedExhausted), 'EXPLICIT REPORT VALUES') !== false, 'Routed-family exhaustion must not expose server guidance.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'Reference resolver guidance') !== false, 'Routed-family exhaustion must not expose resolver schema guidance.');
 repairAssertSame(false, strpos(json_encode($routedExhausted), 'explicitReportRequest') !== false, 'Routed-family exhaustion must not expose internal explicit-value keys.');
+$routedRepairPayload = json_encode(TestTransport::$requests[0] ?? []);
+repairAssertContains('Reference resolver guidance', $routedRepairPayload, 'Routed-family repair must retain resolver guidance as model-only generation context.');
+repairAssertContains('EXPLICIT REPORT VALUES', $routedRepairPayload, 'Routed-family repair must retain explicit-value guidance as model-only generation context.');
 
 TestTransport::$responses = [
     geminiText(semanticallyFlawedRoiSql()),

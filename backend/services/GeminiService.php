@@ -261,12 +261,13 @@ class GeminiService
 
         $primaryMode = self::resolvePrimaryModeForPrompt((string)$prompt, $campus);
         $primary = $primaryMode === 'intent'
-            ? self::generateSql($effectivePrompt, $campus, false, true)
-            : self::generateSql($effectivePrompt, $campus, true, false);
+            ? self::generateSql($effectivePrompt, $campus, false, true, (string)$prompt)
+            : self::generateSql($effectivePrompt, $campus, true, false, (string)$prompt);
         $primary = self::repairRoutedCandidateMissingExplicitValues(
             $primary,
-            (string)$prompt,
-            $campus
+            (string)$effectivePrompt,
+            $campus,
+            (string)$prompt
         );
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
@@ -293,21 +294,21 @@ class GeminiService
 
         try {
             $shadow = $shadowMode === 'intent'
-                ? self::generateSql($effectivePrompt, $campus, false, true)
-                : self::generateSql($effectivePrompt, $campus, true, false);
+                ? self::generateSql($effectivePrompt, $campus, false, true, (string)$prompt)
+                : self::generateSql($effectivePrompt, $campus, true, false, (string)$prompt);
 
             self::logShadowComparison($primary, $shadow, [
                 'primaryMode' => $primaryMode,
                 'shadowMode' => $shadowMode,
                 'userId' => $userId,
-                'promptFingerprint' => self::fingerprintPrompt($effectivePrompt),
+                'promptFingerprint' => self::fingerprintPrompt((string)$prompt),
             ]);
         } catch (\Throwable $e) {
             self::logNlTelemetry('nl2sql.shadow_error', [
                 'primaryMode' => $primaryMode,
                 'shadowMode' => $shadowMode,
                 'userId' => $userId,
-                'promptFingerprint' => self::fingerprintPrompt($effectivePrompt),
+                'promptFingerprint' => self::fingerprintPrompt((string)$prompt),
                 'error' => $e->getMessage(),
             ], true);
         }
@@ -326,7 +327,7 @@ class GeminiService
     ): array
     {
         $originalPrompt = $originalPrompt === null
-            ? ExplicitReportRequestService::removeGuidance($prompt)
+            ? $prompt
             : $originalPrompt;
         $assumptions = ExploratoryQueryDefaultsService::resolve($prompt);
         $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
@@ -1079,8 +1080,18 @@ PROMPT;
      * @return array {sql: string, explanation: string, dataSource: string}
      * @throws \RuntimeException
      */
-    public static function generateSql($prompt, $campus = null, $forceLegacy = false, $forceIntent = false)
+    public static function generateSql(
+        $prompt,
+        $campus = null,
+        $forceLegacy = false,
+        $forceIntent = false,
+        $originalQuestion = null
+    )
     {
+        $originalQuestion = $originalQuestion === null
+            ? (string)$prompt
+            : (string)$originalQuestion;
+
         if ($forceLegacy && $forceIntent) {
             throw new \InvalidArgumentException('Cannot force both legacy and intent generation modes.');
         }
@@ -1092,24 +1103,24 @@ PROMPT;
 
         $model = self::getAiModel();
 
-        if ($forceIntent && self::promptRequiresLegacyFreeform($prompt)) {
-            $fallback = self::generateSql($prompt, $campus, true, false);
+        if ($forceIntent && self::promptRequiresLegacyFreeform($originalQuestion)) {
+            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = 'structured_intent_unsupported_for_marc_source_records';
             return $fallback;
         }
 
         if ($forceIntent) {
-            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model);
+            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model, $originalQuestion);
         }
 
-        if (!$forceLegacy && self::isIntentModeEnabled() && !self::promptRequiresLegacyFreeform($prompt)) {
-            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model);
+        if (!$forceLegacy && self::isIntentModeEnabled() && !self::promptRequiresLegacyFreeform($originalQuestion)) {
+            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model, $originalQuestion);
         }
 
         $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
         $schemaTelemetry = self::buildSchemaTelemetry($schemaContext);
-        $promptFingerprint = self::fingerprintPrompt($prompt);
+        $promptFingerprint = self::fingerprintPrompt($originalQuestion);
 
         // Load acqUnit codes from settings.json (campus full name → 2-letter abbreviation)
         // Maintained in backend/data/settings.json under "acqUnitCodes" — configurable
@@ -1149,8 +1160,8 @@ PROMPT;
   System-wide reference data (material types, instance types, fund types, fiscal years, etc.) does NOT need campus filtering.";
         }
 
-      $legacyPromptFamilyGuidance = self::buildLegacyPromptFamilyGuidance($prompt, $campus);
-    $legacyPromptUserInput = self::buildLegacyPromptUserInput($prompt, $campus);
+      $legacyPromptFamilyGuidance = self::buildLegacyPromptFamilyGuidance($originalQuestion, $campus);
+    $legacyPromptUserInput = self::buildLegacyPromptUserInput($prompt, $campus, $originalQuestion);
 
         $systemPrompt = <<<PROMPT
 You are a PostgreSQL query generator for a FOLIO library management system.
@@ -1346,12 +1357,23 @@ PROMPT;
      * @return array {sql: string, explanation: string, dataSource: string}
      * @throws \RuntimeException
      */
-    private static function generateSqlFromIntent($prompt, $campus, $apiKey, $model)
+    private static function generateSqlFromIntent(
+        $prompt,
+        $campus,
+        $apiKey,
+        $model,
+        string $originalQuestion
+    )
     {
         $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
         $schemaTelemetry = self::buildSchemaTelemetry($schemaContext);
-        $promptFingerprint = self::fingerprintPrompt($prompt);
-        $requestContext = self::buildIntentRequestContext($prompt, $campus, $schemaContext);
+        $promptFingerprint = self::fingerprintPrompt($originalQuestion);
+        $requestContext = self::buildIntentRequestContext(
+            $prompt,
+            $campus,
+            $schemaContext,
+            $originalQuestion
+        );
         $queryFamily = $requestContext['queryFamily'];
         $systemPrompt = $requestContext['systemPrompt'];
         $promptVersion = $requestContext['promptVersion'];
@@ -1426,7 +1448,10 @@ PROMPT;
                 'finishReason' => $finishReason,
                 'attempts' => $requestResult['attempts'] ?? null,
                 'elapsedMs' => $requestResult['elapsedMs'] ?? null,
-            ] + $schemaTelemetry
+            ] + $schemaTelemetry,
+            null,
+            null,
+            $originalQuestion
         );
         if ($familyResponse !== null) {
             return $familyResponse;
@@ -1451,7 +1476,7 @@ PROMPT;
                 'firstErrorMessage' => $message,
             ] + $schemaTelemetry);
             self::logRouteSelection('legacy_fallback', $reason . ": {$path}: {$message}", $intent);
-            $fallback = self::generateSql($prompt, $campus, true);
+            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = $reason;
             self::logNlTelemetry('nl2sql.generated', [
@@ -1473,7 +1498,7 @@ PROMPT;
         $capability = self::classifyIntentCapability($normalizedIntent);
         if (!$capability['supported']) {
             self::logRouteSelection('legacy_fallback', $capability['reason'], $normalizedIntent);
-            $fallback = self::generateSql($prompt, $campus, true);
+            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = $capability['reason'];
             self::logNlTelemetry('nl2sql.generated', [
@@ -1508,7 +1533,7 @@ PROMPT;
         } catch (\InvalidArgumentException $e) {
             $reason = 'builder_conversion_failed';
             self::logRouteSelection('legacy_fallback', $reason . ': ' . $e->getMessage(), $normalizedIntent);
-            $fallback = self::generateSql($prompt, $campus, true);
+            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = $reason;
             self::logNlTelemetry('nl2sql.generated', [
@@ -1576,9 +1601,15 @@ PROMPT;
         ];
     }
 
-    private static function buildIntentRequestContext($prompt, $campus, string $schemaContext): array
+    private static function buildIntentRequestContext(
+        $prompt,
+        $campus,
+        string $schemaContext,
+        ?string $originalQuestion = null
+    ): array
     {
-        $queryFamily = self::resolvePromptQueryFamily($prompt, $campus);
+        $routingQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
+        $queryFamily = self::resolvePromptQueryFamily($routingQuestion, $campus);
         $systemPrompt = $queryFamily !== null
             ? self::buildQueryFamilySlotSystemPrompt($queryFamily['familyKey'], $campus)
             : self::buildIntentSystemPrompt($schemaContext, $campus);
@@ -1611,21 +1642,26 @@ PROMPT-SPECIFIC GUIDANCE:
 GUIDANCE;
     }
 
-    private static function buildLegacyPromptUserInput($prompt, $campus = null): string
+    private static function buildLegacyPromptUserInput(
+        $prompt,
+        $campus = null,
+        ?string $originalQuestion = null
+    ): string
     {
         $prompt = trim((string)$prompt);
         if ($prompt === '') {
             return $prompt;
         }
 
-        $queryFamily = self::resolvePromptQueryFamily($prompt, $campus);
+        $routingQuestion = $originalQuestion === null ? $prompt : $originalQuestion;
+        $queryFamily = self::resolvePromptQueryFamily($routingQuestion, $campus);
         $familyKey = trim((string)($queryFamily['familyKey'] ?? ''));
         if ($familyKey !== 'inventory_collection_age') {
             return $prompt;
         }
 
-        $library = self::extractCollectionAgeLibraryScope($prompt);
-        $location = self::extractCollectionAgeLocationScope($prompt, $library);
+        $library = self::extractCollectionAgeLibraryScope($routingQuestion);
+        $location = self::extractCollectionAgeLocationScope($routingQuestion, $library);
 
         $lines = [
             $prompt,
@@ -1658,12 +1694,14 @@ GUIDANCE;
         $campus,
         array $telemetryContext,
         $familyResponseBuilder = null,
-        $legacyFallbackFactory = null
+        $legacyFallbackFactory = null,
+        ?string $originalQuestion = null
     ): ?array {
         if ($queryFamily === null) {
             return null;
         }
 
+        $originalQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
         $expectedFamilyKey = trim((string)($queryFamily['familyKey'] ?? ''));
         $returnedFamilyKey = trim((string)($intent['familyKey'] ?? ''));
         if ($expectedFamilyKey !== '' && $returnedFamilyKey !== $expectedFamilyKey) {
@@ -1676,8 +1714,8 @@ GUIDANCE;
             );
 
             if ($legacyFallbackFactory === null) {
-                $legacyFallbackFactory = function () use ($prompt, $campus): array {
-                    return self::generateSql($prompt, $campus, true);
+                $legacyFallbackFactory = function () use ($prompt, $campus, $originalQuestion): array {
+                    return self::generateSql($prompt, $campus, true, false, $originalQuestion);
                 };
             }
 
@@ -1699,7 +1737,8 @@ GUIDANCE;
                 $prompt,
                 $campus,
                 $mismatchTelemetryContext,
-                $intent
+                $intent,
+                $originalQuestion
             );
             if ($promptRecoveredResponse !== null) {
                 return $promptRecoveredResponse;
@@ -1741,13 +1780,17 @@ GUIDANCE;
                 $prompt,
                 $campus,
                 array $telemetryContext
-            ): array {
+            ) use ($originalQuestion): array {
                 return self::buildQueryFamilyIntentResponse(
                     $intent,
                     $queryFamily,
                     $prompt,
                     $campus,
-                    $telemetryContext
+                    $telemetryContext,
+                    null,
+                    null,
+                    null,
+                    $originalQuestion
                 );
             };
         }
@@ -1766,22 +1809,28 @@ GUIDANCE;
         $prompt,
         $campus,
         array $telemetryContext,
-        array $sourceIntent = []
+        array $sourceIntent = [],
+        ?string $originalQuestion = null
     ): ?array {
+        $originalQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
         $expectedFamilyKey = trim((string)($queryFamily['familyKey'] ?? ''));
         if ($expectedFamilyKey !== 'inventory_collection_age') {
-            if ($expectedFamilyKey === 'inventory_library_location_listing' && self::promptExplicitlyRequestsOnlyHoldingLocation((string)$prompt)) {
+            if ($expectedFamilyKey === 'inventory_library_location_listing' && self::promptExplicitlyRequestsOnlyHoldingLocation($originalQuestion)) {
                 try {
                     return self::buildQueryFamilyIntentResponse(
                         self::rebuildInventoryListingIntentForPromptOnlyMode(
                             $queryFamily,
                             $sourceIntent,
-                            (string)$prompt
+                            $originalQuestion
                         ),
                         $queryFamily,
                         $prompt,
                         $campus,
-                        $telemetryContext
+                        $telemetryContext,
+                        null,
+                        null,
+                        null,
+                        $originalQuestion
                     );
                 } catch (\InvalidArgumentException | \RuntimeException $e) {
                     self::logValidationFailure('family_contract_prompt_recovery', [
@@ -1812,7 +1861,11 @@ GUIDANCE;
                 $queryFamily,
                 $prompt,
                 $campus,
-                $telemetryContext
+                $telemetryContext,
+                null,
+                null,
+                null,
+                $originalQuestion
             );
         } catch (\InvalidArgumentException | \RuntimeException $e) {
             self::logValidationFailure('family_contract_prompt_recovery', [
@@ -3361,11 +3414,13 @@ PROMPT;
         array $telemetryContext,
         $familyResultBuilder = null,
         $exploratoryFallbackFactory = null,
-        $explicitRepairFactory = null
+        $explicitRepairFactory = null,
+        ?string $originalQuestion = null
     ): array {
+        $originalQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
         $recoveredIntent = self::recoverPromptScopedFamilySlotsWithProvenance(
             $intent,
-            (string)$prompt,
+            $originalQuestion,
             $campus
         );
         $intent = $recoveredIntent['intent'];
@@ -3382,13 +3437,14 @@ PROMPT;
             if (self::shouldRecoverInventoryListingMissingLibraryAsExploratory(
                 $intent,
                 $slotValidation['errors'] ?? [],
-                (string)$prompt
+                $originalQuestion
             )) {
                 $fallback = $exploratoryFallbackFactory === null
                     ? self::generateExploratorySqlResponse(
                         (string)$prompt,
                         $campus,
-                        'inventory_listing_unscoped_missing_library'
+                        'inventory_listing_unscoped_missing_library',
+                        $originalQuestion
                     )
                     : $exploratoryFallbackFactory();
                 return self::withKnownFamilyEvidence(
@@ -3428,12 +3484,12 @@ PROMPT;
 
         $normalizedPayload = QueryFamilySlotService::applyPromptMatchPolicy(
             $slotValidation['normalizedPayload'],
-            (string)$prompt,
+            $originalQuestion,
             $campus
         );
         $normalizedPayload = self::normalizeQueryFamilyPayload(
             $normalizedPayload,
-            (string)$prompt,
+            $originalQuestion,
             $campus
         );
         $slotProvenance = self::finalizeRecoveredSlotProvenance(
@@ -3448,7 +3504,7 @@ PROMPT;
 
         if (
             trim((string)($normalizedPayload['familyKey'] ?? '')) === 'inventory_library_location_listing'
-            && self::promptExplicitlyRequestsOnlyHoldingLocation((string)$prompt)
+            && self::promptExplicitlyRequestsOnlyHoldingLocation($originalQuestion)
             && !self::inventoryListingPayloadHasOnlyHoldingLocationScope($normalizedPayload['slots'] ?? [])
         ) {
             $clarification = self::buildFamilySlotClarificationResponse(
@@ -3477,13 +3533,17 @@ PROMPT;
                 $requestPrompt,
                 $requestCampus,
                 array $requestTelemetry
-            ): array {
+            ) use ($originalQuestion): array {
                 return self::buildCompiledQueryFamilyOrLegacyFallback(
                     $normalizedPayload,
                     $familyRouteReason,
                     $requestPrompt,
                     $requestCampus,
-                    $requestTelemetry
+                    $requestTelemetry,
+                    null,
+                    null,
+                    null,
+                    $originalQuestion
                 );
             };
         }
@@ -3502,15 +3562,16 @@ PROMPT;
 
         $explicitValidation = self::explicitReportValueValidation(
             (string)($compiledFamily['sql'] ?? ''),
-            (string)$prompt
+            $originalQuestion
         );
         if ($explicitValidation !== null) {
             $repair = $explicitRepairFactory === null
-                ? function (string $repairPrompt, $repairCampus, array $candidate): array {
+                ? function (string $repairPrompt, $repairCampus, array $candidate) use ($originalQuestion): array {
                     return self::repairRoutedCandidateAfterExplicitFailure(
                         $repairPrompt,
                         $repairCampus,
-                        $candidate
+                        $candidate,
+                        $originalQuestion
                     );
                 }
                 : $explicitRepairFactory;
@@ -4849,8 +4910,10 @@ PROMPT;
         array $telemetryContext,
         $compiler = null,
         $legacyFallbackFactory = null,
-        $exploratoryFallbackFactory = null
+        $exploratoryFallbackFactory = null,
+        ?string $originalQuestion = null
     ): array {
+        $originalQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
         if ($compiler === null) {
             $compiler = function (array $payload, string $reason): array {
                 return self::buildCompiledQueryFamilyResult($payload, $reason);
@@ -4858,8 +4921,8 @@ PROMPT;
         }
 
         if ($legacyFallbackFactory === null) {
-            $legacyFallbackFactory = function () use ($prompt, $campus): array {
-                return self::generateSql($prompt, $campus, true);
+            $legacyFallbackFactory = function () use ($prompt, $campus, $originalQuestion): array {
+                return self::generateSql($prompt, $campus, true, false, $originalQuestion);
             };
         }
 
@@ -4876,7 +4939,8 @@ PROMPT;
                     $e,
                     (string)$prompt,
                     $campus,
-                    $exploratoryFallbackFactory
+                    $exploratoryFallbackFactory,
+                    $originalQuestion
                 );
             }
 
@@ -4914,14 +4978,16 @@ PROMPT;
         \Throwable $error,
         string $prompt = '',
         $campus = null,
-        $exploratoryFallbackFactory = null
+        $exploratoryFallbackFactory = null,
+        ?string $originalQuestion = null
     ): array {
+        $originalQuestion = $originalQuestion === null ? $prompt : $originalQuestion;
         $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
         $library = trim((string)($slots['library'] ?? ''));
         if (
             (
-                !self::promptMentionsLibraryLocationListingScope($prompt)
-                && !self::promptMentionsCampusScopedInventoryItemFilterListing($prompt)
+                !self::promptMentionsLibraryLocationListingScope($originalQuestion)
+                && !self::promptMentionsCampusScopedInventoryItemFilterListing($originalQuestion)
             )
             || self::valueLooksLikeItemStatus($library)
         ) {
@@ -4929,7 +4995,8 @@ PROMPT;
                 ? self::generateExploratorySqlResponse(
                     $prompt,
                     $campus,
-                    'inventory_listing_unscoped_compiler_failed'
+                    'inventory_listing_unscoped_compiler_failed',
+                    $originalQuestion
                 )
                 : $exploratoryFallbackFactory();
             $response['message'] = 'This looks like a campus-scoped inventory request, not a library or location request. I can still try to build and run the query, but the results may be incomplete or inaccurate. Review the SQL and results before using them.';
@@ -4976,7 +5043,7 @@ PROMPT;
         $question = 'Can you confirm the exact library, location, or location code I should use for this inventory listing?';
         $message = $scopeSummary . ' Type the library name, location name, or location code to use, then continue.';
 
-        if (self::promptMentionsCampusScopedInventoryItemFilterListing($prompt)) {
+        if (self::promptMentionsCampusScopedInventoryItemFilterListing($originalQuestion)) {
             $question = 'I could not produce fully validated SQL for this campus-scoped item listing.';
             $message = 'This request matches a reviewed item-listing pattern, but the validated SQL compiler failed before a query could be produced. Review the request or try again.';
         }
@@ -5592,13 +5659,16 @@ PROMPT;
      * the same two-repair budget used during static validation.
      */
     public static function repairExploratorySqlAfterPreflight(
-        string $prompt,
+        string $originalQuestion,
         $campus,
         array $currentResult,
-        string $preflightError
+        string $preflightError,
+        ?string $generationPrompt = null
     ): array {
+        $generationPrompt = $generationPrompt === null ? $originalQuestion : $generationPrompt;
         $terminalContext = [
-            'originalQuestion' => $prompt,
+            'originalQuestion' => $originalQuestion,
+            'generationPrompt' => $generationPrompt,
             'route' => $currentResult['route'] ?? 'exploratory',
             'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
         ];
@@ -5619,7 +5689,7 @@ PROMPT;
         $repairAttemptsUsed = (int)($currentResult['repairAttempts'] ?? 0);
         $assumptions = is_array($currentResult['assumptions'] ?? null)
             ? $currentResult['assumptions']
-            : ExploratoryQueryDefaultsService::resolve($prompt);
+            : ExploratoryQueryDefaultsService::resolve($originalQuestion);
         $attemptedPlan = trim((string)($currentResult['attemptedPlan'] ?? $currentResult['explanation'] ?? ''));
         if ($attemptedPlan === '') {
             $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
@@ -5627,12 +5697,13 @@ PROMPT;
 
         $useHardenedPhysicalRoi = self::useHardenedPhysicalRoi();
         $context = [
-            'originalQuestion' => $prompt,
+            'originalQuestion' => $originalQuestion,
+            'generationPrompt' => $generationPrompt,
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
             'semanticContract' => ExploratorySemanticContractService::build(
-                $prompt,
+                $originalQuestion,
                 is_string($campus) ? $campus : null,
                 $assumptions,
                 (string)($currentResult['routeReason'] ?? 'preflight_validation_failed'),
@@ -5877,30 +5948,39 @@ PROMPT;
 
     private static function repairRoutedCandidateMissingExplicitValues(
         array $candidate,
-        string $prompt,
-        $campus
+        string $generationPrompt,
+        $campus,
+        ?string $originalQuestion = null
     ): array
     {
+        $originalQuestion = $originalQuestion === null ? $generationPrompt : $originalQuestion;
         if (!isset($candidate['sql'])
-            || self::explicitReportValueValidation((string)$candidate['sql'], $prompt) === null) {
+            || self::explicitReportValueValidation((string)$candidate['sql'], $originalQuestion) === null) {
             return $candidate;
         }
 
-        return self::repairRoutedCandidateAfterExplicitFailure($prompt, $campus, $candidate);
+        return self::repairRoutedCandidateAfterExplicitFailure(
+            $generationPrompt,
+            $campus,
+            $candidate,
+            $originalQuestion
+        );
     }
 
     private static function repairRoutedCandidateAfterExplicitFailure(
-        string $prompt,
+        string $generationPrompt,
         $campus,
-        array $candidate
+        array $candidate,
+        ?string $originalQuestion = null
     ): array {
+        $originalQuestion = $originalQuestion === null ? $generationPrompt : $originalQuestion;
         $candidate['repairAttempts'] = (int)($candidate['repairAttempts'] ?? 0);
-        $rawPrompt = ExplicitReportRequestService::removeGuidance($prompt);
         $repaired = self::repairExploratorySqlAfterPreflight(
-            $rawPrompt,
+            $originalQuestion,
             $campus,
             $candidate,
-            'Explicit report values were not preserved.'
+            'Explicit report values were not preserved.',
+            $generationPrompt
         );
         return self::withAskEvidence(
             $repaired,

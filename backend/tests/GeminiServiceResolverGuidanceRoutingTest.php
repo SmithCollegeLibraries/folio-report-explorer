@@ -189,7 +189,7 @@ function assertSameValue($expected, $actual, string $message): void
 // This prompt names no campus, library, location, or holdings scope. On its own
 // it resolves to no query family (freeform). With the resolver guidance appended
 // it must still resolve to no family — routing must ignore guidance boilerplate.
-$prompt = 'List of items with material type "e-book" and item status of "in process". Include title, barcode and instance number.';
+$prompt = 'List item titles with material type "e-book" and item status of "in process".';
 
 $result = GeminiService::generateSqlWithShadow($prompt, 'Smith College', null, false);
 
@@ -202,6 +202,24 @@ assertSameValue(
     'unsupported_query_family',
     $result['routeReason'] ?? null,
     'The raw prompt resolves to no query family, so the route reason must reflect the freeform/exploratory fallback rather than a contaminated family match.'
+);
+
+$effectivePrompt = \app\services\ReferenceResolverService::appendGuidanceToPrompt(
+    $prompt,
+    \app\services\ReferenceResolverService::resolvePrompt($prompt)
+);
+$intentRequestContext = new ReflectionMethod(GeminiService::class, 'buildIntentRequestContext');
+$requestContext = $intentRequestContext->invoke(
+    null,
+    $effectivePrompt,
+    'Smith College',
+    'inventory.item__t(id, title)',
+    $prompt
+);
+assertSameValue(
+    null,
+    $requestContext['queryFamily'] ?? null,
+    'Intent-family selection must use the raw question while retaining resolver guidance in the model generation prompt.'
 );
 
 fwrite(STDOUT, "GeminiService resolver guidance routing test passed\n");
