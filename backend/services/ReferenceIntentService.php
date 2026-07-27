@@ -29,7 +29,10 @@ final class ReferenceIntentService
         'material_type',
     ];
 
-    private const HARD_PUNCTUATION = ['.', ';', ':', '!', '?', '—', '–', '•', '/'];
+    private const HARD_PUNCTUATION = [
+        '.', ';', ':', '!', '?', '—', '–', '•', '/', "\n", '|', '¦',
+        '·', '∙', '⋅', '‧', '‣', '⁃', '▪',
+    ];
 
     public static function extract(string $prompt): array
     {
@@ -207,7 +210,7 @@ final class ReferenceIntentService
     private static function lex(string $prompt): array
     {
         if (!preg_match_all(
-            '/[\pL\pN]+(?:[\'’][\pL\pN]+)*(?:(?:[-\/])[\pL\pN]+)*|[&]|[,.;:!?—–•\/]/u',
+            '/[\pL\pN]+(?:[\'’][\pL\pN]+)*(?:(?:[-\/])[\pL\pN]+)*|[&]|\R|[,.;:!?—–•\/|¦·∙⋅‧‣⁃▪]/u',
             $prompt,
             $matches,
             PREG_OFFSET_CAPTURE
@@ -220,7 +223,9 @@ final class ReferenceIntentService
         $previousCommaEnd = 0;
         foreach ($matches[0] as $match) {
             $raw = $match[0];
-            $norm = self::lower($raw);
+            $norm = preg_match('/^\R$/u', $raw) === 1
+                ? "\n"
+                : self::lower($raw);
             $token = [
                 'raw' => $raw,
                 'norm' => $norm,
@@ -376,14 +381,66 @@ final class ReferenceIntentService
     ): bool {
         $start = self::previousHardBoundary($tokens, $qualifier['token_start']);
         $before = self::tokensInSpan($tokens, $start, $qualifier['start']);
-        if (
-            $before === []
-            || !in_array($before[0]['norm'], ['what', 'which'], true)
+        while (
+            $before !== []
+            && !in_array($before[0]['norm'], ['what', 'which'], true)
         ) {
+            $trimmed = self::afterScaffolding($before);
+            if (
+                count($trimmed) === count($before)
+                && ($trimmed[0]['start'] ?? null) === ($before[0]['start'] ?? null)
+            ) {
+                return false;
+            }
+            $before = $trimmed;
+        }
+        if ($before === []) {
             return false;
         }
 
-        return self::afterScaffolding($before) === [];
+        return self::isCoordinatedCategorySequence(array_slice($before, 1));
+    }
+
+    private static function isCoordinatedCategorySequence(array $tokens): bool
+    {
+        $expectCategory = true;
+        for ($index = 0, $count = count($tokens); $index < $count; $index++) {
+            $word = $tokens[$index]['norm'];
+            if (!$expectCategory) {
+                if (!self::isConnector($word)) {
+                    return false;
+                }
+                $expectCategory = true;
+                continue;
+            }
+
+            if (
+                $word === 'service'
+                && isset($tokens[$index + 1])
+                && in_array($tokens[$index + 1]['norm'], ['point', 'points'], true)
+            ) {
+                $index++;
+                $expectCategory = false;
+                continue;
+            }
+            if (
+                !in_array(
+                    $word,
+                    [
+                        'location', 'locations', 'collection', 'collections',
+                        'stack', 'stacks', 'room', 'rooms', 'shelving',
+                        'library', 'libraries', 'campus', 'campuses',
+                        'institution', 'institutions',
+                    ],
+                    true
+                )
+            ) {
+                return false;
+            }
+            $expectCategory = false;
+        }
+
+        return true;
     }
 
     private static function isPrefixQualifier(array $qualifier, array $tokens): bool
@@ -684,20 +741,6 @@ final class ReferenceIntentService
         );
     }
 
-    private static function containsMaterialEvidence(array $tokens): bool
-    {
-        foreach ($tokens as $token) {
-            if (
-                self::knownMaterialTerm($token['norm']) !== null
-                || in_array($token['norm'], ['video', 'videos'], true)
-            ) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private static function splitQualifiedValues(
         array $tokens,
         int $start,
@@ -719,7 +762,14 @@ final class ReferenceIntentService
         }
 
         if ($hasComma) {
-            return self::commaChunks($valueTokens);
+            return self::commaChunks(
+                $valueTokens,
+                $plural
+                    || (
+                        $dimension === 'material_type'
+                        && self::singularMaterialListIsExplicit($valueTokens)
+                    )
+            );
         }
 
         $splitConnectors = $plural;
@@ -745,7 +795,10 @@ final class ReferenceIntentService
         return $chunks;
     }
 
-    private static function commaChunks(array $tokens): array
+    private static function commaChunks(
+        array $tokens,
+        bool $splitTrailingConnector
+    ): array
     {
         $chunks = [];
         $chunkStart = 0;
@@ -756,6 +809,42 @@ final class ReferenceIntentService
             self::appendTokenChunk($chunks, $tokens, $chunkStart, $index);
             $chunkStart = $index + 1;
         }
+
+        if ($splitTrailingConnector) {
+            $connectorIndex = null;
+            $count = count($tokens);
+            for ($index = $chunkStart; $index < $count; $index++) {
+                if (!self::isConnector($tokens[$index]['norm'])) {
+                    continue;
+                }
+                if ($connectorIndex !== null) {
+                    $connectorIndex = null;
+                    break;
+                }
+                $connectorIndex = $index;
+            }
+            if (
+                $connectorIndex !== null
+                && $connectorIndex > $chunkStart
+                && $connectorIndex < count($tokens) - 1
+            ) {
+                self::appendTokenChunk(
+                    $chunks,
+                    $tokens,
+                    $chunkStart,
+                    $connectorIndex
+                );
+                self::appendTokenChunk(
+                    $chunks,
+                    $tokens,
+                    $connectorIndex + 1,
+                    count($tokens)
+                );
+
+                return $chunks;
+            }
+        }
+
         self::appendTokenChunk($chunks, $tokens, $chunkStart, count($tokens));
 
         return $chunks;
@@ -1186,14 +1275,6 @@ final class ReferenceIntentService
         array $tokens,
         bool $requestForm
     ): array {
-        if (
-            $requestForm
-            && $tokens !== []
-            && self::isBoundaryPreposition($tokens[0]['norm'])
-        ) {
-            return array_slice($tokens, 1);
-        }
-
         foreach ($tokens as $index => $token) {
             if (
                 $token['norm'] === 'held'
@@ -1203,40 +1284,15 @@ final class ReferenceIntentService
                 return array_slice($tokens, $index + 2);
             }
 
-            if (!self::isBoundaryPreposition($token['norm'])) {
-                continue;
-            }
-
-            $before = array_slice($tokens, 0, $index);
             if (
-                self::containsMaterialEvidence($before)
-                || self::containsRequestObjectEvidence($before)
+                self::isBoundaryPreposition($token['norm'])
+                && ($requestForm || $token['norm'] === 'at')
             ) {
                 return array_slice($tokens, $index + 1);
             }
         }
 
         return $tokens;
-    }
-
-    private static function containsRequestObjectEvidence(array $tokens): bool
-    {
-        foreach ($tokens as $token) {
-            if (
-                in_array(
-                    $token['norm'],
-                    [
-                        'item', 'items', 'record', 'records', 'holding',
-                        'holdings', 'format', 'formats', 'material', 'materials',
-                    ],
-                    true
-                )
-            ) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private static function locationMaterialBoundary(

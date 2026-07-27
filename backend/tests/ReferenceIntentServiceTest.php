@@ -973,6 +973,81 @@ assertIntentSame(
     'An em dash must leave the earlier material available.'
 );
 
+$coordinatedCategoryPrompt = 'Tell me which campuses and libraries have films?';
+assertIntentSame(
+    [],
+    spansForDimension($coordinatedCategoryPrompt, 'campus'),
+    'Scaffolded coordinated campus categories must not become named campuses.'
+);
+assertIntentSame(
+    [],
+    spansForDimension($coordinatedCategoryPrompt, 'library'),
+    'Scaffolded coordinated library categories must not become named libraries.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms($coordinatedCategoryPrompt),
+    'Scaffolded coordinated category questions must leave material terms available.'
+);
+
+$nonOxfordMaterialPrompt =
+    'At Hillyer library, Rock and Roll, Betamax, VHS and DVD formats.';
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension($nonOxfordMaterialPrompt, 'library'),
+    'A non-Oxford material list must not consume an earlier qualified library.'
+);
+assertIntentSame(
+    ['vhs', 'dvd', 'rock and roll', 'betamax'],
+    materialTerms($nonOxfordMaterialPrompt),
+    'A non-Oxford trailing pair must split while earlier conjunction-bearing chunks remain atomic.'
+);
+
+$prepositionBearingNames = [
+    ['Video for All library', 'library', 'Video for All library'],
+    ['Materials for the Arts library', 'library', 'Materials for the Arts library'],
+    ['Items for Everyone library', 'library', 'Items for Everyone library'],
+    ['Records on the Run location', 'location', 'Records on the Run'],
+];
+foreach ($prepositionBearingNames as $prepositionBearingName) {
+    assertIntentSame(
+        [$prepositionBearingName[2]],
+        spansForDimension(
+            $prepositionBearingName[0],
+            $prepositionBearingName[1]
+        ),
+        'Lexical request or material words must not truncate a qualified name.'
+    );
+}
+
+$visualBoundaryPrompts = [
+    "Hillyer library\nSmith campus",
+    'Hillyer library | Smith campus',
+    'Hillyer library · Smith campus',
+];
+foreach ($visualBoundaryPrompts as $visualBoundaryPrompt) {
+    assertIntentSame(
+        ['Hillyer library'],
+        spansForDimension($visualBoundaryPrompt, 'library'),
+        'A visual separator must preserve the library on its left.'
+    );
+    assertIntentSame(
+        ['Smith campus'],
+        spansForDimension($visualBoundaryPrompt, 'campus'),
+        'A visual separator must bound the campus on its right.'
+    );
+}
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('DVD | Hillyer library', 'library'),
+    'A pipe must prevent a library from consuming an earlier material.'
+);
+assertIntentSame(
+    ['dvd'],
+    materialTerms('DVD | Hillyer library'),
+    'A pipe must leave the earlier material available.'
+);
+
 $materialBoundaryWarnings = [];
 set_error_handler(function (
     int $severity,
