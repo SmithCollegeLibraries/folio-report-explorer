@@ -29,7 +29,7 @@ final class ReferenceIntentService
         'material_type',
     ];
 
-    private const HARD_PUNCTUATION = ['.', ';', ':', '!', '?'];
+    private const HARD_PUNCTUATION = ['.', ';', ':', '!', '?', '—', '–', '•', '/'];
 
     public static function extract(string $prompt): array
     {
@@ -46,11 +46,22 @@ final class ReferenceIntentService
 
         for ($index = count($qualifiers) - 1; $index >= 0; $index--) {
             $qualifier = $qualifiers[$index];
-            if (self::overlaps($qualifier['start'], $qualifier['end'], $claims)) {
+            if (
+                self::overlapsDescendingClaims(
+                    $qualifier['start'],
+                    $qualifier['end'],
+                    $claims
+                )
+            ) {
                 continue;
             }
 
-            $prefix = self::isPrefixQualifier($qualifier, $tokens);
+            $direction = self::qualifierDirection($qualifier, $tokens);
+            if ($direction === null) {
+                continue;
+            }
+
+            $prefix = $direction === 'prefix';
             $valueSpan = $prefix
                 ? self::prefixValueSpan($qualifier, $tokens, $claims)
                 : self::suffixValueSpan($qualifier, $qualifiers, $index, $tokens);
@@ -121,6 +132,10 @@ final class ReferenceIntentService
             $claims[] = [$claimStart, $claimEnd];
         }
 
+        usort($claims, function (array $left, array $right): int {
+            return $left[0] <=> $right[0];
+        });
+
         foreach (self::unqualifiedKnownMaterials($prompt, $tokens, $claims) as $atom) {
             $materialAtoms[] = $atom;
         }
@@ -164,13 +179,18 @@ final class ReferenceIntentService
             return [];
         }
 
+        $terms = $intent['terms'] ?? [];
+        if (!is_array($terms)) {
+            return [];
+        }
+
         $selector = $intent['selector'] ?? null;
         if (is_string($selector) && isset(self::MATERIAL_SELECTORS[$selector])) {
             return self::MATERIAL_SELECTORS[$selector];
         }
 
         $names = [];
-        foreach (($intent['terms'] ?? []) as $term) {
+        foreach ($terms as $term) {
             if (!is_string($term) || !isset(self::MATERIAL_SELECTORS[$term])) {
                 continue;
             }
@@ -187,7 +207,7 @@ final class ReferenceIntentService
     private static function lex(string $prompt): array
     {
         if (!preg_match_all(
-            '/[\pL\pN]+(?:[\'’][\pL\pN]+)*(?:(?:[-\/])[\pL\pN]+)*|[&]|[,.;:!?]/u',
+            '/[\pL\pN]+(?:[\'’][\pL\pN]+)*(?:(?:[-\/])[\pL\pN]+)*|[&]|[,.;:!?—–•\/]/u',
             $prompt,
             $matches,
             PREG_OFFSET_CAPTURE
@@ -196,16 +216,38 @@ final class ReferenceIntentService
         }
 
         $tokens = [];
+        $previousHardEnd = 0;
+        $previousCommaEnd = 0;
         foreach ($matches[0] as $match) {
             $raw = $match[0];
-            $tokens[] = [
+            $norm = self::lower($raw);
+            $token = [
                 'raw' => $raw,
-                'norm' => self::lower($raw),
+                'norm' => $norm,
                 'start' => $match[1],
                 'end' => $match[1] + strlen($raw),
-                'punctuation' => strlen($raw) === 1
-                    && strpos(',.;:!?', $raw) !== false,
+                'punctuation' => $norm === ','
+                    || in_array($norm, self::HARD_PUNCTUATION, true),
+                'previous_hard_end' => $previousHardEnd,
+                'previous_comma_end' => $previousCommaEnd,
             ];
+            $tokens[] = $token;
+            if (in_array($norm, self::HARD_PUNCTUATION, true)) {
+                $previousHardEnd = $token['end'];
+            }
+            if ($norm === ',') {
+                $previousCommaEnd = $token['end'];
+            }
+        }
+
+        $nextHardStart = $tokens === []
+            ? 0
+            : $tokens[count($tokens) - 1]['end'];
+        for ($index = count($tokens) - 1; $index >= 0; $index--) {
+            if (in_array($tokens[$index]['norm'], self::HARD_PUNCTUATION, true)) {
+                $nextHardStart = $tokens[$index]['start'];
+            }
+            $tokens[$index]['next_hard_start'] = $nextHardStart;
         }
 
         return $tokens;
@@ -284,24 +326,142 @@ final class ReferenceIntentService
         return $qualifiers;
     }
 
-    private static function isPrefixQualifier(array $qualifier, array $tokens): bool
-    {
+    private static function qualifierDirection(
+        array $qualifier,
+        array $tokens
+    ): ?string {
         $next = $qualifier['token_end'];
-        if (!isset($tokens[$next]) || $tokens[$next]['punctuation']) {
-            return false;
+        if (
+            isset($tokens[$next])
+            && $tokens[$next]['norm'] === ':'
+            && isset($tokens[$next + 1])
+        ) {
+            return 'prefix';
+        }
+        if (self::hasInterrogativeCategoryEvidence($qualifier, $tokens)) {
+            return null;
+        }
+
+        $hasLeftValue = self::hasSuffixValueEvidence($qualifier, $tokens);
+        if (!isset($tokens[$next])) {
+            return $hasLeftValue ? 'suffix' : null;
+        }
+        if (self::isPredicateVerb($tokens[$next]['norm'])) {
+            return $hasLeftValue ? 'suffix' : null;
+        }
+        if ($tokens[$next]['punctuation']) {
+            return $hasLeftValue ? 'suffix' : null;
         }
         if (
             self::isConnector($tokens[$next]['norm'])
             || self::isBoundaryPreposition($tokens[$next]['norm'])
         ) {
+            return $hasLeftValue ? 'suffix' : null;
+        }
+
+        if (self::hasPrefixContextEvidence($qualifier, $tokens)) {
+            return 'prefix';
+        }
+
+        if ($hasLeftValue) {
+            return 'suffix';
+        }
+
+        return self::isPrefixQualifierByKind($qualifier) ? 'prefix' : null;
+    }
+
+    private static function hasInterrogativeCategoryEvidence(
+        array $qualifier,
+        array $tokens
+    ): bool {
+        $start = self::previousHardBoundary($tokens, $qualifier['token_start']);
+        $before = self::tokensInSpan($tokens, $start, $qualifier['start']);
+        if (
+            $before === []
+            || !in_array($before[0]['norm'], ['what', 'which'], true)
+        ) {
             return false;
         }
 
-        if ($qualifier['dimension'] === 'location') {
+        return self::afterScaffolding($before) === [];
+    }
+
+    private static function isPrefixQualifier(array $qualifier, array $tokens): bool
+    {
+        return self::qualifierDirection($qualifier, $tokens) === 'prefix';
+    }
+
+    private static function isPrefixQualifierByKind(array $qualifier): bool
+    {
+        return $qualifier['dimension'] === 'location'
+            || (
+                $qualifier['dimension'] !== 'material_type'
+                && $qualifier['plural']
+            );
+    }
+
+    private static function hasSuffixValueEvidence(
+        array $qualifier,
+        array $tokens
+    ): bool {
+        $start = self::previousHardBoundary($tokens, $qualifier['token_start']);
+        list($start, $end) = self::trimSpan(
+            $tokens,
+            $start,
+            $qualifier['start'],
+            true
+        );
+        $valueTokens = self::tokensInSpan($tokens, $start, $end);
+        if (
+            count($valueTokens) === 1
+            && in_array($valueTokens[0]['norm'], ['all', 'the'], true)
+        ) {
+            return false;
+        }
+
+        return $start < $end;
+    }
+
+    private static function hasPrefixContextEvidence(
+        array $qualifier,
+        array $tokens
+    ): bool {
+        if ($qualifier['token_start'] === 0) {
             return true;
         }
 
-        return $qualifier['dimension'] !== 'material_type' && $qualifier['plural'];
+        $previous = $tokens[$qualifier['token_start'] - 1];
+        if (
+            $previous['punctuation']
+            || self::isBoundaryPreposition($previous['norm'])
+            || self::isConnector($previous['norm'])
+        ) {
+            return true;
+        }
+
+        $start = self::previousHardBoundary($tokens, $qualifier['token_start']);
+        list($trimmedStart, $trimmedEnd) = self::trimSpan(
+            $tokens,
+            $start,
+            $qualifier['start'],
+            true
+        );
+
+        return $trimmedStart >= $trimmedEnd;
+    }
+
+    private static function isPredicateVerb(string $word): bool
+    {
+        return in_array(
+            $word,
+            [
+                'is', 'are', 'was', 'were', 'has', 'have', 'had',
+                'does', 'do', 'did', 'offers', 'offer', 'provides', 'provide',
+                'contains', 'contain', 'holds', 'hold', 'serves', 'serve',
+                'manages', 'manage', 'owns', 'own', 'uses', 'use',
+            ],
+            true
+        );
     }
 
     private static function prefixValueSpan(
@@ -310,15 +470,22 @@ final class ReferenceIntentService
         array $claims
     ): ?array {
         $startIndex = $qualifier['token_end'];
+        if (
+            isset($tokens[$startIndex])
+            && $tokens[$startIndex]['norm'] === ':'
+        ) {
+            $startIndex++;
+        }
         if (!isset($tokens[$startIndex])) {
             return null;
         }
 
         $start = $tokens[$startIndex]['start'];
         $end = self::nextHardBoundary($tokens, $startIndex);
-        foreach ($claims as $claim) {
-            if ($claim[0] >= $start) {
-                $end = min($end, $claim[0]);
+        if ($claims !== []) {
+            $nearestClaim = $claims[count($claims) - 1];
+            if ($nearestClaim[0] >= $start) {
+                $end = min($end, $nearestClaim[0]);
             }
         }
 
@@ -381,19 +548,23 @@ final class ReferenceIntentService
             if ($previous['end'] >= $end) {
                 continue;
             }
-            if (
-                $qualifier['dimension'] === 'location'
-                && $previous['dimension'] !== 'location'
-            ) {
+            if (self::qualifierDirection($previous, $tokens) === null) {
                 continue;
             }
 
             $between = self::tokensInSpan($tokens, $previous['end'], $end);
-            $separatorEnd = self::lastStructuralSeparatorEnd($between);
+            $separatorEnd = self::firstStructuralSeparatorEnd($between);
             if ($separatorEnd !== null) {
                 $start = $separatorEnd;
                 break;
             }
+        }
+
+        if ($qualifier['dimension'] !== 'material_type') {
+            $start = max(
+                $start,
+                self::earlierMaterialClauseBoundary($tokens, $start, $end)
+            );
         }
 
         list($start, $end) = self::trimSpan($tokens, $start, $end, true);
@@ -459,6 +630,72 @@ final class ReferenceIntentService
         }
 
         return $end;
+    }
+
+    private static function firstStructuralSeparatorEnd(array $tokens): ?int
+    {
+        foreach ($tokens as $token) {
+            if (
+                $token['norm'] === ','
+                || self::isConnector($token['norm'])
+                || self::isBoundaryPreposition($token['norm'])
+            ) {
+                return $token['end'];
+            }
+        }
+
+        return null;
+    }
+
+    private static function earlierMaterialClauseBoundary(
+        array $tokens,
+        int $start,
+        int $end
+    ): int {
+        $spanTokens = self::tokensInSpan($tokens, $start, $end);
+        foreach ($spanTokens as $index => $token) {
+            if ($token['norm'] !== ',') {
+                continue;
+            }
+
+            $before = array_slice($spanTokens, 0, $index);
+            if (self::isMaterialClause($before)) {
+                return $token['end'];
+            }
+
+            break;
+        }
+
+        return $start;
+    }
+
+    private static function isMaterialClause(array $tokens): bool
+    {
+        $tokens = self::afterScaffolding($tokens);
+        if ($tokens === []) {
+            return false;
+        }
+        if (self::exactKnownMaterialTokens($tokens) !== null) {
+            return true;
+        }
+
+        return self::isGenericVideoTerm(
+            implode(' ', array_column($tokens, 'norm'))
+        );
+    }
+
+    private static function containsMaterialEvidence(array $tokens): bool
+    {
+        foreach ($tokens as $token) {
+            if (
+                self::knownMaterialTerm($token['norm']) !== null
+                || in_array($token['norm'], ['video', 'videos'], true)
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function splitQualifiedValues(
@@ -792,7 +1029,6 @@ final class ReferenceIntentService
         }
 
         if ($stripScaffolding) {
-            $spanTokens = self::afterLastPreposition($spanTokens);
             $spanTokens = self::afterScaffolding($spanTokens);
         }
         if ($spanTokens === []) {
@@ -803,25 +1039,6 @@ final class ReferenceIntentService
             $spanTokens[0]['start'],
             $spanTokens[count($spanTokens) - 1]['end'],
         ];
-    }
-
-    private static function afterLastPreposition(array $tokens): array
-    {
-        $boundary = null;
-        foreach ($tokens as $index => $token) {
-            if (self::isBoundaryPreposition($token['norm'])) {
-                $boundary = $index;
-            }
-            if (
-                $token['norm'] === 'held'
-                && isset($tokens[$index + 1])
-                && $tokens[$index + 1]['norm'] === 'by'
-            ) {
-                $boundary = $index + 1;
-            }
-        }
-
-        return $boundary === null ? $tokens : array_slice($tokens, $boundary + 1);
     }
 
     private static function afterScaffolding(array $tokens): array
@@ -837,7 +1054,9 @@ final class ReferenceIntentService
             'has', 'have', 'had', 'holds', 'hold', 'contains', 'contain',
             'serves', 'serve', 'manages', 'manage', 'owns', 'own',
         ];
-        $commands = ['show', 'find', 'list', 'display', 'get', 'give', 'report'];
+        $commands = [
+            'show', 'find', 'list', 'display', 'get', 'give', 'report', 'search',
+        ];
         $index = 0;
 
         if (in_array($words[0], ['what', 'which', 'who', 'where'], true)) {
@@ -852,7 +1071,10 @@ final class ReferenceIntentService
                 $index++;
             }
 
-            return array_slice($tokens, $index);
+            return self::afterRequestObjectBoundary(
+                array_slice($tokens, $index),
+                true
+            );
         }
 
         if (
@@ -865,7 +1087,18 @@ final class ReferenceIntentService
                 $index++;
             }
 
-            return array_slice($tokens, $index);
+            return self::afterRequestObjectBoundary(
+                array_slice($tokens, $index),
+                true
+            );
+        }
+
+        if (
+            in_array($words[0], ['can', 'could', 'would', 'will', 'may'], true)
+            && ($words[1] ?? null) === 'i'
+            && in_array($words[2] ?? null, ['see', 'find', 'get'], true)
+        ) {
+            return array_slice($tokens, 3);
         }
 
         if ($words[0] === 'how' && ($words[1] ?? null) === 'many') {
@@ -877,7 +1110,10 @@ final class ReferenceIntentService
                 $index++;
             }
 
-            return array_slice($tokens, $index);
+            return self::afterRequestObjectBoundary(
+                array_slice($tokens, $index),
+                true
+            );
         }
 
         if (in_array($words[0], ['does', 'do', 'did'], true)) {
@@ -885,7 +1121,36 @@ final class ReferenceIntentService
         }
 
         if ($words[0] === 'tell' && ($words[1] ?? null) === 'me') {
-            return array_slice($tokens, 2);
+            $index = ($words[2] ?? null) === 'about' ? 3 : 2;
+
+            return array_slice($tokens, $index);
+        }
+
+        if (
+            $words[0] === 'please'
+            && in_array($words[1] ?? null, $commands, true)
+        ) {
+            $index = 2;
+            if (($words[$index] ?? null) === 'me') {
+                $index++;
+            }
+
+            return self::afterRequestObjectBoundary(
+                array_slice($tokens, $index),
+                true
+            );
+        }
+
+        if ($words[0] === 'i' && ($words[1] ?? null) === 'need') {
+            $index = 2;
+            if (($words[$index] ?? null) === 'to') {
+                $index++;
+            }
+            if (in_array($words[$index] ?? null, ['see', 'find', 'get'], true)) {
+                $index++;
+            }
+
+            return array_slice($tokens, $index);
         }
 
         if (in_array($words[0], $commands, true)) {
@@ -904,10 +1169,74 @@ final class ReferenceIntentService
                 $index++;
             }
 
-            return array_slice($tokens, $index);
+            return self::afterRequestObjectBoundary(
+                array_slice($tokens, $index),
+                true
+            );
+        }
+
+        if (self::isBoundaryPreposition($words[0])) {
+            return array_slice($tokens, 1);
+        }
+
+        return self::afterRequestObjectBoundary($tokens, false);
+    }
+
+    private static function afterRequestObjectBoundary(
+        array $tokens,
+        bool $requestForm
+    ): array {
+        if (
+            $requestForm
+            && $tokens !== []
+            && self::isBoundaryPreposition($tokens[0]['norm'])
+        ) {
+            return array_slice($tokens, 1);
+        }
+
+        foreach ($tokens as $index => $token) {
+            if (
+                $token['norm'] === 'held'
+                && isset($tokens[$index + 1])
+                && $tokens[$index + 1]['norm'] === 'by'
+            ) {
+                return array_slice($tokens, $index + 2);
+            }
+
+            if (!self::isBoundaryPreposition($token['norm'])) {
+                continue;
+            }
+
+            $before = array_slice($tokens, 0, $index);
+            if (
+                self::containsMaterialEvidence($before)
+                || self::containsRequestObjectEvidence($before)
+            ) {
+                return array_slice($tokens, $index + 1);
+            }
         }
 
         return $tokens;
+    }
+
+    private static function containsRequestObjectEvidence(array $tokens): bool
+    {
+        foreach ($tokens as $token) {
+            if (
+                in_array(
+                    $token['norm'],
+                    [
+                        'item', 'items', 'record', 'records', 'holding',
+                        'holdings', 'format', 'formats', 'material', 'materials',
+                    ],
+                    true
+                )
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function locationMaterialBoundary(
@@ -1035,54 +1364,49 @@ final class ReferenceIntentService
 
     private static function nextHardBoundary(array $tokens, int $startIndex): int
     {
-        foreach ($tokens as $index => $token) {
-            if ($index < $startIndex) {
-                continue;
-            }
-            if (in_array($token['norm'], self::HARD_PUNCTUATION, true)) {
-                return $token['start'];
-            }
-        }
-
-        if ($tokens === []) {
+        if (!isset($tokens[$startIndex])) {
             return 0;
         }
 
-        return $tokens[count($tokens) - 1]['end'];
+        return $tokens[$startIndex]['next_hard_start'];
     }
 
     private static function previousHardBoundary(array $tokens, int $endIndex): int
     {
-        $start = 0;
-        for ($index = 0; $index < $endIndex; $index++) {
-            if (in_array($tokens[$index]['norm'], self::HARD_PUNCTUATION, true)) {
-                $start = $tokens[$index]['end'];
-            }
-        }
-
-        return $start;
+        return isset($tokens[$endIndex])
+            ? $tokens[$endIndex]['previous_hard_end']
+            : 0;
     }
 
     private static function previousCommaBoundary(array $tokens, int $endIndex): int
     {
-        $start = 0;
-        for ($index = 0; $index < $endIndex; $index++) {
-            if ($tokens[$index]['norm'] === ',') {
-                $start = $tokens[$index]['end'];
-            }
-        }
-
-        return $start;
+        return isset($tokens[$endIndex])
+            ? $tokens[$endIndex]['previous_comma_end']
+            : 0;
     }
 
     private static function tokensInSpan(array $tokens, int $start, int $end): array
     {
-        return array_values(array_filter(
-            $tokens,
-            function (array $token) use ($start, $end): bool {
-                return $token['start'] >= $start && $token['end'] <= $end;
+        $low = 0;
+        $high = count($tokens);
+        while ($low < $high) {
+            $middle = intdiv($low + $high, 2);
+            if ($tokens[$middle]['start'] < $start) {
+                $low = $middle + 1;
+            } else {
+                $high = $middle;
             }
-        ));
+        }
+
+        $span = [];
+        for ($index = $low, $count = count($tokens); $index < $count; $index++) {
+            if ($tokens[$index]['end'] > $end) {
+                break;
+            }
+            $span[] = $tokens[$index];
+        }
+
+        return $span;
     }
 
     private static function isConnector(string $word): bool
@@ -1122,7 +1446,30 @@ final class ReferenceIntentService
 
     private static function overlaps(int $start, int $end, array $ranges): bool
     {
-        foreach ($ranges as $range) {
+        $low = 0;
+        $high = count($ranges);
+        while ($low < $high) {
+            $middle = intdiv($low + $high, 2);
+            if ($ranges[$middle][1] <= $start) {
+                $low = $middle + 1;
+            } else {
+                $high = $middle;
+            }
+        }
+
+        return isset($ranges[$low]) && $ranges[$low][0] < $end;
+    }
+
+    private static function overlapsDescendingClaims(
+        int $start,
+        int $end,
+        array $ranges
+    ): bool {
+        for ($index = count($ranges) - 1; $index >= 0; $index--) {
+            $range = $ranges[$index];
+            if ($range[0] >= $end) {
+                return false;
+            }
             if ($start < $range[1] && $end > $range[0]) {
                 return true;
             }

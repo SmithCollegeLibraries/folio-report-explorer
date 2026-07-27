@@ -724,6 +724,294 @@ assertIntentSame(
     'Unknown Unicode material terms must normalize case consistently.'
 );
 
+assertIntentSame(
+    [],
+    spansForDimension('Which libraries have films?', 'library'),
+    'A plural library category followed by a predicate must not become a named library.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('Which libraries have films?'),
+    'A library category predicate must leave its material term available.'
+);
+assertIntentSame(
+    [],
+    spansForDimension('Which libraries circulate films?', 'library'),
+    'Interrogative category structure must reject unenumerated predicate verbs.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('Which libraries circulate films?'),
+    'An unenumerated category predicate must leave its material term available.'
+);
+assertIntentSame(
+    [],
+    spansForDimension('What locations offer DVDs?', 'location'),
+    'A location category followed by a predicate must not become a named location.'
+);
+assertIntentSame(
+    ['dvd'],
+    materialTerms('What locations offer DVDs?'),
+    'A location category predicate must leave its material term available.'
+);
+assertIntentSame(
+    [],
+    spansForDimension('Which service points are open?', 'service_point'),
+    'A service-point category followed by a predicate must not become a named service point.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('HC DVD location is closed.', 'location'),
+    'A suffix location followed by a predicate must retain the value on its left.'
+);
+assertIntentSame(
+    [],
+    materialTerms('HC DVD location is closed.'),
+    'A suffix location must consume material-looking words in its own name.'
+);
+assertIntentSame(
+    ['SC Art Video'],
+    spansForDimension('SC Art Video location has films.', 'location'),
+    'A suffix location before a material predicate must retain the value on its left.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('SC Art Video location has films.'),
+    'A suffix location predicate must leave following explicit materials available.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('location: HC DVD', 'location'),
+    'A colon after a location qualifier must introduce a prefix value.'
+);
+assertIntentSame(
+    [],
+    materialTerms('location: HC DVD'),
+    'A colon-introduced location must consume material-looking words in its name.'
+);
+assertIntentSame(
+    ['Hillyer'],
+    spansForDimension('library: Hillyer', 'library'),
+    'A colon after a library qualifier must introduce a prefix value.'
+);
+assertIntentSame(
+    ['betamax'],
+    materialTerms('material type: Betamax'),
+    'A colon after a material-type qualifier must introduce a prefix value.'
+);
+
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension('Smith campus, Hillyer and Neilson libraries', 'campus'),
+    'A dimension before a shared suffix library list must remain independent.'
+);
+assertIntentSame(
+    ['Hillyer', 'Neilson'],
+    spansForDimension('Smith campus, Hillyer and Neilson libraries', 'library'),
+    'A shared suffix library list after a campus must retain every value.'
+);
+assertIntentSame(
+    ['Hillyer library', 'Neilson', 'Josten'],
+    spansForDimension(
+        'Show films at Hillyer library, Neilson and Josten libraries.',
+        'library'
+    ),
+    'A repeated/shared suffix library list must retain all values after material wording.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('Show films at Hillyer library, Neilson and Josten libraries.'),
+    'A suffix library list must not consume an earlier material clause.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('At Hillyer library, show Betamax and VHS formats.', 'library'),
+    'A library before a shared material list must remain independent.'
+);
+assertIntentSame(
+    ['vhs', 'betamax'],
+    materialTerms('At Hillyer library, show Betamax and VHS formats.'),
+    'A shared suffix material list after a library must retain every value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension(
+        'Hillyer library, HC DVD and SC Art Video locations',
+        'library'
+    ),
+    'A library before plural suffix locations must not be retyped as a location.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension(
+        'Hillyer library, HC DVD and SC Art Video locations',
+        'location'
+    ),
+    'Plural suffix locations after a library must retain every location.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension(
+        'Smith campus, HC DVD and SC Art Video locations',
+        'campus'
+    ),
+    'A campus before plural suffix locations must not be retyped as a location.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension(
+        'Smith campus, HC DVD and SC Art Video locations',
+        'location'
+    ),
+    'Plural suffix locations after a campus must retain every location.'
+);
+assertIntentSame(
+    ['Hillyer', 'Neilson'],
+    spansForDimension('Show films, Hillyer and Neilson libraries.', 'library'),
+    'A shared suffix library list must start after an earlier material clause.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('Show films, Hillyer and Neilson libraries.'),
+    'An earlier material clause must survive suffix library extraction.'
+);
+
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Please show Hillyer library.', 'library'),
+    'Please-show request scaffolding must not pollute a library value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('I need Hillyer library.', 'library'),
+    'I-need request scaffolding must not pollute a library value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Could I see Hillyer library?', 'library'),
+    'Could-I-see request scaffolding must not pollute a library value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Search Hillyer library for DVDs.', 'library'),
+    'Search request scaffolding must not pollute a library value.'
+);
+assertIntentSame(
+    ['dvd'],
+    materialTerms('Search Hillyer library for DVDs.'),
+    'Search request scaffolding must leave following materials available.'
+);
+assertIntentSame(
+    ['Books for All library'],
+    spansForDimension('Books for All library', 'library'),
+    'A legitimate library name containing for must remain intact.'
+);
+assertIntentSame(
+    ['Center for Media library'],
+    spansForDimension('Center for Media library', 'library'),
+    'A second legitimate library name containing for must remain intact.'
+);
+assertIntentSame(
+    ['Made in America'],
+    spansForDimension('Made in America location', 'location'),
+    'A legitimate location name containing in must remain intact.'
+);
+assertIntentSame(
+    ['Service for Students service point'],
+    spansForDimension('Service for Students service point', 'service_point'),
+    'A legitimate service-point name containing for must remain intact.'
+);
+
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Hillyer library — Smith campus', 'library'),
+    'An em dash must separate a library from a following campus.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension('Hillyer library — Smith campus', 'campus'),
+    'An em dash must bound a following campus value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Hillyer library – Smith campus', 'library'),
+    'An en dash must separate a library from a following campus.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension('Hillyer library – Smith campus', 'campus'),
+    'An en dash must bound a following campus value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Hillyer library / Smith campus', 'library'),
+    'A visually separated slash must separate a library from a following campus.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension('Hillyer library / Smith campus', 'campus'),
+    'A visually separated slash must bound a following campus value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Hillyer library • Smith campus', 'library'),
+    'A bullet must separate a library from a following campus.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension('Hillyer library • Smith campus', 'campus'),
+    'A bullet must bound a following campus value.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('DVD — Hillyer library', 'library'),
+    'An em dash must prevent a library from consuming an earlier material.'
+);
+assertIntentSame(
+    ['dvd'],
+    materialTerms('DVD — Hillyer library'),
+    'An em dash must leave the earlier material available.'
+);
+
+$materialBoundaryWarnings = [];
+set_error_handler(function (
+    int $severity,
+    string $message
+) use (&$materialBoundaryWarnings): bool {
+    $materialBoundaryWarnings[] = [$severity, $message];
+
+    return true;
+});
+$malformedMaterialNames = ReferenceIntentService::canonicalNamesForMaterialIntent([
+    'dimension' => 'material_type',
+    'terms' => 'vhs',
+]);
+restore_error_handler();
+assertIntentSame(
+    [],
+    $malformedMaterialNames,
+    'Malformed scalar material terms must fail closed.'
+);
+assertIntentSame(
+    [],
+    $materialBoundaryWarnings,
+    'Malformed scalar material terms must not emit a public-boundary warning.'
+);
+
+$smallPerformancePrompt = str_repeat('Hillyer library. ', 500);
+$largePerformancePrompt = str_repeat('Hillyer library. ', 2000);
+$smallPerformanceStart = microtime(true);
+ReferenceIntentService::extract($smallPerformancePrompt);
+$smallPerformanceDuration = microtime(true) - $smallPerformanceStart;
+$largePerformanceStart = microtime(true);
+ReferenceIntentService::extract($largePerformancePrompt);
+$largePerformanceDuration = microtime(true) - $largePerformanceStart;
+assertIntentSame(
+    true,
+    $largePerformanceDuration <= max(0.05, $smallPerformanceDuration * 6),
+    'Independent hard-delimited qualifiers must scale near-linearly.'
+);
+
 if ($intentTestFailures !== []) {
     fwrite(STDERR, implode("\n", $intentTestFailures));
     exit(1);
