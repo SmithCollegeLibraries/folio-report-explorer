@@ -121,24 +121,51 @@ final class ReferenceIntentService
     {
         $intents = [];
         $ranges = [];
-        $qualifier = '(?:locations?|collections?|stacks|rooms?|shelving)';
-        $qualifierMatches = [];
+        self::appendLocationIntentsForQualifiers(
+            $prompt,
+            $matchText,
+            '/\b(locations?|collections?)\b/iu',
+            $intents,
+            $ranges
+        );
+        self::appendLocationIntentsForQualifiers(
+            $prompt,
+            $matchText,
+            '/\b(stacks|rooms?|shelving)\b/iu',
+            $intents,
+            $ranges
+        );
 
-        if (preg_match_all(
-            '/\b' . $qualifier . '\b/iu',
+        return $intents;
+    }
+
+    private static function appendLocationIntentsForQualifiers(
+        string $prompt,
+        string $matchText,
+        string $pattern,
+        array &$intents,
+        array &$ranges
+    ): void {
+        if (!preg_match_all(
+            $pattern,
             $matchText,
             $matches,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE
         )) {
-            $qualifierMatches = $matches;
+            return;
         }
 
         $prefixMatches = [];
-        foreach ($qualifierMatches as $index => $match) {
-            $qualifierEnd = $match[0][1] + strlen($match[0][0]);
+        $structuralEnds = [];
+        foreach ($matches as $index => $match) {
+            $qualifierOffset = $match[1][1];
+            $qualifierEnd = $qualifierOffset + strlen($match[1][0]);
+            if (self::overlaps($qualifierOffset, $qualifierEnd, $ranges)) {
+                continue;
+            }
+
             $valueOffset = self::skipWhitespace($matchText, $qualifierEnd);
             $following = substr($matchText, $valueOffset);
-
             if (
                 $following === ''
                 || preg_match('/^[.,;:!?\n]/u', $following)
@@ -146,64 +173,122 @@ final class ReferenceIntentService
                     '/^(?:and|or|at|in|from|for|with|within|inside|near|on|by|held)\b/iu',
                     $following
                 )
+                || preg_match(
+                    '/^(?:locations?|collections?|stacks|rooms?|shelving)\b/iu',
+                    $following
+                )
             ) {
                 continue;
             }
 
-            $valueEnd = self::nextPunctuationOffset($matchText, $valueOffset);
-            if (isset($qualifierMatches[$index + 1])) {
-                $valueEnd = min($valueEnd, $qualifierMatches[$index + 1][0][1]);
+            $valueEnd = self::nextClauseOffset($matchText, $valueOffset);
+            if (isset($matches[$index + 1])) {
+                $nextOffset = $matches[$index + 1][1][1];
+                $nextEnd = $nextOffset + strlen($matches[$index + 1][1][0]);
+                $nextFollowing = substr(
+                    $matchText,
+                    self::skipWhitespace($matchText, $nextEnd)
+                );
+                $sameQualifier = strtolower($match[1][0])
+                    === strtolower($matches[$index + 1][1][0]);
+                if (
+                    $sameQualifier
+                    || (
+                        $nextFollowing !== ''
+                        && !preg_match('/^[.,;:!?\n]/u', $nextFollowing)
+                    )
+                ) {
+                    $valueEnd = min($valueEnd, $nextOffset);
+                }
             }
 
-            list($offset, $length) = self::trimLocationValue(
-                substr($matchText, $valueOffset, $valueEnd - $valueOffset),
-                $valueOffset
-            );
-            if ($length === 0 || self::overlaps($offset, $offset + $length, $ranges)) {
-                continue;
-            }
+            $capture = substr($matchText, $valueOffset, $valueEnd - $valueOffset);
+            $capture = self::trimLocationValue($capture);
+            $plural = self::isPluralQualifier($match[1][0]);
+            $values = self::qualifiedValues($capture, $valueOffset, $plural);
+            foreach ($values as $value) {
+                list($offset, $length) = $value;
+                if (
+                    $length === 0
+                    || self::overlaps($offset, $offset + $length, $ranges)
+                ) {
+                    continue;
+                }
 
-            $intents[] = self::namedIntent(
-                'location',
-                substr($prompt, $offset, $length),
-                $offset,
-                $offset + $length
-            );
-            $ranges[] = [$offset, $offset + $length];
-            $prefixMatches[$index] = true;
+                $intents[] = self::namedIntent(
+                    'location',
+                    substr($prompt, $offset, $length),
+                    $offset,
+                    $offset + $length
+                );
+                $ranges[] = [$offset, $offset + $length];
+            }
+            if ($values !== []) {
+                $prefixMatches[$index] = true;
+                $structuralEnds[] = $qualifierEnd;
+            }
         }
 
-        foreach ($qualifierMatches as $index => $match) {
+        foreach ($matches as $index => $match) {
             if (isset($prefixMatches[$index])) {
                 continue;
             }
 
-            $qualifierOffset = $match[0][1];
-            $valueStart = self::previousPunctuationOffset($matchText, $qualifierOffset);
-            if ($index > 0) {
-                $previousEnd = $qualifierMatches[$index - 1][0][1]
-                    + strlen($qualifierMatches[$index - 1][0][0]);
-                $valueStart = max($valueStart, $previousEnd);
-            }
-
-            list($offset, $length) = self::trimLeadingQualifiedValue(
-                substr($matchText, $valueStart, $qualifierOffset - $valueStart),
-                $valueStart
-            );
-            if ($length === 0 || self::overlaps($offset, $offset + $length, $ranges)) {
+            $qualifierOffset = $match[1][1];
+            $qualifierEnd = $qualifierOffset + strlen($match[1][0]);
+            if (self::overlaps($qualifierOffset, $qualifierEnd, $ranges)) {
                 continue;
             }
 
-            $intents[] = self::namedIntent(
-                'location',
-                substr($prompt, $offset, $length),
-                $offset,
-                $offset + $length
+            $following = substr(
+                $matchText,
+                self::skipWhitespace($matchText, $qualifierEnd)
             );
-            $ranges[] = [$offset, $offset + $length];
-        }
+            if (
+                $following !== ''
+                && !preg_match(
+                    '/^(?:[.,;:!?\n]|and\b|or\b|at\b|in\b|from\b|for\b|'
+                        . 'with\b|within\b|inside\b|near\b|on\b|by\b|held\b)/iu',
+                    $following
+                )
+            ) {
+                continue;
+            }
 
-        return $intents;
+            $plural = self::isPluralQualifier($match[1][0]);
+            $valueStart = $plural
+                ? self::previousClauseOffset($matchText, $qualifierOffset)
+                : self::previousPunctuationOffset($matchText, $qualifierOffset);
+            if ($structuralEnds !== []) {
+                $valueStart = max($valueStart, max($structuralEnds));
+            }
+
+            $values = self::qualifiedValues(
+                substr($matchText, $valueStart, $qualifierOffset - $valueStart),
+                $valueStart,
+                $plural
+            );
+            foreach ($values as $value) {
+                list($offset, $length) = $value;
+                if (
+                    $length === 0
+                    || self::overlaps($offset, $offset + $length, $ranges)
+                ) {
+                    continue;
+                }
+
+                $intents[] = self::namedIntent(
+                    'location',
+                    substr($prompt, $offset, $length),
+                    $offset,
+                    $offset + $length
+                );
+                $ranges[] = [$offset, $offset + $length];
+            }
+            if ($values !== []) {
+                $structuralEnds[] = $qualifierEnd;
+            }
+        }
     }
 
     private static function extractNamedDimensionIntents(
@@ -242,6 +327,11 @@ final class ReferenceIntentService
                 $previousEnd = $matches[$index - 1][1][1]
                     + strlen($matches[$index - 1][1][0]);
                 $nameStart = max($nameStart, $previousEnd);
+            }
+            foreach ($consumed as $range) {
+                if ($range[1] <= $qualifierOffset) {
+                    $nameStart = max($nameStart, $range[1]);
+                }
             }
 
             list($nameOffset, $nameLength) = self::trimLeadingQualifiedValue(
@@ -317,69 +407,81 @@ final class ReferenceIntentService
         )) {
             foreach ($matches as $index => $match) {
                 $qualifierOffset = $match[1][1];
-                $candidateStart = self::previousPunctuationOffset(
-                    $matchText,
-                    $qualifierOffset
-                );
+                $plural = self::isPluralQualifier($match[1][0]);
+                $candidateStart = $plural
+                    ? self::previousClauseOffset($matchText, $qualifierOffset)
+                    : self::previousPunctuationOffset(
+                        $matchText,
+                        $qualifierOffset
+                    );
                 if ($index > 0) {
                     $previousEnd = $matches[$index - 1][1][1]
                         + strlen($matches[$index - 1][1][0]);
                     $candidateStart = max($candidateStart, $previousEnd);
                 }
 
-                list($offset, $length) = self::trimLeadingQualifiedValue(
+                foreach ($consumed as $range) {
+                    if ($range[1] <= $qualifierOffset) {
+                        $candidateStart = max($candidateStart, $range[1]);
+                    }
+                }
+
+                $values = self::qualifiedValues(
                     substr(
                         $matchText,
                         $candidateStart,
                         $qualifierOffset - $candidateStart
                     ),
                     $candidateStart,
+                    $plural,
                     true
                 );
-                $end = $offset + $length;
-                if (
-                    $length === 0
-                    ||
-                    self::overlaps($offset, $end, $consumed)
-                    || self::overlaps($offset, $end, $knownRanges)
-                ) {
-                    continue;
-                }
+                foreach ($values as $value) {
+                    list($offset, $length) = $value;
+                    $end = $offset + $length;
+                    if (
+                        $length === 0
+                        || self::overlaps($offset, $end, $consumed)
+                        || self::overlaps($offset, $end, $knownRanges)
+                    ) {
+                        continue;
+                    }
 
-                $term = preg_replace(
-                    '/\s+/u',
-                    ' ',
-                    strtolower(substr($matchText, $offset, $length))
-                );
-                if (!is_string($term)) {
-                    continue;
-                }
-                $term = trim($term);
-                if (
-                    in_array(
-                        $term,
-                        [
-                            'video',
-                            'videos',
-                            'all',
-                            'material',
-                            'materials',
-                            'vhs',
-                            'dvd',
-                            'dvds',
-                            'film',
-                            'films',
-                        ],
-                        true
-                    )
-                    || isset($unknownTerms[$term])
-                ) {
-                    continue;
-                }
+                    $term = preg_replace(
+                        '/\s+/u',
+                        ' ',
+                        strtolower(substr($matchText, $offset, $length))
+                    );
+                    if (!is_string($term)) {
+                        continue;
+                    }
+                    $term = trim($term);
+                    if (
+                        in_array(
+                            $term,
+                            [
+                                'video',
+                                'videos',
+                                'all',
+                                'material',
+                                'materials',
+                                'vhs',
+                                'dvd',
+                                'dvds',
+                                'film',
+                                'films',
+                            ],
+                            true
+                        )
+                        || isset($unknownTerms[$term])
+                    ) {
+                        continue;
+                    }
 
-                $unknownTerms[$term] = [$offset, $end];
-                if ($firstMatch === null || $offset < $firstMatch[0]) {
-                    $firstMatch = [$offset, $end];
+                    $unknownTerms[$term] = [$offset, $end];
+                    if ($firstMatch === null || $offset < $firstMatch[0]) {
+                        $firstMatch = [$offset, $end];
+                    }
                 }
             }
         }
@@ -449,8 +551,16 @@ final class ReferenceIntentService
         $capture = ltrim($capture);
         $offset += $leadingLength;
 
+        if (preg_match('/^(?:,\s*)?(?:and|or)\b\s*/iu', $capture, $leading)) {
+            $offset += strlen($leading[0]);
+            $capture = substr($capture, strlen($leading[0]));
+        } elseif (preg_match('/^,\s*/u', $capture, $leading)) {
+            $offset += strlen($leading[0]);
+            $capture = substr($capture, strlen($leading[0]));
+        }
+
         if (preg_match_all(
-            '/\b(?:held\s+by|at|in|from|for|with|within|inside|near|on|by|and|or)\s+/iu',
+            '/\b(?:held\s+by|at|in|from|for|with|within|inside|near|on|by)\s+/iu',
             $capture,
             $boundaries,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE
@@ -461,10 +571,30 @@ final class ReferenceIntentService
             $capture = substr($capture, $boundaryEnd);
         }
 
+        if (preg_match(
+            '/^(?:(?:what|which|who|where)\b\s*)'
+                . '(?:(?:is|are|was|were|does|do|did|uses?|has|have|had|'
+                . 'holds?|contains?|serves?|manages?|owns?)\b\s*)*'
+                . '(?:the\b\s*)?/iu',
+            $capture,
+            $interrogative
+        )) {
+            $offset += strlen($interrogative[0]);
+            $capture = substr($capture, strlen($interrogative[0]));
+        } elseif (preg_match(
+            '/^(?:(?:is|are|was|were|does|do|did|has|have|had)\b\s*)'
+                . '(?:the\b\s*)?/iu',
+            $capture,
+            $interrogative
+        )) {
+            $offset += strlen($interrogative[0]);
+            $capture = substr($capture, strlen($interrogative[0]));
+        }
+
         $prefixWords = $formatIntro
-            ? 'show|find|list|display|get|give|report|please|what|which|who|where|'
+            ? 'show|find|list|display|get|give|report|please|'
                 . 'all|the|of|items?|this|can|be'
-            : 'show|find|list|display|get|give|report|please|what|which|who|where|'
+            : 'show|find|list|display|get|give|report|please|'
                 . 'all|the|of|items?';
         $prefixPattern = '/^(?:(?:' . $prefixWords . ')\b\s*)+/iu';
         if (preg_match($prefixPattern, $capture, $prefix, PREG_OFFSET_CAPTURE)) {
@@ -477,12 +607,9 @@ final class ReferenceIntentService
         return [$offset, $length];
     }
 
-    private static function trimLocationValue(string $capture, int $offset): array
+    private static function trimLocationValue(string $capture): string
     {
-        $leadingLength = strlen($capture) - strlen(ltrim($capture));
-        $capture = ltrim($capture);
-        $offset += $leadingLength;
-
+        $boundaries = [];
         if (preg_match(
             '/\s+\b(?:and|or)\s+(?=[^.,;:!?\n]*\b'
                 . '(?:service\s+points?|librar(?:y|ies)|campus(?:es)?|institutions?)\b)/iu',
@@ -490,7 +617,20 @@ final class ReferenceIntentService
             $dimensionBoundary,
             PREG_OFFSET_CAPTURE
         )) {
-            $capture = substr($capture, 0, $dimensionBoundary[0][1]);
+            $boundaries[] = $dimensionBoundary[0][1];
+        }
+
+        if (preg_match(
+            '/\s+\b(?:and|or)\s+(?='
+                . '(?:vhs(?:\s+tapes?)?|'
+                . '(?:dvds?(?:\s*(?:\/|-|and)\s*blu[\s-]*rays?)?|blu[\s-]*rays?)|'
+                . 'films?|videos?(?:\s+(?:materials?|formats?))?)\b'
+                . '|[^.,;:!?\n]*\b(?:formats?|material\s+types?)\b)/iu',
+            $capture,
+            $materialBoundary,
+            PREG_OFFSET_CAPTURE
+        )) {
+            $boundaries[] = $materialBoundary[0][1];
         }
 
         if (preg_match(
@@ -499,15 +639,77 @@ final class ReferenceIntentService
             $boundary,
             PREG_OFFSET_CAPTURE
         )) {
-            $capture = substr($capture, 0, $boundary[0][1]);
+            $boundaries[] = $boundary[0][1];
+        }
+
+        if ($boundaries !== []) {
+            $capture = substr($capture, 0, min($boundaries));
         }
 
         $capture = preg_replace('/(?:,\s*)?(?:and|or)?\s*$/iu', '', $capture);
         if (!is_string($capture)) {
-            return [$offset, 0];
+            return '';
         }
 
-        return [$offset, strlen(rtrim($capture))];
+        return rtrim($capture);
+    }
+
+    private static function qualifiedValues(
+        string $capture,
+        int $offset,
+        bool $plural,
+        bool $formatIntro = false
+    ): array {
+        list($valueOffset, $valueLength) = self::trimLeadingQualifiedValue(
+            $capture,
+            $offset,
+            $formatIntro
+        );
+        if ($valueLength === 0) {
+            return [];
+        }
+
+        $capture = substr($capture, $valueOffset - $offset, $valueLength);
+        if (!$plural) {
+            return [[$valueOffset, $valueLength]];
+        }
+
+        $parts = preg_split(
+            '/\s*,\s*(?:(?:and|or)\s+)?|\s+(?:and|or)\s+/iu',
+            $capture,
+            -1,
+            PREG_SPLIT_NO_EMPTY | PREG_SPLIT_OFFSET_CAPTURE
+        );
+        if (!is_array($parts)) {
+            return [];
+        }
+
+        $values = [];
+        foreach ($parts as $part) {
+            $leadingLength = strlen($part[0]) - strlen(ltrim($part[0]));
+            $value = trim($part[0]);
+            if ($value === '') {
+                continue;
+            }
+
+            $values[] = [
+                $valueOffset + $part[1] + $leadingLength,
+                strlen($value),
+            ];
+        }
+
+        return $values;
+    }
+
+    private static function isPluralQualifier(string $qualifier): bool
+    {
+        $normalized = strtolower(preg_replace('/\s+/u', ' ', trim($qualifier)));
+
+        return in_array(
+            $normalized,
+            ['locations', 'collections', 'rooms', 'formats', 'material types'],
+            true
+        );
     }
 
     private static function skipWhitespace(string $text, int $offset): int
@@ -520,10 +722,10 @@ final class ReferenceIntentService
         return $offset;
     }
 
-    private static function nextPunctuationOffset(string $text, int $offset): int
+    private static function nextClauseOffset(string $text, int $offset): int
     {
         if (preg_match(
-            '/[.,;:!?\n]/u',
+            '/[.;:!?\n]/u',
             $text,
             $match,
             PREG_OFFSET_CAPTURE,
@@ -533,6 +735,20 @@ final class ReferenceIntentService
         }
 
         return strlen($text);
+    }
+
+    private static function previousClauseOffset(string $text, int $offset): int
+    {
+        $prefix = substr($text, 0, $offset);
+        $positions = [];
+        foreach (['.', ';', ':', '!', '?', "\n"] as $punctuation) {
+            $position = strrpos($prefix, $punctuation);
+            if ($position !== false) {
+                $positions[] = $position + 1;
+            }
+        }
+
+        return $positions === [] ? 0 : max($positions);
     }
 
     private static function previousPunctuationOffset(string $text, int $offset): int

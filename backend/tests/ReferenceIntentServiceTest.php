@@ -313,6 +313,171 @@ assertIntentSame(
     'Qualified format lists must use clause and list boundaries.'
 );
 
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('What is the Hillyer library?', 'library'),
+    'An interrogative auxiliary and article must not pollute a named library.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Where is Hillyer library?', 'library'),
+    'An interrogative auxiliary must not pollute a named library.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension('Which is the Smith campus?', 'campus'),
+    'Interrogative scaffolding must be removed from a named campus.'
+);
+assertIntentSame(
+    ['Neilson service point'],
+    spansForDimension('Who uses Neilson service point?', 'service_point'),
+    'An interrogative subject and verb must not pollute a named service point.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Does Hillyer library have films?', 'library'),
+    'An interrogative verb must not pollute a named library.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('Does Hillyer library have films?'),
+    'Interrogative hierarchy extraction must leave following materials available.'
+);
+
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension('locations HC DVD and SC Art Video', 'location'),
+    'A shared prefix plural location qualifier must split every list value.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension('HC DVD and SC Art Video locations', 'location'),
+    'A shared suffix plural location qualifier must split every list value.'
+);
+assertIntentSame(
+    [],
+    materialTerms('HC DVD and SC Art Video locations'),
+    'Every shared suffix location value must be consumed before material extraction.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video', 'SC Music'],
+    spansForDimension(
+        'HC DVD, SC Art Video, and SC Music locations',
+        'location'
+    ),
+    'A shared suffix plural location qualifier must retain prompt order.'
+);
+assertIntentSame(
+    [],
+    materialTerms('HC DVD, SC Art Video, and SC Music locations'),
+    'Comma-separated shared suffix locations must consume every value.'
+);
+assertIntentSame(
+    ['Library Stacks'],
+    spansForDimension('Show items in location Library Stacks.', 'location'),
+    'A location name may contain the word Stacks.'
+);
+assertIntentSame(
+    ['Room 101'],
+    spansForDimension('Show items in Room 101 location.', 'location'),
+    'A location name may contain the word Room.'
+);
+assertIntentSame(
+    ['Archives and Special Collections'],
+    spansForDimension('Archives and Special Collections location', 'location'),
+    'A suffix-qualified location may contain another qualifier word.'
+);
+assertIntentSame(
+    ['Archives and Special Collections'],
+    spansForDimension(
+        'Show items in location Archives and Special Collections.',
+        'location'
+    ),
+    'A singular prefix qualifier must not split a location name containing and.'
+);
+assertIntentSame(
+    ['Research and Instruction Center'],
+    spansForDimension(
+        'Research and Instruction Center location',
+        'location'
+    ),
+    'A singular suffix qualifier must not split a location name containing and.'
+);
+
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension(
+        'Show items in location HC DVD and Betamax format.',
+        'location'
+    ),
+    'A prefix location must stop before a conjoined qualified material.'
+);
+assertIntentSame(
+    ['betamax'],
+    materialTerms('Show items in location HC DVD and Betamax format.'),
+    'A qualified unknown material after a prefix location must remain available.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension('Show items in location HC DVD and VHS.', 'location'),
+    'A prefix location must stop before a conjoined known material.'
+);
+assertIntentSame(
+    ['vhs'],
+    materialTerms('Show items in location HC DVD and VHS.'),
+    'A known material after a prefix location must remain available.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension(
+        'Show items in location HC DVD and video materials.',
+        'location'
+    ),
+    'A prefix location must stop before conjoined generic video material wording.'
+);
+assertIntentSame(
+    'physical_video',
+    ReferenceIntentService::extract(
+        'Show items in location HC DVD and video materials.'
+    )[1]['selector'] ?? null,
+    'Generic video after a prefix location must retain physical-video behavior.'
+);
+
+assertIntentSame(
+    ['betamax', 'laser disc'],
+    materialTerms('Show Betamax and laser disc formats at Hillyer library.'),
+    'A shared plural format qualifier must retain all unknown list terms.'
+);
+assertIntentSame(
+    ['betamax', 'laser disc', 'type ii'],
+    materialTerms(
+        'Show Betamax, laser disc, and Type II formats at Hillyer library.'
+    ),
+    'A shared plural format qualifier must retain numbered and multiword terms.'
+);
+assertIntentSame(
+    ['vhs', 'betamax'],
+    materialTerms('Show Betamax and VHS formats at Hillyer library.'),
+    'Shared known and unknown formats must retain canonical known-term order.'
+);
+assertIntentSame(
+    ['dvd', 'laser disc'],
+    materialTerms('Show laser disc and DVD formats at Hillyer library.'),
+    'A trailing known format must not discard an earlier unknown format.'
+);
+assertIntentSame(
+    ['type ii', 'u-matic 3/4-inch'],
+    materialTerms(
+        'Show Type II and U-matic 3/4-inch material types at Hillyer library.'
+    ),
+    'Shared material-type qualifiers must retain every numbered multiword term.'
+);
+assertIntentSame(
+    ['rock and roll'],
+    materialTerms('Show Rock and Roll format at Hillyer library.'),
+    'A singular format qualifier must not split a material name containing and.'
+);
+
 if ($intentTestFailures !== []) {
     fwrite(STDERR, implode("\n", $intentTestFailures));
     exit(1);
