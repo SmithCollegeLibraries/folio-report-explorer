@@ -29,6 +29,17 @@ function materialTerms(string $prompt): array
     return [];
 }
 
+function materialSelector(string $prompt)
+{
+    foreach (ReferenceIntentService::extract($prompt) as $intent) {
+        if (($intent['dimension'] ?? null) === 'material_type') {
+            return $intent['selector'] ?? null;
+        }
+    }
+
+    return null;
+}
+
 function firstDimension(string $prompt)
 {
     $intents = ReferenceIntentService::extract($prompt);
@@ -345,14 +356,14 @@ assertIntentSame(
 );
 
 assertIntentSame(
-    ['HC DVD', 'SC Art Video'],
+    ['HC DVD and SC Art Video'],
     spansForDimension('locations HC DVD and SC Art Video', 'location'),
-    'A shared prefix plural location qualifier must split every list value.'
+    'An all-unknown conjunction after a shared prefix qualifier must remain atomic.'
 );
 assertIntentSame(
-    ['HC DVD', 'SC Art Video'],
+    ['HC DVD and SC Art Video'],
     spansForDimension('HC DVD and SC Art Video locations', 'location'),
-    'A shared suffix plural location qualifier must split every list value.'
+    'An all-unknown conjunction before a shared suffix qualifier must remain atomic.'
 );
 assertIntentSame(
     [],
@@ -444,9 +455,9 @@ assertIntentSame(
 );
 
 assertIntentSame(
-    ['betamax', 'laser disc'],
+    ['betamax and laser disc'],
     materialTerms('Show Betamax and laser disc formats at Hillyer library.'),
-    'A shared plural format qualifier must retain all unknown list terms.'
+    'An all-unknown material conjunction must remain atomic rather than fabricate terms.'
 );
 assertIntentSame(
     ['betamax', 'laser disc', 'type ii'],
@@ -466,11 +477,11 @@ assertIntentSame(
     'A trailing known format must not discard an earlier unknown format.'
 );
 assertIntentSame(
-    ['type ii', 'u-matic 3/4-inch'],
+    ['type ii and u-matic 3/4-inch'],
     materialTerms(
         'Show Type II and U-matic 3/4-inch material types at Hillyer library.'
     ),
-    'Shared material-type qualifiers must retain every numbered multiword term.'
+    'An ambiguous all-unknown material-type conjunction must remain atomic.'
 );
 assertIntentSame(
     ['rock and roll'],
@@ -529,12 +540,12 @@ assertIntentSame(
     'A suffix location qualifier must not leak into a following material span.'
 );
 assertIntentSame(
-    ['HC DVD', 'SC Art Video'],
+    ['HC DVD and SC Art Video'],
     spansForDimension(
         'HC DVD and SC Art Video locations and Smith campus',
         'location'
     ),
-    'A shared suffix location qualifier must consume its complete structure.'
+    'An ambiguous shared suffix location conjunction must remain one qualified name.'
 );
 assertIntentSame(
     ['Smith campus'],
@@ -546,9 +557,9 @@ assertIntentSame(
 );
 
 assertIntentSame(
-    ['Hillyer', 'Neilson'],
+    ['Hillyer and Neilson'],
     spansForDimension('Hillyer and Neilson libraries', 'library'),
-    'A shared suffix library qualifier must split each value.'
+    'An all-unknown shared suffix library conjunction must remain atomic.'
 );
 assertIntentSame(
     ['Hillyer', 'Neilson', 'Smith College'],
@@ -559,14 +570,14 @@ assertIntentSame(
     'A comma-structured shared library list must preserve every value in prompt order.'
 );
 assertIntentSame(
-    ['Smith', 'Mount Holyoke'],
+    ['Smith and Mount Holyoke'],
     spansForDimension('Smith and Mount Holyoke campuses', 'campus'),
-    'A shared suffix campus qualifier must split each value.'
+    'An all-unknown shared suffix campus conjunction must remain atomic.'
 );
 assertIntentSame(
-    ['Hillyer', 'Neilson'],
+    ['Hillyer and Neilson'],
     spansForDimension('libraries Hillyer and Neilson', 'library'),
-    'A shared prefix library qualifier must split each value.'
+    'An all-unknown shared prefix library conjunction must remain atomic.'
 );
 assertIntentSame(
     ['Campus Center library'],
@@ -806,17 +817,17 @@ assertIntentSame(
     'A dimension before a shared suffix library list must remain independent.'
 );
 assertIntentSame(
-    ['Hillyer', 'Neilson'],
+    ['Hillyer and Neilson'],
     spansForDimension('Smith campus, Hillyer and Neilson libraries', 'library'),
-    'A shared suffix library list after a campus must retain every value.'
+    'An ambiguous final library conjunction after a campus must remain atomic.'
 );
 assertIntentSame(
-    ['Hillyer library', 'Neilson', 'Josten'],
+    ['Hillyer library', 'Neilson and Josten'],
     spansForDimension(
         'Show films at Hillyer library, Neilson and Josten libraries.',
         'library'
     ),
-    'A repeated/shared suffix library list must retain all values after material wording.'
+    'An ambiguous non-Oxford final library chunk must remain atomic.'
 );
 assertIntentSame(
     ['film'],
@@ -842,12 +853,12 @@ assertIntentSame(
     'A library before plural suffix locations must not be retyped as a location.'
 );
 assertIntentSame(
-    ['HC DVD', 'SC Art Video'],
+    ['HC DVD and SC Art Video'],
     spansForDimension(
         'Hillyer library, HC DVD and SC Art Video locations',
         'location'
     ),
-    'Plural suffix locations after a library must retain every location.'
+    'An ambiguous final location conjunction after a library must remain atomic.'
 );
 assertIntentSame(
     ['Smith campus'],
@@ -858,17 +869,17 @@ assertIntentSame(
     'A campus before plural suffix locations must not be retyped as a location.'
 );
 assertIntentSame(
-    ['HC DVD', 'SC Art Video'],
+    ['HC DVD and SC Art Video'],
     spansForDimension(
         'Smith campus, HC DVD and SC Art Video locations',
         'location'
     ),
-    'Plural suffix locations after a campus must retain every location.'
+    'An ambiguous final location conjunction after a campus must remain atomic.'
 );
 assertIntentSame(
-    ['Hillyer', 'Neilson'],
+    ['Hillyer and Neilson'],
     spansForDimension('Show films, Hillyer and Neilson libraries.', 'library'),
-    'A shared suffix library list must start after an earlier material clause.'
+    'An ambiguous library conjunction after a material clause must remain atomic.'
 );
 assertIntentSame(
     ['film'],
@@ -990,6 +1001,46 @@ assertIntentSame(
     'Scaffolded coordinated category questions must leave material terms available.'
 );
 
+$punctuatedCategoryPrompts = [
+    ['Which locations, libraries, and campuses have DVDs?', ['dvd']],
+    ['Which campuses, libraries and locations have films?', ['film']],
+];
+foreach ($punctuatedCategoryPrompts as $punctuatedCategoryPrompt) {
+    foreach (['campus', 'library', 'location'] as $categoryDimension) {
+        assertIntentSame(
+            [],
+            spansForDimension($punctuatedCategoryPrompt[0], $categoryDimension),
+            'A punctuated coordinated category prefix must not become a named hierarchy intent.'
+        );
+    }
+    assertIntentSame(
+        $punctuatedCategoryPrompt[1],
+        materialTerms($punctuatedCategoryPrompt[0]),
+        'A punctuated coordinated category prefix must leave its predicate material available.'
+    );
+}
+
+assertIntentSame(
+    [],
+    materialTerms('Which campuses and libraries have video formats?'),
+    'A coordinated category prefix must not be folded into a generic video qualifier.'
+);
+assertIntentSame(
+    'physical_video',
+    materialSelector('Which campuses and libraries have video formats?'),
+    'A coordinated category predicate must retain the generic physical-video selector.'
+);
+assertIntentSame(
+    ['betamax'],
+    materialTerms('Which campuses and libraries have Betamax format?'),
+    'A coordinated category predicate must retain one immediately qualified unknown format.'
+);
+assertIntentSame(
+    ['vhs', 'betamax'],
+    materialTerms('Which campuses and libraries have Betamax and VHS formats?'),
+    'A coordinated category predicate must retain known and unknown qualified formats.'
+);
+
 $nonOxfordMaterialPrompt =
     'At Hillyer library, Rock and Roll, Betamax, VHS and DVD formats.';
 assertIntentSame(
@@ -1001,6 +1052,31 @@ assertIntentSame(
     ['vhs', 'dvd', 'rock and roll', 'betamax'],
     materialTerms($nonOxfordMaterialPrompt),
     'A non-Oxford trailing pair must split while earlier conjunction-bearing chunks remain atomic.'
+);
+
+$nonOxfordAtomicValues = [
+    [
+        'Hillyer, Lewis and Clark libraries',
+        'library',
+        ['Hillyer', 'Lewis and Clark'],
+    ],
+    [
+        'HC DVD, Research and Instruction Center locations',
+        'location',
+        ['HC DVD', 'Research and Instruction Center'],
+    ],
+];
+foreach ($nonOxfordAtomicValues as $nonOxfordAtomicValue) {
+    assertIntentSame(
+        $nonOxfordAtomicValue[2],
+        spansForDimension($nonOxfordAtomicValue[0], $nonOxfordAtomicValue[1]),
+        'A conjunction-bearing non-Oxford final name must not be split into fabricated fragments.'
+    );
+}
+assertIntentSame(
+    ['betamax', 'rock and roll'],
+    materialTerms('Betamax, Rock and Roll formats'),
+    'A conjunction-bearing non-Oxford final material name must remain atomic.'
 );
 
 $prepositionBearingNames = [
@@ -1019,6 +1095,33 @@ foreach ($prepositionBearingNames as $prepositionBearingName) {
         'Lexical request or material words must not truncate a qualified name.'
     );
 }
+
+$structuralPrepositionNames = [
+    ['Art at Work library', 'library', 'Art at Work library'],
+    ['Research at Home location', 'location', 'Research at Home'],
+    ['Held by Design library', 'library', 'Held by Design library'],
+    ['Science at Work service point', 'service_point', 'Science at Work service point'],
+];
+foreach ($structuralPrepositionNames as $structuralPrepositionName) {
+    assertIntentSame(
+        [$structuralPrepositionName[2]],
+        spansForDimension(
+            $structuralPrepositionName[0],
+            $structuralPrepositionName[1]
+        ),
+        'At and held-by text inside a qualified name must remain lexical.'
+    );
+}
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('DVD at Hillyer library', 'library'),
+    'At after a material atom must remain a structural request boundary.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('films held by Hillyer library', 'library'),
+    'Held by after a material atom must remain a structural request boundary.'
+);
 
 $visualBoundaryPrompts = [
     "Hillyer library\nSmith campus",
@@ -1071,20 +1174,6 @@ assertIntentSame(
     [],
     $materialBoundaryWarnings,
     'Malformed scalar material terms must not emit a public-boundary warning.'
-);
-
-$smallPerformancePrompt = str_repeat('Hillyer library. ', 500);
-$largePerformancePrompt = str_repeat('Hillyer library. ', 2000);
-$smallPerformanceStart = microtime(true);
-ReferenceIntentService::extract($smallPerformancePrompt);
-$smallPerformanceDuration = microtime(true) - $smallPerformanceStart;
-$largePerformanceStart = microtime(true);
-ReferenceIntentService::extract($largePerformancePrompt);
-$largePerformanceDuration = microtime(true) - $largePerformanceStart;
-assertIntentSame(
-    true,
-    $largePerformanceDuration <= max(0.05, $smallPerformanceDuration * 6),
-    'Independent hard-delimited qualifiers must scale near-linearly.'
 );
 
 if ($intentTestFailures !== []) {

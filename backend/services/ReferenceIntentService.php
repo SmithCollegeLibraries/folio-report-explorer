@@ -42,6 +42,7 @@ final class ReferenceIntentService
 
         $tokens = self::lex($prompt);
         $qualifiers = self::qualifiers($tokens);
+        $categoryClaims = self::interrogativeCategoryClaims($tokens);
         $claims = [];
         $intents = [];
         $materialAtoms = [];
@@ -55,6 +56,11 @@ final class ReferenceIntentService
                     $qualifier['end'],
                     $claims
                 )
+                || self::overlaps(
+                    $qualifier['start'],
+                    $qualifier['end'],
+                    $categoryClaims
+                )
             ) {
                 continue;
             }
@@ -67,7 +73,13 @@ final class ReferenceIntentService
             $prefix = $direction === 'prefix';
             $valueSpan = $prefix
                 ? self::prefixValueSpan($qualifier, $tokens, $claims)
-                : self::suffixValueSpan($qualifier, $qualifiers, $index, $tokens);
+                : self::suffixValueSpan(
+                    $qualifier,
+                    $qualifiers,
+                    $index,
+                    $tokens,
+                    $categoryClaims
+                );
             if ($valueSpan === null) {
                 continue;
             }
@@ -135,6 +147,9 @@ final class ReferenceIntentService
             $claims[] = [$claimStart, $claimEnd];
         }
 
+        foreach ($categoryClaims as $categoryClaim) {
+            $claims[] = $categoryClaim;
+        }
         usort($claims, function (array $left, array $right): int {
             return $left[0] <=> $right[0];
         });
@@ -401,6 +416,95 @@ final class ReferenceIntentService
         return self::isCoordinatedCategorySequence(array_slice($before, 1));
     }
 
+    private static function interrogativeCategoryClaims(array $tokens): array
+    {
+        $claims = [];
+        foreach ($tokens as $index => $token) {
+            if (!in_array($token['norm'], ['what', 'which'], true)) {
+                continue;
+            }
+
+            $cursor = $index + 1;
+            while (isset($tokens[$cursor])) {
+                $categoryEnd = self::categoryTokenEnd($tokens, $cursor);
+                if ($categoryEnd === null) {
+                    break;
+                }
+                $cursor = $categoryEnd;
+
+                if (
+                    isset($tokens[$cursor])
+                    && self::isPredicateVerb($tokens[$cursor]['norm'])
+                ) {
+                    $claims[] = [
+                        self::previousHardBoundary($tokens, $index),
+                        $tokens[$cursor]['end'],
+                    ];
+                    break;
+                }
+
+                if (
+                    isset($tokens[$cursor])
+                    && $tokens[$cursor]['norm'] === ','
+                ) {
+                    $cursor++;
+                    if (
+                        isset($tokens[$cursor])
+                        && self::isConnector($tokens[$cursor]['norm'])
+                    ) {
+                        $cursor++;
+                    }
+                    continue;
+                }
+
+                if (
+                    isset($tokens[$cursor])
+                    && self::isConnector($tokens[$cursor]['norm'])
+                ) {
+                    $cursor++;
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        usort($claims, function (array $left, array $right): int {
+            return $left[0] <=> $right[0];
+        });
+
+        return $claims;
+    }
+
+    private static function categoryTokenEnd(array $tokens, int $index): ?int
+    {
+        if (
+            ($tokens[$index]['norm'] ?? null) === 'service'
+            && isset($tokens[$index + 1])
+            && in_array($tokens[$index + 1]['norm'], ['point', 'points'], true)
+        ) {
+            return $index + 2;
+        }
+
+        if (
+            !isset($tokens[$index])
+            || !in_array(
+                $tokens[$index]['norm'],
+                [
+                    'location', 'locations', 'collection', 'collections',
+                    'stack', 'stacks', 'room', 'rooms', 'shelving',
+                    'library', 'libraries', 'campus', 'campuses',
+                    'institution', 'institutions',
+                ],
+                true
+            )
+        ) {
+            return null;
+        }
+
+        return $index + 1;
+    }
+
     private static function isCoordinatedCategorySequence(array $tokens): bool
     {
         $expectCategory = true;
@@ -571,7 +675,8 @@ final class ReferenceIntentService
         array $qualifier,
         array $qualifiers,
         int $qualifierIndex,
-        array $tokens
+        array $tokens,
+        array $categoryClaims
     ): ?array {
         if (
             self::isEmbeddedInPrefixLocation(
@@ -586,6 +691,12 @@ final class ReferenceIntentService
 
         $start = self::previousHardBoundary($tokens, $qualifier['token_start']);
         $end = $qualifier['start'];
+        foreach ($categoryClaims as $categoryClaim) {
+            if ($categoryClaim[0] >= $end || $categoryClaim[1] <= $start) {
+                continue;
+            }
+            $start = max($start, $categoryClaim[1]);
+        }
 
         if (
             !$qualifier['plural']
@@ -768,12 +879,13 @@ final class ReferenceIntentService
                     || (
                         $dimension === 'material_type'
                         && self::singularMaterialListIsExplicit($valueTokens)
-                    )
+                    ),
+                $dimension
             );
         }
 
-        $splitConnectors = $plural;
-        if (!$splitConnectors && $dimension === 'material_type') {
+        $splitConnectors = self::hasAndOrConnector($valueTokens);
+        if ($dimension === 'material_type') {
             $splitConnectors = self::singularMaterialListIsExplicit($valueTokens);
         }
 
@@ -797,7 +909,8 @@ final class ReferenceIntentService
 
     private static function commaChunks(
         array $tokens,
-        bool $splitTrailingConnector
+        bool $splitTrailingConnector,
+        string $dimension
     ): array
     {
         $chunks = [];
@@ -827,6 +940,12 @@ final class ReferenceIntentService
                 $connectorIndex !== null
                 && $connectorIndex > $chunkStart
                 && $connectorIndex < count($tokens) - 1
+                && self::connectorSeparatesDeterministicValues(
+                    $tokens,
+                    $chunkStart,
+                    $connectorIndex,
+                    $dimension
+                )
             ) {
                 self::appendTokenChunk(
                     $chunks,
@@ -848,6 +967,41 @@ final class ReferenceIntentService
         self::appendTokenChunk($chunks, $tokens, $chunkStart, count($tokens));
 
         return $chunks;
+    }
+
+    private static function connectorSeparatesDeterministicValues(
+        array $tokens,
+        int $chunkStart,
+        int $connectorIndex,
+        string $dimension
+    ): bool {
+        if ($tokens[$connectorIndex]['norm'] === 'and/or') {
+            return true;
+        }
+        if ($dimension !== 'material_type') {
+            return false;
+        }
+
+        $left = array_slice(
+            $tokens,
+            $chunkStart,
+            $connectorIndex - $chunkStart
+        );
+        $right = array_slice($tokens, $connectorIndex + 1);
+
+        return self::exactKnownMaterialTokens($left) !== null
+            || self::exactKnownMaterialTokens($right) !== null;
+    }
+
+    private static function hasAndOrConnector(array $tokens): bool
+    {
+        foreach ($tokens as $token) {
+            if ($token['norm'] === 'and/or') {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function appendTokenChunk(
@@ -1276,23 +1430,59 @@ final class ReferenceIntentService
         bool $requestForm
     ): array {
         foreach ($tokens as $index => $token) {
+            $structuralLeft = self::isStructuralBoundaryLeftContext(
+                array_slice($tokens, 0, $index)
+            );
             if (
                 $token['norm'] === 'held'
                 && isset($tokens[$index + 1])
                 && $tokens[$index + 1]['norm'] === 'by'
+                && $structuralLeft
             ) {
                 return array_slice($tokens, $index + 2);
             }
 
             if (
                 self::isBoundaryPreposition($token['norm'])
-                && ($requestForm || $token['norm'] === 'at')
+                && (
+                    ($requestForm && ($index === 0 || $structuralLeft))
+                    || ($token['norm'] === 'at' && $structuralLeft)
+                )
             ) {
                 return array_slice($tokens, $index + 1);
             }
         }
 
         return $tokens;
+    }
+
+    private static function isStructuralBoundaryLeftContext(array $tokens): bool
+    {
+        if ($tokens === []) {
+            return false;
+        }
+        if (self::isMaterialClause($tokens)) {
+            return true;
+        }
+
+        $words = array_column($tokens, 'norm');
+        if (
+            in_array(
+                implode(' ', $words),
+                ['all material', 'all materials'],
+                true
+            )
+        ) {
+            return true;
+        }
+
+        $last = $words[count($words) - 1];
+
+        return in_array(
+            $last,
+            ['format', 'formats', 'type', 'types', 'material', 'materials'],
+            true
+        );
     }
 
     private static function locationMaterialBoundary(
