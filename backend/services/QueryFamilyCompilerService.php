@@ -499,7 +499,7 @@ class QueryFamilyCompilerService
                     $selectColumns[] = 'ii.dates__date1 AS pub_date';
                     break;
                 case 'title':
-                    $selectColumns[] = 'ii.title';
+                    $selectColumns[] = 'ii.title AS title';
                     break;
             }
         }
