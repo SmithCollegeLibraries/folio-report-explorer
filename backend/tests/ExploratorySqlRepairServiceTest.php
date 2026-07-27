@@ -81,6 +81,7 @@ assertSameValue(2, $calls, 'Only initial generation and one repair should run.')
 assertSameValue(
     [
         'originalQuestion' => 'Show items',
+        'generationPrompt' => '',
         'campus' => 'main',
         'assumptions' => [['key' => 'period', 'value' => 'current_year']],
         'attemptedPlan' => 'Read inventory items.',
