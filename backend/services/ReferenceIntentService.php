@@ -122,57 +122,85 @@ final class ReferenceIntentService
         $intents = [];
         $ranges = [];
         $qualifier = '(?:locations?|collections?|stacks|rooms?|shelving)';
+        $qualifierMatches = [];
 
         if (preg_match_all(
-            '/\b' . $qualifier . '\b\s+([^.,;:!?\n]+)/iu',
+            '/\b' . $qualifier . '\b/iu',
             $matchText,
             $matches,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE
         )) {
-            foreach ($matches as $match) {
-                list($offset, $length) = self::trimCapture(
-                    $match[1][0],
-                    $match[1][1],
-                    true
-                );
-                if ($length === 0 || self::overlaps($offset, $offset + $length, $ranges)) {
-                    continue;
-                }
-
-                $intents[] = self::namedIntent(
-                    'location',
-                    substr($prompt, $offset, $length),
-                    $offset,
-                    $offset + $length
-                );
-                $ranges[] = [$offset, $offset + $length];
-            }
+            $qualifierMatches = $matches;
         }
 
-        if (preg_match_all(
-            '/([^.,;:!?\n]+?)\s+\b' . $qualifier . '\b/iu',
-            $matchText,
-            $matches,
-            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
-        )) {
-            foreach ($matches as $match) {
-                list($offset, $length) = self::trimCapture(
-                    $match[1][0],
-                    $match[1][1],
-                    false
-                );
-                if ($length === 0 || self::overlaps($offset, $offset + $length, $ranges)) {
-                    continue;
-                }
+        $prefixMatches = [];
+        foreach ($qualifierMatches as $index => $match) {
+            $qualifierEnd = $match[0][1] + strlen($match[0][0]);
+            $valueOffset = self::skipWhitespace($matchText, $qualifierEnd);
+            $following = substr($matchText, $valueOffset);
 
-                $intents[] = self::namedIntent(
-                    'location',
-                    substr($prompt, $offset, $length),
-                    $offset,
-                    $offset + $length
-                );
-                $ranges[] = [$offset, $offset + $length];
+            if (
+                $following === ''
+                || preg_match('/^[.,;:!?\n]/u', $following)
+                || preg_match(
+                    '/^(?:and|or|at|in|from|for|with|within|inside|near|on|by|held)\b/iu',
+                    $following
+                )
+            ) {
+                continue;
             }
+
+            $valueEnd = self::nextPunctuationOffset($matchText, $valueOffset);
+            if (isset($qualifierMatches[$index + 1])) {
+                $valueEnd = min($valueEnd, $qualifierMatches[$index + 1][0][1]);
+            }
+
+            list($offset, $length) = self::trimLocationValue(
+                substr($matchText, $valueOffset, $valueEnd - $valueOffset),
+                $valueOffset
+            );
+            if ($length === 0 || self::overlaps($offset, $offset + $length, $ranges)) {
+                continue;
+            }
+
+            $intents[] = self::namedIntent(
+                'location',
+                substr($prompt, $offset, $length),
+                $offset,
+                $offset + $length
+            );
+            $ranges[] = [$offset, $offset + $length];
+            $prefixMatches[$index] = true;
+        }
+
+        foreach ($qualifierMatches as $index => $match) {
+            if (isset($prefixMatches[$index])) {
+                continue;
+            }
+
+            $qualifierOffset = $match[0][1];
+            $valueStart = self::previousPunctuationOffset($matchText, $qualifierOffset);
+            if ($index > 0) {
+                $previousEnd = $qualifierMatches[$index - 1][0][1]
+                    + strlen($qualifierMatches[$index - 1][0][0]);
+                $valueStart = max($valueStart, $previousEnd);
+            }
+
+            list($offset, $length) = self::trimLeadingQualifiedValue(
+                substr($matchText, $valueStart, $qualifierOffset - $valueStart),
+                $valueStart
+            );
+            if ($length === 0 || self::overlaps($offset, $offset + $length, $ranges)) {
+                continue;
+            }
+
+            $intents[] = self::namedIntent(
+                'location',
+                substr($prompt, $offset, $length),
+                $offset,
+                $offset + $length
+            );
+            $ranges[] = [$offset, $offset + $length];
         }
 
         return $intents;
@@ -184,46 +212,56 @@ final class ReferenceIntentService
         array $consumed
     ): array {
         $intents = [];
-        $qualifiers = [
-            'service_point' => 'service\s+points?',
-            'library' => 'librar(?:y|ies)',
-            'campus' => 'campus(?:es)?',
-            'institution' => 'institutions?',
-        ];
+        $ranges = $consumed;
+        $pattern = '/\b(service\s+points?|librar(?:y|ies)|campus(?:es)?|institutions?)\b/iu';
+        if (!preg_match_all(
+            $pattern,
+            $matchText,
+            $matches,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+        )) {
+            return [];
+        }
 
-        foreach ($qualifiers as $dimension => $qualifier) {
-            if (!preg_match_all(
-                '/([^.,;:!?\n]+?)\s+\b(' . $qualifier . ')\b/iu',
-                $matchText,
-                $matches,
-                PREG_SET_ORDER | PREG_OFFSET_CAPTURE
-            )) {
+        foreach ($matches as $index => $match) {
+            $qualifier = strtolower(preg_replace('/\s+/u', ' ', $match[1][0]));
+            if (strpos($qualifier, 'service point') === 0) {
+                $dimension = 'service_point';
+            } elseif (strpos($qualifier, 'librar') === 0) {
+                $dimension = 'library';
+            } elseif (strpos($qualifier, 'campus') === 0) {
+                $dimension = 'campus';
+            } else {
+                $dimension = 'institution';
+            }
+
+            $qualifierOffset = $match[1][1];
+            $end = $qualifierOffset + strlen($match[1][0]);
+            $nameStart = self::previousPunctuationOffset($matchText, $qualifierOffset);
+            if ($index > 0) {
+                $previousEnd = $matches[$index - 1][1][1]
+                    + strlen($matches[$index - 1][1][0]);
+                $nameStart = max($nameStart, $previousEnd);
+            }
+
+            list($nameOffset, $nameLength) = self::trimLeadingQualifiedValue(
+                substr($matchText, $nameStart, $qualifierOffset - $nameStart),
+                $nameStart
+            );
+            if (
+                $nameLength === 0
+                || self::overlaps($nameOffset, $end, $ranges)
+            ) {
                 continue;
             }
 
-            foreach ($matches as $match) {
-                list($nameOffset, $nameLength) = self::trimCapture(
-                    $match[1][0],
-                    $match[1][1],
-                    false
-                );
-                $qualifierOffset = $match[2][1];
-                $end = $qualifierOffset + strlen($match[2][0]);
-
-                if (
-                    $nameLength === 0
-                    || self::overlaps($nameOffset, $end, $consumed)
-                ) {
-                    continue;
-                }
-
-                $intents[] = self::namedIntent(
-                    $dimension,
-                    substr($prompt, $nameOffset, $end - $nameOffset),
-                    $nameOffset,
-                    $end
-                );
-            }
+            $intents[] = self::namedIntent(
+                $dimension,
+                substr($prompt, $nameOffset, $end - $nameOffset),
+                $nameOffset,
+                $end
+            );
+            $ranges[] = [$nameOffset, $end];
         }
 
         return $intents;
@@ -272,30 +310,74 @@ final class ReferenceIntentService
 
         $unknownTerms = [];
         if (preg_match_all(
-            '/\b([\pL\pN][\pL\pN\'&-]*)\s+(?:formats?|material\s+types?)\b/iu',
+            '/\b(formats?|material\s+types?)\b/iu',
             $matchText,
             $matches,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE
         )) {
-            foreach ($matches as $match) {
-                $offset = $match[1][1];
-                $end = $offset + strlen($match[1][0]);
+            foreach ($matches as $index => $match) {
+                $qualifierOffset = $match[1][1];
+                $candidateStart = self::previousPunctuationOffset(
+                    $matchText,
+                    $qualifierOffset
+                );
+                if ($index > 0) {
+                    $previousEnd = $matches[$index - 1][1][1]
+                        + strlen($matches[$index - 1][1][0]);
+                    $candidateStart = max($candidateStart, $previousEnd);
+                }
+
+                list($offset, $length) = self::trimLeadingQualifiedValue(
+                    substr(
+                        $matchText,
+                        $candidateStart,
+                        $qualifierOffset - $candidateStart
+                    ),
+                    $candidateStart,
+                    true
+                );
+                $end = $offset + $length;
                 if (
+                    $length === 0
+                    ||
                     self::overlaps($offset, $end, $consumed)
                     || self::overlaps($offset, $end, $knownRanges)
                 ) {
                     continue;
                 }
 
-                $term = strtolower($match[1][0]);
+                $term = preg_replace(
+                    '/\s+/u',
+                    ' ',
+                    strtolower(substr($matchText, $offset, $length))
+                );
+                if (!is_string($term)) {
+                    continue;
+                }
+                $term = trim($term);
                 if (
-                    in_array($term, ['video', 'videos', 'all', 'vhs', 'dvd', 'dvds', 'film', 'films'], true)
+                    in_array(
+                        $term,
+                        [
+                            'video',
+                            'videos',
+                            'all',
+                            'material',
+                            'materials',
+                            'vhs',
+                            'dvd',
+                            'dvds',
+                            'film',
+                            'films',
+                        ],
+                        true
+                    )
                     || isset($unknownTerms[$term])
                 ) {
                     continue;
                 }
 
-                $unknownTerms[$term] = $offset;
+                $unknownTerms[$term] = [$offset, $end];
                 if ($firstMatch === null || $offset < $firstMatch[0]) {
                     $firstMatch = [$offset, $end];
                 }
@@ -310,7 +392,9 @@ final class ReferenceIntentService
                 }
             }
 
-            asort($unknownTerms);
+            uasort($unknownTerms, function (array $left, array $right): int {
+                return $left[0] <=> $right[0];
+            });
             foreach (array_keys($unknownTerms) as $term) {
                 $terms[] = $term;
             }
@@ -356,22 +440,17 @@ final class ReferenceIntentService
         ];
     }
 
-    private static function trimCapture(
+    private static function trimLeadingQualifiedValue(
         string $capture,
         int $offset,
-        bool $trimTail
+        bool $formatIntro = false
     ): array {
         $leadingLength = strlen($capture) - strlen(ltrim($capture));
         $capture = ltrim($capture);
         $offset += $leadingLength;
 
-        $boundaryPattern = '/\b(?:at|in|from|for|within|inside|near)\s+/iu';
-        if ($trimTail && preg_match('/^(?:at|in|from|for|with)\b/iu', $capture)) {
-            return [$offset, 0];
-        }
-
-        if (!$trimTail && preg_match_all(
-            $boundaryPattern,
+        if (preg_match_all(
+            '/\b(?:held\s+by|at|in|from|for|with|within|inside|near|on|by|and|or)\s+/iu',
             $capture,
             $boundaries,
             PREG_SET_ORDER | PREG_OFFSET_CAPTURE
@@ -382,8 +461,40 @@ final class ReferenceIntentService
             $capture = substr($capture, $boundaryEnd);
         }
 
-        if ($trimTail && preg_match(
-            '/\s+\b(?:at|in|from|for|with)\s+/iu',
+        $prefixWords = $formatIntro
+            ? 'show|find|list|display|get|give|report|please|what|which|who|where|'
+                . 'all|the|of|items?|this|can|be'
+            : 'show|find|list|display|get|give|report|please|what|which|who|where|'
+                . 'all|the|of|items?';
+        $prefixPattern = '/^(?:(?:' . $prefixWords . ')\b\s*)+/iu';
+        if (preg_match($prefixPattern, $capture, $prefix, PREG_OFFSET_CAPTURE)) {
+            $offset += strlen($prefix[0][0]);
+            $capture = substr($capture, strlen($prefix[0][0]));
+        }
+
+        $length = strlen(rtrim($capture));
+
+        return [$offset, $length];
+    }
+
+    private static function trimLocationValue(string $capture, int $offset): array
+    {
+        $leadingLength = strlen($capture) - strlen(ltrim($capture));
+        $capture = ltrim($capture);
+        $offset += $leadingLength;
+
+        if (preg_match(
+            '/\s+\b(?:and|or)\s+(?=[^.,;:!?\n]*\b'
+                . '(?:service\s+points?|librar(?:y|ies)|campus(?:es)?|institutions?)\b)/iu',
+            $capture,
+            $dimensionBoundary,
+            PREG_OFFSET_CAPTURE
+        )) {
+            $capture = substr($capture, 0, $dimensionBoundary[0][1]);
+        }
+
+        if (preg_match(
+            '/\s+\b(?:held\s+by|at|in|from|for|with|within|inside|near|on)\s+/iu',
             $capture,
             $boundary,
             PREG_OFFSET_CAPTURE
@@ -391,21 +502,55 @@ final class ReferenceIntentService
             $capture = substr($capture, 0, $boundary[0][1]);
         }
 
-        if (!$trimTail) {
-            $prefixPattern = '/^(?:(?:show|find|list|display|get|give|report)\b\s*|(?:all|the|of|items?)\b\s*)+/iu';
-            if (preg_match($prefixPattern, $capture, $prefix, PREG_OFFSET_CAPTURE)) {
-                $offset += strlen($prefix[0][0]);
-                $capture = substr($capture, strlen($prefix[0][0]));
-            }
+        $capture = preg_replace('/(?:,\s*)?(?:and|or)?\s*$/iu', '', $capture);
+        if (!is_string($capture)) {
+            return [$offset, 0];
+        }
 
-            if (preg_match('/^(?:at|in|from|for|within|inside|near)$/iu', trim($capture))) {
-                $capture = '';
+        return [$offset, strlen(rtrim($capture))];
+    }
+
+    private static function skipWhitespace(string $text, int $offset): int
+    {
+        $remaining = substr($text, $offset);
+        if (preg_match('/^\s+/u', $remaining, $match)) {
+            return $offset + strlen($match[0]);
+        }
+
+        return $offset;
+    }
+
+    private static function nextPunctuationOffset(string $text, int $offset): int
+    {
+        if (preg_match(
+            '/[.,;:!?\n]/u',
+            $text,
+            $match,
+            PREG_OFFSET_CAPTURE,
+            $offset
+        )) {
+            return $match[0][1];
+        }
+
+        return strlen($text);
+    }
+
+    private static function previousPunctuationOffset(string $text, int $offset): int
+    {
+        $prefix = substr($text, 0, $offset);
+        if (preg_match('/[.,;:!?\n]\s*$/u', $prefix, $match, PREG_OFFSET_CAPTURE)) {
+            return $match[0][1] + strlen($match[0][0]);
+        }
+
+        $positions = [];
+        foreach (['.', ',', ';', ':', '!', '?', "\n"] as $punctuation) {
+            $position = strrpos($prefix, $punctuation);
+            if ($position !== false) {
+                $positions[] = $position + 1;
             }
         }
 
-        $length = strlen(rtrim($capture));
-
-        return [$offset, $length];
+        return $positions === [] ? 0 : max($positions);
     }
 
     private static function namedIntent(

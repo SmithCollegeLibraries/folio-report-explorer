@@ -6,17 +6,17 @@ use app\services\ReferenceIntentService;
 
 function assertIntentSame($expected, $actual, string $message): void
 {
+    global $intentTestFailures;
+
     if ($expected !== $actual) {
-        fwrite(
-            STDERR,
-            $message
+        $intentTestFailures[] = $message
             . "\nExpected: " . var_export($expected, true)
             . "\nActual: " . var_export($actual, true)
-            . "\n"
-        );
-        exit(1);
+            . "\n";
     }
 }
+
+$intentTestFailures = [];
 
 function materialTerms(string $prompt): array
 {
@@ -34,6 +34,18 @@ function firstDimension(string $prompt)
     $intents = ReferenceIntentService::extract($prompt);
 
     return $intents[0]['dimension'] ?? null;
+}
+
+function spansForDimension(string $prompt, string $dimension): array
+{
+    $spans = [];
+    foreach (ReferenceIntentService::extract($prompt) as $intent) {
+        if (($intent['dimension'] ?? null) === $dimension) {
+            $spans[] = $intent['span'] ?? null;
+        }
+    }
+
+    return $spans;
 }
 
 $reported = ReferenceIntentService::extract(
@@ -134,5 +146,176 @@ assertIntentSame(
     ]),
     'Unknown explicit material terms must not be mapped to similar canonical values.'
 );
+
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Show films held by Hillyer library.', 'library'),
+    'Held-by wording must not become part of the library span.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('Show films held by Hillyer library.'),
+    'A named library must not consume an earlier explicit material term.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension('Show DVDs at Hillyer library on Smith campus.', 'library'),
+    'A library followed by a campus must retain only its own qualified phrase.'
+);
+assertIntentSame(
+    ['Smith campus'],
+    spansForDimension('Show DVDs at Hillyer library on Smith campus.', 'campus'),
+    'On must delimit the following campus phrase.'
+);
+assertIntentSame(
+    ['dvd'],
+    materialTerms('Show DVDs at Hillyer library on Smith campus.'),
+    'Adjacent named dimensions must not consume an explicit material term.'
+);
+assertIntentSame(
+    [],
+    spansForDimension('What library has films?', 'library'),
+    'An interrogative category noun must not become a named library.'
+);
+assertIntentSame(
+    ['film'],
+    materialTerms('What library has films?'),
+    'An interrogative library question must retain its explicit material term.'
+);
+assertIntentSame(
+    [],
+    spansForDimension('Which campus has DVDs?', 'campus'),
+    'An interrogative category noun must not become a named campus.'
+);
+assertIntentSame(
+    ['dvd'],
+    materialTerms('Which campus has DVDs?'),
+    'An interrogative campus question must retain its explicit material term.'
+);
+assertIntentSame(
+    ['Hillyer library', 'Neilson library'],
+    spansForDimension('Hillyer library and Neilson library', 'library'),
+    'Conjoined named libraries must produce clean non-overlapping spans.'
+);
+assertIntentSame(
+    ['Hillyer library', 'Neilson library', 'Smith College library'],
+    spansForDimension(
+        'Show items at Hillyer library, Neilson library, or Smith College library.',
+        'library'
+    ),
+    'Comma and or-separated named libraries must retain one span per qualifier.'
+);
+
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension(
+        'Show items in location HC DVD and location SC Art Video.',
+        'location'
+    ),
+    'Repeated prefix-qualified locations must be split at and.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension(
+        'location HC DVD and location SC Art Video',
+        'location'
+    ),
+    'A prefix-qualified location list must preserve prompt order.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video', 'SC Music'],
+    spansForDimension(
+        'Show items in location HC DVD, location SC Art Video, and location SC Music.',
+        'location'
+    ),
+    'Comma-separated prefix locations must not create conjunction-only spans.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension(
+        'Show items at location HC DVD or location SC Art Video.',
+        'location'
+    ),
+    'Or-separated prefix locations must produce one intent per qualifier.'
+);
+assertIntentSame(
+    ['HC DVD'],
+    spansForDimension(
+        'Show items in location HC DVD and Hillyer library.',
+        'location'
+    ),
+    'A prefix location must stop at a conjoined named dimension.'
+);
+assertIntentSame(
+    ['Hillyer library'],
+    spansForDimension(
+        'Show items in location HC DVD and Hillyer library.',
+        'library'
+    ),
+    'A named dimension after a prefix location must remain unconsumed.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video'],
+    spansForDimension(
+        'HC DVD location and SC Art Video location',
+        'location'
+    ),
+    'Repeated suffix-qualified locations must be split at and.'
+);
+assertIntentSame(
+    ['HC DVD', 'SC Art Video', 'SC Music'],
+    spansForDimension(
+        'HC DVD location, SC Art Video location, or SC Music location',
+        'location'
+    ),
+    'Comma-separated suffix locations must not create phantom spans.'
+);
+
+assertIntentSame(
+    ['8 mm'],
+    materialTerms('Show 8 mm format at Hillyer library.'),
+    'A numeric multiword qualified format must retain its full phrase.'
+);
+assertIntentSame(
+    ['8 mm'],
+    spansForDimension('Show 8 mm format at Hillyer library.', 'material_type'),
+    'A numeric multiword format must retain its full raw provenance span.'
+);
+assertIntentSame(
+    ['laser disc'],
+    materialTerms('Show laser disc format at Hillyer library.'),
+    'A multiword qualified format must retain all resolvable words.'
+);
+assertIntentSame(
+    ['laser disc'],
+    spansForDimension('Show laser disc format at Hillyer library.', 'material_type'),
+    'A multiword format must retain its full raw provenance span.'
+);
+assertIntentSame(
+    ['video recording'],
+    materialTerms('Show video recording material type at Hillyer library.'),
+    'A multiword material type must not collapse to its final token.'
+);
+assertIntentSame(
+    ['video recording'],
+    spansForDimension(
+        'Show video recording material type at Hillyer library.',
+        'material_type'
+    ),
+    'A multiword material type must retain its full raw provenance span.'
+);
+assertIntentSame(
+    ['8 mm', 'laser disc', 'video recording'],
+    materialTerms(
+        'Show 8 mm format, laser disc format, and video recording material type '
+        . 'at Hillyer library.'
+    ),
+    'Qualified format lists must use clause and list boundaries.'
+);
+
+if ($intentTestFailures !== []) {
+    fwrite(STDERR, implode("\n", $intentTestFailures));
+    exit(1);
+}
 
 fwrite(STDOUT, "ReferenceIntentService test passed\n");
