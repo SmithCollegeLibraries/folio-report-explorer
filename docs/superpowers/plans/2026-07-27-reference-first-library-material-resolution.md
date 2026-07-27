@@ -142,7 +142,7 @@ Implement extraction in this order:
 6. If no explicit format was found and unconsumed text contains `video`, `videos`, `video material`, or `video formats`, add the `physical_video` selector.
 7. Suppress material intent for `all materials` when no explicit format appears.
 
-Return deterministic prompt-order intents. Merge all explicit material terms into one intent in canonical selector order (`vhs`, `dvd`, `film`), and retain the first matching raw material span for provenance.
+Return intents in stable dimension order: institution, campus, library, location, service point, then material type. Preserve prompt order within a dimension. Merge all explicit material terms into one intent in canonical selector order (`vhs`, `dvd`, `film`), and retain the first matching raw material span for provenance.
 
 - [ ] **Step 4: Run the test and verify GREEN**
 
