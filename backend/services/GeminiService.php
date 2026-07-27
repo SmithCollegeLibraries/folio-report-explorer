@@ -350,6 +350,7 @@ class GeminiService
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
+            'attemptedPlanProvenance' => 'server_defaults',
             'semanticContract' => $semanticContract,
             'route' => 'exploratory_legacy_freeform',
             'routeReason' => $reason,
@@ -525,7 +526,7 @@ class GeminiService
         array $outcome,
         string $reason
     ): array {
-        return [
+        $response = [
             'mode' => 'exploratory',
             'exploratory' => true,
             'route' => 'exploratory_recovery',
@@ -533,7 +534,6 @@ class GeminiService
             'needsClarification' => false,
             'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
             'assumptions' => $context['assumptions'] ?? [],
-            'attemptedPlan' => $context['attemptedPlan'] ?? '',
             'suggestions' => $outcome['suggestions'] ?? [],
             'unmetRequirements' => is_array($outcome['unmetRequirements'] ?? null)
                 ? $outcome['unmetRequirements']
@@ -554,6 +554,16 @@ class GeminiService
                 ? $outcome['_askEvidence']
                 : [],
         ];
+
+        $attemptedPlan = trim((string)($context['attemptedPlan'] ?? ''));
+        if ($attemptedPlan !== ''
+            && ($context['attemptedPlanProvenance'] ?? null) === 'server_defaults'
+        ) {
+            $response['attemptedPlan'] = $attemptedPlan;
+            $response['_attemptedPlanProvenance'] = 'server_defaults';
+        }
+
+        return $response;
     }
 
     private static function decorateExploratoryResponse(array $primary, string $reason): array
@@ -5710,13 +5720,9 @@ PROMPT;
 
         $candidateSql = (string)($currentResult['sql'] ?? '');
         $repairAttemptsUsed = (int)($currentResult['repairAttempts'] ?? 0);
-        $assumptions = is_array($currentResult['assumptions'] ?? null)
-            ? $currentResult['assumptions']
-            : ExploratoryQueryDefaultsService::resolve($generationPrompt);
-        $attemptedPlan = trim((string)($currentResult['attemptedPlan'] ?? $currentResult['explanation'] ?? ''));
-        if ($attemptedPlan === '') {
-            $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
-        }
+        $assumptions = ExploratoryQueryDefaultsService::resolve($generationPrompt);
+        $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
+        $modelCandidateExplanation = trim((string)($currentResult['explanation'] ?? ''));
 
         $useHardenedPhysicalRoi = self::useHardenedPhysicalRoi();
         $context = [
@@ -5725,6 +5731,8 @@ PROMPT;
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
+            'attemptedPlanProvenance' => 'server_defaults',
+            'modelCandidateExplanation' => $modelCandidateExplanation,
             'semanticContract' => ExploratorySemanticContractService::build(
                 $generationPrompt,
                 is_string($campus) ? $campus : null,
@@ -5848,6 +5856,7 @@ PROMPT;
             "SEMANTIC REQUIREMENTS TO CORRECT\n" . ($semanticGuidance !== [] ? implode("\n", $semanticGuidance) : 'None supplied.'),
             "ASSUMPTIONS\n" . ($assumptionGuidance !== '' ? $assumptionGuidance : 'None documented.'),
             "ATTEMPTED PLAN\n" . (string)($context['attemptedPlan'] ?? ''),
+            "PREVIOUS MODEL EXPLANATION\n" . (string)($context['modelCandidateExplanation'] ?? ''),
             "SCOPED SCHEMA CONTEXT\n" . $schemaContext,
         ]);
 

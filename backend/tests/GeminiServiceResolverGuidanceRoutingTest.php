@@ -124,17 +124,20 @@ namespace app\services {
 
         public static function getTableNames(): array
         {
-            return ['item__t'];
+            return ['item__t', 'instance__t'];
         }
 
         public static function discoverTableMapping(): array
         {
-            return ['item__t' => 'inventory.item__t'];
+            return [
+                'item__t' => 'inventory.item__t',
+                'instance__t' => 'inventory.instance__t',
+            ];
         }
 
         public static function fuzzyMatch($table)
         {
-            return $table === 'item__t' ? 'item__t' : null;
+            return in_array($table, ['item__t', 'instance__t'], true) ? $table : null;
         }
     }
 
@@ -238,9 +241,9 @@ function telemetryEvents(string $event): array
     return $events;
 }
 
-function geminiSql(string $sql): string
+function geminiSql(string $sql, string $explanation = 'Candidate query.'): string
 {
-    return "```sql\n{$sql}\n```\nCandidate query.\nDATA SOURCE: folio";
+    return "```sql\n{$sql}\n```\n{$explanation}\nDATA SOURCE: folio";
 }
 
 // This prompt names no campus, library, location, or holdings scope. On its own
@@ -300,12 +303,82 @@ $routedFollowUpPrompt = implode("\n\n", [
     'Previous SQL: SELECT title FROM inventory.instance__t',
     'Follow-up request: ' . $routedRawQuestion,
 ]);
+$untrustedRoutedExplanation = "Plan: filter with inventory.material_type__t.name = 'E-Book'.";
+$routedGenerationPrompt = \app\services\ReferenceResolverService::appendGuidanceToPrompt(
+    $routedFollowUpPrompt,
+    \app\services\ReferenceResolverService::resolvePrompt($routedRawQuestion)
+);
+$routedGenerationPrompt = \app\services\ExplicitReportRequestService::appendGuidance(
+    $routedGenerationPrompt,
+    \app\services\ExplicitReportRequestService::extract($routedRawQuestion)
+);
 TestTransport::$responses = [
-    geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
     geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
     geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
 ];
 TestTransport::$requests = [];
+$modelEchoRecovery = GeminiService::repairExploratorySqlAfterPreflight(
+    $routedRawQuestion,
+    'Smith College',
+    [
+        'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        'explanation' => $untrustedRoutedExplanation,
+        'route' => 'legacy_fallback',
+        'routeReason' => 'intent_contract_failed',
+        'repairAttempts' => 0,
+    ],
+    'Explicit report values were not preserved.',
+    $routedGenerationPrompt
+);
+assertSameValue(2, count(TestTransport::$requests), 'A routed candidate should consume exactly the shared two repair attempts before exhaustion.');
+assertSameValue(2, $modelEchoRecovery['repairAttempts'] ?? null, 'Model-echo recovery must preserve the shared two-attempt cap.');
+assertSameValue(false, isset($modelEchoRecovery['sql']), 'Model-echo exhaustion must not return invalid SQL.');
+assertSameValue(
+    false,
+    strpos((string)($modelEchoRecovery['attemptedPlan'] ?? ''), "inventory.material_type__t.name = 'E-Book'") !== false,
+    'Routed recovery attemptedPlan must not expose the resolver predicate echoed by the initial model explanation.'
+);
+assertSameValue(
+    false,
+    strpos(json_encode($modelEchoRecovery), $untrustedRoutedExplanation) !== false,
+    'Routed service recovery must not expose the untrusted initial model explanation anywhere.'
+);
+if (isset($modelEchoRecovery['attemptedPlan'])) {
+    assertSameValue(
+        'server_defaults',
+        $modelEchoRecovery['_attemptedPlanProvenance'] ?? null,
+        'Any routed recovery attempted plan must carry explicit server-authored provenance.'
+    );
+}
+$modelEchoRepairPayload = json_encode(TestTransport::$requests);
+assertContainsText(
+    $untrustedRoutedExplanation,
+    $modelEchoRepairPayload,
+    'The initial model explanation should remain available only inside model repair context.'
+);
+assertContainsText(
+    'explicit_values_missing',
+    $modelEchoRepairPayload,
+    'Both routed repair attempts must fail through explicit-value validation.'
+);
+
+TestTransport::$responses = [
+    geminiSql(
+        "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        $untrustedRoutedExplanation
+    ),
+    geminiSql(
+        "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        $untrustedRoutedExplanation
+    ),
+    geminiSql(
+        "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        $untrustedRoutedExplanation
+    ),
+];
+TestTransport::$requests = [];
+$previousForceLegacy = Yii::$app->params['nl2sqlForceLegacy'];
+Yii::$app->params['nl2sqlForceLegacy'] = true;
 $routedTransport = null;
 $routedRecovery = GeminiService::generateSqlWithShadow(
     $routedRawQuestion,
@@ -315,10 +388,28 @@ $routedRecovery = GeminiService::generateSqlWithShadow(
     $routedFollowUpPrompt,
     $routedTransport
 );
+Yii::$app->params['nl2sqlForceLegacy'] = $previousForceLegacy;
 assertSameValue(3, count(TestTransport::$requests), 'Routed exhaustion should make one generation call plus exactly two repair calls.');
 assertSameValue(2, $routedRecovery['repairAttempts'] ?? null, 'Routed exhaustion must preserve the shared two-attempt repair cap.');
 assertSameValue(false, isset($routedRecovery['sql']), 'Routed exhaustion must not return invalid SQL.');
 assertSameValue($routedRawQuestion, $routedRecovery['recoveryContext']['originalQuestion'] ?? null, 'Routed exhaustion must recover the exact latest raw question.');
+assertSameValue(
+    false,
+    strpos((string)($routedRecovery['attemptedPlan'] ?? ''), "inventory.material_type__t.name = 'E-Book'") !== false,
+    'Routed recovery attemptedPlan must not expose the resolver predicate echoed by the initial model explanation.'
+);
+assertSameValue(
+    false,
+    strpos((string)($routedRecovery['attemptedPlan'] ?? ''), $untrustedRoutedExplanation) !== false,
+    'Routed recovery must never promote a model-authored explanation into the user-visible attempted plan.'
+);
+if (isset($routedRecovery['attemptedPlan'])) {
+    assertSameValue(
+        'server_defaults',
+        $routedRecovery['_attemptedPlanProvenance'] ?? null,
+        'Any routed recovery attempted plan must carry explicit server-authored provenance.'
+    );
+}
 $routedRecoveryJson = json_encode($routedRecovery);
 assertSameValue(false, strpos($routedRecoveryJson, 'Previous SQL:') !== false, 'Recovery must not expose follow-up generation context.');
 assertSameValue(false, strpos($routedRecoveryJson, 'Reference resolver guidance:') !== false, 'Recovery must not expose resolver guidance.');

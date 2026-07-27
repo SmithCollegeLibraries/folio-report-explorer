@@ -33,7 +33,16 @@ final class AskResponseContractService
             unset($result['validationSummary']['failureCategory']);
             unset($result['validationSummary']['validatorStage']);
         }
-        unset($result['referenceResolver'], $result['_askEvidence']);
+        if (($result['route'] ?? null) === 'exploratory_recovery'
+            && ($result['_attemptedPlanProvenance'] ?? null) !== 'server_defaults'
+        ) {
+            unset($result['attemptedPlan']);
+        }
+        unset(
+            $result['referenceResolver'],
+            $result['_askEvidence'],
+            $result['_attemptedPlanProvenance']
+        );
         return $result;
     }
 }

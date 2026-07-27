@@ -96,6 +96,12 @@ class ExploratorySqlRepairService
             'attemptedPlan' => is_string($context['attemptedPlan'] ?? null)
                 ? $context['attemptedPlan']
                 : '',
+            'attemptedPlanProvenance' => ($context['attemptedPlanProvenance'] ?? null) === 'server_defaults'
+                ? 'server_defaults'
+                : null,
+            'modelCandidateExplanation' => is_string($context['modelCandidateExplanation'] ?? null)
+                ? $context['modelCandidateExplanation']
+                : '',
             'semanticContract' => is_array($context['semanticContract'] ?? null)
                 ? $context['semanticContract']
                 : [],

@@ -54,6 +54,7 @@ $ordinaryRecovery = AskResponseContractService::toUserResponse([
     'route' => 'exploratory_recovery',
     'recoveryContext' => ['originalQuestion' => 'Show title for instance number in0001.'],
     'suggestions' => ['Keep each requested identifier exactly as supplied.'],
+    'attemptedPlan' => "Plan: filter with inventory.material_type__t.name = 'E-Book'.",
     'referenceResolver' => [
         'resolved' => true,
         'guidanceLines' => [
@@ -67,11 +68,25 @@ $ordinaryRecovery = AskResponseContractService::toUserResponse([
 ]);
 askResponseAssertSame(false, isset($ordinaryRecovery['_askEvidence']), 'Ordinary responses must not expose internal explicit-value evidence.');
 askResponseAssertSame(false, isset($ordinaryRecovery['referenceResolver']), 'Ordinary responses must not expose internal resolver guidance.');
+askResponseAssertSame(false, isset($ordinaryRecovery['attemptedPlan']), 'Ordinary recovery must omit an attempted plan without server-authored provenance.');
 askResponseAssertSame(
     false,
     strpos(json_encode($ordinaryRecovery), "inventory.material_type__t.name = 'E-Book'") !== false,
     'Ordinary responses must not expose distinctive resolver schema predicates.'
 );
 askResponseAssertSame('Show title for instance number in0001.', $ordinaryRecovery['recoveryContext']['originalQuestion'] ?? null, 'Ordinary recovery context must retain the raw user question.');
+
+$trustedRecovery = AskResponseContractService::toUserResponse([
+    'mode' => 'exploratory',
+    'route' => 'exploratory_recovery',
+    'attemptedPlan' => 'Use the documented default reporting period.',
+    '_attemptedPlanProvenance' => 'server_defaults',
+]);
+askResponseAssertSame(
+    'Use the documented default reporting period.',
+    $trustedRecovery['attemptedPlan'] ?? null,
+    'Ordinary recovery may retain a server-authored attempted plan with explicit provenance.'
+);
+askResponseAssertSame(false, isset($trustedRecovery['_attemptedPlanProvenance']), 'Attempted-plan provenance must remain internal.');
 
 fwrite(STDOUT, "Ask response contract service test passed\n");

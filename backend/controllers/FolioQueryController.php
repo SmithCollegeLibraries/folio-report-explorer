@@ -703,6 +703,11 @@ class FolioQueryController extends Controller
                 $response[$field] = $result[$field];
             }
         }
+        if (($result['_attemptedPlanProvenance'] ?? null) === 'server_defaults'
+            && isset($response['attemptedPlan'])
+        ) {
+            $response['_attemptedPlanProvenance'] = 'server_defaults';
+        }
 
         if (is_array($result['_askEvidence'] ?? null)) {
             $response['_askEvidence'] = array_merge($result['_askEvidence'], [

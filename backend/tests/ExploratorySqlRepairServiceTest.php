@@ -60,6 +60,8 @@ $outcome = ExploratorySqlRepairService::run(
         'campus' => 'main',
         'assumptions' => [['key' => 'period', 'value' => 'current_year']],
         'attemptedPlan' => 'Read inventory items.',
+        'attemptedPlanProvenance' => 'server_defaults',
+        'modelCandidateExplanation' => 'The model tried an inventory item query.',
         'semanticContract' => ['contractVersion' => 1, 'applicable' => false],
         'unsafeExtra' => 'must not reach the attempt',
     ]
@@ -85,6 +87,8 @@ assertSameValue(
         'campus' => 'main',
         'assumptions' => [['key' => 'period', 'value' => 'current_year']],
         'attemptedPlan' => 'Read inventory items.',
+        'attemptedPlanProvenance' => 'server_defaults',
+        'modelCandidateExplanation' => 'The model tried an inventory item query.',
         'semanticContract' => ['contractVersion' => 1, 'applicable' => false],
         'safeViolations' => [],
         'repairNumber' => 0,

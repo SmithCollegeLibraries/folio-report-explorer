@@ -46,6 +46,7 @@ namespace app\services {
         public static $generationCalls = [];
         public static $generationResult = [];
         public static $generationTransport = [];
+        public static $preflightRepairResult;
 
         public static function isAiTimeoutMessage($message): bool { return false; }
 
@@ -83,7 +84,7 @@ namespace app\services {
                 'generationPrompt' => $generationPrompt,
             ];
 
-            return [
+            return self::$preflightRepairResult ?? [
                 'sql' => 'SELECT title FROM inventory.instance__t',
                 'repairAttempts' => 1,
                 'mode' => 'exploratory',
@@ -1004,6 +1005,7 @@ namespace {
     ]);
     \app\services\GeminiService::$generationCalls = [];
     \app\services\GeminiService::$preflightRepairCalls = [];
+    \app\services\GeminiService::$preflightRepairResult = null;
     \app\services\GeminiService::$generationTransport = [
         'rawQuestion' => $actionRawQuestion,
         'generationPrompt' => $actionGenerationPrompt,
@@ -1066,6 +1068,61 @@ namespace {
         json_encode($actionResponse),
         'The finalized actionNl browser response must omit the distinctive resolver schema predicate.'
     );
+
+    $untrustedActionExplanation = "Plan: filter with inventory.material_type__t.name = 'E-Book'.";
+    \app\services\GeminiService::$generationCalls = [];
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    \app\services\GeminiService::$generationTransport = [
+        'rawQuestion' => $actionRawQuestion,
+        'generationPrompt' => $actionGenerationPrompt,
+    ];
+    \app\services\GeminiService::$generationResult = [
+        'sql' => 'SELECT broken_column FROM inventory.instance__t',
+        'explanation' => $untrustedActionExplanation,
+        'mode' => 'exploratory',
+        'route' => 'legacy_freeform',
+        'routeReason' => 'primary_legacy_mode',
+        'repairAttempts' => 0,
+    ];
+    \app\services\GeminiService::$preflightRepairResult = [
+        'mode' => 'exploratory',
+        'route' => 'exploratory_recovery',
+        'routeReason' => 'primary_legacy_mode',
+        'repairAttempts' => 2,
+        'attemptedPlan' => $untrustedActionExplanation,
+        'assumptions' => [],
+        'suggestions' => [],
+        'validationSummary' => [
+            'status' => 'exhausted',
+            'repairAttempts' => 2,
+            'validatorStage' => 'explicit_values',
+            'failureCategory' => 'missing_explicit_values',
+        ],
+        'recoveryContext' => ['originalQuestion' => $actionRawQuestion],
+    ];
+    \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$results = [
+        ['error' => 'column "broken_column" does not exist'],
+    ];
+    $actionExhaustionReview = new CapturingAdministratorReviewService();
+    $actionExhaustionController = new TestableFolioQueryController('folio-query', null);
+    $actionExhaustionController->reviewService = $actionExhaustionReview;
+    $actionExhaustionResponse = $actionExhaustionController->actionNl();
+
+    repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'Routed action exhaustion should enter the default repair seam once.');
+    repairAssertSame(2, $actionExhaustionResponse['validationSummary']['repairAttempts'] ?? null, 'Final routed action recovery must preserve the shared two-attempt cap.');
+    repairAssertSame(false, isset($actionExhaustionResponse['attemptedPlan']), 'Final routed action recovery must omit an attempted plan without trusted provenance.');
+    repairAssertNotContains(
+        $untrustedActionExplanation,
+        json_encode($actionExhaustionResponse),
+        'The actual finalized actionNl response must not expose the untrusted model explanation.'
+    );
+    repairAssertNotContains(
+        "inventory.material_type__t.name = 'E-Book'",
+        json_encode($actionExhaustionResponse),
+        'The actual finalized routed-exhaustion response must not expose the distinctive resolver predicate.'
+    );
+    \app\services\GeminiService::$preflightRepairResult = null;
 
     $controllerSource = file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');
     repairAssertSame(
