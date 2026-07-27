@@ -42,7 +42,33 @@ namespace app\services {
     class GeminiService
     {
         public const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
+        public static $preflightRepairCalls = [];
+
         public static function isAiTimeoutMessage($message): bool { return false; }
+
+        public static function repairExploratorySqlAfterPreflight(
+            string $originalQuestion,
+            $campus,
+            array $currentResult,
+            string $preflightError,
+            ?string $generationPrompt = null
+        ): array {
+            self::$preflightRepairCalls[] = [
+                'originalQuestion' => $originalQuestion,
+                'campus' => $campus,
+                'currentResult' => $currentResult,
+                'preflightError' => $preflightError,
+                'generationPrompt' => $generationPrompt,
+            ];
+
+            return [
+                'sql' => 'SELECT title FROM inventory.instance__t',
+                'repairAttempts' => 1,
+                'mode' => 'exploratory',
+                'route' => 'exploratory',
+                'routeReason' => 'unsupported_query_family',
+            ];
+        }
     }
     class SettingsService {}
     class DatabaseRetryService {}
@@ -180,6 +206,49 @@ namespace {
     repairAssertSame('validated', $terminalOutcomes[0]['outcome'] ?? null, 'Successful re-preflight should emit terminal validated.');
     repairAssertSame('validated', $terminalOutcomes[0]['category'] ?? null, 'Successful re-preflight should retain a safe validated category.');
     repairAssertSame('exploratory', $terminalOutcomes[0]['route'] ?? null, 'Terminal validation telemetry should preserve the final exploratory route.');
+
+    $rawFollowUpQuestion = 'Include instance numbers in0001 and in0002. Limit 20.';
+    $modelOnlyGenerationPrompt = implode("\n\n", [
+        'This is a follow-up request to a previously generated library report.',
+        'Previous SQL: SELECT title FROM inventory.instance__t',
+        'Follow-up request: ' . $rawFollowUpQuestion,
+        "Reference resolver guidance:\n- Use inventory.material_type__t.name = 'E-Book'.",
+        "EXPLICIT REPORT VALUES (preserve every value exactly):\n- instance_number: in0001, in0002",
+    ]);
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    $modelContextPreflightCalls = 0;
+    $modelContextResult = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT broken_column FROM inventory.instance__t',
+            'mode' => 'exploratory',
+            'repairAttempts' => 0,
+            'route' => 'exploratory_legacy_freeform',
+            'routeReason' => 'unsupported_query_family',
+        ],
+        $rawFollowUpQuestion,
+        'Smith College',
+        function () use (&$modelContextPreflightCalls): array {
+            $modelContextPreflightCalls++;
+            return $modelContextPreflightCalls === 1
+                ? ['error' => 'column "broken_column" does not exist']
+                : ['rows' => 2, 'cost' => 3.0];
+        },
+        null,
+        $modelOnlyGenerationPrompt
+    );
+    repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'Controller post-preflight failure should invoke the production repair seam once.');
+    repairAssertSame(
+        $rawFollowUpQuestion,
+        \app\services\GeminiService::$preflightRepairCalls[0]['originalQuestion'] ?? null,
+        'Controller post-preflight repair must retain the exact latest raw question.'
+    );
+    repairAssertSame(
+        $modelOnlyGenerationPrompt,
+        \app\services\GeminiService::$preflightRepairCalls[0]['generationPrompt'] ?? null,
+        'Controller post-preflight repair must retain follow-up, resolver, and explicit guidance as model-only context.'
+    );
+    repairAssertSame('SELECT title FROM inventory.instance__t', $modelContextResult['sql'] ?? null, 'Model-context regression should re-preflight the repaired SQL.');
 
     $exhaustedRepairCalls = 0;
     $exhausted = $validateAndRepair->invoke(
@@ -869,13 +938,18 @@ namespace {
     $controllerSource = file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');
     repairAssertSame(
         1,
-        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$prompt,\s*\$campus/s', $controllerSource),
-        'Ask should pass the raw user prompt to repair/recovery instead of the expanded follow-up prompt.'
+        preg_match('/generateSqlWithShadow\(\s*\$prompt,\s*\$campus\s*\?:\s*null,\s*\$userId,\s*\$allowExploratory,\s*\$effectivePrompt,\s*\$generationTransport/s', $controllerSource),
+        'Ask generation must cross the service boundary with separate raw and model-only prompts plus non-response transport context.'
     );
     repairAssertSame(
-        0,
-        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$effectivePrompt,/s', $controllerSource),
-        'Ask must not expose the expanded follow-up prompt or previous SQL through repair recovery context.'
+        1,
+        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$prompt,\s*\$campus\s*\?:\s*null,\s*null,\s*null,\s*\$generationPrompt/s', $controllerSource),
+        'Ask must pass the raw question and consumed model-only generation context to post-preflight repair.'
+    );
+    repairAssertSame(
+        1,
+        preg_match('/unset\(\$generationTransport\)/', $controllerSource),
+        'Ask must consume the internal generation transport instead of serializing it into the final response.'
     );
 
     fwrite(STDOUT, "FolioQueryController exploratory repair test passed\n");

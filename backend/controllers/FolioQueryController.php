@@ -414,11 +414,13 @@ class FolioQueryController extends Controller
      */
     private function validateAndRepairNlResult(
         array $result,
-        string $prompt,
+        string $rawQuestion,
         $campus,
         ?callable $preflight = null,
-        ?callable $repair = null
+        ?callable $repair = null,
+        ?string $generationPrompt = null
     ): array {
+        $generationPrompt = $generationPrompt === null ? $rawQuestion : $generationPrompt;
         if (isset($result['sql']) || array_key_exists('repairAttempts', $result)) {
             $result['repairAttempts'] = $this->clampExploratoryRepairAttempts(
                 $result['repairAttempts'] ?? 0
@@ -427,19 +429,20 @@ class FolioQueryController extends Controller
         $preflight = $preflight ?: function (string $sql, string $dataSource): array {
             return $this->estimateQueryComplexity($sql, $dataSource) ?? [];
         };
-        $repair = $repair ?: function (string $question, $campusScope, array $currentResult, string $error): array {
+        $repair = $repair ?: function (string $question, $campusScope, array $currentResult, string $error) use ($generationPrompt): array {
             return GeminiService::repairExploratorySqlAfterPreflight(
                 $question,
                 $campusScope,
                 $currentResult,
-                $error
+                $error,
+                $generationPrompt
             );
         };
 
         while (isset($result['sql'])) {
             $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
             if (!$this->isSafeSelectNlSql((string)$result['sql'])) {
-                return $this->buildUnsafeGeneratedSqlResponse($result, $prompt, $campus);
+                return $this->buildUnsafeGeneratedSqlResponse($result, $rawQuestion, $campus);
             }
 
             if (!empty($result['semanticContractApplicable'])
@@ -447,7 +450,7 @@ class FolioQueryController extends Controller
             ) {
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     $campus,
                     'semantic_coverage_gap'
                 );
@@ -457,11 +460,11 @@ class FolioQueryController extends Controller
             try {
                 $estimate = $preflight((string)$result['sql'], $dataSource);
             } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'cancelled', 'database_cancelled');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
                 throw $exception;
             }
             if (!isset($estimate['error'])) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'validated', 'validated');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'validated', 'validated');
                 return $result;
             }
 
@@ -475,16 +478,16 @@ class FolioQueryController extends Controller
                 [
                     'route' => $result['route'] ?? null,
                     'routeReason' => $result['routeReason'] ?? null,
-                    'promptFingerprint' => $this->fingerprintPrompt($prompt),
+                    'promptFingerprint' => $this->fingerprintPrompt($rawQuestion),
                     'repairAttempts' => (int)($result['repairAttempts'] ?? 0),
                 ]
             );
 
             if ($this->isAskPostgresConnectivityFailure($error)) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'connectivity_failure', 'database_connectivity');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'connectivity_failure', 'database_connectivity');
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskPostgresConnectivityRecovery(
-                        $prompt,
+                        $rawQuestion,
                         $campus,
                         'ask_sql_preflight_recovery'
                     ),
@@ -492,15 +495,15 @@ class FolioQueryController extends Controller
                 );
             }
             if ($this->isAskPreflightCancellationFailure($error)) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'cancelled', 'database_cancelled');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
                 throw new \app\exceptions\DatabaseQueryCancelledException();
             }
             if ($this->isAskPreflightPolicyFailure($error)) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'policy_blocked', 'policy_blocked');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'policy_blocked', 'policy_blocked');
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskContinuationFromFailure(
                         new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.'),
-                        $prompt,
+                        $rawQuestion,
                         $campus,
                         'ask_sql_preflight_recovery'
                     ),
@@ -516,7 +519,7 @@ class FolioQueryController extends Controller
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskContinuationFromFailure(
                         new \RuntimeException('Generated query failed database validation.'),
-                        $prompt,
+                        $rawQuestion,
                         $campus,
                         'ask_sql_preflight_recovery'
                     ),
@@ -528,20 +531,20 @@ class FolioQueryController extends Controller
             if ($repairAttempts >= 2) {
                 $this->logExploratoryTerminalOutcome(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     'exhausted',
                     $this->classifyPreflightErrorFamily($error)
                 );
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     $campus,
                     $this->classifyPreflightErrorFamily($error)
                 );
             }
 
             $previousResult = $result;
-            $repairResult = $repair($prompt, $campus, $result, $error);
+            $repairResult = $repair($rawQuestion, $campus, $result, $error);
             if (!is_array($repairResult)) {
                 $repairResult = [];
             }
@@ -580,7 +583,7 @@ class FolioQueryController extends Controller
                     ?? $this->classifyPreflightErrorFamily($error));
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     $campus,
                     $failureCategory
                 );
@@ -1786,7 +1789,19 @@ class FolioQueryController extends Controller
                 ? $this->buildFollowUpPrompt($prompt, $followUpContext)
                 : $prompt;
 
-            $result = GeminiService::generateSqlWithShadow($effectivePrompt, $campus ?: null, $userId, $allowExploratory);
+            $generationTransport = null;
+            $result = GeminiService::generateSqlWithShadow(
+                $prompt,
+                $campus ?: null,
+                $userId,
+                $allowExploratory,
+                $effectivePrompt,
+                $generationTransport
+            );
+            $generationPrompt = is_array($generationTransport)
+                ? (string)($generationTransport['generationPrompt'] ?? $effectivePrompt)
+                : $effectivePrompt;
+            unset($generationTransport);
             $initialSql = isset($result['sql']) ? (string)$result['sql'] : null;
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
@@ -1794,7 +1809,10 @@ class FolioQueryController extends Controller
             $result = $this->validateAndRepairNlResult(
                 $result,
                 $prompt,
-                $campus ?: null
+                $campus ?: null,
+                null,
+                null,
+                $generationPrompt
             );
 
             if (!array_key_exists('suggestions', $result)) {
@@ -1825,7 +1843,7 @@ class FolioQueryController extends Controller
         } catch (\InvalidArgumentException $e) {
             return $this->finalizeAskResponse(
                 $this->attachTrustedAskEvidence(
-                    $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                    $this->buildAskContinuationFromFailure($e, $prompt, $campus ?? null),
                     isset($result) && is_array($result) ? $result : []
                 ),
                 $prompt,
@@ -1836,7 +1854,7 @@ class FolioQueryController extends Controller
             if ($e instanceof \app\exceptions\DatabaseQueryCancelledException) {
                 return $this->finalizeAskResponse(
                     $this->attachTrustedAskEvidence(
-                        $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                        $this->buildAskContinuationFromFailure($e, $prompt, $campus ?? null),
                         isset($result) && is_array($result) ? $result : []
                     ),
                     $prompt,
@@ -1859,7 +1877,7 @@ class FolioQueryController extends Controller
             }
             return $this->finalizeAskResponse(
                 $this->attachTrustedAskEvidence(
-                    $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null),
+                    $this->buildAskContinuationFromFailure($e, $prompt, $campus ?? null),
                     isset($result) && is_array($result) ? $result : []
                 ),
                 $prompt,

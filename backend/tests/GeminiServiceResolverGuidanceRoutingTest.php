@@ -21,6 +21,8 @@ namespace yii\httpclient {
 
     class Request
     {
+        private $content = '';
+
         public function setMethod($method)
         {
             return $this;
@@ -43,12 +45,18 @@ namespace yii\httpclient {
 
         public function setContent($content)
         {
+            $this->content = (string)$content;
             return $this;
         }
 
         public function send()
         {
-            return new Response();
+            TestTransport::$requests[] = json_decode($this->content, true);
+            $text = array_shift(TestTransport::$responses);
+            if ($text === null) {
+                $text = "```sql\nSELECT ii.title FROM inventory.item__t AS ii LIMIT 100\n```\nFreeform item listing.\nDATA SOURCE: folio";
+            }
+            return new Response($text);
         }
     }
 
@@ -56,7 +64,23 @@ namespace yii\httpclient {
     {
         public $isOk = true;
         public $statusCode = 200;
-        public $content = '{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"```sql\nSELECT ii.title FROM inventory.item__t AS ii LIMIT 100\n```\nFreeform item listing.\nDATA SOURCE: folio"}]}}]}';
+        public $content;
+
+        public function __construct(string $text)
+        {
+            $this->content = json_encode([
+                'candidates' => [[
+                    'finishReason' => 'STOP',
+                    'content' => ['parts' => [['text' => $text]]],
+                ]],
+            ]);
+        }
+    }
+
+    class TestTransport
+    {
+        public static $responses = [];
+        public static $requests = [];
     }
 }
 
@@ -148,6 +172,7 @@ if (!class_exists('Yii')) {
     class Yii
     {
         public static $app;
+        public static $logs = [];
 
         public static function getAlias($alias)
         {
@@ -156,10 +181,12 @@ if (!class_exists('Yii')) {
 
         public static function info($message, $category = null)
         {
+            self::$logs[] = ['message' => $message, 'category' => $category];
         }
 
         public static function warning($message, $category = null)
         {
+            self::$logs[] = ['message' => $message, 'category' => $category];
         }
     }
 }
@@ -177,6 +204,7 @@ require_once $contractServicePath;
 require_once $geminiServicePath;
 
 use app\services\GeminiService;
+use yii\httpclient\TestTransport;
 
 function assertSameValue($expected, $actual, string $message): void
 {
@@ -186,12 +214,60 @@ function assertSameValue($expected, $actual, string $message): void
     }
 }
 
+function assertContainsText(string $needle, string $haystack, string $message): void
+{
+    if (strpos($haystack, $needle) === false) {
+        fwrite(STDERR, $message . "\nMissing: {$needle}\nActual: {$haystack}\n");
+        exit(1);
+    }
+}
+
+function telemetryEvents(string $event): array
+{
+    $events = [];
+    foreach (Yii::$logs as $record) {
+        $message = (string)($record['message'] ?? '');
+        if (strpos($message, 'NL2SQL telemetry: ') !== 0) {
+            continue;
+        }
+        $payload = json_decode(substr($message, strlen('NL2SQL telemetry: ')), true);
+        if (($payload['event'] ?? null) === $event) {
+            $events[] = $payload;
+        }
+    }
+    return $events;
+}
+
+function geminiSql(string $sql): string
+{
+    return "```sql\n{$sql}\n```\nCandidate query.\nDATA SOURCE: folio";
+}
+
 // This prompt names no campus, library, location, or holdings scope. On its own
 // it resolves to no query family (freeform). With the resolver guidance appended
 // it must still resolve to no family — routing must ignore guidance boilerplate.
 $prompt = 'List item titles with material type "e-book" and item status of "in process".';
 
-$result = GeminiService::generateSqlWithShadow($prompt, 'Smith College', null, false);
+$followUpGenerationPrompt = implode("\n\n", [
+    'This is a follow-up request to a previously generated library report.',
+    'Previous request: Show active E-Books from MRBC.',
+    'Previous SQL: SELECT title FROM inventory.instance__t',
+    'Follow-up request: ' . $prompt,
+]);
+$generationTransport = null;
+TestTransport::$responses = [
+    geminiSql('SELECT ii.title FROM inventory.item__t AS ii LIMIT 100'),
+];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$result = GeminiService::generateSqlWithShadow(
+    $prompt,
+    'Smith College',
+    null,
+    false,
+    $followUpGenerationPrompt,
+    $generationTransport
+);
 
 assertSameValue(
     'exploratory_legacy_freeform',
@@ -203,6 +279,57 @@ assertSameValue(
     $result['routeReason'] ?? null,
     'The raw prompt resolves to no query family, so the route reason must reflect the freeform/exploratory fallback rather than a contaminated family match.'
 );
+assertSameValue($prompt, $generationTransport['rawQuestion'] ?? null, 'Generation transport must retain the immutable raw question.');
+assertContainsText('Previous SQL:', $generationTransport['generationPrompt'] ?? '', 'Generation transport must retain the expanded follow-up model context.');
+assertContainsText('Reference resolver guidance:', $generationTransport['generationPrompt'] ?? '', 'Generation transport must retain resolver guidance for later model repair.');
+assertSameValue(false, isset($result['_generationTransport']), 'Internal generation transport must not be serialized into the service response.');
+
+$rawFingerprint = substr(hash('sha256', trim($prompt)), 0, 16);
+$augmentedFingerprint = substr(hash('sha256', trim($generationTransport['generationPrompt'] ?? '')), 0, 16);
+assertSameValue(false, $rawFingerprint === $augmentedFingerprint, 'Telemetry regression requires distinguishable raw and generated prompts.');
+foreach (['nl2sql.generated', 'nl2sql.exploratory_notice_attached'] as $eventName) {
+    $events = telemetryEvents($eventName);
+    assertSameValue(1, count($events), "{$eventName} should be emitted once for the exploratory response.");
+    assertSameValue($rawFingerprint, $events[0]['promptFingerprint'] ?? null, "{$eventName} must fingerprint only the raw question.");
+}
+
+$routedRawQuestion = 'For instance numbers in0001, in0002, show title, barcode, and publication date for material type E-Book. Limit 20.';
+$routedFollowUpPrompt = implode("\n\n", [
+    'This is a follow-up request to a previously generated library report.',
+    'Previous request: Show E-Book titles.',
+    'Previous SQL: SELECT title FROM inventory.instance__t',
+    'Follow-up request: ' . $routedRawQuestion,
+]);
+TestTransport::$responses = [
+    geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+];
+TestTransport::$requests = [];
+$routedTransport = null;
+$routedRecovery = GeminiService::generateSqlWithShadow(
+    $routedRawQuestion,
+    'Smith College',
+    null,
+    false,
+    $routedFollowUpPrompt,
+    $routedTransport
+);
+assertSameValue(3, count(TestTransport::$requests), 'Routed exhaustion should make one generation call plus exactly two repair calls.');
+assertSameValue(2, $routedRecovery['repairAttempts'] ?? null, 'Routed exhaustion must preserve the shared two-attempt repair cap.');
+assertSameValue(false, isset($routedRecovery['sql']), 'Routed exhaustion must not return invalid SQL.');
+assertSameValue($routedRawQuestion, $routedRecovery['recoveryContext']['originalQuestion'] ?? null, 'Routed exhaustion must recover the exact latest raw question.');
+$routedRecoveryJson = json_encode($routedRecovery);
+assertSameValue(false, strpos($routedRecoveryJson, 'Previous SQL:') !== false, 'Recovery must not expose follow-up generation context.');
+assertSameValue(false, strpos($routedRecoveryJson, 'Reference resolver guidance:') !== false, 'Recovery must not expose resolver guidance.');
+assertSameValue(false, strpos($routedRecoveryJson, 'EXPLICIT REPORT VALUES') !== false, 'Recovery must not expose explicit-value guidance.');
+assertSameValue($routedRawQuestion, $routedTransport['rawQuestion'] ?? null, 'Routed transport must retain the exact raw question.');
+assertContainsText('Previous SQL:', $routedTransport['generationPrompt'] ?? '', 'Routed transport must retain follow-up generation context.');
+assertContainsText('Reference resolver guidance:', $routedTransport['generationPrompt'] ?? '', 'Routed transport must retain resolver guidance.');
+assertContainsText('EXPLICIT REPORT VALUES', $routedTransport['generationPrompt'] ?? '', 'Routed transport must retain explicit guidance.');
+$lastRepairPayload = json_encode(TestTransport::$requests[2] ?? []);
+assertContainsText('MODEL GENERATION CONTEXT', $lastRepairPayload, 'Repair payload must label augmented model context accurately.');
+assertSameValue(false, strpos($lastRepairPayload, 'ORIGINAL QUESTION') !== false, 'Repair payload must not label augmented model context as the original question.');
 
 $effectivePrompt = \app\services\ReferenceResolverService::appendGuidanceToPrompt(
     $prompt,

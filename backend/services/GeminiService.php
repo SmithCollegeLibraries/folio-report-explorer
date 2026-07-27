@@ -132,19 +132,35 @@ class GeminiService
      * Step 8 entrypoint: run the configured primary mode and optionally execute
      * the alternate mode in shadow for comparison telemetry.
      *
-     * @param string $prompt
+     * @param string $rawQuestion
      * @param string|null $campus
      * @param int|null $userId
      * @param bool $allowExploratory
+     * @param string|null $generationPrompt
+     * @param array|null $generationTransport Internal non-response context for controller preflight repair.
      * @return array {sql: string, explanation: string, dataSource: string}
      */
-    public static function generateSqlWithShadow($prompt, $campus = null, $userId = null, $allowExploratory = false)
-    {
+    public static function generateSqlWithShadow(
+        $rawQuestion,
+        $campus = null,
+        $userId = null,
+        $allowExploratory = false,
+        $generationPrompt = null,
+        ?array &$generationTransport = null
+    ) {
+        $rawQuestion = (string)$rawQuestion;
+        $generationPrompt = $generationPrompt === null
+            ? $rawQuestion
+            : (string)$generationPrompt;
+        $generationTransport = [
+            'rawQuestion' => $rawQuestion,
+            'generationPrompt' => $generationPrompt,
+        ];
         $referenceBundleMetadata = self::buildReferenceBundleMetadata();
-        $explicitReportRequest = ExplicitReportRequestService::extract((string)$prompt);
+        $explicitReportRequest = ExplicitReportRequestService::extract($rawQuestion);
         $explicitEvidence = self::explicitReportRequestEvidence($explicitReportRequest);
-        $referenceResolution = ReferenceResolverService::resolvePrompt((string)$prompt, $userId);
-        self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt((string)$prompt));
+        $referenceResolution = ReferenceResolverService::resolvePrompt($rawQuestion, $userId);
+        self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt($rawQuestion));
         if (!empty($referenceResolution['needsClarification'])) {
             self::logRouteSelection('clarification', (string)($referenceResolution['routeReason'] ?? 'reference_resolver_batch_clarification'), [
                 'clarificationBatchId' => $referenceResolution['clarificationBatchId'] ?? null,
@@ -186,11 +202,15 @@ class GeminiService
             ));
         }
 
-        $effectivePrompt = ReferenceResolverService::appendGuidanceToPrompt((string)$prompt, $referenceResolution);
+        $effectivePrompt = ReferenceResolverService::appendGuidanceToPrompt($generationPrompt, $referenceResolution);
         $effectivePrompt = ExplicitReportRequestService::appendGuidance($effectivePrompt, $explicitReportRequest);
+        $generationTransport = [
+            'rawQuestion' => $rawQuestion,
+            'generationPrompt' => $effectivePrompt,
+        ];
 
         $clarification = ClarificationService::detectPromptAmbiguity(
-            (string)$effectivePrompt,
+            $rawQuestion,
             self::loadAcceptedClarificationKeys($userId)
         );
         if ($clarification !== null) {
@@ -215,7 +235,7 @@ class GeminiService
                 (string)$effectivePrompt,
                 $campus,
                 'user_requested_exploratory_generation',
-                (string)$prompt
+                $rawQuestion
             );
 
             if (!empty($referenceResolution['guidanceLines'])) {
@@ -234,16 +254,16 @@ class GeminiService
         // Route on the raw user prompt, not the resolver-augmented prompt: the
         // resolver appends guidance boilerplate ("...library or campus name
         // columns") whose scope words would otherwise hijack family selection.
-        $queryFamily = self::resolvePromptQueryFamily((string)$prompt, $campus);
+        $queryFamily = self::resolvePromptQueryFamily($rawQuestion, $campus);
         if ($queryFamily === null) {
-            $exploratoryReason = self::promptRequiresLegacyFreeform($effectivePrompt)
+            $exploratoryReason = self::promptRequiresLegacyFreeform($rawQuestion)
                 ? 'canonical_path_unavailable_for_marc_source_records'
                 : 'unsupported_query_family';
             $primary = self::generateExploratorySqlResponse(
                 (string)$effectivePrompt,
                 $campus,
                 $exploratoryReason,
-                (string)$prompt
+                $rawQuestion
             );
 
             if (!empty($referenceResolution['guidanceLines'])) {
@@ -259,15 +279,15 @@ class GeminiService
             ));
         }
 
-        $primaryMode = self::resolvePrimaryModeForPrompt((string)$prompt, $campus);
+        $primaryMode = self::resolvePrimaryModeForPrompt($rawQuestion, $campus);
         $primary = $primaryMode === 'intent'
-            ? self::generateSql($effectivePrompt, $campus, false, true, (string)$prompt)
-            : self::generateSql($effectivePrompt, $campus, true, false, (string)$prompt);
+            ? self::generateSql($effectivePrompt, $campus, false, true, $rawQuestion)
+            : self::generateSql($effectivePrompt, $campus, true, false, $rawQuestion);
         $primary = self::repairRoutedCandidateMissingExplicitValues(
             $primary,
             (string)$effectivePrompt,
             $campus,
-            (string)$prompt
+            $rawQuestion
         );
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
@@ -283,7 +303,7 @@ class GeminiService
             ];
         }
 
-        if (!self::shouldRunShadowForUser($userId, $effectivePrompt)) {
+        if (!self::shouldRunShadowForUser($userId, $rawQuestion)) {
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
                 array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
@@ -294,21 +314,21 @@ class GeminiService
 
         try {
             $shadow = $shadowMode === 'intent'
-                ? self::generateSql($effectivePrompt, $campus, false, true, (string)$prompt)
-                : self::generateSql($effectivePrompt, $campus, true, false, (string)$prompt);
+                ? self::generateSql($effectivePrompt, $campus, false, true, $rawQuestion)
+                : self::generateSql($effectivePrompt, $campus, true, false, $rawQuestion);
 
             self::logShadowComparison($primary, $shadow, [
                 'primaryMode' => $primaryMode,
                 'shadowMode' => $shadowMode,
                 'userId' => $userId,
-                'promptFingerprint' => self::fingerprintPrompt((string)$prompt),
+                'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
             ]);
         } catch (\Throwable $e) {
             self::logNlTelemetry('nl2sql.shadow_error', [
                 'primaryMode' => $primaryMode,
                 'shadowMode' => $shadowMode,
                 'userId' => $userId,
-                'promptFingerprint' => self::fingerprintPrompt((string)$prompt),
+                'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
                 'error' => $e->getMessage(),
             ], true);
         }
@@ -320,28 +340,28 @@ class GeminiService
     }
 
     private static function generateExploratorySqlResponse(
-        string $prompt,
+        string $generationPrompt,
         $campus = null,
         string $reason = 'unsupported_query_family',
-        ?string $originalPrompt = null
+        ?string $rawQuestion = null
     ): array
     {
-        $originalPrompt = $originalPrompt === null
-            ? $prompt
-            : $originalPrompt;
-        $assumptions = ExploratoryQueryDefaultsService::resolve($prompt);
+        $rawQuestion = $rawQuestion === null
+            ? $generationPrompt
+            : $rawQuestion;
+        $assumptions = ExploratoryQueryDefaultsService::resolve($generationPrompt);
         $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
         $useHardenedPhysicalRoi = self::useHardenedPhysicalRoi();
         $semanticContract = ExploratorySemanticContractService::build(
-            $prompt,
+            $generationPrompt,
             is_string($campus) ? $campus : null,
             $assumptions,
             $reason,
             ['physicalRoiPolicyVersion' => $useHardenedPhysicalRoi ? 'v2' : 'legacy']
         );
         $context = [
-            'originalQuestion' => $originalPrompt,
-            'generationPrompt' => $prompt,
+            'originalQuestion' => $rawQuestion,
+            'generationPrompt' => $generationPrompt,
             'campus' => is_string($campus) ? $campus : null,
             'assumptions' => $assumptions,
             'attemptedPlan' => $attemptedPlan,
@@ -352,19 +372,19 @@ class GeminiService
 
         try {
             $outcome = ExploratorySqlRepairService::run(
-                function (array $attemptContext) use ($prompt, $campus, $attemptedPlan, $reason): array {
+                function (array $attemptContext) use ($generationPrompt, $campus, $attemptedPlan, $reason, $rawQuestion): array {
                     return self::runExploratorySqlAttempt(
                         $attemptContext + [
                             'route' => 'exploratory_legacy_freeform',
                             'routeReason' => $reason,
                         ],
-                        function () use ($attemptContext, $prompt, $campus, $attemptedPlan): array {
+                        function () use ($attemptContext, $generationPrompt, $campus, $attemptedPlan, $rawQuestion): array {
                             if ((int)($attemptContext['repairNumber'] ?? 0) === 0) {
-                                $guidedPrompt = $prompt;
+                                $guidedPrompt = $generationPrompt;
                                 if ($attemptedPlan !== '') {
                                     $guidedPrompt .= "\n\n" . $attemptedPlan;
                                 }
-                                return self::generateSql($guidedPrompt, $campus, true, false);
+                                return self::generateSql($guidedPrompt, $campus, true, false, $rawQuestion);
                             }
 
                             return self::generateExploratoryRepairCandidate($attemptContext);
@@ -417,7 +437,7 @@ class GeminiService
                     throw $exception;
                 } catch (\Throwable $exception) {
                     self::logNlTelemetry('nl2sql.exploratory_compiled_fallback_rejected', [
-                        'promptFingerprint' => self::fingerprintPrompt($prompt),
+                        'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
                         'category' => $exception instanceof ExploratorySqlValidationException
                             ? $exception->getSafeCategory()
                             : 'validation_failure',
@@ -433,7 +453,7 @@ class GeminiService
                 (string)($outcome['failureCategory'] ?? 'validation_failure'),
                 (int)($outcome['repairAttempts'] ?? 0)
             );
-            $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
+            $schemaContext = FolioSchemaService::buildSchemaContext($generationPrompt);
             return self::withAskEvidence(
                 self::buildExploratoryRecoveryResponse($context, $outcome, $reason),
                 [
@@ -450,7 +470,7 @@ class GeminiService
             $assumptions,
             (int)$outcome['repairAttempts']
         );
-        $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
+        $schemaContext = FolioSchemaService::buildSchemaContext($generationPrompt);
         $primary = self::withAskEvidence($primary, [
             'modelName' => self::getAiModel(),
             'promptVersion' => self::LEGACY_PROMPT_VERSION,
@@ -464,7 +484,7 @@ class GeminiService
         self::logNlTelemetry('nl2sql.exploratory_notice_attached', [
             'route' => 'exploratory_legacy_freeform',
             'routeReason' => $reason,
-            'promptFingerprint' => self::fingerprintPrompt($prompt),
+            'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
             'dataSource' => $primary['dataSource'] ?? 'folio',
             'mode' => 'exploratory',
         ]);
@@ -5784,10 +5804,10 @@ PROMPT;
         }
 
         $model = self::getAiModel();
-        $question = trim((string)($context['generationPrompt'] ?? '')) !== ''
+        $generationPrompt = trim((string)($context['generationPrompt'] ?? '')) !== ''
             ? (string)$context['generationPrompt']
             : (string)($context['originalQuestion'] ?? '');
-        $schemaContext = FolioSchemaService::buildSchemaContext($question);
+        $schemaContext = FolioSchemaService::buildSchemaContext($generationPrompt);
         $assumptionGuidance = ExploratoryQueryDefaultsService::buildPromptGuidance(
             is_array($context['assumptions'] ?? null) ? $context['assumptions'] : []
         );
@@ -5817,7 +5837,7 @@ PROMPT;
         }
 
         $userContent = implode("\n\n", [
-            "ORIGINAL QUESTION\n" . $question,
+            "MODEL GENERATION CONTEXT\n" . $generationPrompt,
             "CAMPUS SCOPE\n" . $campusScope,
             "PREVIOUS CANDIDATE\n" . (string)($context['previousCandidate'] ?? ''),
             "VALIDATOR STAGE\n" . (string)($context['validatorStage'] ?? 'response_validation'),
