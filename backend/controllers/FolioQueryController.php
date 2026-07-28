@@ -1268,7 +1268,8 @@ class FolioQueryController extends Controller
     public function actionQuerySubmit()
     {
         $body = Yii::$app->request->getBodyParams();
-        $executionGeneration = null;
+        $executionGenerationRequest = null;
+        $administratorReviewService = null;
 
         $sql = $body['sql'] ?? null;
         $params = $body['params'] ?? [];
@@ -1309,16 +1310,21 @@ class FolioQueryController extends Controller
                 Yii::$app->response->statusCode = 403;
                 return ['error' => 'This generated query is not available for execution.'];
             }
+            $administratorReviewService = $this->administratorReviewService();
             try {
-                $executionGeneration = $this->administratorReviewService()->resolveExecutionGeneration(
+                $administratorReviewService->assertExecutionGenerationOwned(
                     $generationId,
-                    $userId,
-                    $sql
+                    $userId
                 );
             } catch (\DomainException $exception) {
                 Yii::$app->response->statusCode = 403;
                 return ['error' => 'This generated query is not available for execution.'];
             }
+            $executionGenerationRequest = [
+                'generationId' => $generationId,
+                'userId' => $userId,
+                'normalizedSql' => $sql,
+            ];
         }
 
         // Safety validation
@@ -1388,17 +1394,51 @@ class FolioQueryController extends Controller
                 $job->estimated_cost = ($cost !== null) ? min((float)$cost, 1.0e15) : null;
             }
         }
-        if (!$job->save()) {
-            Yii::$app->response->statusCode = 500;
-            return ['error' => 'Failed to create job', 'details' => $job->errors];
-        }
+        $jobSaveErrors = [];
+        try {
+            QueryJob::getDb()->transaction(function () use (
+                $job,
+                $executionGenerationRequest,
+                $administratorReviewService,
+                &$jobSaveErrors
+            ): void {
+                if (!$job->save()) {
+                    $jobSaveErrors = $job->errors;
+                    throw new \RuntimeException('query_job_save_failed');
+                }
 
-        if ($executionGeneration !== null) {
-            $this->administratorReviewService()->linkExecutionGeneration(
-                $executionGeneration['generation'],
-                (string)$job->id,
-                $executionGeneration['provenanceGeneration']
+                if (
+                    $executionGenerationRequest !== null
+                    && $administratorReviewService !== null
+                ) {
+                    $executionGeneration = $administratorReviewService
+                        ->resolveExecutionGeneration(
+                            $executionGenerationRequest['generationId'],
+                            $executionGenerationRequest['userId'],
+                            $executionGenerationRequest['normalizedSql']
+                        );
+                    $administratorReviewService->linkExecutionGeneration(
+                        $executionGeneration['generation'],
+                        (string)$job->id,
+                        $executionGeneration['provenanceGeneration']
+                    );
+                }
+            });
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'This generated query is not available for execution.'];
+        } catch (\Throwable $exception) {
+            Yii::warning(
+                'Atomic query submission persistence failed: '
+                    . $exception->getMessage(),
+                'query.submit'
             );
+            Yii::$app->response->statusCode = 500;
+            $response = ['error' => 'Failed to create job'];
+            if ($jobSaveErrors !== []) {
+                $response['details'] = $jobSaveErrors;
+            }
+            return $response;
         }
 
         Yii::$app->response->statusCode = 202;

@@ -86,6 +86,16 @@ class AdministratorReviewService
     }
 
     /**
+     * Verify that an execution generation and its source lineage belong to the
+     * submitting user without creating derivative persistence.
+     */
+    public function assertExecutionGenerationOwned(string $generationId, int $userId): void
+    {
+        $generation = $this->ownedExecutionGeneration($generationId, $userId);
+        $this->executionSourceGeneration($generation, $userId);
+    }
+
+    /**
      * Resolve an owned Ask generation for execution, creating a reviewed child
      * when the submitted SQL no longer matches the server-stored SQL hash.
      *
@@ -93,10 +103,7 @@ class AdministratorReviewService
      */
     public function resolveExecutionGeneration(string $generationId, int $userId, string $normalizedSql): array
     {
-        $generation = AiReportGeneration::findOne(['id' => $generationId]);
-        if ($generation === null || $generation->user_id === null || (int)$generation->user_id !== $userId) {
-            throw new DomainException('generation_not_owned');
-        }
+        $generation = $this->ownedExecutionGeneration($generationId, $userId);
         $sourceGeneration = $this->executionSourceGeneration($generation, $userId);
 
         $storedHash = (string)$sourceGeneration->sql_hash;
@@ -137,6 +144,9 @@ class AdministratorReviewService
                 'SELECT metadata FROM query_jobs WHERE id = :id',
                 [':id' => $queryJobId]
             )->queryScalar();
+            if ($metadataJson === false) {
+                throw new RuntimeException('query_job_not_found');
+            }
             $metadata = is_string($metadataJson) ? json_decode($metadataJson, true) : [];
             if (!is_array($metadata)) {
                 $metadata = [];
@@ -163,14 +173,23 @@ class AdministratorReviewService
             ];
 
             $now = gmdate('Y-m-d H:i:s');
-            $this->db->createCommand()->update('query_jobs', [
+            $updatedJobs = $this->db->createCommand()->update('query_jobs', [
                 'metadata' => $this->encodeJson($metadata),
             ], ['id' => $queryJobId])->execute();
-            $this->db->createCommand()->update('ai_report_generations', [
+            if ($updatedJobs !== 1) {
+                throw new RuntimeException('query_job_link_update_failed');
+            }
+            $updatedGenerations = $this->db->createCommand()->update('ai_report_generations', [
                 'query_job_id' => $queryJobId,
                 'linked_at' => $now,
                 'updated_at' => $now,
-            ], ['id' => (string)$generation->id])->execute();
+            ], [
+                'id' => (string)$generation->id,
+                'query_job_id' => null,
+            ])->execute();
+            if ($updatedGenerations !== 1) {
+                throw new RuntimeException('generation_link_update_failed');
+            }
         });
     }
 
@@ -448,6 +467,22 @@ class AdministratorReviewService
         }
 
         return $parent;
+    }
+
+    private function ownedExecutionGeneration(
+        string $generationId,
+        int $userId
+    ): AiReportGeneration {
+        $generation = AiReportGeneration::findOne(['id' => $generationId]);
+        if (
+            $generation === null
+            || $generation->user_id === null
+            || (int)$generation->user_id !== $userId
+        ) {
+            throw new DomainException('generation_not_owned');
+        }
+
+        return $generation;
     }
 
     private function executionSourceGeneration(

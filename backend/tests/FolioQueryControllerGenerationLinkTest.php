@@ -167,6 +167,48 @@ function submitGenerationLinkedQuery(array $body)
     return (new FolioQueryController('folio-query', Yii::$app))->actionQuerySubmit();
 }
 
+function captureGenerationLinkedQuery(array $body)
+{
+    try {
+        return [
+            'result' => submitGenerationLinkedQuery($body),
+            'statusCode' => Yii::$app->response->statusCode,
+            'exception' => null,
+        ];
+    } catch (\Throwable $exception) {
+        return [
+            'result' => null,
+            'statusCode' => Yii::$app->response->statusCode,
+            'exception' => $exception,
+        ];
+    }
+}
+
+function generationLinkPersistenceSnapshot($db)
+{
+    return [
+        'jobs' => $db->createCommand(
+            'SELECT * FROM query_jobs ORDER BY id'
+        )->queryAll(),
+        'generations' => $db->createCommand(
+            'SELECT * FROM ai_report_generations ORDER BY id'
+        )->queryAll(),
+        'reviews' => $db->createCommand(
+            'SELECT * FROM ai_report_reviews ORDER BY id'
+        )->queryAll(),
+    ];
+}
+
+function generationLinkCollectAtomicityFailure(
+    $condition,
+    $message,
+    array &$failures
+) {
+    if (!$condition) {
+        $failures[] = $message;
+    }
+}
+
 $service = new AdministratorReviewService($db);
 $exactSql = 'SELECT 1 AS exact_value';
 $exact = seedGeneration($service, 7, $exactSql, [
@@ -242,6 +284,33 @@ generationLinkAssert((int)$editedChild['review_required'] === 1, 'An edited deri
 generationLinkAssert($editedChild['query_job_id'] === $editedResult['jobId'], 'The job must link to the edited derivative, not its parent.');
 generationLinkAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_reviews WHERE generation_id = :id', [':id' => $editedChild['id']])->queryScalar() === 1, 'An edited derivative must create its review row.');
 
+$missingJobSql = 'SELECT 31 AS missing_job_value';
+$missingJobParent = seedGeneration($service, 7, $missingJobSql);
+$missingJobExecution = $service->resolveExecutionGeneration(
+    $missingJobParent['generationId'],
+    7,
+    $missingJobSql
+);
+$beforeMissingJobLink = generationLinkPersistenceSnapshot($db);
+$missingJobRejected = false;
+try {
+    $service->linkExecutionGeneration(
+        $missingJobExecution['generation'],
+        'missing-query-job',
+        $missingJobExecution['provenanceGeneration']
+    );
+} catch (\RuntimeException $exception) {
+    $missingJobRejected = true;
+}
+generationLinkAssert(
+    $missingJobRejected,
+    'A missing query job must fail generation linking instead of committing a phantom link.'
+);
+generationLinkAssert(
+    generationLinkPersistenceSnapshot($db) === $beforeMissingJobLink,
+    'A failed missing-job link must leave generation, review, and job state unchanged.'
+);
+
 $beforeJobs = (int)$db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar();
 Yii::$app->folioDb->commandCount = 0;
 $unknownPolicyBlocked = submitGenerationLinkedQuery([
@@ -310,6 +379,127 @@ foreach (['manual', 'builder'] as $source) {
         'generationId' => 'ignored-for-non-nl',
     ]);
     generationLinkAssert(Yii::$app->response->statusCode === 202 && !empty($result['jobId']), ucfirst($source) . ' submissions must remain unchanged.');
+}
+
+$atomicityFailures = [];
+
+$policyFailureSource = seedGeneration(
+    $service,
+    7,
+    'SELECT 81 AS policy_original'
+);
+$beforePolicyFailure = generationLinkPersistenceSnapshot($db);
+$policyFailure = captureGenerationLinkedQuery([
+    'sql' => 'DELETE FROM inventory.items',
+    'source' => 'nl',
+    'dataSource' => 'folio',
+    'generationId' => $policyFailureSource['generationId'],
+]);
+generationLinkCollectAtomicityFailure(
+    $policyFailure['exception'] === null
+        && $policyFailure['statusCode'] === 403
+        && ($policyFailure['result']['error'] ?? null)
+            === 'This query is blocked by reporting data policy.'
+        && generationLinkPersistenceSnapshot($db) === $beforePolicyFailure,
+    'Policy rejection changed generation, review, or job persistence.',
+    $atomicityFailures
+);
+
+$preflightFailureSource = seedGeneration(
+    $service,
+    7,
+    'SELECT 82 AS preflight_original'
+);
+$beforePreflightFailure = generationLinkPersistenceSnapshot($db);
+$preflightFailure = captureGenerationLinkedQuery([
+    'sql' => 'SELECT 83 AS preflight_edited',
+    'source' => 'nl',
+    'dataSource' => 'folio',
+    'generationId' => $preflightFailureSource['generationId'],
+]);
+generationLinkCollectAtomicityFailure(
+    $preflightFailure['exception'] === null
+        && $preflightFailure['statusCode'] === 422
+        && ($preflightFailure['result']['error'] ?? null)
+            === 'Query validation failed before execution.'
+        && generationLinkPersistenceSnapshot($db) === $beforePreflightFailure,
+    'Preflight failure changed generation, review, or job persistence.',
+    $atomicityFailures
+);
+
+$jobSaveFailureSource = seedGeneration(
+    $service,
+    7,
+    'SELECT 84 AS save_original'
+);
+$db->pdo->exec(<<<'SQL'
+CREATE TRIGGER fail_query_job_insert
+BEFORE INSERT ON query_jobs
+BEGIN
+    SELECT RAISE(ABORT, 'forced query job save failure');
+END
+SQL
+);
+$beforeJobSaveFailure = generationLinkPersistenceSnapshot($db);
+$jobSaveFailure = captureGenerationLinkedQuery([
+    'sql' => 'SELECT 85 AS save_edited',
+    'source' => 'nl',
+    'dataSource' => 'local',
+    'generationId' => $jobSaveFailureSource['generationId'],
+]);
+$afterJobSaveFailure = generationLinkPersistenceSnapshot($db);
+$db->createCommand('DROP TRIGGER fail_query_job_insert')->execute();
+generationLinkCollectAtomicityFailure(
+    $jobSaveFailure['exception'] === null
+        && $jobSaveFailure['statusCode'] === 500
+        && ($jobSaveFailure['result']['error'] ?? null)
+            === 'Failed to create job'
+        && $afterJobSaveFailure === $beforeJobSaveFailure,
+    'Query-job save failure changed persistence or escaped the stable 500 response.',
+    $atomicityFailures
+);
+
+$linkFailureSource = seedGeneration(
+    $service,
+    7,
+    'SELECT 86 AS link_original'
+);
+$db->pdo->exec(<<<'SQL'
+CREATE TRIGGER fail_generation_link
+BEFORE UPDATE OF query_job_id ON ai_report_generations
+WHEN NEW.query_job_id IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'forced generation link failure');
+END
+SQL
+);
+$beforeLinkFailure = generationLinkPersistenceSnapshot($db);
+$linkFailure = captureGenerationLinkedQuery([
+    'sql' => 'SELECT 87 AS link_edited',
+    'source' => 'nl',
+    'dataSource' => 'local',
+    'generationId' => $linkFailureSource['generationId'],
+]);
+$afterLinkFailure = generationLinkPersistenceSnapshot($db);
+$db->createCommand('DROP TRIGGER fail_generation_link')->execute();
+generationLinkCollectAtomicityFailure(
+    $linkFailure['exception'] === null
+        && $linkFailure['statusCode'] === 500
+        && ($linkFailure['result']['error'] ?? null)
+            === 'Failed to create job'
+        && $afterLinkFailure === $beforeLinkFailure,
+    'Generation-link failure changed persistence or escaped the stable 500 response.',
+    $atomicityFailures
+);
+
+if ($atomicityFailures !== []) {
+    fwrite(
+        STDERR,
+        "Atomic generation persistence regressions failed:\n- "
+            . implode("\n- ", $atomicityFailures)
+            . "\n"
+    );
+    exit(1);
 }
 
 fwrite(STDOUT, "FolioQueryController generation link test passed\n");
