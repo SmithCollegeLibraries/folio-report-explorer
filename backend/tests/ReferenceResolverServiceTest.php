@@ -367,11 +367,32 @@ assertResolverSame(
     'An unresolved typed library intent must survive resolver output so runtime safe probing cannot be skipped.'
 );
 
+$riversideLibraryReference = [
+    'source_table' => 'inventory.loclibrary__t',
+    'source_id' => 'lib-neilson',
+    'name' => 'SC Neilson Library',
+    'code' => 'SCNLS',
+    'metadata' => ['campus_name' => 'Smith College'],
+];
+$riversideLocationReference = [
+    'source_table' => 'inventory.location__t',
+    'source_id' => 'loc-neilson-main',
+    'name' => 'SC Neilson Main Stacks',
+    'code' => 'SCNMAIN',
+    'metadata' => [
+        'library_name' => 'SC Neilson Library',
+        'campus_name' => 'Smith College',
+    ],
+];
+
 $acceptedTypedLibraryAlias = ReferenceResolverService::resolvePromptAgainstReferences(
     'Show DVDs at Riverside library.',
-    array_values(array_filter($videoReferences, function (array $reference): bool {
-        return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
-    })),
+    array_merge(
+        array_values(array_filter($videoReferences, function (array $reference): bool {
+            return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
+        })),
+        [$riversideLibraryReference]
+    ),
     [[
         'alias' => 'Riverside',
         'clarification_key' => 'reference_alias.riverside',
@@ -379,7 +400,8 @@ $acceptedTypedLibraryAlias = ReferenceResolverService::resolvePromptAgainstRefer
             'table' => 'inventory.loclibrary__t',
             'column' => 'name',
             'operator' => '=',
-            'value' => 'SC Riverside Library',
+            'value' => 'SC Neilson Library',
+            'sourceId' => 'lib-neilson',
         ],
     ]],
     ['reference_alias.riverside']
@@ -390,16 +412,34 @@ assertResolverSame(
     'An accepted learned alias must satisfy its typed named scope without triggering a second safe-probe clarification.'
 );
 assertResolverContains(
-    'SC Riverside Library',
+    'SC Neilson Library',
     implode("\n", $acceptedTypedLibraryAlias['guidanceLines'] ?? []),
     'Accepted learned-alias guidance must remain available beside typed material guidance.'
+);
+assertResolverSame(
+    ['material_type', 'library'],
+    array_column($acceptedTypedLibraryAlias['resolvedFilters'] ?? [], 'dimension'),
+    'An accepted learned alias must add an authoritative structured filter beside sibling filters.'
+);
+assertResolverSame(
+    ['SC Neilson Library'],
+    $acceptedTypedLibraryAlias['resolvedFilters'][1]['values'] ?? null,
+    'The learned-alias filter must use the active canonical row value.'
+);
+assertResolverSame(
+    ['campus_name' => 'Smith College'],
+    $acceptedTypedLibraryAlias['resolvedFilters'][1]['value_metadata']['SC Neilson Library'] ?? null,
+    'The learned-alias filter must carry current canonical hierarchy metadata.'
 );
 
 $acceptedLibraryBesideUnresolvedLocation = ReferenceResolverService::resolvePromptAgainstReferences(
     'Show DVDs at Riverside library and Riverside location.',
-    array_values(array_filter($videoReferences, function (array $reference): bool {
-        return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
-    })),
+    array_merge(
+        array_values(array_filter($videoReferences, function (array $reference): bool {
+            return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
+        })),
+        [$riversideLibraryReference]
+    ),
     [[
         'alias' => 'Riverside',
         'clarification_key' => 'reference_alias.riverside_library',
@@ -407,7 +447,8 @@ $acceptedLibraryBesideUnresolvedLocation = ReferenceResolverService::resolveProm
             'table' => 'inventory.loclibrary__t',
             'column' => 'name',
             'operator' => '=',
-            'value' => 'SC Riverside Library',
+            'value' => 'SC Neilson Library',
+            'sourceId' => 'lib-neilson',
         ],
     ]],
     ['reference_alias.riverside_library']
@@ -420,7 +461,7 @@ assertResolverSame(
 
 $acceptedQualifiedLocationAlias = ReferenceResolverService::resolvePromptAgainstReferences(
     'Show items at Riverside location.',
-    [],
+    [$riversideLocationReference],
     [[
         'alias' => 'Riverside location',
         'clarification_key' => 'reference_alias.riverside_location',
@@ -428,7 +469,8 @@ $acceptedQualifiedLocationAlias = ReferenceResolverService::resolvePromptAgainst
             'table' => 'inventory.location__t',
             'column' => 'name',
             'operator' => '=',
-            'value' => 'SC Riverside',
+            'value' => 'SC Neilson Main Stacks',
+            'sourceId' => 'loc-neilson-main',
         ],
     ]],
     ['reference_alias.riverside_location']
@@ -438,6 +480,57 @@ assertResolverSame(
     $acceptedQualifiedLocationAlias['unresolvedNamedIntents'] ?? null,
     'An accepted qualified location alias must satisfy its suffix-extracted location intent.'
 );
+assertResolverSame(
+    ['SC Neilson Main Stacks'],
+    $acceptedQualifiedLocationAlias['resolvedFilters'][0]['values'] ?? null,
+    'A qualified location alias must become an authoritative structured location filter.'
+);
+
+$missingCanonicalAlias = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Riverside library.',
+    array_values(array_filter($videoReferences, function (array $reference): bool {
+        return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
+    })),
+    [[
+        'alias' => 'Riverside',
+        'clarification_key' => 'reference_alias.riverside',
+        'resolved_filter' => [
+            'table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'operator' => '=',
+            'value' => 'SC Neilson Library',
+            'sourceId' => 'lib-neilson',
+        ],
+    ]],
+    ['reference_alias.riverside']
+);
+assertResolverSame(true, $missingCanonicalAlias['needsClarification'] ?? null, 'A learned alias with no active canonical row must fail closed.');
+assertResolverSame('reference_value_unavailable', $missingCanonicalAlias['routeReason'] ?? null, 'A stale learned alias needs a stable unavailable route reason.');
+assertResolverSame(false, strpos($missingCanonicalAlias['question'] ?? '', 'inventory.') !== false, 'A stale learned alias response must not expose schema names.');
+
+$wrongCanonicalIdentityAlias = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Riverside library.',
+    array_merge(
+        array_values(array_filter($videoReferences, function (array $reference): bool {
+            return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
+        })),
+        [$riversideLibraryReference]
+    ),
+    [[
+        'alias' => 'Riverside',
+        'clarification_key' => 'reference_alias.riverside',
+        'resolved_filter' => [
+            'table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'operator' => '=',
+            'value' => 'SC Neilson Library',
+            'sourceId' => 'lib-stale',
+        ],
+    ]],
+    ['reference_alias.riverside']
+);
+assertResolverSame(true, $wrongCanonicalIdentityAlias['needsClarification'] ?? null, 'A learned alias may not rebind by name when its authoritative source ID is stale.');
+assertResolverSame('reference_value_unavailable', $wrongCanonicalIdentityAlias['routeReason'] ?? null, 'A stale learned-alias identity must fail with the unavailable category.');
 
 if (!class_exists('ReferenceResolverRuntimeTestCommand')) {
     class ReferenceResolverRuntimeTestCommand

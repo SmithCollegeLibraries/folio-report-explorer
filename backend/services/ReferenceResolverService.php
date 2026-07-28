@@ -230,10 +230,40 @@ class ReferenceResolverService
 
             $clarificationKey = trim((string)($alias['clarification_key'] ?? ('reference_alias.' . str_replace(' ', '_', $normalizedAlias))));
             if (in_array($clarificationKey, $acceptedClarificationKeys, true) && !empty($alias['resolved_filter'])) {
-                $guidanceLines[] = self::buildAliasGuidanceLine($alias);
                 $resolvedFilter = is_array($alias['resolved_filter'])
                     ? $alias['resolved_filter']
                     : [];
+                $matchingIntents = array_values(array_filter(
+                    $unresolvedNamedIntents,
+                    function (array $intent) use ($aliasText, $resolvedFilter): bool {
+                        return self::acceptedAliasSatisfiesNamedIntent(
+                            $intent,
+                            $aliasText,
+                            $resolvedFilter
+                        );
+                    }
+                ));
+                if (empty($matchingIntents)) {
+                    $guidanceLines[] = self::buildAliasGuidanceLine($alias);
+                    continue;
+                }
+
+                $canonicalMatch = self::canonicalReferenceForAcceptedAlias(
+                    $alias,
+                    $references
+                );
+                if ($canonicalMatch === null) {
+                    return self::buildUnavailableLearnedAliasOutcome($matchingIntents[0]);
+                }
+
+                $aliasIntent = $matchingIntents[0];
+                $aliasIntent['provenance'] = 'accepted_learned_alias';
+                $resolvedFilters[] = self::buildResolvedFilter(
+                    $aliasIntent,
+                    [$canonicalMatch]
+                );
+                $resolved[] = $canonicalMatch;
+                $guidanceLines[] = self::buildAliasGuidanceLine($alias);
                 $unresolvedNamedIntents = array_values(array_filter(
                     $unresolvedNamedIntents,
                     function (array $intent) use ($aliasText, $resolvedFilter): bool {
@@ -394,6 +424,83 @@ class ReferenceResolverService
     }
 
     /**
+     * @param array<string, mixed> $alias
+     * @param array<int, array<string, mixed>> $references
+     * @return array<string, mixed>|null
+     */
+    private static function canonicalReferenceForAcceptedAlias(
+        array $alias,
+        array $references
+    ) {
+        $filter = $alias['resolved_filter'] ?? null;
+        if (!is_array($filter)) {
+            return null;
+        }
+
+        $sourceTable = trim((string)($filter['table'] ?? ''));
+        $column = trim((string)($filter['column'] ?? ''));
+        $operator = trim((string)($filter['operator'] ?? '='));
+        $expectedName = trim((string)($filter['value'] ?? ''));
+        $expectedSourceId = trim((string)(
+            $filter['sourceId']
+                ?? $filter['source_id']
+                ?? $alias['source_id']
+                ?? ''
+        ));
+        if (
+            $sourceTable === ''
+            || $column !== 'name'
+            || $operator !== '='
+            || $expectedName === ''
+        ) {
+            return null;
+        }
+
+        $matches = [];
+        foreach (self::referencesForTable($references, $sourceTable) as $reference) {
+            $sourceId = trim((string)($reference['source_id'] ?? ($reference['id'] ?? '')));
+            $name = trim((string)($reference['name'] ?? ''));
+            if (
+                self::normalizeText($name) !== self::normalizeText($expectedName)
+                || ($expectedSourceId !== '' && $sourceId !== $expectedSourceId)
+            ) {
+                continue;
+            }
+            $matches[] = self::referenceAsMatch(
+                $reference,
+                2100,
+                'accepted_learned_alias'
+            );
+        }
+
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @return array<string, mixed>
+     */
+    private static function buildUnavailableLearnedAliasOutcome(array $intent): array
+    {
+        $dimension = trim((string)($intent['dimension'] ?? 'reference'));
+        $label = trim(str_replace('_', ' ', $dimension));
+        if ($label === '') {
+            $label = 'reference value';
+        }
+
+        return [
+            'needsClarification' => true,
+            'clarificationType' => 'reference_value_unavailable',
+            'question' => 'I could not find the saved ' . $label
+                . ' in the current library reference data.',
+            'options' => [],
+            'route' => 'clarification',
+            'routeReason' => 'reference_value_unavailable',
+            'dataSource' => null,
+        ];
+    }
+
+    /**
      * @param array<string, mixed> $resolution
      */
     public static function appendGuidanceToPrompt(string $prompt, array $resolution): string
@@ -542,8 +649,10 @@ class ReferenceResolverService
 
             $resolvedValue = (string)($row['resolved_value'] ?? '');
             $sourceTable = (string)($row['source_table'] ?? '');
+            $sourceId = (string)($row['source_id'] ?? '');
             $aliases[] = [
                 'alias' => (string)($row['alias'] ?? ''),
+                'source_id' => $sourceId,
                 'clarification_key' => 'reference_alias.' . self::normalizeKey((string)($row['alias'] ?? '')),
                 'confidence' => (string)($row['confidence'] ?? 'learned'),
                 'resolved_filter' => [
@@ -551,6 +660,7 @@ class ReferenceResolverService
                     'column' => 'name',
                     'operator' => '=',
                     'value' => $resolvedValue,
+                    'sourceId' => $sourceId,
                 ],
                 'options' => [
                     [
@@ -563,6 +673,7 @@ class ReferenceResolverService
                             'column' => 'name',
                             'operator' => '=',
                             'value' => $resolvedValue,
+                            'sourceId' => $sourceId,
                         ],
                     ],
                 ],
