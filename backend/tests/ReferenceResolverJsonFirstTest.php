@@ -433,14 +433,15 @@ assertJsonFirstSame(
 );
 
 Yii::$app->acceptedClarificationKeys = [$ambiguousVideoItem['clarificationKey']];
-Yii::$app->acceptedClarificationRows = [[
+$validAcceptedClarificationRow = [
     'clarification_key' => $ambiguousVideoItem['clarificationKey'],
     'term' => $ambiguousVideoItem['term'],
     'resolved_filter_json' => json_encode($selectedLibraryOption['resolvedFilter']),
     'selected_source_table' => $selectedLibraryOption['resolvedFilter']['table'],
     'selected_source_id' => $selectedLibraryOption['id'],
     'selected_value' => $selectedLibraryOption['resolvedFilter']['value'],
-]];
+];
+Yii::$app->acceptedClarificationRows = [$validAcceptedClarificationRow];
 $acceptedContinuation = ReferenceResolverService::resolvePrompt($frontendContinuation, 7);
 $acceptedFilters = [];
 foreach (($acceptedContinuation['resolvedFilters'] ?? []) as $filter) {
@@ -465,6 +466,46 @@ assertJsonFirstSame(
     $acceptedFilters['material_type']['values'] ?? null,
     'The accepted library continuation must preserve the VHS and DVD material filters.'
 );
+
+$emptySourceIdRow = $validAcceptedClarificationRow;
+$emptySourceIdRow['selected_source_id'] = '';
+Yii::$app->acceptedClarificationRows = [$emptySourceIdRow];
+$emptySourceIdAttempt = ReferenceResolverService::resolvePrompt($frontendContinuation, 7);
+assertJsonFirstSame(
+    'reference_resolver_ambiguous_library',
+    $emptySourceIdAttempt['routeReason'] ?? null,
+    'An accepted event with an empty selected source ID must fail closed.'
+);
+
+$conflictingFilterSourceIdRow = $validAcceptedClarificationRow;
+$conflictingResolvedFilter = $selectedLibraryOption['resolvedFilter'];
+$conflictingResolvedFilter['sourceId'] = 'ac-hillyer';
+$conflictingFilterSourceIdRow['resolved_filter_json'] = json_encode($conflictingResolvedFilter);
+Yii::$app->acceptedClarificationRows = [$conflictingFilterSourceIdRow];
+$conflictingFilterSourceIdAttempt = ReferenceResolverService::resolvePrompt(
+    $frontendContinuation,
+    7
+);
+assertJsonFirstSame(
+    'reference_resolver_ambiguous_library',
+    $conflictingFilterSourceIdAttempt['routeReason'] ?? null,
+    'An event source ID that conflicts with resolved_filter.sourceId must fail closed.'
+);
+
+$malformedNewestRow = $validAcceptedClarificationRow;
+$malformedNewestRow['resolved_filter_json'] = json_encode('malformed-newest-event');
+Yii::$app->acceptedClarificationRows = [
+    $malformedNewestRow,
+    $validAcceptedClarificationRow,
+];
+$malformedNewestAttempt = ReferenceResolverService::resolvePrompt($frontendContinuation, 7);
+assertJsonFirstSame(
+    'reference_resolver_ambiguous_library',
+    $malformedNewestAttempt['routeReason'] ?? null,
+    'A malformed newest event must block fallback to an older valid event for the same key.'
+);
+
+Yii::$app->acceptedClarificationRows = [$validAcceptedClarificationRow];
 
 $crossDimensionContinuation = $ambiguousVideoQuestion
     . "\n\nClarifications:\n- Hillyer library: Use HC DVD for Hillyer library.";

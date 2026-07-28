@@ -561,7 +561,6 @@ class ReferenceResolverService
                         selected_source_table, selected_source_id, selected_value
                  FROM ai_clarification_events
                  WHERE user_id = :user_id
-                   AND resolved_filter_json IS NOT NULL
                  ORDER BY id DESC',
                 [':user_id' => (int)$userId]
             )->queryAll();
@@ -570,11 +569,13 @@ class ReferenceResolverService
         }
 
         $selections = [];
+        $seenKeys = [];
         foreach ($rows as $row) {
             $clarificationKey = trim((string)($row['clarification_key'] ?? ''));
-            if ($clarificationKey === '' || isset($selections[$clarificationKey])) {
+            if ($clarificationKey === '' || isset($seenKeys[$clarificationKey])) {
                 continue;
             }
+            $seenKeys[$clarificationKey] = true;
             $resolvedFilter = json_decode(
                 (string)($row['resolved_filter_json'] ?? ''),
                 true
@@ -1133,10 +1134,15 @@ class ReferenceResolverService
             $acceptedTable = trim((string)($acceptedFilter['table'] ?? ''));
             $acceptedColumn = trim((string)($acceptedFilter['column'] ?? ''));
             $acceptedValue = trim((string)($acceptedFilter['value'] ?? ''));
+            $acceptedSourceId = trim((string)($acceptedSelection['source_id'] ?? ''));
+            $acceptedFilterSourceId = trim((string)($acceptedFilter['sourceId'] ?? ''));
             if (
                 $acceptedTable !== $sourceTable
                 || $acceptedColumn !== 'name'
                 || $acceptedValue === ''
+                || $acceptedSourceId === ''
+                || $acceptedFilterSourceId === ''
+                || $acceptedSourceId !== $acceptedFilterSourceId
                 || trim((string)($acceptedSelection['source_table'] ?? '')) !== $sourceTable
                 || trim((string)($acceptedSelection['value'] ?? '')) !== $acceptedValue
             ) {
@@ -1167,7 +1173,6 @@ class ReferenceResolverService
                     continue;
                 }
 
-                $acceptedSourceId = trim((string)($acceptedSelection['source_id'] ?? ''));
                 $selectedCandidates = array_values(array_filter(
                     $responsibleMatches,
                     function (array $match) use (
@@ -1178,10 +1183,8 @@ class ReferenceResolverService
                         return (string)($match['source_table'] ?? '') === $sourceTable
                             && self::normalizeText((string)($match['name'] ?? ''))
                                 === self::normalizeText($acceptedValue)
-                            && (
-                                $acceptedSourceId === ''
-                                || (string)($match['source_id'] ?? '') === $acceptedSourceId
-                            );
+                            && trim((string)($match['source_id'] ?? ''))
+                                === $acceptedSourceId;
                     }
                 ));
                 if (count($selectedCandidates) !== 1) {
