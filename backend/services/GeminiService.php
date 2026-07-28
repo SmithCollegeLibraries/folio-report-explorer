@@ -1252,6 +1252,7 @@ PROMPT;
         }
 
       $organizationAcquisitionUnitGuidance = self::buildOrganizationAcquisitionUnitGuidance();
+      $referenceNameMatchingGuidance = self::buildReferenceNameMatchingGuidance($resolvedFilters);
       $legacyPromptFamilyGuidance = self::buildLegacyPromptFamilyGuidance($originalQuestion, $campus);
     $legacyPromptUserInput = self::buildLegacyPromptUserInput($prompt, $campus, $originalQuestion);
 
@@ -1275,8 +1276,7 @@ RULES:
     For example, "Smith College" is a CAMPUS (inventory.loccampus__t), NOT an organization/vendor.
     This is a shared Five Colleges system — library/location names are prefixed with 2-letter campus codes
     (SC=Smith, AC=Amherst, MH=Mt Holyoke, UM=UMass, HC=Hampshire, RP=Five Colleges, YB=Yiddish Book Center).
-    When matching library/location names, use ILIKE with wildcards (e.g. '%Neilson%') since names are stored
-    with campus prefixes (e.g. 'SC Neilson Library'). See the Location Naming Schema section for details.
+    {$referenceNameMatchingGuidance}
     Always check the vocabulary section before choosing a table for user-mentioned entities.
 11. For text/name comparisons, ALWAYS use case-insensitive matching with LOWER() on both sides
     or ILIKE operator. Never compare name columns with exact case (e.g. use LOWER(imt.name) = 'book'
@@ -1745,6 +1745,36 @@ PROMPT;
             'systemPrompt' => $systemPrompt,
             'promptVersion' => $promptVersion,
         ];
+    }
+
+    /**
+     * Name-matching guidance for library, location, and material references.
+     *
+     * Wildcard matching is the right default when the model has to guess at a
+     * stored name, but once the reference resolver has supplied authoritative
+     * values the generated SQL must use them verbatim: a wildcard predicate
+     * cannot be checked against the resolved value set and is rejected by
+     * ResolvedReferenceSqlValidatorService.
+     *
+     * @param array<int, array<string, mixed>> $resolvedFilters
+     */
+    private static function buildReferenceNameMatchingGuidance(array $resolvedFilters): string
+    {
+        if ($resolvedFilters === []) {
+            return "When matching library/location names, use ILIKE with wildcards (e.g. '%Neilson%') since names are stored\n"
+                . "    with campus prefixes (e.g. 'SC Neilson Library'). See the Location Naming Schema section for details.";
+        }
+
+        return "Resolved reference filters are supplied with this request. Use each resolved value exactly as supplied\n"
+            . "    in a plain equality or IN predicate (e.g. lib.name = 'SC Neilson Library'), never a wildcard ILIKE\n"
+            . "    pattern and never a shortened form. The names are already complete, including the campus prefix.\n"
+            . "    Write the report as one single SELECT statement and put every resolved filter in its top-level WHERE\n"
+            . "    clause, comparing the reference table's own name column. Join the reference table to reach it — for\n"
+            . "    material types write JOIN inventory.material_type__t AS mt ON mt.id = ii.material_type_id and then\n"
+            . "    mt.name IN (...) in WHERE. Never filter through a subquery such as\n"
+            . "    ii.material_type_id IN (SELECT id FROM inventory.material_type__t WHERE ...).\n"
+            . "    Do not use a WITH (CTE) clause, UNION, or any subquery inside WHERE. Get per-item counts and\n"
+            . "    circulation measures with LEFT JOIN plus GROUP BY in that same statement instead.";
     }
 
     private static function buildLegacyPromptFamilyGuidance($prompt, $campus = null): string
@@ -6293,7 +6323,18 @@ PROMPT;
                 $sql,
                 true,
                 'The SQL candidate did not preserve the resolved library or material filters.',
-                $exception
+                $exception,
+                // Without a violation the repair prompt reports "None supplied"
+                // and the model has to guess what to change.
+                [[
+                    'key' => 'resolved_reference_filters',
+                    'category' => 'resolved_reference_filters',
+                    'label' => 'Library and material filters',
+                    'guidance' => 'Apply every resolved library, location, and material value exactly as supplied,'
+                        . ' in the top-level WHERE clause of a single SELECT statement.'
+                        . ' Do not use a WITH (CTE) clause, UNION, a subquery inside WHERE, OR, CASE, or a wildcard'
+                        . ' ILIKE pattern for those values; use LEFT JOIN with GROUP BY for counts instead.',
+                ]]
             );
         }
     }

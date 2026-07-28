@@ -2328,6 +2328,13 @@ class ReferenceResolverService
             'unknown' => true,
             'unspecified' => true,
             'general' => true,
+            // Reference rows whose name is also the everyday word for a report
+            // output column. "include the title, call number, barcode" names
+            // outputs, not filter values, so these lose to any specific match.
+            'title' => true,
+            'barcode' => true,
+            'location' => true,
+            'status' => true,
         ];
 
         return isset($generic[self::normalizeText($name)]);

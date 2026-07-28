@@ -123,6 +123,19 @@ try {
         $exception->getSafeCategory() === 'resolved_reference_filter_mismatch',
         'Resolved-reference mismatch must expose only the stable safe category.'
     );
+    $guardViolations = $exception->getSafeViolations();
+    assertGuardTrue(
+        count($guardViolations) === 1,
+        'A resolved-reference mismatch must carry one violation so repair prompts are not left without guidance.'
+    );
+    assertGuardTrue(
+        strpos((string)($guardViolations[0]['guidance'] ?? ''), 'single SELECT') !== false,
+        'Resolved-reference repair guidance must state the supported single-SELECT shape.'
+    );
+    assertGuardTrue(
+        strpos((string)($guardViolations[0]['guidance'] ?? ''), 'WITH') !== false,
+        'Resolved-reference repair guidance must name the CTE construct it cannot accept.'
+    );
 }
 
 $badSql = <<<'SQL'

@@ -857,4 +857,35 @@ assertResolverSame(
     'Legacy multi-token location matching must retain coordinated Josten and Treasure Folio behavior.'
 );
 
+// "title", "barcode", and similar words name report outputs far more often than
+// they name a reference row, so they must not become filters alongside a real
+// reference match.
+$outputWordReferences = array_merge($videoReferences, [
+    [
+        'source_table' => 'inventory.call_number_type__t',
+        'source_id' => 'cnt-title',
+        'name' => 'Title',
+        'code' => '',
+    ],
+]);
+$outputWordResolution = ReferenceResolverService::resolvePromptAgainstReferences(
+    'show me all of the vhs and dvds in hillyer library. include the title, call number, barcode, and location',
+    $outputWordReferences
+);
+assertResolverSame(
+    false,
+    in_array('Title', array_column($outputWordResolution['resolvedReferences'] ?? [], 'name'), true),
+    'A requested output column named "title" must not resolve to a call number type reference.'
+);
+assertResolverSame(
+    false,
+    strpos(implode("\n", $outputWordResolution['guidanceLines'] ?? []), 'call_number_type') !== false,
+    'A requested output column must not add a call number type filter instruction.'
+);
+assertResolverSame(
+    ['SC Hillyer Art Library'],
+    $outputWordResolution['resolvedFilters'][0]['values'] ?? null,
+    'Suppressing an output-word reference must leave the real library filter intact.'
+);
+
 fwrite(STDOUT, "ReferenceResolverService test passed\n");

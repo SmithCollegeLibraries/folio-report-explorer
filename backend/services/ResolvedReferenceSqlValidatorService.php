@@ -84,17 +84,9 @@ final class ResolvedReferenceSqlValidatorService
             self::mismatch();
         }
 
-        preg_match_all('/\bSELECT\b/i', $code, $selectMatches);
-        if (count($selectMatches[0]) !== 1) {
-            self::mismatch();
-        }
-
-        if (
-            preg_match(
-                '/\b(?:WITH|UNION|INTERSECT|EXCEPT|EXISTS|CASE|OR)\b/i',
-                $code
-            ) === 1
-        ) {
+        // Set operations and CTEs can add rows the top-level WHERE never sees,
+        // so they stay unsupported anywhere in the statement.
+        if (preg_match('/\b(?:WITH|UNION|INTERSECT|EXCEPT)\b/i', $code) === 1) {
             self::mismatch();
         }
 
@@ -128,8 +120,17 @@ final class ResolvedReferenceSqlValidatorService
             self::mismatch();
         }
 
+        // Boolean shapes that can dilute or hide a required predicate are
+        // rejected inside the WHERE clause only. The same constructs in the
+        // select list describe outputs, not row scope, and cannot weaken a
+        // filter that this clause still has to satisfy exactly.
         $whereCode = substr($code, $whereOffset, $whereEnd - $whereOffset);
-        if (preg_match('/\b(?:TRUE|FALSE)\b/i', $whereCode) === 1) {
+        if (
+            preg_match(
+                '/\b(?:SELECT|EXISTS|CASE|OR|TRUE|FALSE)\b/i',
+                $whereCode
+            ) === 1
+        ) {
             self::mismatch();
         }
 
@@ -458,6 +459,40 @@ final class ResolvedReferenceSqlValidatorService
                     $match[1],
                     self::exactLikeValue($match[2], $escapeLiteral)
                 );
+                continue;
+            }
+
+            // LOWER(x.name) IN (LOWER('a'), 'b') — the case-insensitive list
+            // form the generation prompt asks for. Each element may be a bare
+            // literal or a LOWER()-wrapped literal.
+            if (
+                preg_match(
+                    '/\ALOWER\s*\(\s*' . $nameField . '\s*\)\s+IN\s*\((.*)\)\z/is',
+                    $term,
+                    $match
+                ) === 1
+            ) {
+                $loweredList = $match[2];
+                $loweredToken = '(?:LOWER\s*\(\s*' . $literalToken . '\s*\)|' . $literalToken . ')';
+                if (
+                    preg_match(
+                        '/\A\s*' . $loweredToken
+                            . '(?:\s*,\s*' . $loweredToken . ')*\s*\z/is',
+                        $loweredList
+                    ) !== 1
+                ) {
+                    continue;
+                }
+
+                preg_match_all('/' . $literalToken . '/', $loweredList, $loweredLiterals);
+                foreach ($loweredLiterals[0] as $valueLiteral) {
+                    self::appendResolvedPredicate(
+                        $predicates,
+                        $aliases,
+                        $match[1],
+                        self::unquoteSqlLiteral($valueLiteral)
+                    );
+                }
                 continue;
             }
 

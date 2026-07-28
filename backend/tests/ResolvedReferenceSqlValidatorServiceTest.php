@@ -569,4 +569,69 @@ resolvedReferenceAssertMismatch(
     'Canonical literals without authoritative FROM or JOIN tables must fail closed.'
 );
 
+// Prompt rule 11 tells the generator to compare names case-insensitively with
+// LOWER() on both sides, which produces a LOWER(...) IN (...) list.
+resolvedReferenceAssertValid(
+    resolvedReferenceCompleteSql(
+        "LOWER(lib.name) = LOWER('SC Hillyer Art Library')"
+        . " AND LOWER(mt.name) IN (LOWER('Videocassette'), LOWER('DVD/Blu-ray'))"
+    ),
+    $resolvedFilters,
+    'A case-insensitive IN list must satisfy the resolved reference filters.'
+);
+
+resolvedReferenceAssertValid(
+    resolvedReferenceCompleteSql(
+        "lib.name = 'SC Hillyer Art Library'"
+        . " AND LOWER(mt.name) IN ('videocassette', 'dvd/blu-ray')"
+    ),
+    $resolvedFilters,
+    'A lowered name column compared against plain literals must also be recognized.'
+);
+
+resolvedReferenceAssertMismatch(
+    resolvedReferenceCompleteSql(
+        "lib.name = 'SC Hillyer Art Library'"
+        . " AND LOWER(mt.name) IN (LOWER('Videocassette'))"
+    ),
+    $resolvedFilters,
+    'A case-insensitive IN list that drops a resolved value must still fail closed.'
+);
+
+// Output-only complexity must not be confused with a filter violation: the
+// resolved values are still applied exactly once, conjunctively, in the
+// top-level WHERE clause.
+$authoritativeWhere = "lib.name = 'SC Hillyer Art Library'"
+    . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')";
+
+resolvedReferenceAssertValid(
+    str_replace(
+        'SELECT item.id',
+        "SELECT item.id, (SELECT COUNT(*) FROM circulation.loan__t loan"
+            . ' WHERE loan.item_id = item.id) AS checkout_count',
+        resolvedReferenceCompleteSql($authoritativeWhere)
+    ),
+    $resolvedFilters,
+    'A scalar subquery in the select list must not fail a satisfied reference filter.'
+);
+
+resolvedReferenceAssertValid(
+    str_replace(
+        'SELECT item.id',
+        "SELECT item.id, COUNT(CASE WHEN loan.status__name = 'Open' THEN 1 END) AS open_loans",
+        resolvedReferenceCompleteSql($authoritativeWhere)
+    ),
+    $resolvedFilters,
+    'A CASE expression in the select list must not fail a satisfied reference filter.'
+);
+
+resolvedReferenceAssertMismatch(
+    resolvedReferenceCompleteSql(
+        "lib.name = 'SC Hillyer Art Library'"
+        . " AND mt.name IN (SELECT name FROM inventory.material_type__t)"
+    ),
+    $resolvedFilters,
+    'A subquery inside the top-level WHERE clause must still fail closed.'
+);
+
 fwrite(STDOUT, "ResolvedReferenceSqlValidatorService test passed\n");

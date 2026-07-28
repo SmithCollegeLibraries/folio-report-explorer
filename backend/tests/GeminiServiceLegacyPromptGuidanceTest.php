@@ -238,4 +238,51 @@ assertSameValue(
     'Uncovered prompts should preserve the original legacy prompt input without extra rewrite text.'
 );
 
+if (!method_exists(GeminiService::class, 'buildReferenceNameMatchingGuidance')) {
+    fwrite(STDERR, "The reference name-matching guidance builder is missing.\n");
+    exit(1);
+}
+$nameMatchingBuilder = new ReflectionMethod(GeminiService::class, 'buildReferenceNameMatchingGuidance');
+if (PHP_VERSION_ID < 80500) {
+    $nameMatchingBuilder->setAccessible(true);
+}
+
+$unresolvedNameGuidance = $nameMatchingBuilder->invoke(null, []);
+assertContainsText(
+    'ILIKE with wildcards',
+    $unresolvedNameGuidance,
+    'Without resolved reference filters the prompt must keep the wildcard matching guidance.'
+);
+
+$resolvedNameGuidance = $nameMatchingBuilder->invoke(null, [
+    [
+        'dimension' => 'library',
+        'source_table' => 'inventory.loclibrary__t',
+        'column' => 'name',
+        'values' => ['SC Hillyer Art Library'],
+    ],
+]);
+assertNotContainsText(
+    'ILIKE with wildcards',
+    $resolvedNameGuidance,
+    'Resolved reference filters must suppress the wildcard matching guidance that the resolved-reference validator rejects.'
+);
+assertContainsText(
+    'exactly as supplied',
+    $resolvedNameGuidance,
+    'Resolved reference filters must instruct exact-value matching.'
+);
+foreach ([
+    'single SELECT',
+    'WITH',
+    'GROUP BY',
+    'JOIN inventory.material_type__t',
+] as $shapeAnchor) {
+    assertContainsText(
+        $shapeAnchor,
+        $resolvedNameGuidance,
+        'Resolved reference filters must instruct the flat query shape the validator can verify.'
+    );
+}
+
 fwrite(STDOUT, "GeminiService legacy prompt guidance test passed\n");
