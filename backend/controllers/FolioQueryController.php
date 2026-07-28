@@ -709,14 +709,16 @@ class FolioQueryController extends Controller
             $response['_attemptedPlanProvenance'] = 'server_defaults';
         }
 
-        if (is_array($result['_askEvidence'] ?? null)) {
-            $response['_askEvidence'] = array_merge($result['_askEvidence'], [
-                'finalSql' => isset($result['sql'])
-                    ? (string)$result['sql']
-                    : ($result['_askEvidence']['finalSql'] ?? null),
-                'repairAttempts' => $repairAttempts,
-            ]);
-        }
+        $resultEvidence = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
+        $response['_askEvidence'] = array_merge($resultEvidence, [
+            'finalSql' => isset($result['sql'])
+                ? (string)$result['sql']
+                : ($resultEvidence['finalSql'] ?? null),
+            'repairAttempts' => $repairAttempts,
+            'validationStatus' => 'exhausted',
+        ]);
 
         if ($semanticExhaustion) {
             $response['validationSummary']['validatorStage'] = 'semantic_conformance';
@@ -800,6 +802,7 @@ class FolioQueryController extends Controller
         $response['message'] = "I couldn't safely turn this request into a report. Nothing ran or changed. Retry the request or refine one part of it.";
         $response['routeReason'] = 'unsafe_generated_sql';
         $response['validationSummary']['status'] = 'rejected';
+        $response['_askEvidence']['validationStatus'] = 'rejected';
         unset($response['sql']);
         return $response;
     }
@@ -1922,9 +1925,6 @@ class FolioQueryController extends Controller
         $evidence = is_array($generatedResult['_askEvidence'] ?? null)
             ? $generatedResult['_askEvidence']
             : [];
-        if ($evidence === []) {
-            return $response;
-        }
 
         if (!isset($evidence['finalSql']) && isset($generatedResult['sql'])) {
             $evidence['finalSql'] = (string)$generatedResult['sql'];
@@ -1934,11 +1934,47 @@ class FolioQueryController extends Controller
                 $generatedResult['repairAttempts']
             );
         }
-        $response['_askEvidence'] = array_merge(
+        $evidence = array_merge(
             $evidence,
             is_array($response['_askEvidence'] ?? null) ? $response['_askEvidence'] : []
         );
+        $failureStatus = $this->askFailureValidationStatus($response);
+        if ($failureStatus !== null) {
+            $evidence['validationStatus'] = $failureStatus;
+        }
+        if ($evidence !== []) {
+            $response['_askEvidence'] = $evidence;
+        }
         return $response;
+    }
+
+    private function askFailureValidationStatus(array $response): ?string
+    {
+        $status = (string)($response['validationSummary']['status'] ?? '');
+        if ($status === 'exhausted') {
+            return 'exhausted';
+        }
+        if ($status === 'rejected') {
+            return 'rejected';
+        }
+
+        $route = (string)($response['route'] ?? '');
+        if (
+            array_key_exists('error', $response)
+            || trim((string)($response['errorType'] ?? '')) !== ''
+            || in_array($route, [
+                'blocked',
+                'exploratory_recovery',
+                'postgres_connectivity_recovery',
+                'database_cancelled',
+                'ai_timeout',
+                'follow_up_context_rejected',
+            ], true)
+        ) {
+            return 'rejected';
+        }
+
+        return null;
     }
 
     protected function administratorReviewService()
@@ -2222,7 +2258,19 @@ class FolioQueryController extends Controller
     ): array {
         $message = trim($error->getMessage());
         if ($error instanceof \app\exceptions\DatabaseQueryCancelledException) {
-            return $this->buildDatabaseCancelledResponse();
+            $response = $this->buildDatabaseCancelledResponse();
+            $response['validationSummary'] = [
+                'status' => 'rejected',
+                'repairAttempts' => 0,
+            ];
+            $response['recoveryContext'] = [
+                'originalQuestion' => $prompt,
+                'campus' => $campus,
+            ];
+            $response['_askEvidence'] = [
+                'validationStatus' => 'rejected',
+            ];
+            return $response;
         }
         // Prefer the typed policy violation; fall back to message matching for
         // policy errors that bubble up from elsewhere as plain exceptions.
@@ -2232,6 +2280,9 @@ class FolioQueryController extends Controller
                 'error' => $this->buildAskPolicyBlockMessage($message),
                 'route' => 'blocked',
                 'routeReason' => 'ask_policy_block',
+                '_askEvidence' => [
+                    'validationStatus' => 'rejected',
+                ],
             ];
         }
 
@@ -2261,7 +2312,12 @@ class FolioQueryController extends Controller
             'suggestions' => [],
             'route' => 'exploratory_recovery',
             'routeReason' => $routeReason,
+            'validationSummary' => [
+                'status' => 'rejected',
+                'repairAttempts' => 0,
+            ],
             'recoveryContext' => [
+                'originalQuestion' => $prompt,
                 'campus' => $campus,
                 'promptFingerprint' => $this->fingerprintPrompt($prompt),
             ],
@@ -2309,7 +2365,12 @@ class FolioQueryController extends Controller
             'suggestions' => [],
             'route' => 'postgres_connectivity_recovery',
             'routeReason' => $routeReason,
+            'validationSummary' => [
+                'status' => 'rejected',
+                'repairAttempts' => 0,
+            ],
             'recoveryContext' => [
+                'originalQuestion' => $prompt,
                 'campus' => $campus,
                 'promptFingerprint' => $this->fingerprintPrompt($prompt),
             ],

@@ -35,6 +35,34 @@ evidenceAssertSame(null, $trustedRejected['generatedSql'], 'A trusted rejected c
 evidenceAssertSame(null, $trustedRejected['sqlHash'], 'A trusted rejected candidate must not persist an executable SQL hash.');
 evidenceAssertSame(true, is_array($trustedRejected['finalStructure']), 'A trusted rejected candidate may retain structural evidence.');
 
+$connectivityFailure = AskGenerationEvidenceService::build([
+    'route' => 'postgres_connectivity_recovery',
+    'mode' => 'exploratory',
+    'errorType' => 'postgres_connectivity',
+    'message' => 'Database validation was unavailable.',
+    '_askEvidence' => [
+        'finalSql' => 'SELECT id FROM inventory.item__t',
+    ],
+], ['prompt' => 'Show available items']);
+evidenceAssertSame('rejected', $connectivityFailure['validationStatus'], 'Connectivity recovery must never infer validation from a retained final candidate.');
+evidenceAssertSame(null, $connectivityFailure['generatedSql'], 'Connectivity recovery must retain no executable SQL.');
+evidenceAssertSame(null, $connectivityFailure['sqlHash'], 'Connectivity recovery must retain no executable SQL hash.');
+evidenceAssertSame(true, is_array($connectivityFailure['finalStructure']), 'Connectivity recovery may retain non-executable structural evidence.');
+
+$policyFailure = AskGenerationEvidenceService::build([
+    'route' => 'blocked',
+    'routeReason' => 'ask_policy_block',
+    'error' => 'Blocked',
+    'policyBlocked' => true,
+    '_askEvidence' => [
+        'finalSql' => 'SELECT id FROM inventory.item__t',
+        'validationStatus' => 'validated',
+    ],
+], ['prompt' => 'List patron email']);
+evidenceAssertSame('rejected', $policyFailure['validationStatus'], 'Policy-blocked responses must override a stale validated status.');
+evidenceAssertSame(null, $policyFailure['generatedSql'], 'Policy-blocked responses must never persist executable SQL.');
+evidenceAssertSame(null, $policyFailure['sqlHash'], 'Policy-blocked responses must never persist an executable SQL hash.');
+
 $ordinary = AskGenerationEvidenceService::build([
     'route' => 'exploratory_legacy_freeform',
     'routeReason' => 'unsupported_query_family',

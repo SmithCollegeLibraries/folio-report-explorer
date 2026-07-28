@@ -69,17 +69,22 @@ final class AskGenerationEvidenceService
         $semanticContract = is_array($requestContext['semanticContract'] ?? null)
             ? $requestContext['semanticContract']
             : [];
+        $policyBlocked = !empty($result['policyBlocked'])
+            || !empty($requestContext['policyBlocked'])
+            || $route === 'blocked'
+            || ($result['routeReason'] ?? null) === 'ask_policy_block';
+        $failureBoundary = self::isFailureBoundary($result, $route, $policyBlocked);
+        $nonExecutableResponse = $failureBoundary
+            || $route === 'clarification'
+            || !empty($result['needsClarification']);
         $validationStatus = self::validationStatus(
             $internalEvidence,
             $result,
             $validationSummary,
             $semanticValidation,
-            $finalSql
+            $finalSql,
+            $failureBoundary
         );
-        $policyBlocked = !empty($result['policyBlocked'])
-            || !empty($requestContext['policyBlocked'])
-            || $route === 'blocked'
-            || ($result['routeReason'] ?? null) === 'ask_policy_block';
         $repairAttempts = max(0, min(2, (int)(
             $internalEvidence['repairAttempts']
                 ?? $result['repairAttempts']
@@ -159,7 +164,8 @@ final class AskGenerationEvidenceService
             ['limited', 'partial'],
             true
         );
-        $generatedSql = in_array($validationStatus, ['exhausted', 'rejected'], true)
+        $generatedSql = $nonExecutableResponse
+            || in_array($validationStatus, ['exhausted', 'rejected'], true)
             ? null
             : $finalSql;
 
@@ -221,7 +227,8 @@ final class AskGenerationEvidenceService
         array $result,
         array $validationSummary,
         array $semanticValidation,
-        ?string $finalSql
+        ?string $finalSql,
+        bool $failureBoundary
     ): ?string {
         $status = self::nullableString(
             $internalEvidence['validationStatus']
@@ -229,6 +236,12 @@ final class AskGenerationEvidenceService
                 ?? $result['validationStatus']
                 ?? null
         );
+        if (!in_array($status, ['validated', 'rejected', 'exhausted'], true)) {
+            $status = null;
+        }
+        if ($failureBoundary) {
+            return $status === 'exhausted' ? 'exhausted' : 'rejected';
+        }
         if ($status !== null) {
             return $status;
         }
@@ -239,6 +252,37 @@ final class AskGenerationEvidenceService
             return 'validated';
         }
         return null;
+    }
+
+    private static function isFailureBoundary(
+        array $result,
+        ?string $route,
+        bool $policyBlocked
+    ): bool {
+        if (
+            $policyBlocked
+            || array_key_exists('error', $result)
+            || self::nullableString($result['errorType'] ?? null) !== null
+        ) {
+            return true;
+        }
+
+        $status = self::nullableString(
+            $result['validationSummary']['status']
+                ?? $result['validationStatus']
+                ?? null
+        );
+        if (in_array($status, ['rejected', 'exhausted'], true)) {
+            return true;
+        }
+
+        return in_array($route, [
+            'exploratory_recovery',
+            'postgres_connectivity_recovery',
+            'database_cancelled',
+            'ai_timeout',
+            'follow_up_context_rejected',
+        ], true);
     }
 
     private static function executionMode(?string $mode, ?string $route, bool $policyBlocked): ?string

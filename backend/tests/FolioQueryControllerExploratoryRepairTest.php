@@ -470,7 +470,8 @@ namespace {
     );
     repairAssertSame(0, $canonicalRepairCalls, 'Verified-family preflight failures must retain legacy recovery without Gemini repair.');
     repairAssertSame('exploratory_recovery', $canonicalFailure['route'] ?? null, 'Verified-family preflight failures should retain the legacy continuation route.');
-    repairAssertSame(null, $canonicalFailure['validationSummary'] ?? null, 'Verified-family preflight failures must not be mislabeled as exploratory repair exhaustion.');
+    repairAssertSame('rejected', $canonicalFailure['validationSummary']['status'] ?? null, 'Verified-family preflight failures must use the safe no-SQL recovery status.');
+    repairAssertSame(null, $canonicalFailure['errorType'] ?? null, 'Verified-family preflight failures must remain distinct from exploratory repair exhaustion.');
 
     $cancelRepairCalls = 0;
     try {
@@ -803,7 +804,8 @@ namespace {
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['_askEvidence']), 'Ordinary database recovery must strip the internal envelope after persistence.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['sql']), 'Ordinary database recovery must not expose generated SQL.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['validationStatus']), 'Ordinary database recovery must not expose validator status.');
-    repairAssertSame(false, isset($finalizedOrdinaryRecovery['validationSummary']), 'Ordinary database recovery must not expose validator details.');
+    repairAssertSame('rejected', $finalizedOrdinaryRecovery['validationSummary']['status'] ?? null, 'Ordinary database recovery must expose only the safe no-SQL recovery status.');
+    repairAssertSame('Show available items', $finalizedOrdinaryRecovery['recoveryContext']['originalQuestion'] ?? null, 'Ordinary database recovery must preserve the original question for safe Retry controls.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['failureCategory']), 'Ordinary database recovery must not expose validator category.');
     repairAssertSame(true, $finalizedOrdinaryRecovery['reviewRequired'] ?? null, 'Ordinary database recovery may expose only the designed review signal.');
     repairAssertSame(200, Yii::$app->response->statusCode, 'Ordinary database recovery must preserve its HTTP 200 status.');
@@ -842,6 +844,17 @@ namespace {
         repairAssertSame('bundle-hash', $outcomeRecorder->received['provenance']['referenceBundleMetadata']['hash'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must retain reference provenance.');
         repairAssertSame('inventory_library_location_listing', $outcomeRecorder->received['queryFamily'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must retain family evidence.');
         repairAssertSame(true, is_array($outcomeRecorder->received['finalStructure'] ?? null), ucfirst($postGenerationOutcome) . ' recovery persistence must retain final candidate structure.');
+        repairAssertSame('rejected', $outcomeRecorder->received['validationStatus'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must record an explicit rejection.');
+        repairAssertSame(null, $outcomeRecorder->received['generatedSql'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must not retain executable SQL.');
+        repairAssertSame(null, $outcomeRecorder->received['sqlHash'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must not retain an executable SQL hash.');
+        repairAssertSame(
+            $postGenerationOutcome === 'connectivity',
+            $outcomeRecorder->received['reviewRequired'] ?? null,
+            ucfirst($postGenerationOutcome) . ' recovery review policy must distinguish inability to validate from a policy block.'
+        );
+        if ($postGenerationOutcome === 'connectivity') {
+            repairAssertSame(true, in_array('unable_to_validate', $outcomeRecorder->received['reviewReasons'] ?? [], true), 'Connectivity recovery must create unable-to-validate administrator review work.');
+        }
         repairAssertSame(false, isset($finalizedOutcome['_askEvidence']), ucfirst($postGenerationOutcome) . ' recovery must strip the internal envelope after persistence.');
         repairAssertSame(false, isset($finalizedOutcome['sql']), ucfirst($postGenerationOutcome) . ' recovery must not expose generated SQL.');
         repairAssertSame($postGenerationOutcome === 'policy' ? 403 : 200, Yii::$app->response->statusCode, ucfirst($postGenerationOutcome) . ' recovery must preserve its response status.');
@@ -874,6 +887,8 @@ namespace {
     repairAssertSame('trusted-model', $cancellationRecorder->received['provenance']['modelName'] ?? null, 'Cancellation recovery persistence must retain model provenance.');
     repairAssertSame('family_compiler_v1', $cancellationRecorder->received['provenance']['compilerVersion'] ?? null, 'Cancellation recovery persistence must retain compiler provenance.');
     repairAssertSame(true, is_array($cancellationRecorder->received['finalStructure'] ?? null), 'Cancellation recovery persistence must retain final candidate structure.');
+    repairAssertSame('rejected', $cancellationRecorder->received['validationStatus'] ?? null, 'Cancellation recovery persistence must record an explicit rejection.');
+    repairAssertSame(null, $cancellationRecorder->received['generatedSql'] ?? null, 'Cancellation recovery persistence must not retain executable SQL.');
     repairAssertSame(false, isset($finalizedCancellation['_askEvidence']), 'Cancellation recovery must strip the internal envelope after persistence.');
     repairAssertSame(false, isset($finalizedCancellation['sql']), 'Cancellation recovery must not expose generated SQL.');
     repairAssertSame(503, Yii::$app->response->statusCode, 'Cancellation recovery must preserve its 503 response status.');

@@ -128,4 +128,31 @@ describe('ExploratoryRecoveryPanel', () => {
     expect(screen.queryByText(/Generated SQL/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Run/i })).not.toBeInTheDocument();
   });
+
+  it('renders connectivity guidance and retries the preserved question without SQL controls', () => {
+    const onRetry = vi.fn();
+    render(
+      <ExploratoryRecoveryPanel
+        response={{
+          mode: 'exploratory',
+          errorType: 'postgres_connectivity',
+          message: 'I could not connect to the FOLIO reporting database. Connect to VPN and try again.',
+          validationSummary: { status: 'rejected', repairAttempts: 0 },
+          recoveryContext: {
+            originalQuestion: 'Show available items',
+            campus: 'Smith College',
+          },
+        }}
+        onRetry={onRetry}
+        onRefine={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText(/connect to the FOLIO reporting database/i)).toBeInTheDocument();
+    expect(screen.getByText(/VPN/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onRetry).toHaveBeenCalledWith('Show available items');
+    expect(screen.queryByText(/Generated SQL/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run/i })).not.toBeInTheDocument();
+  });
 });
