@@ -169,8 +169,11 @@ function submitGenerationLinkedQuery(array $body)
 
 $service = new AdministratorReviewService($db);
 $exactSql = 'SELECT 1 AS exact_value';
-$exact = seedGeneration($service, 7, $exactSql);
-$exactResult = submitGenerationLinkedQuery([
+$exact = seedGeneration($service, 7, $exactSql, [
+    'reviewRequired' => true,
+    'reviewReasons' => ['documented_default'],
+]);
+$exactFirstResult = submitGenerationLinkedQuery([
     'sql' => $exactSql,
     'source' => 'nl',
     'dataSource' => 'local',
@@ -178,15 +181,46 @@ $exactResult = submitGenerationLinkedQuery([
     'provenance' => ['model' => 'client-forged'],
 ]);
 generationLinkAssert(Yii::$app->response->statusCode === 202, 'An owned exact generation should submit successfully.');
+$exactSecondResult = submitGenerationLinkedQuery([
+    'sql' => $exactSql,
+    'source' => 'nl',
+    'dataSource' => 'local',
+    'generationId' => $exact['generationId'],
+]);
+generationLinkAssert(Yii::$app->response->statusCode === 202, 'An owned exact generation should support a second execution.');
 $exactRow = $db->createCommand('SELECT * FROM ai_report_generations WHERE id = :id', [':id' => $exact['generationId']])->queryOne();
 generationLinkAssert(
-    $exactRow['query_job_id'] === $exactResult['jobId'],
-    'The exact trusted generation must link to the saved job. Linked: ' . var_export($exactRow['query_job_id'], true)
-        . '; job: ' . var_export($exactResult['jobId'] ?? null, true)
+    $exactRow['query_job_id'] === null,
+    'The reviewed source generation must remain stable instead of being overwritten by exact reruns.'
 );
-generationLinkAssert($exactRow['linked_at'] !== null, 'The exact trusted generation must record its link time.');
-$exactMetadata = json_decode((string)$db->createCommand('SELECT metadata FROM query_jobs WHERE id = :id', [':id' => $exactResult['jobId']])->queryScalar(), true);
-generationLinkAssert(($exactMetadata['askAiProvenance']['generationId'] ?? null) === $exact['generationId'], 'Job metadata must identify the trusted server generation.');
+$exactChildren = $db->createCommand(
+    'SELECT * FROM ai_report_generations WHERE parent_generation_id = :parentId ORDER BY created_at, id',
+    [':parentId' => $exact['generationId']]
+)->queryAll();
+generationLinkAssert(count($exactChildren) === 2, 'Each exact execution must create its own linked child generation.');
+$linkedExactJobIds = array_values(array_unique(array_column($exactChildren, 'query_job_id')));
+$expectedExactJobIds = [$exactFirstResult['jobId'], $exactSecondResult['jobId']];
+sort($linkedExactJobIds, SORT_STRING);
+sort($expectedExactJobIds, SORT_STRING);
+generationLinkAssert(
+    $linkedExactJobIds === $expectedExactJobIds,
+    'Both exact rerun jobs must retain independent generation links.'
+);
+generationLinkAssert(
+    (int)$db->createCommand(
+        'SELECT COUNT(*) FROM ai_report_reviews WHERE generation_id IN (:first, :second)',
+        [':first' => $exactChildren[0]['id'], ':second' => $exactChildren[1]['id']]
+    )->queryScalar() === 0,
+    'Execution-link children must reuse the source review instead of creating duplicate administrator work.'
+);
+$exactFirstChild = $db->createCommand(
+    'SELECT * FROM ai_report_generations WHERE query_job_id = :jobId',
+    [':jobId' => $exactFirstResult['jobId']]
+)->queryOne();
+$exactMetadata = json_decode((string)$db->createCommand('SELECT metadata FROM query_jobs WHERE id = :id', [':id' => $exactFirstResult['jobId']])->queryScalar(), true);
+generationLinkAssert(($exactMetadata['askAiProvenance']['generationId'] ?? null) === $exactFirstChild['id'], 'Job metadata must identify its unique execution child.');
+generationLinkAssert(($exactMetadata['askAiProvenance']['sourceGenerationId'] ?? null) === $exact['generationId'], 'Job metadata must identify the reviewed source generation.');
+generationLinkAssert(($exactMetadata['askAiProvenance']['reviewRequired'] ?? null) === true, 'Job metadata must retain the source generation review signal.');
 generationLinkAssert(($exactMetadata['askAiProvenance']['provenance']['model'] ?? null) === 'gemini-2.5-pro', 'Job metadata must copy server-stored provenance.');
 generationLinkAssert(($exactMetadata['askAiProvenance']['provenance']['model'] ?? null) !== 'client-forged', 'Job metadata must ignore client provenance.');
 

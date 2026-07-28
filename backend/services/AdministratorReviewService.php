@@ -89,7 +89,7 @@ class AdministratorReviewService
      * Resolve an owned Ask generation for execution, creating a reviewed child
      * when the submitted SQL no longer matches the server-stored SQL hash.
      *
-     * @return array{generation:AiReportGeneration,edited:bool}
+     * @return array{generation:AiReportGeneration,provenanceGeneration:AiReportGeneration,edited:bool}
      */
     public function resolveExecutionGeneration(string $generationId, int $userId, string $normalizedSql): array
     {
@@ -97,15 +97,22 @@ class AdministratorReviewService
         if ($generation === null || $generation->user_id === null || (int)$generation->user_id !== $userId) {
             throw new DomainException('generation_not_owned');
         }
+        $sourceGeneration = $this->executionSourceGeneration($generation, $userId);
 
-        $storedHash = (string)$generation->sql_hash;
+        $storedHash = (string)$sourceGeneration->sql_hash;
         $submittedHash = hash('sha256', $normalizedSql);
         if ($storedHash !== '' && hash_equals($storedHash, $submittedHash)) {
-            return ['generation' => $generation, 'edited' => false];
+            return [
+                'generation' => $this->createExecutionChild($sourceGeneration, $normalizedSql),
+                'provenanceGeneration' => $sourceGeneration,
+                'edited' => false,
+            ];
         }
 
+        $editedGeneration = $this->createEditedChild($sourceGeneration, $normalizedSql);
         return [
-            'generation' => $this->createEditedChild($generation, $normalizedSql),
+            'generation' => $editedGeneration,
+            'provenanceGeneration' => $editedGeneration,
             'edited' => true,
         ];
     }
@@ -114,9 +121,18 @@ class AdministratorReviewService
      * Link a saved query job and copy only server-trusted Ask provenance into
      * its metadata.
      */
-    public function linkExecutionGeneration(AiReportGeneration $generation, string $queryJobId): void
+    public function linkExecutionGeneration(
+        AiReportGeneration $generation,
+        string $queryJobId,
+        ?AiReportGeneration $provenanceGeneration = null
+    ): void
     {
-        $this->db->transaction(function () use ($generation, $queryJobId): void {
+        $provenanceGeneration = $provenanceGeneration ?: $generation;
+        $this->db->transaction(function () use (
+            $generation,
+            $queryJobId,
+            $provenanceGeneration
+        ): void {
             $metadataJson = $this->db->createCommand(
                 'SELECT metadata FROM query_jobs WHERE id = :id',
                 [':id' => $queryJobId]
@@ -128,17 +144,22 @@ class AdministratorReviewService
 
             $metadata['askAiProvenance'] = [
                 'generationId' => (string)$generation->id,
+                'sourceGenerationId' => (string)$provenanceGeneration->id,
                 'conversationId' => (string)$generation->conversation_id,
                 'parentGenerationId' => $generation->parent_generation_id === null
                     ? null
                     : (string)$generation->parent_generation_id,
-                'route' => $generation->route,
-                'routeReason' => $generation->route_reason,
-                'executionMode' => $generation->execution_mode,
-                'validationStatus' => $generation->validation_status,
-                'reviewRequired' => (bool)$generation->review_required,
-                'reviewReasons' => $this->decodeJsonList($generation->review_reasons_json),
-                'provenance' => $this->decodeJsonObject($generation->provenance_json),
+                'route' => $provenanceGeneration->route,
+                'routeReason' => $provenanceGeneration->route_reason,
+                'executionMode' => $provenanceGeneration->execution_mode,
+                'validationStatus' => $provenanceGeneration->validation_status,
+                'reviewRequired' => (bool)$provenanceGeneration->review_required,
+                'reviewReasons' => $this->decodeJsonList(
+                    $provenanceGeneration->review_reasons_json
+                ),
+                'provenance' => $this->decodeJsonObject(
+                    $provenanceGeneration->provenance_json
+                ),
             ];
 
             $now = gmdate('Y-m-d H:i:s');
@@ -353,17 +374,35 @@ class AdministratorReviewService
 
         return $this->db->transaction(function () use ($cutoff): int {
             $terminalGenerationIds = $this->db->createCommand(
-                "SELECT generation_id FROM ai_report_reviews
-                 WHERE status IN ('resolved', 'dismissed')
-                   AND COALESCE(resolved_at, updated_at) < :cutoff",
+                "SELECT r.generation_id
+                 FROM ai_report_reviews r
+                 INNER JOIN ai_report_generations g ON g.id = r.generation_id
+                 WHERE r.status IN ('resolved', 'dismissed')
+                   AND COALESCE(r.resolved_at, r.updated_at) < :cutoff
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM ai_report_generations linked
+                       WHERE linked.parent_generation_id = g.id
+                         AND linked.query_job_id IS NOT NULL
+                   )",
                 [':cutoff' => $cutoff]
             )->queryColumn();
 
             $deleted = $this->deleteGenerationsByIds($terminalGenerationIds);
-            $deleted += $this->db->createCommand(
-                'DELETE FROM ai_report_generations WHERE query_job_id IS NULL AND created_at < :cutoff',
+            $unlinkedGenerationIds = $this->db->createCommand(
+                'SELECT g.id
+                 FROM ai_report_generations g
+                 WHERE g.query_job_id IS NULL
+                   AND g.created_at < :cutoff
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM ai_report_generations linked
+                       WHERE linked.parent_generation_id = g.id
+                         AND linked.query_job_id IS NOT NULL
+                   )',
                 [':cutoff' => $cutoff]
-            )->execute();
+            )->queryColumn();
+            $deleted += $this->deleteGenerationsByIds($unlinkedGenerationIds);
 
             return $deleted;
         });
@@ -409,6 +448,71 @@ class AdministratorReviewService
         }
 
         return $parent;
+    }
+
+    private function executionSourceGeneration(
+        AiReportGeneration $generation,
+        int $userId
+    ): AiReportGeneration {
+        $seen = [];
+        while (
+            (string)$generation->route_reason === 'query_execution'
+            && $generation->parent_generation_id !== null
+        ) {
+            $generationId = (string)$generation->id;
+            if (isset($seen[$generationId])) {
+                throw new DomainException('generation_lineage_cycle');
+            }
+            $seen[$generationId] = true;
+
+            $parent = AiReportGeneration::findOne([
+                'id' => (string)$generation->parent_generation_id,
+            ]);
+            if (
+                $parent === null
+                || $parent->user_id === null
+                || (int)$parent->user_id !== $userId
+            ) {
+                throw new DomainException('generation_not_owned');
+            }
+            $generation = $parent;
+        }
+
+        return $generation;
+    }
+
+    private function createExecutionChild(
+        AiReportGeneration $parent,
+        string $normalizedSql
+    ): AiReportGeneration {
+        $record = $this->recordGeneration([
+            'userId' => (int)$parent->user_id,
+            'parentGenerationId' => (string)$parent->id,
+            'promptFingerprint' => (string)$parent->prompt_fingerprint,
+            'originalQuestion' => (string)$parent->original_question,
+            'followUpContext' => $this->decodeNullableJson($parent->follow_up_context),
+            'responseMode' => $parent->response_mode,
+            'executionMode' => $parent->execution_mode,
+            'route' => $parent->route,
+            'routeReason' => 'query_execution',
+            'validationStatus' => $parent->validation_status,
+            'generatedSql' => $normalizedSql,
+            'sqlHash' => hash('sha256', $normalizedSql),
+            'assumptions' => $this->decodeNullableJson($parent->assumptions_json),
+            'userNotice' => $this->decodeNullableJson($parent->user_notice_json),
+            'confidenceEvidence' => $this->decodeJsonObject($parent->confidence_evidence_json),
+            'initialStructure' => $this->decodeNullableJson($parent->initial_structure_json),
+            'finalStructure' => $this->decodeNullableJson($parent->final_structure_json),
+            'provenance' => $this->decodeJsonObject($parent->provenance_json),
+            'reviewRequired' => false,
+            'reviewReasons' => [],
+        ]);
+
+        $child = AiReportGeneration::findOne(['id' => $record['generationId']]);
+        if ($child === null) {
+            throw new RuntimeException('execution_generation_not_found');
+        }
+        return $child;
     }
 
     private function createEditedChild(AiReportGeneration $parent, string $normalizedSql): AiReportGeneration

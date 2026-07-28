@@ -64,6 +64,7 @@ SQL)->execute();
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
     id VARCHAR(36) PRIMARY KEY,
+    parent_generation_id VARCHAR(36) NULL,
     query_job_id VARCHAR(36) NULL,
     user_id INTEGER NULL,
     original_question TEXT NOT NULL,
@@ -190,6 +191,22 @@ function historyDeletionReview(
     return $generationId;
 }
 
+function historyDeletionExecutionChild($parentGenerationId, $jobId, $userId, $suffix)
+{
+    $generationId = 'execution-' . $suffix;
+    Yii::$app->db->createCommand()->insert('ai_report_generations', [
+        'id' => $generationId,
+        'parent_generation_id' => $parentGenerationId,
+        'query_job_id' => $jobId,
+        'user_id' => $userId,
+        'original_question' => 'PRIVATE EXECUTION QUESTION ' . $suffix,
+        'follow_up_context' => null,
+        'generated_sql' => 'SELECT 1',
+        'confidence_evidence_json' => '{}',
+    ])->execute();
+    return $generationId;
+}
+
 function invokeHistoryDeletion($id)
 {
     Yii::$app->response->statusCode = 200;
@@ -291,6 +308,48 @@ $ordinaryHistoryPayload = json_encode([$advisoryItems[$cautionedId], $advisoryIt
 foreach (['PRIVATE QUESTION', 'PRIVATE_', 'private', 'PRIVATE NOTES', 'administrator_notes', 'confidence_evidence'] as $secret) {
     historyDeletionAssert(strpos($ordinaryHistoryPayload, $secret) === false, 'Ordinary history must not expose review notes or generation evidence.');
 }
+
+$exactFirstId = '8f4a4aa0-5111-4222-8333-123456789abc';
+$exactSecondId = '8f4a4aa0-5112-4222-8333-123456789abc';
+historyDeletionJob($exactFirstId, 7, 'completed', '2026-07-19 10:08:00');
+historyDeletionJob($exactSecondId, 7, 'completed', '2026-07-19 10:09:00');
+$exactSourceGeneration = historyDeletionReview(null, 7, 'cautioned', null, 'exact-source');
+$exactFirstGeneration = historyDeletionExecutionChild($exactSourceGeneration, $exactFirstId, 7, 'exact-first');
+$exactSecondGeneration = historyDeletionExecutionChild($exactSourceGeneration, $exactSecondId, 7, 'exact-second');
+$exactAdvisoryItems = queryHistoryItems();
+foreach ([$exactFirstId, $exactSecondId] as $exactJobId) {
+    historyDeletionAssert(($exactAdvisoryItems[$exactJobId]['reviewAdvisory'] ?? null) === [
+        'state' => 'cautioned',
+        'message' => 'A reporting specialist identified an important limitation in this result.',
+    ], 'Every exact rerun must inherit the reviewed source advisory.');
+}
+$deleteNewestExact = invokeHistoryDeletion($exactSecondId);
+historyDeletionAssert(($deleteNewestExact['success'] ?? false) === true, 'The newest exact rerun should be deletable.');
+historyDeletionAssert(
+    (int)Yii::$app->db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id = :id', [':id' => $exactSecondGeneration])->queryScalar() === 0,
+    'Deleting one exact rerun must remove only its execution child.'
+);
+historyDeletionAssert(
+    (int)Yii::$app->db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id = :id', [':id' => $exactSourceGeneration])->queryScalar() === 1,
+    'Deleting the newest exact rerun must retain the shared reviewed source while an older rerun remains.'
+);
+historyDeletionAssert(
+    queryHistoryItems()[$exactFirstId]['reviewAdvisory']['state'] === 'cautioned',
+    'The older exact rerun must retain its advisory after the newest rerun is deleted.'
+);
+$deleteLastExact = invokeHistoryDeletion($exactFirstId);
+historyDeletionAssert(($deleteLastExact['success'] ?? false) === true, 'The last exact rerun should be deletable.');
+historyDeletionAssert(
+    (int)Yii::$app->db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id IN (:source, :child)', [
+        ':source' => $exactSourceGeneration,
+        ':child' => $exactFirstGeneration,
+    ])->queryScalar() === 0,
+    'Deleting the last exact rerun must clean up its child and now-unreferenced source generation.'
+);
+historyDeletionAssert(
+    (int)Yii::$app->db->createCommand('SELECT COUNT(*) FROM ai_report_reviews WHERE generation_id = :id', [':id' => $exactSourceGeneration])->queryScalar() === 0,
+    'Deleting the last exact rerun must clean up the shared review.'
+);
 
 $missingReplacementId = '8f4a4aa0-5301-4222-8333-123456789abc';
 $deletedReplacementId = '8f4a4aa0-5302-4222-8333-123456789abc';

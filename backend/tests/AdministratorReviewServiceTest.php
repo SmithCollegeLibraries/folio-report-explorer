@@ -312,6 +312,47 @@ reviewAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_reviews WHE
 reviewAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id = :id', [':id' => $atCutoff['generationId']])->queryScalar() === 1, 'A generation exactly at the retention cutoff must remain.');
 reviewAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id = :id', [':id' => $beforeCutoff['generationId']])->queryScalar() === 0, 'A generation older than the retention cutoff must be removed.');
 
+$retainedSource = $service->recordGeneration(generationContext([
+    'reviewRequired' => true,
+    'reviewReasons' => ['documented_default'],
+]));
+$db->createCommand()->update('ai_report_generations', [
+    'created_at' => '2026-01-01 00:00:00',
+    'updated_at' => '2026-01-01 00:00:00',
+], ['id' => $retainedSource['generationId']])->execute();
+$db->createCommand()->update('ai_report_reviews', [
+    'status' => 'resolved',
+    'resolved_at' => '2026-01-01 00:00:00',
+    'updated_at' => '2026-01-01 00:00:00',
+], ['id' => $retainedSource['reviewId']])->execute();
+$db->createCommand()->insert('query_jobs', [
+    'id' => 'retained-execution-job',
+    'user_id' => 7,
+    'status' => 'completed',
+])->execute();
+$retainedExecution = $service->recordGeneration(generationContext([
+    'parentGenerationId' => $retainedSource['generationId'],
+    'queryJobId' => 'retained-execution-job',
+    'reviewRequired' => false,
+    'reviewReasons' => [],
+]));
+$protectedPurge = $service->purgeExpired(
+    30,
+    new DateTimeImmutable('2026-07-21 00:00:00', new DateTimeZone('UTC'))
+);
+reviewAssert($protectedPurge === 0, 'Retention must not remove a reviewed source while an execution child remains linked to history.');
+reviewAssert(
+    (int)$db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id IN (:source, :child)', [
+        ':source' => $retainedSource['generationId'],
+        ':child' => $retainedExecution['generationId'],
+    ])->queryScalar() === 2,
+    'Retention must preserve both the shared source and linked execution child.'
+);
+reviewAssert(
+    (int)$db->createCommand('SELECT COUNT(*) FROM ai_report_reviews WHERE id = :id', [':id' => $retainedSource['reviewId']])->queryScalar() === 1,
+    'Retention must preserve the shared source review while history still depends on it.'
+);
+
 $userGeneration = $service->recordGeneration(generationContext(['userId' => 44, 'reviewRequired' => true]));
 $otherGeneration = $service->recordGeneration(generationContext(['userId' => 45, 'reviewRequired' => true]));
 $userPurged = $service->purgeUserContent(44);

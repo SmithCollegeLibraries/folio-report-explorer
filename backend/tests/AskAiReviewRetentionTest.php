@@ -33,6 +33,7 @@ $db->createCommand('PRAGMA foreign_keys = ON')->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
     id VARCHAR(36) PRIMARY KEY,
+    parent_generation_id VARCHAR(36) NULL,
     query_job_id VARCHAR(36) NULL,
     created_at DATETIME NOT NULL
 )

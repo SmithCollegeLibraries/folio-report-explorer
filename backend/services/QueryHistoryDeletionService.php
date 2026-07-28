@@ -47,14 +47,37 @@ class QueryHistoryDeletionService
 
         $db = QueryJob::getDb();
         $db->transaction(function () use ($db, $job): void {
-            $generationIds = $db->createCommand(
-                'SELECT id FROM ai_report_generations WHERE query_job_id = :jobId',
+            $generationRows = $db->createCommand(
+                'SELECT id, parent_generation_id
+                 FROM ai_report_generations
+                 WHERE query_job_id = :jobId',
                 [':jobId' => $job->id]
-            )->queryColumn();
+            )->queryAll();
+            $generationIds = [];
+            $parentGenerationIds = [];
+            foreach ($generationRows as $generationRow) {
+                $generationId = trim((string)($generationRow['id'] ?? ''));
+                if ($generationId !== '') {
+                    $generationIds[] = $generationId;
+                }
+                $parentGenerationId = trim((string)(
+                    $generationRow['parent_generation_id'] ?? ''
+                ));
+                if ($parentGenerationId !== '') {
+                    $parentGenerationIds[] = $parentGenerationId;
+                }
+            }
+            $generationIds = array_values(array_unique($generationIds));
+            $parentGenerationIds = array_values(array_unique($parentGenerationIds));
 
             if ($generationIds !== []) {
                 $db->createCommand()->delete('ai_report_reviews', ['generation_id' => $generationIds])->execute();
                 $db->createCommand()->delete('ai_report_generations', ['id' => $generationIds])->execute();
+            }
+            foreach ($parentGenerationIds as $parentGenerationId) {
+                if (!in_array($parentGenerationId, $generationIds, true)) {
+                    $this->deleteOrphanedSourceGeneration($db, $parentGenerationId);
+                }
             }
 
             $this->removeExport($job);
@@ -62,6 +85,38 @@ class QueryHistoryDeletionService
                 throw new RuntimeException('History row could not be deleted.');
             }
         });
+    }
+
+    private function deleteOrphanedSourceGeneration($db, string $generationId): void
+    {
+        $source = $db->createCommand(
+            'SELECT query_job_id
+             FROM ai_report_generations
+             WHERE id = :generationId',
+            [':generationId' => $generationId]
+        )->queryOne();
+        if ($source === false || $source['query_job_id'] !== null) {
+            return;
+        }
+
+        $childCount = (int)$db->createCommand(
+            'SELECT COUNT(*)
+             FROM ai_report_generations
+             WHERE parent_generation_id = :generationId',
+            [':generationId' => $generationId]
+        )->queryScalar();
+        if ($childCount !== 0) {
+            return;
+        }
+
+        $db->createCommand()->delete(
+            'ai_report_reviews',
+            ['generation_id' => $generationId]
+        )->execute();
+        $db->createCommand()->delete(
+            'ai_report_generations',
+            ['id' => $generationId]
+        )->execute();
     }
 
     private function removeExport(QueryJob $job): void

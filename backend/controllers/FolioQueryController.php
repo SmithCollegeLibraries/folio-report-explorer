@@ -1396,7 +1396,8 @@ class FolioQueryController extends Controller
         if ($executionGeneration !== null) {
             $this->administratorReviewService()->linkExecutionGeneration(
                 $executionGeneration['generation'],
-                (string)$job->id
+                (string)$job->id,
+                $executionGeneration['provenanceGeneration']
             );
         }
 
@@ -4645,9 +4646,11 @@ class FolioQueryController extends Controller
         $statusFilter = Yii::$app->request->get('status', 'all');
         $mineOnly     = filter_var(Yii::$app->request->get('mine', false), FILTER_VALIDATE_BOOLEAN);
         $advisoryReviewSubquery = "(SELECT r2.id
-            FROM ai_report_generations g2
-            INNER JOIN ai_report_reviews r2 ON r2.generation_id = g2.id
-            WHERE g2.query_job_id = qj.id
+            FROM ai_report_generations linked_generation
+            INNER JOIN ai_report_reviews r2
+                ON r2.generation_id = linked_generation.id
+                OR r2.generation_id = linked_generation.parent_generation_id
+            WHERE linked_generation.query_job_id = qj.id
               AND r2.advisory_state IN ('cautioned', 'superseded')
             ORDER BY r2.updated_at DESC, r2.id DESC
             LIMIT 1)";

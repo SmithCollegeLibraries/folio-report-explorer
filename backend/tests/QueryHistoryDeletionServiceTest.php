@@ -31,6 +31,7 @@ SQL)->execute();
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
     id VARCHAR(36) PRIMARY KEY,
+    parent_generation_id VARCHAR(36) NULL,
     query_job_id VARCHAR(36) NULL,
     original_question TEXT NOT NULL,
     generated_sql TEXT NULL
@@ -85,6 +86,19 @@ function insertLinkedDeletionReview($jobId, $suffix)
         'administrator_notes' => 'Sensitive notes ' . $suffix,
     ])->execute();
 
+    return $generationId;
+}
+
+function insertSharedDeletionExecution($sourceGenerationId, $jobId, $suffix)
+{
+    $generationId = 'execution-' . $suffix;
+    Yii::$app->db->createCommand()->insert('ai_report_generations', [
+        'id' => $generationId,
+        'parent_generation_id' => $sourceGenerationId,
+        'query_job_id' => $jobId,
+        'original_question' => 'Execution question ' . $suffix,
+        'generated_sql' => 'SELECT 1',
+    ])->execute();
     return $generationId;
 }
 
@@ -161,6 +175,26 @@ $linkedJob = insertDeletionJob('linked-job', 'completed');
 $linkedGeneration = insertLinkedDeletionReview('linked-job', 'single');
 $service->delete($linkedJob);
 deletionAssert(!linkedDeletionRowsExist($linkedGeneration), 'Single deletion must remove linked review and generation rows.');
+
+$sharedSource = insertLinkedDeletionReview(null, 'shared-source');
+$sharedFirstJob = insertDeletionJob('shared-first-job', 'completed');
+$sharedSecondJob = insertDeletionJob('shared-second-job', 'completed');
+$sharedFirstExecution = insertSharedDeletionExecution($sharedSource, 'shared-first-job', 'shared-first');
+$sharedSecondExecution = insertSharedDeletionExecution($sharedSource, 'shared-second-job', 'shared-second');
+$service->delete($sharedSecondJob);
+deletionAssert(
+    !linkedDeletionRowsExist($sharedSecondExecution),
+    'Deleting one shared execution must remove its execution child.'
+);
+deletionAssert(
+    linkedDeletionRowsExist($sharedSource) && linkedDeletionRowsExist($sharedFirstExecution),
+    'Deleting one shared execution must retain the reviewed source and sibling execution.'
+);
+$service->delete($sharedFirstJob);
+deletionAssert(
+    !linkedDeletionRowsExist($sharedFirstExecution) && !linkedDeletionRowsExist($sharedSource),
+    'Deleting the last shared execution must remove its child, source generation, and review.'
+);
 
 $batchGenerations = [];
 foreach (['batch-a', 'batch-b'] as $batchJobId) {
