@@ -177,6 +177,14 @@ function assertContainsText(string $needle, string $haystack, string $message): 
     }
 }
 
+function assertDoesNotAssignSqlReview(string $copy, string $message): void
+{
+    if (preg_match('/review.{0,80}sql|sql.{0,80}review/i', $copy) === 1) {
+        fwrite(STDERR, $message . "\nActual: {$copy}\n");
+        exit(1);
+    }
+}
+
 $unsupported = GeminiService::generateSqlWithShadow(
     'Show vendors with the highest invoice spend last fiscal year.',
     'Smith College',
@@ -204,14 +212,68 @@ assertContainsText(
     'Exploratory notice should explain the limitation without internal compiler terms.'
 );
 assertContainsText(
-    'Review the results and SQL',
+    'assumptions shown here',
     $unsupported['exploratoryNotice']['message'] ?? '',
-    'Exploratory notice should tell staff what action to take.'
+    'Exploratory notice should direct staff to readable assumptions.'
+);
+assertDoesNotAssignSqlReview(
+    $unsupported['exploratoryNotice']['message'] ?? '',
+    'Exploratory notice must not assign SQL review to staff.'
 );
 assertSameValue(
     'unsupported_query_family',
     $unsupported['exploratoryNotice']['reason'] ?? null,
     'Exploratory notice should expose a stable reason for telemetry and review queues.'
+);
+
+$inventoryFallbackInvoker = \Closure::bind(
+    function (
+        array $normalizedPayload,
+        array $telemetryContext,
+        \Throwable $error,
+        string $prompt,
+        $campus,
+        $exploratoryFallbackFactory,
+        ?string $originalQuestion,
+        array $resolvedFilters
+    ): array {
+        return GeminiService::buildInventoryListingCompilerClarificationResponse(
+            $normalizedPayload,
+            $telemetryContext,
+            $error,
+            $prompt,
+            $campus,
+            $exploratoryFallbackFactory,
+            $originalQuestion,
+            $resolvedFilters
+        );
+    },
+    null,
+    GeminiService::class
+);
+$inventoryFallback = $inventoryFallbackInvoker(
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [],
+    ],
+    [],
+    new \RuntimeException('compiler failed'),
+    'Show current inventory.',
+    'Smith College',
+    function (): array {
+        return ['sql' => 'SELECT 1'];
+    },
+    'Show current inventory.',
+    []
+);
+assertContainsText(
+    'reported scope and assumptions',
+    $inventoryFallback['message'] ?? '',
+    'Inventory fallback should direct staff to readable scope and assumptions.'
+);
+assertDoesNotAssignSqlReview(
+    $inventoryFallback['message'] ?? '',
+    'Inventory fallback must not assign SQL review to staff.'
 );
 
 $source = file_get_contents($geminiServicePath);

@@ -248,7 +248,7 @@ describe('Ask error formatting', () => {
     const notice = AskPage.getExploratoryNoticeCopy?.({
       exploratoryNotice: {
         title: 'AI-assisted query',
-        message: 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+        message: 'I could not match this request to a verified report pattern, so I built a best-effort query with the assumptions shown here.',
         detail: 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
         reason: 'unsupported_query_family',
       },
@@ -257,6 +257,7 @@ describe('Ask error formatting', () => {
     expect(notice?.title).toBe('AI-assisted query');
     expect(notice?.message).toContain('best-effort query');
     expect(notice?.message).not.toContain('canonical compiler path');
+    expect(notice?.message).not.toMatch(/review.{0,80}sql|sql.{0,80}review/i);
     expect(notice?.detail).toContain('Similar wording');
   });
 
@@ -289,7 +290,7 @@ describe('Ask error formatting', () => {
       mode: 'exploratory',
       exploratoryNotice: {
         title: 'AI-assisted query',
-        message: 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+        message: 'I could not match this request to a verified report pattern, so I built a best-effort query with the assumptions shown here.',
       },
     })).toBe(false);
 

@@ -1,6 +1,6 @@
 # Reference-First Library and Material-Type Resolution Design
 
-**Date:** 2026-07-27  
+**Date:** 2026-07-27
 **Status:** Conversation design approved; written specification pending review
 
 ## Purpose

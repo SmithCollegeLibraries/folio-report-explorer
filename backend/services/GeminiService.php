@@ -633,7 +633,7 @@ class GeminiService
     {
         return [
             'title' => 'AI-assisted query',
-            'message' => 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+            'message' => 'I could not match this request to a verified report pattern, so I built a best-effort query with the assumptions shown here.',
             'detail' => 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
             'reason' => $reason,
         ];
@@ -5183,7 +5183,7 @@ PROMPT;
                     $resolvedFilters
                 )
                 : $exploratoryFallbackFactory();
-            $response['message'] = 'This looks like a campus-scoped inventory request, not a library or location request. I can still try to build and run the query, but the results may be incomplete or inaccurate. Review the SQL and results before using them.';
+            $response['message'] = 'This looks like a campus-scoped inventory request, not a library or location request. I can still try to build and run the query, but the results may be incomplete or inaccurate. Check the reported scope and assumptions before using the results.';
             return self::withKnownFamilyEvidence(
                 $response,
                 (string)($normalizedPayload['familyKey'] ?? '')
