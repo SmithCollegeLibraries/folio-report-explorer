@@ -225,6 +225,14 @@ function assertContainsText(string $needle, string $haystack, string $message): 
     }
 }
 
+function assertNotContainsText(string $needle, string $haystack, string $message): void
+{
+    if (strpos($haystack, $needle) !== false) {
+        fwrite(STDERR, $message . "\nUnexpected: {$needle}\nActual: {$haystack}\n");
+        exit(1);
+    }
+}
+
 function telemetryEvents(string $event): array
 {
     $events = [];
@@ -245,6 +253,44 @@ function geminiSql(string $sql, string $explanation = 'Candidate query.'): strin
 {
     return "```sql\n{$sql}\n```\n{$explanation}\nDATA SOURCE: folio";
 }
+
+$realResolverPath = realpath(__DIR__ . '/../services/ReferenceResolverService.php');
+$structuredResolution = [
+    'guidanceLines' => [],
+    'resolvedFilters' => [
+        [
+            'dimension' => 'library',
+            'source_table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'values' => ['SC Hillyer Art Library'],
+        ],
+        [
+            'dimension' => 'material_type',
+            'source_table' => 'inventory.material_type__t',
+            'column' => 'name',
+            'values' => ['Videocassette', 'DVD/Blu-ray'],
+        ],
+    ],
+];
+$guidanceProbe = 'require ' . var_export($realResolverPath, true) . ';'
+    . '$resolution=' . var_export($structuredResolution, true) . ';'
+    . 'echo app\\services\\ReferenceResolverService::appendGuidanceToPrompt("Prompt", $resolution);';
+$guidanceLines = [];
+$guidanceStatus = 0;
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($guidanceProbe), $guidanceLines, $guidanceStatus);
+assertSameValue(0, $guidanceStatus, 'The real resolver guidance probe must execute successfully.');
+$guidance = implode("\n", $guidanceLines);
+assertContainsText(
+    "inventory.loclibrary__t.name = 'SC Hillyer Art Library'",
+    $guidance,
+    'Guidance must preserve library scope.'
+);
+assertContainsText(
+    "inventory.material_type__t.name IN ('Videocassette', 'DVD/Blu-ray')",
+    $guidance,
+    'Guidance must render explicit narrowed material values.'
+);
+assertNotContainsText('HC DVD', $guidance, 'Guidance must not contain unrelated location matches.');
 
 // This prompt names no campus, library, location, or holdings scope. On its own
 // it resolves to no query family (freeform). With the resolver guidance appended
@@ -432,6 +478,7 @@ $effectivePrompt = \app\services\ReferenceResolverService::appendGuidanceToPromp
     \app\services\ReferenceResolverService::resolvePrompt($prompt)
 );
 $intentRequestContext = new ReflectionMethod(GeminiService::class, 'buildIntentRequestContext');
+$intentRequestContext->setAccessible(true);
 $requestContext = $intentRequestContext->invoke(
     null,
     $effectivePrompt,

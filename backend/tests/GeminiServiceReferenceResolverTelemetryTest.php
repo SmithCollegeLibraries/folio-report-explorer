@@ -78,6 +78,20 @@ $logger->invoke(null, [
         ['source_table' => 'inventory.location__t', 'name' => 'SC Josten Treasure', 'matched_by' => 'code'],
         ['source_table' => 'inventory.location__t', 'name' => 'SC Josten Treasure Folio', 'matched_by' => 'location_hierarchy_partial'],
     ],
+    'resolvedFilters' => [
+        [
+            'dimension' => 'library',
+            'source_table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'values' => ['SC Hillyer Art Library'],
+        ],
+        [
+            'dimension' => 'material_type',
+            'source_table' => 'inventory.material_type__t',
+            'column' => 'name',
+            'values' => ['Videocassette', 'DVD/Blu-ray'],
+        ],
+    ],
 ], 'prompt-fingerprint');
 
 assertTelemetrySame(1, count(Yii::$infos), 'Resolved reference telemetry should emit one info event.');
@@ -86,6 +100,19 @@ assertTelemetrySame('nl2sql.reference_resolver_match', $matchTelemetry['event'] 
 assertTelemetrySame('prompt-fingerprint', $matchTelemetry['promptFingerprint'] ?? null, 'Resolved reference telemetry should include prompt fingerprint.');
 assertTelemetrySame(2, $matchTelemetry['resolvedCount'] ?? null, 'Resolved reference telemetry should include resolved count.');
 assertTelemetryTrue(in_array('inventory.location__t', $matchTelemetry['sourceTables'] ?? [], true), 'Resolved reference telemetry should include source tables.');
+assertTelemetrySame(
+    ['library', 'material_type'],
+    $matchTelemetry['resolvedDimensions'] ?? null,
+    'Resolved reference telemetry should identify structured dimensions without values.'
+);
+assertTelemetrySame(3, $matchTelemetry['resolvedValueCount'] ?? null, 'Resolved reference telemetry should include only the total structured value count.');
+$encodedMatchTelemetry = json_encode($matchTelemetry);
+foreach (['SC Hillyer Art Library', 'Videocassette', 'DVD/Blu-ray', 'Reference resolver guidance'] as $leakedText) {
+    assertTelemetryTrue(
+        strpos($encodedMatchTelemetry, $leakedText) === false,
+        'Resolver telemetry must not contain resolved values or generated guidance.'
+    );
+}
 
 $logger->invoke(null, [
     'needsClarification' => true,

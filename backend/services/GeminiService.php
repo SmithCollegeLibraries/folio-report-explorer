@@ -10,6 +10,7 @@ use app\exceptions\ExploratorySqlValidationException;
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/AskResponseContractService.php';
 require_once __DIR__ . '/ReferenceJsonBundleService.php';
+require_once __DIR__ . '/ResolvedReferenceSqlValidatorService.php';
 require_once __DIR__ . '/ExploratoryQueryDefaultsService.php';
 require_once __DIR__ . '/ExploratoryRoiSqlCompilerService.php';
 require_once __DIR__ . '/HardenedPhysicalRoiSqlCompilerService.php';
@@ -160,6 +161,17 @@ class GeminiService
         $explicitReportRequest = ExplicitReportRequestService::extract($rawQuestion);
         $explicitEvidence = self::explicitReportRequestEvidence($explicitReportRequest);
         $referenceResolution = ReferenceResolverService::resolvePrompt($rawQuestion, $userId);
+        $resolvedFilters = is_array($referenceResolution['resolvedFilters'] ?? null)
+            ? $referenceResolution['resolvedFilters']
+            : [];
+        $referenceEvidence = [
+            'resolvedReferenceFilters' => $resolvedFilters,
+        ];
+        $askEvidence = array_merge(
+            ['referenceBundleMetadata' => $referenceBundleMetadata],
+            $explicitEvidence,
+            $referenceEvidence
+        );
         self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt($rawQuestion));
         if (!empty($referenceResolution['needsClarification'])) {
             self::logRouteSelection('clarification', (string)($referenceResolution['routeReason'] ?? 'reference_resolver_batch_clarification'), [
@@ -178,7 +190,7 @@ class GeminiService
             ]);
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $referenceResolution,
-                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+                $askEvidence
             ));
         }
 
@@ -198,7 +210,7 @@ class GeminiService
             ];
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $clarification,
-                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+                $askEvidence
             ));
         }
 
@@ -226,7 +238,7 @@ class GeminiService
             ]);
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $clarification,
-                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+                $askEvidence
             ));
         }
 
@@ -235,14 +247,15 @@ class GeminiService
                 (string)$effectivePrompt,
                 $campus,
                 'user_requested_exploratory_generation',
-                $rawQuestion
+                $rawQuestion,
+                $resolvedFilters
             );
 
             $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
-                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+                $askEvidence
             ));
         }
 
@@ -258,26 +271,47 @@ class GeminiService
                 (string)$effectivePrompt,
                 $campus,
                 $exploratoryReason,
-                $rawQuestion
+                $rawQuestion,
+                $resolvedFilters
             );
 
             $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
-                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+                $askEvidence
             ));
         }
 
         $primaryMode = self::resolvePrimaryModeForPrompt($rawQuestion, $campus);
-        $primary = $primaryMode === 'intent'
-            ? self::generateSql($effectivePrompt, $campus, false, true, $rawQuestion)
-            : self::generateSql($effectivePrompt, $campus, true, false, $rawQuestion);
+        try {
+            $primary = $primaryMode === 'intent'
+                ? self::generateSql($effectivePrompt, $campus, false, true, $rawQuestion, $resolvedFilters)
+                : self::generateSql($effectivePrompt, $campus, true, false, $rawQuestion, $resolvedFilters);
+        } catch (ExploratorySqlValidationException $exception) {
+            if ($exception->getSafeCategory() !== 'resolved_reference_filter_mismatch') {
+                throw $exception;
+            }
+            $primary = self::repairExploratorySqlAfterPreflight(
+                $rawQuestion,
+                $campus,
+                [
+                    'sql' => $exception->getCandidateSql(),
+                    'route' => $primaryMode === 'intent' ? 'builder_intent' : 'legacy_freeform',
+                    'routeReason' => 'resolved_reference_filter_mismatch',
+                    'repairAttempts' => 0,
+                ],
+                'Resolved reference filters were not preserved.',
+                (string)$effectivePrompt,
+                $resolvedFilters
+            );
+        }
         $primary = self::repairRoutedCandidateMissingExplicitValues(
             $primary,
             (string)$effectivePrompt,
             $campus,
-            $rawQuestion
+            $rawQuestion,
+            $resolvedFilters
         );
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
@@ -291,7 +325,7 @@ class GeminiService
         if (!self::shouldRunShadowForUser($userId, $rawQuestion)) {
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
-                array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+                $askEvidence
             ));
         }
 
@@ -299,8 +333,8 @@ class GeminiService
 
         try {
             $shadow = $shadowMode === 'intent'
-                ? self::generateSql($effectivePrompt, $campus, false, true, $rawQuestion)
-                : self::generateSql($effectivePrompt, $campus, true, false, $rawQuestion);
+                ? self::generateSql($effectivePrompt, $campus, false, true, $rawQuestion, $resolvedFilters)
+                : self::generateSql($effectivePrompt, $campus, true, false, $rawQuestion, $resolvedFilters);
 
             self::logShadowComparison($primary, $shadow, [
                 'primaryMode' => $primaryMode,
@@ -320,7 +354,7 @@ class GeminiService
 
         return AskResponseContractService::normalizeMode(self::withAskEvidence(
             $primary,
-            array_merge(['referenceBundleMetadata' => $referenceBundleMetadata], $explicitEvidence)
+            $askEvidence
         ));
     }
 
@@ -328,7 +362,8 @@ class GeminiService
         string $generationPrompt,
         $campus = null,
         string $reason = 'unsupported_query_family',
-        ?string $rawQuestion = null
+        ?string $rawQuestion = null,
+        array $resolvedFilters = []
     ): array
     {
         $rawQuestion = $rawQuestion === null
@@ -352,25 +387,34 @@ class GeminiService
             'attemptedPlan' => $attemptedPlan,
             'attemptedPlanProvenance' => 'server_defaults',
             'semanticContract' => $semanticContract,
+            'resolvedFilters' => $resolvedFilters,
             'route' => 'exploratory_legacy_freeform',
             'routeReason' => $reason,
         ];
 
         try {
             $outcome = ExploratorySqlRepairService::run(
-                function (array $attemptContext) use ($generationPrompt, $campus, $attemptedPlan, $reason, $rawQuestion): array {
+                function (array $attemptContext) use ($generationPrompt, $campus, $attemptedPlan, $reason, $rawQuestion, $resolvedFilters): array {
                     return self::runExploratorySqlAttempt(
                         $attemptContext + [
                             'route' => 'exploratory_legacy_freeform',
                             'routeReason' => $reason,
+                            'resolvedFilters' => $resolvedFilters,
                         ],
-                        function () use ($attemptContext, $generationPrompt, $campus, $attemptedPlan, $rawQuestion): array {
+                        function () use ($attemptContext, $generationPrompt, $campus, $attemptedPlan, $rawQuestion, $resolvedFilters): array {
                             if ((int)($attemptContext['repairNumber'] ?? 0) === 0) {
                                 $guidedPrompt = $generationPrompt;
                                 if ($attemptedPlan !== '') {
                                     $guidedPrompt .= "\n\n" . $attemptedPlan;
                                 }
-                                return self::generateSql($guidedPrompt, $campus, true, false, $rawQuestion);
+                                return self::generateSql(
+                                    $guidedPrompt,
+                                    $campus,
+                                    true,
+                                    false,
+                                    $rawQuestion,
+                                    $resolvedFilters
+                                );
                             }
 
                             return self::generateExploratoryRepairCandidate($attemptContext);
@@ -398,7 +442,8 @@ class GeminiService
                 try {
                     $compiledFallback = self::validateCompiledExploratoryFallback(
                         $compiledFallback,
-                        $semanticContract
+                        $semanticContract,
+                        $resolvedFilters
                     );
                     self::validateExplicitReportValues(
                         (string)($compiledFallback['sql'] ?? ''),
@@ -478,7 +523,11 @@ class GeminiService
         return $primary;
     }
 
-    private static function validateCompiledExploratoryFallback(array $result, array $contract): array
+    private static function validateCompiledExploratoryFallback(
+        array $result,
+        array $contract,
+        array $resolvedFilters = []
+    ): array
     {
         $sql = (string)($result['sql'] ?? '');
         SqlBuilderService::validateSafety($sql);
@@ -497,6 +546,7 @@ class GeminiService
                 is_array($semanticValidation['violations'] ?? null) ? $semanticValidation['violations'] : []
             );
         }
+        self::validateResolvedReferenceSql($sql, $resolvedFilters);
 
         $result['semanticContractApplicable'] = true;
         $result['semanticValidation'] = $semanticValidation;
@@ -1100,7 +1150,8 @@ PROMPT;
         $campus = null,
         $forceLegacy = false,
         $forceIntent = false,
-        $originalQuestion = null
+        $originalQuestion = null,
+        array $resolvedFilters = []
     )
     {
         $originalQuestion = $originalQuestion === null
@@ -1119,18 +1170,39 @@ PROMPT;
         $model = self::getAiModel();
 
         if ($forceIntent && self::promptRequiresLegacyFreeform($originalQuestion)) {
-            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
+            $fallback = self::generateSql(
+                $prompt,
+                $campus,
+                true,
+                false,
+                $originalQuestion,
+                $resolvedFilters
+            );
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = 'structured_intent_unsupported_for_marc_source_records';
             return $fallback;
         }
 
         if ($forceIntent) {
-            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model, $originalQuestion);
+            return self::generateSqlFromIntent(
+                $prompt,
+                $campus,
+                $apiKey,
+                $model,
+                $originalQuestion,
+                $resolvedFilters
+            );
         }
 
         if (!$forceLegacy && self::isIntentModeEnabled() && !self::promptRequiresLegacyFreeform($originalQuestion)) {
-            return self::generateSqlFromIntent($prompt, $campus, $apiKey, $model, $originalQuestion);
+            return self::generateSqlFromIntent(
+                $prompt,
+                $campus,
+                $apiKey,
+                $model,
+                $originalQuestion,
+                $resolvedFilters
+            );
         }
 
         $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
@@ -1330,6 +1402,7 @@ PROMPT;
         if (!isset($parsed['routeReason'])) {
             $parsed['routeReason'] = $forceLegacy ? 'forced_legacy_mode' : 'intent_mode_disabled';
         }
+        self::validateResolvedReferenceSql((string)($parsed['sql'] ?? ''), $resolvedFilters);
 
         self::logNlTelemetry('nl2sql.generated', [
             'route' => $parsed['route'],
@@ -1377,7 +1450,8 @@ PROMPT;
         $campus,
         $apiKey,
         $model,
-        string $originalQuestion
+        string $originalQuestion,
+        array $resolvedFilters = []
     )
     {
         $schemaContext = FolioSchemaService::buildSchemaContext($prompt);
@@ -1466,9 +1540,11 @@ PROMPT;
             ] + $schemaTelemetry,
             null,
             null,
-            $originalQuestion
+            $originalQuestion,
+            $resolvedFilters
         );
         if ($familyResponse !== null) {
+            self::validateResolvedReferenceResult($familyResponse, $resolvedFilters);
             return $familyResponse;
         }
 
@@ -1491,7 +1567,18 @@ PROMPT;
                 'firstErrorMessage' => $message,
             ] + $schemaTelemetry);
             self::logRouteSelection('legacy_fallback', $reason . ": {$path}: {$message}", $intent);
-            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
+            if (empty($resolvedFilters)) {
+                $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
+            } else {
+                $fallback = self::generateSql(
+                    $prompt,
+                    $campus,
+                    true,
+                    false,
+                    $originalQuestion,
+                    $resolvedFilters
+                );
+            }
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = $reason;
             self::logNlTelemetry('nl2sql.generated', [
@@ -1513,7 +1600,14 @@ PROMPT;
         $capability = self::classifyIntentCapability($normalizedIntent);
         if (!$capability['supported']) {
             self::logRouteSelection('legacy_fallback', $capability['reason'], $normalizedIntent);
-            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
+            $fallback = self::generateSql(
+                $prompt,
+                $campus,
+                true,
+                false,
+                $originalQuestion,
+                $resolvedFilters
+            );
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = $capability['reason'];
             self::logNlTelemetry('nl2sql.generated', [
@@ -1548,7 +1642,14 @@ PROMPT;
         } catch (\InvalidArgumentException $e) {
             $reason = 'builder_conversion_failed';
             self::logRouteSelection('legacy_fallback', $reason . ': ' . $e->getMessage(), $normalizedIntent);
-            $fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);
+            $fallback = self::generateSql(
+                $prompt,
+                $campus,
+                true,
+                false,
+                $originalQuestion,
+                $resolvedFilters
+            );
             $fallback['route'] = 'legacy_fallback';
             $fallback['routeReason'] = $reason;
             self::logNlTelemetry('nl2sql.generated', [
@@ -1575,6 +1676,7 @@ PROMPT;
         SqlBuilderService::validateSafety($sql);
         SqlBuilderService::validateTablePolicy($sql);
         self::validateTableReferences($sql);
+        self::validateResolvedReferenceSql($sql, $resolvedFilters);
 
         $dataSource = 'folio';
         if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
@@ -1710,7 +1812,8 @@ GUIDANCE;
         array $telemetryContext,
         $familyResponseBuilder = null,
         $legacyFallbackFactory = null,
-        ?string $originalQuestion = null
+        ?string $originalQuestion = null,
+        array $resolvedFilters = []
     ): ?array {
         if ($queryFamily === null) {
             return null;
@@ -1729,8 +1832,15 @@ GUIDANCE;
             );
 
             if ($legacyFallbackFactory === null) {
-                $legacyFallbackFactory = function () use ($prompt, $campus, $originalQuestion): array {
-                    return self::generateSql($prompt, $campus, true, false, $originalQuestion);
+                $legacyFallbackFactory = function () use ($prompt, $campus, $originalQuestion, $resolvedFilters): array {
+                    return self::generateSql(
+                        $prompt,
+                        $campus,
+                        true,
+                        false,
+                        $originalQuestion,
+                        $resolvedFilters
+                    );
                 };
             }
 
@@ -1753,7 +1863,8 @@ GUIDANCE;
                 $campus,
                 $mismatchTelemetryContext,
                 $intent,
-                $originalQuestion
+                $originalQuestion,
+                $resolvedFilters
             );
             if ($promptRecoveredResponse !== null) {
                 return $promptRecoveredResponse;
@@ -1795,7 +1906,7 @@ GUIDANCE;
                 $prompt,
                 $campus,
                 array $telemetryContext
-            ) use ($originalQuestion): array {
+            ) use ($originalQuestion, $resolvedFilters): array {
                 return self::buildQueryFamilyIntentResponse(
                     $intent,
                     $queryFamily,
@@ -1805,7 +1916,8 @@ GUIDANCE;
                     null,
                     null,
                     null,
-                    $originalQuestion
+                    $originalQuestion,
+                    $resolvedFilters
                 );
             };
         }
@@ -1825,7 +1937,8 @@ GUIDANCE;
         $campus,
         array $telemetryContext,
         array $sourceIntent = [],
-        ?string $originalQuestion = null
+        ?string $originalQuestion = null,
+        array $resolvedFilters = []
     ): ?array {
         $originalQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
         $expectedFamilyKey = trim((string)($queryFamily['familyKey'] ?? ''));
@@ -1845,7 +1958,8 @@ GUIDANCE;
                         null,
                         null,
                         null,
-                        $originalQuestion
+                        $originalQuestion,
+                        $resolvedFilters
                     );
                 } catch (\InvalidArgumentException | \RuntimeException $e) {
                     self::logValidationFailure('family_contract_prompt_recovery', [
@@ -1880,7 +1994,8 @@ GUIDANCE;
                 null,
                 null,
                 null,
-                $originalQuestion
+                $originalQuestion,
+                $resolvedFilters
             );
         } catch (\InvalidArgumentException | \RuntimeException $e) {
             self::logValidationFailure('family_contract_prompt_recovery', [
@@ -2295,6 +2410,8 @@ GUIDANCE;
 
         $sourceTables = [];
         $matchedBy = [];
+        $resolvedDimensions = [];
+        $resolvedValueCount = 0;
         foreach ($resolved as $match) {
             $table = trim((string)($match['source_table'] ?? ''));
             if ($table !== '') {
@@ -2305,6 +2422,20 @@ GUIDANCE;
                 $matchedBy[$method] = true;
             }
         }
+        foreach (($referenceResolution['resolvedFilters'] ?? []) as $filter) {
+            if (!is_array($filter)) {
+                continue;
+            }
+            $dimension = trim((string)($filter['dimension'] ?? ''));
+            if ($dimension !== '') {
+                $resolvedDimensions[$dimension] = true;
+            }
+            $resolvedValueCount += count(
+                is_array($filter['values'] ?? null) ? $filter['values'] : []
+            );
+        }
+        $resolvedDimensions = array_keys($resolvedDimensions);
+        sort($resolvedDimensions);
 
         self::logNlTelemetry('nl2sql.reference_resolver_match', [
             'promptFingerprint' => $promptFingerprint,
@@ -2312,6 +2443,8 @@ GUIDANCE;
             'resolvedCount' => count($resolved),
             'sourceTables' => array_keys($sourceTables),
             'matchedBy' => array_keys($matchedBy),
+            'resolvedDimensions' => $resolvedDimensions,
+            'resolvedValueCount' => $resolvedValueCount,
         ]);
     }
 
@@ -3448,7 +3581,8 @@ PROMPT;
         $familyResultBuilder = null,
         $exploratoryFallbackFactory = null,
         $explicitRepairFactory = null,
-        ?string $originalQuestion = null
+        ?string $originalQuestion = null,
+        array $resolvedFilters = []
     ): array {
         $originalQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
         $recoveredIntent = self::recoverPromptScopedFamilySlotsWithProvenance(
@@ -3477,7 +3611,8 @@ PROMPT;
                         (string)$prompt,
                         $campus,
                         'inventory_listing_unscoped_missing_library',
-                        $originalQuestion
+                        $originalQuestion,
+                        $resolvedFilters
                     )
                     : $exploratoryFallbackFactory();
                 return self::withKnownFamilyEvidence(
@@ -3566,7 +3701,7 @@ PROMPT;
                 $requestPrompt,
                 $requestCampus,
                 array $requestTelemetry
-            ) use ($originalQuestion): array {
+            ) use ($originalQuestion, $resolvedFilters): array {
                 return self::buildCompiledQueryFamilyOrLegacyFallback(
                     $normalizedPayload,
                     $familyRouteReason,
@@ -3576,7 +3711,8 @@ PROMPT;
                     null,
                     null,
                     null,
-                    $originalQuestion
+                    $originalQuestion,
+                    $resolvedFilters
                 );
             };
         }
@@ -3599,12 +3735,13 @@ PROMPT;
         );
         if ($explicitValidation !== null) {
             $repair = $explicitRepairFactory === null
-                ? function (string $repairPrompt, $repairCampus, array $candidate) use ($originalQuestion): array {
+                ? function (string $repairPrompt, $repairCampus, array $candidate) use ($originalQuestion, $resolvedFilters): array {
                     return self::repairRoutedCandidateAfterExplicitFailure(
                         $repairPrompt,
                         $repairCampus,
                         $candidate,
-                        $originalQuestion
+                        $originalQuestion,
+                        $resolvedFilters
                     );
                 }
                 : $explicitRepairFactory;
@@ -4944,7 +5081,8 @@ PROMPT;
         $compiler = null,
         $legacyFallbackFactory = null,
         $exploratoryFallbackFactory = null,
-        ?string $originalQuestion = null
+        ?string $originalQuestion = null,
+        array $resolvedFilters = []
     ): array {
         $originalQuestion = $originalQuestion === null ? (string)$prompt : $originalQuestion;
         if ($compiler === null) {
@@ -4954,13 +5092,20 @@ PROMPT;
         }
 
         if ($legacyFallbackFactory === null) {
-            $legacyFallbackFactory = function () use ($prompt, $campus, $originalQuestion): array {
-                return self::generateSql($prompt, $campus, true, false, $originalQuestion);
+            $legacyFallbackFactory = function () use ($prompt, $campus, $originalQuestion, $resolvedFilters): array {
+                return self::generateSql(
+                    $prompt,
+                    $campus,
+                    true,
+                    false,
+                    $originalQuestion,
+                    $resolvedFilters
+                );
             };
         }
 
         try {
-            return $compiler($normalizedPayload, $routeReason);
+            $compiled = $compiler($normalizedPayload, $routeReason);
         } catch (\InvalidArgumentException | \RuntimeException $e) {
             $reason = 'family_compiler_failed';
             $familyKey = trim((string)($normalizedPayload['familyKey'] ?? ''));
@@ -4973,7 +5118,8 @@ PROMPT;
                     (string)$prompt,
                     $campus,
                     $exploratoryFallbackFactory,
-                    $originalQuestion
+                    $originalQuestion,
+                    $resolvedFilters
                 );
             }
 
@@ -5003,6 +5149,9 @@ PROMPT;
             ] + $telemetryContext);
             return self::withKnownFamilyEvidence($fallback, $familyKey);
         }
+
+        self::validateResolvedReferenceResult($compiled, $resolvedFilters);
+        return $compiled;
     }
 
     private static function buildInventoryListingCompilerClarificationResponse(
@@ -5012,7 +5161,8 @@ PROMPT;
         string $prompt = '',
         $campus = null,
         $exploratoryFallbackFactory = null,
-        ?string $originalQuestion = null
+        ?string $originalQuestion = null,
+        array $resolvedFilters = []
     ): array {
         $originalQuestion = $originalQuestion === null ? $prompt : $originalQuestion;
         $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
@@ -5029,7 +5179,8 @@ PROMPT;
                     $prompt,
                     $campus,
                     'inventory_listing_unscoped_compiler_failed',
-                    $originalQuestion
+                    $originalQuestion,
+                    $resolvedFilters
                 )
                 : $exploratoryFallbackFactory();
             $response['message'] = 'This looks like a campus-scoped inventory request, not a library or location request. I can still try to build and run the query, but the results may be incomplete or inaccurate. Review the SQL and results before using them.';
@@ -5696,9 +5847,14 @@ PROMPT;
         $campus,
         array $currentResult,
         string $preflightError,
-        ?string $generationPrompt = null
+        ?string $generationPrompt = null,
+        array $resolvedFilters = []
     ): array {
         $generationPrompt = $generationPrompt === null ? $originalQuestion : $generationPrompt;
+        if (empty($resolvedFilters)) {
+            $evidenceFilters = $currentResult['_askEvidence']['resolvedReferenceFilters'] ?? [];
+            $resolvedFilters = is_array($evidenceFilters) ? $evidenceFilters : [];
+        }
         $terminalContext = [
             'originalQuestion' => $originalQuestion,
             'generationPrompt' => $generationPrompt,
@@ -5740,27 +5896,34 @@ PROMPT;
                 (string)($currentResult['routeReason'] ?? 'preflight_validation_failed'),
                 ['physicalRoiPolicyVersion' => $useHardenedPhysicalRoi ? 'v2' : 'legacy']
             ),
+            'resolvedFilters' => $resolvedFilters,
             'route' => $currentResult['route'] ?? 'exploratory',
             'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
             '_askEvidence' => is_array($currentResult['_askEvidence'] ?? null)
                 ? $currentResult['_askEvidence']
                 : [],
         ];
-        $failure = new ExploratorySqlValidationException(
-            'database_preflight',
-            self::sanitizePreflightFailureCategory($preflightError),
-            $candidateSql,
-            true,
-            'PostgreSQL preflight rejected the exploratory SQL candidate.'
-        );
+        try {
+            self::validateResolvedReferenceSql($candidateSql, $resolvedFilters);
+            $failure = new ExploratorySqlValidationException(
+                'database_preflight',
+                self::sanitizePreflightFailureCategory($preflightError),
+                $candidateSql,
+                true,
+                'PostgreSQL preflight rejected the exploratory SQL candidate.'
+            );
+        } catch (ExploratorySqlValidationException $exception) {
+            $failure = $exception;
+        }
 
         try {
             $outcome = ExploratorySqlRepairService::run(
-                function (array $attemptContext) use ($context): array {
+                function (array $attemptContext) use ($context, $resolvedFilters): array {
                     return self::runExploratorySqlAttempt(
                         $attemptContext + [
                             'route' => $context['route'],
                             'routeReason' => $context['routeReason'],
+                            'resolvedFilters' => $resolvedFilters,
                         ],
                         function () use ($attemptContext): array {
                             return self::generateExploratoryRepairCandidate($attemptContext);
@@ -5967,6 +6130,35 @@ PROMPT;
         );
     }
 
+    private static function validateResolvedReferenceResult(
+        array $result,
+        array $resolvedFilters
+    ): void {
+        if (!isset($result['sql'])) {
+            return;
+        }
+
+        self::validateResolvedReferenceSql((string)$result['sql'], $resolvedFilters);
+    }
+
+    private static function validateResolvedReferenceSql(
+        string $sql,
+        array $resolvedFilters
+    ): void {
+        try {
+            ResolvedReferenceSqlValidatorService::validate($sql, $resolvedFilters);
+        } catch (\InvalidArgumentException $exception) {
+            throw new ExploratorySqlValidationException(
+                'semantic_validation',
+                'resolved_reference_filter_mismatch',
+                $sql,
+                true,
+                'The SQL candidate did not preserve the resolved library or material filters.',
+                $exception
+            );
+        }
+    }
+
     private static function explicitReportValueValidation(string $sql, string $prompt): ?array
     {
         $request = ExplicitReportRequestService::extract($prompt);
@@ -5982,12 +6174,26 @@ PROMPT;
         array $candidate,
         string $generationPrompt,
         $campus,
-        ?string $originalQuestion = null
+        ?string $originalQuestion = null,
+        array $resolvedFilters = []
     ): array
     {
         $originalQuestion = $originalQuestion === null ? $generationPrompt : $originalQuestion;
-        if (!isset($candidate['sql'])
-            || self::explicitReportValueValidation((string)$candidate['sql'], $originalQuestion) === null) {
+        if (!isset($candidate['sql'])) {
+            return $candidate;
+        }
+
+        $hasExplicitFailure = self::explicitReportValueValidation(
+            (string)$candidate['sql'],
+            $originalQuestion
+        ) !== null;
+        $hasResolvedFilterFailure = false;
+        try {
+            self::validateResolvedReferenceSql((string)$candidate['sql'], $resolvedFilters);
+        } catch (ExploratorySqlValidationException $exception) {
+            $hasResolvedFilterFailure = true;
+        }
+        if (!$hasExplicitFailure && !$hasResolvedFilterFailure) {
             return $candidate;
         }
 
@@ -5995,7 +6201,8 @@ PROMPT;
             $generationPrompt,
             $campus,
             $candidate,
-            $originalQuestion
+            $originalQuestion,
+            $resolvedFilters
         );
     }
 
@@ -6003,7 +6210,8 @@ PROMPT;
         string $generationPrompt,
         $campus,
         array $candidate,
-        ?string $originalQuestion = null
+        ?string $originalQuestion = null,
+        array $resolvedFilters = []
     ): array {
         $originalQuestion = $originalQuestion === null ? $generationPrompt : $originalQuestion;
         $candidate['repairAttempts'] = (int)($candidate['repairAttempts'] ?? 0);
@@ -6012,7 +6220,8 @@ PROMPT;
             $campus,
             $candidate,
             'Explicit report values were not preserved.',
-            $generationPrompt
+            $generationPrompt,
+            $resolvedFilters
         );
         return self::withAskEvidence(
             $repaired,
@@ -6077,6 +6286,12 @@ PROMPT;
             self::validateExplicitReportValues(
                 (string)($result['sql'] ?? ''),
                 (string)($context['originalQuestion'] ?? '')
+            );
+            self::validateResolvedReferenceSql(
+                (string)($result['sql'] ?? ''),
+                is_array($context['resolvedFilters'] ?? null)
+                    ? $context['resolvedFilters']
+                    : []
             );
             $checkedRequirements = is_array($semanticValidation['checkedRequirements'] ?? null)
                 ? $semanticValidation['checkedRequirements']

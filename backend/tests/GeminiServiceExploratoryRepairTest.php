@@ -66,12 +66,40 @@ namespace app\services {
     {
         public static function resolvePrompt(string $prompt, $userId = null): array
         {
-            return ['needsClarification' => false, 'guidanceLines' => []];
+            if (stripos($prompt, 'Hillyer scoped video report') === false) {
+                return ['needsClarification' => false, 'guidanceLines' => [], 'resolvedFilters' => []];
+            }
+
+            return [
+                'needsClarification' => false,
+                'guidanceLines' => [],
+                'resolvedFilters' => [
+                    [
+                        'dimension' => 'library',
+                        'source_table' => 'inventory.loclibrary__t',
+                        'column' => 'name',
+                        'values' => ['SC Hillyer Art Library'],
+                    ],
+                    [
+                        'dimension' => 'material_type',
+                        'source_table' => 'inventory.material_type__t',
+                        'column' => 'name',
+                        'values' => ['Videocassette', 'DVD/Blu-ray'],
+                    ],
+                ],
+            ];
         }
 
         public static function appendGuidanceToPrompt(string $prompt, array $resolution): string
         {
-            return $prompt;
+            if (empty($resolution['resolvedFilters'])) {
+                return $prompt;
+            }
+
+            return $prompt
+                . "\n\nReference resolver guidance:\n"
+                . "- Resolved local reference filter: use exactly inventory.loclibrary__t.name = 'SC Hillyer Art Library'.\n"
+                . "- Resolved local reference filter: use exactly inventory.material_type__t.name IN ('Videocassette', 'DVD/Blu-ray').";
         }
     }
 
@@ -88,6 +116,7 @@ namespace app\services {
             return [
                 'item__t', 'po_line__t', 'purchase_order__t', 'invoice_lines__t',
                 'audit_loan__t', 'holdings_record__t', 'instance__t', 'classification__t',
+                'location__t', 'loclibrary__t', 'material_type__t',
             ];
         }
         public static function discoverTableMapping(): array
@@ -108,6 +137,7 @@ namespace app\services {
                 'location__t' => 'inventory.location__t',
                 'loclibrary__t' => 'inventory.loclibrary__t',
                 'loccampus__t' => 'inventory.loccampus__t',
+                'material_type__t' => 'inventory.material_type__t',
                 'classification__t' => 'classification.classification__t',
             ];
         }
@@ -253,6 +283,21 @@ GROUP BY pc.call_number_class
 SQL;
 }
 
+function scopedVideoSql(string $library, array $materialTypes): string
+{
+    $quotedMaterialTypes = array_map(function (string $value): string {
+        return "'" . str_replace("'", "''", $value) . "'";
+    }, $materialTypes);
+
+    return "SELECT item.id\n"
+        . "FROM inventory.item__t item\n"
+        . "JOIN inventory.location__t location ON location.id = item.effective_location_id\n"
+        . "JOIN inventory.loclibrary__t library ON library.id = location.library_id\n"
+        . "JOIN inventory.material_type__t material_type ON material_type.id = item.material_type_id\n"
+        . "WHERE library.name = '" . str_replace("'", "''", $library) . "'\n"
+        . 'AND material_type.name IN (' . implode(', ', $quotedMaterialTypes) . ')';
+}
+
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
     geminiText('SELECT ii.id FROM inventory.item__t ii'),
@@ -278,6 +323,70 @@ repairAssertSame(2, count(TestTransport::$requests), 'Bad-then-valid generation 
 
 $repairPayload = json_encode(TestTransport::$requests[1]);
 repairAssertContains('SELECT mt.id FROM inventory.missing_table__t mt', $repairPayload, 'The repair request should contain the previous SQL candidate.');
+$baselineRepairLogs = Yii::$logs;
+
+TestTransport::$responses = [
+    geminiText(str_replace(
+        "library.name = 'SC Hillyer Art Library'",
+        "location.name = 'HC DVD'",
+        scopedVideoSql('SC Hillyer Art Library', ['Videocassette', 'DVD/Blu-ray'])
+    )),
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['Videocassette', 'DVD/Blu-ray'])),
+];
+TestTransport::$requests = [];
+$resolvedFilterRepair = GeminiService::generateSqlWithShadow(
+    'Hillyer scoped video report',
+    'Smith College',
+    null,
+    true
+);
+repairAssertSame(1, $resolvedFilterRepair['repairAttempts'] ?? null, 'Resolved-filter mismatch should use one bounded repair.');
+repairAssertContains("library.name = 'SC Hillyer Art Library'", $resolvedFilterRepair['sql'] ?? '', 'Repair must restore library scope.');
+repairAssertSame(false, strpos($resolvedFilterRepair['sql'] ?? '', 'HC DVD') !== false, 'Repair must remove the wrong location.');
+repairAssertSame(
+    [
+        [
+            'dimension' => 'library',
+            'source_table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'values' => ['SC Hillyer Art Library'],
+        ],
+        [
+            'dimension' => 'material_type',
+            'source_table' => 'inventory.material_type__t',
+            'column' => 'name',
+            'values' => ['Videocassette', 'DVD/Blu-ray'],
+        ],
+    ],
+    $resolvedFilterRepair['_askEvidence']['resolvedReferenceFilters'] ?? null,
+    'Trusted evidence must contain only the structured resolved filters.'
+);
+$resolvedEvidenceJson = json_encode($resolvedFilterRepair['_askEvidence']['resolvedReferenceFilters'] ?? []);
+repairAssertSame(false, strpos($resolvedEvidenceJson, 'Hillyer scoped video report') !== false, 'Resolved-filter evidence must not contain raw prompts.');
+repairAssertSame(false, strpos($resolvedEvidenceJson, 'Reference resolver guidance') !== false, 'Resolved-filter evidence must not contain rendered guidance.');
+
+TestTransport::$responses = [
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['DVD/Blu-ray'])),
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['DVD/Blu-ray'])),
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['DVD/Blu-ray'])),
+];
+TestTransport::$requests = [];
+$resolvedFilterExhausted = GeminiService::generateSqlWithShadow(
+    'Hillyer scoped video report exhaustion',
+    'Smith College',
+    null,
+    true
+);
+repairAssertSame(false, isset($resolvedFilterExhausted['sql']), 'Resolved-filter repair exhaustion must not return a candidate for database preflight.');
+repairAssertSame('exploratory_recovery', $resolvedFilterExhausted['route'] ?? null, 'Resolved-filter repair exhaustion must return a no-result recovery.');
+repairAssertSame(2, $resolvedFilterExhausted['repairAttempts'] ?? null, 'Resolved-filter exhaustion must preserve the shared two-repair maximum.');
+repairAssertSame(3, count(TestTransport::$requests), 'Resolved-filter exhaustion must use one initial generation and exactly two repairs.');
+repairAssertSame(
+    'resolved_reference_filter_mismatch',
+    $resolvedFilterExhausted['validationSummary']['failureCategory'] ?? null,
+    'Resolved-filter exhaustion must retain only the safe mismatch category.'
+);
+repairAssertSame(false, strpos(json_encode($resolvedFilterExhausted), 'Reference resolver guidance') !== false, 'Resolved-filter recovery must not leak generated guidance.');
 repairAssertContains('unknown_table', $repairPayload, 'The repair request should contain the safe validation category.');
 repairAssertContains('None documented.', $repairPayload, 'The repair request should safely represent absent assumptions.');
 repairAssertContains('SCOPED SCHEMA', $repairPayload, 'The repair request should contain fresh scoped schema context.');
@@ -285,6 +394,7 @@ repairAssertContains('Smith College', $repairPayload, 'The repair request should
 repairAssertContains('Never include a second SQL statement', $repairPayload, 'The repair response contract should explicitly forbid alternate statements.');
 repairAssertContains('one ```sql code block', $repairPayload, 'The repair response contract should require the parser-supported fenced SQL shape.');
 
+Yii::$logs = $baselineRepairLogs;
 $telemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
 repairAssertSame(false, strpos($telemetry, 'SELECT mt.id FROM inventory.missing_table__t mt') !== false, 'Telemetry must not contain raw candidate SQL.');
 repairAssertSame(false, strpos($telemetry, roiPrompt()) !== false, 'Telemetry must not contain the raw user prompt.');
@@ -327,6 +437,7 @@ repairAssertSame(['title', 'barcode', 'publication_date'], $explicitValuesResult
 
 Yii::$logs = [];
 $logValidationFailure = new ReflectionMethod(GeminiService::class, 'logValidationFailure');
+$logValidationFailure->setAccessible(true);
 $logValidationFailure->invoke(null, 'legacy_sql_parse', [
     'route' => 'legacy_freeform',
     'routeReason' => 'forced_legacy_mode',
@@ -522,6 +633,7 @@ TestTransport::$responses = [
 TestTransport::$requests = [];
 Yii::$logs = [];
 $routedRepair = new ReflectionMethod(GeminiService::class, 'repairRoutedCandidateMissingExplicitValues');
+$routedRepair->setAccessible(true);
 $routedExhausted = $routedRepair->invoke(
     null,
     [

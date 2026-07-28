@@ -278,7 +278,9 @@ class ReferenceResolverService
             'resolvedReferences' => $resolved,
             'resolvedFilters' => $resolvedFilters,
             'unresolvedNamedIntents' => $unresolvedNamedIntents,
-            'routeReason' => !empty($guidanceLines) ? 'reference_resolver_guidance' : null,
+            'routeReason' => (!empty($guidanceLines) || !empty($resolvedFilters))
+                ? 'reference_resolver_guidance'
+                : null,
         ];
     }
 
@@ -396,12 +398,62 @@ class ReferenceResolverService
      */
     public static function appendGuidanceToPrompt(string $prompt, array $resolution): string
     {
-        $lines = $resolution['guidanceLines'] ?? [];
-        if (empty($lines) || !is_array($lines)) {
+        $lines = [];
+        foreach (($resolution['resolvedFilters'] ?? []) as $filter) {
+            if (is_array($filter)) {
+                $lines[] = self::buildResolvedFilterGuidanceLine($filter);
+            }
+        }
+        foreach (($resolution['guidanceLines'] ?? []) as $line) {
+            $line = (string)$line;
+            if (!self::guidanceLineCoveredByResolvedFilters($line, $resolution['resolvedFilters'] ?? [])) {
+                $lines[] = $line;
+            }
+        }
+        if (empty($lines)) {
             return $prompt;
         }
 
         return rtrim($prompt) . "\n\nReference resolver guidance:\n" . implode("\n", array_map('strval', $lines));
+    }
+
+    /**
+     * @param array<string, mixed> $filter
+     */
+    private static function buildResolvedFilterGuidanceLine(array $filter): string
+    {
+        $table = (string)($filter['source_table'] ?? '');
+        $filterValues = is_array($filter['values'] ?? null) ? $filter['values'] : [];
+        $values = array_values(array_map([self::class, 'quoteLiteral'], $filterValues));
+        $predicate = count($values) === 1
+            ? $table . '.name = ' . $values[0]
+            : $table . '.name IN (' . implode(', ', $values) . ')';
+
+        return '- Resolved local reference filter: use exactly ' . $predicate
+            . '. Apply each value only to this reference dimension.';
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $resolvedFilters
+     */
+    private static function guidanceLineCoveredByResolvedFilters(
+        string $line,
+        array $resolvedFilters
+    ): bool
+    {
+        foreach ($resolvedFilters as $filter) {
+            if (!is_array($filter)) {
+                continue;
+            }
+            $prefix = (string)($filter['source_table'] ?? '') . '.name = ';
+            foreach (($filter['values'] ?? []) as $value) {
+                if (strpos($line, $prefix . self::quoteLiteral((string)$value)) !== false) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
