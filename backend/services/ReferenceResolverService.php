@@ -130,6 +130,7 @@ class ReferenceResolverService
         $guidanceLines = [];
         $resolvedFilters = $typedResolution['resolvedFilters'];
         $resolved = $typedResolution['resolvedReferences'];
+        $unresolvedNamedIntents = $typedResolution['unresolvedNamedIntents'];
         $legacyPrompt = self::removeConsumedPromptText(
             $prompt,
             $typedResolution['consumedSpans'],
@@ -218,6 +219,19 @@ class ReferenceResolverService
             $clarificationKey = trim((string)($alias['clarification_key'] ?? ('reference_alias.' . str_replace(' ', '_', $normalizedAlias))));
             if (in_array($clarificationKey, $acceptedClarificationKeys, true) && !empty($alias['resolved_filter'])) {
                 $guidanceLines[] = self::buildAliasGuidanceLine($alias);
+                $resolvedFilter = is_array($alias['resolved_filter'])
+                    ? $alias['resolved_filter']
+                    : [];
+                $unresolvedNamedIntents = array_values(array_filter(
+                    $unresolvedNamedIntents,
+                    function (array $intent) use ($aliasText, $resolvedFilter): bool {
+                        return !self::acceptedAliasSatisfiesNamedIntent(
+                            $intent,
+                            $aliasText,
+                            $resolvedFilter
+                        );
+                    }
+                ));
                 continue;
             }
 
@@ -251,6 +265,7 @@ class ReferenceResolverService
             'guidanceLines' => $guidanceLines,
             'resolvedReferences' => $resolved,
             'resolvedFilters' => $resolvedFilters,
+            'unresolvedNamedIntents' => $unresolvedNamedIntents,
             'routeReason' => !empty($guidanceLines) ? 'reference_resolver_guidance' : null,
         ];
     }
@@ -266,7 +281,33 @@ class ReferenceResolverService
         $aliases = self::loadReferenceAliases($userId);
         $acceptedKeys = self::loadAcceptedClarificationKeys($userId);
         $resolution = self::resolvePromptAgainstReferences($prompt, $references, $aliases, $acceptedKeys);
-        if (!empty($resolution['needsClarification']) || !empty($resolution['guidanceLines'])) {
+        if (!empty($resolution['needsClarification'])) {
+            return $resolution;
+        }
+
+        $unresolvedNamedIntents = $resolution['unresolvedNamedIntents'] ?? [];
+        if (!empty($unresolvedNamedIntents)) {
+            $safeProbeClarification = self::buildSafeProbeClarification(
+                $prompt,
+                $unresolvedNamedIntents
+            );
+            if ($safeProbeClarification !== null) {
+                $safeProbeClarification['guidanceLines'] = array_values(array_unique(array_merge(
+                    $resolution['guidanceLines'] ?? [],
+                    $safeProbeClarification['guidanceLines'] ?? []
+                )));
+                $safeProbeClarification['resolvedReferences'] = array_merge(
+                    $resolution['resolvedReferences'] ?? [],
+                    $safeProbeClarification['resolvedReferences'] ?? []
+                );
+                $safeProbeClarification['resolvedFilters'] = $resolution['resolvedFilters'] ?? [];
+                $safeProbeClarification['unresolvedNamedIntents'] = $unresolvedNamedIntents;
+
+                return $safeProbeClarification;
+            }
+        }
+
+        if (!empty($resolution['guidanceLines'])) {
             return $resolution;
         }
 
@@ -304,6 +345,31 @@ class ReferenceResolverService
         }
 
         return array_values($terms);
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<string, mixed> $resolvedFilter
+     */
+    private static function acceptedAliasSatisfiesNamedIntent(
+        array $intent,
+        string $aliasText,
+        array $resolvedFilter
+    ): bool {
+        $dimension = (string)($intent['dimension'] ?? '');
+        $intentTable = ReferenceIntentService::tableForDimension($dimension);
+        $aliasTable = trim((string)($resolvedFilter['table'] ?? ''));
+        if ($intentTable === null || $aliasTable !== $intentTable) {
+            return false;
+        }
+
+        $intentValue = self::normalizeNamedIntentSpan(
+            (string)($intent['span'] ?? ''),
+            $dimension
+        );
+        $aliasValue = self::normalizeNamedIntentSpan($aliasText, $dimension);
+
+        return $intentValue !== '' && $intentValue === $aliasValue;
     }
 
     /**
@@ -464,13 +530,18 @@ class ReferenceResolverService
     /**
      * @return array<string, mixed>|null
      */
-    private static function buildSafeProbeClarification(string $prompt)
+    private static function buildSafeProbeClarification(
+        string $prompt,
+        array $unresolvedNamedIntents = []
+    )
     {
         if (!class_exists('\Yii')) {
             return null;
         }
 
-        $terms = self::extractSafeProbeTerms($prompt);
+        $terms = empty($unresolvedNamedIntents)
+            ? self::extractSafeProbeTerms($prompt)
+            : self::safeProbeTermsForUnresolvedNamedIntents($unresolvedNamedIntents);
         if (empty($terms)) {
             return null;
         }
@@ -492,6 +563,48 @@ class ReferenceResolverService
         }
 
         return self::buildSafeProbeClarificationFromOptions($prompt, $items);
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $intents
+     * @return array<int, array{term: string, trigger: string}>
+     */
+    private static function safeProbeTermsForUnresolvedNamedIntents(array $intents): array
+    {
+        $terms = [];
+        foreach ($intents as $intent) {
+            $span = trim((string)($intent['span'] ?? ''));
+            $dimension = (string)($intent['dimension'] ?? '');
+            if ($span === '' || $dimension === '') {
+                continue;
+            }
+
+            $extractedTerms = self::extractSafeProbeTerms($span);
+            if (empty($extractedTerms)) {
+                $term = self::normalizeNamedIntentSpan($span, $dimension);
+                if ($term === '') {
+                    continue;
+                }
+                $extractedTerms[] = [
+                    'term' => $term,
+                    'trigger' => str_replace('_', ' ', $dimension),
+                ];
+            }
+
+            foreach ($extractedTerms as $termInfo) {
+                $term = trim((string)($termInfo['term'] ?? ''));
+                $trigger = trim((string)($termInfo['trigger'] ?? $dimension));
+                if ($term === '') {
+                    continue;
+                }
+                $terms[strtolower($term . '|' . $trigger)] = [
+                    'term' => $term,
+                    'trigger' => $trigger,
+                ];
+            }
+        }
+
+        return array_values($terms);
     }
 
     /**
@@ -806,6 +919,7 @@ class ReferenceResolverService
         $resolved = [];
         $consumedSpans = [];
         $consumedMaterialTerms = [];
+        $unresolvedNamedIntents = [];
         $seenReferences = [];
 
         foreach ($intents as $intent) {
@@ -835,6 +949,7 @@ class ReferenceResolverService
                         'resolvedReferences' => [],
                         'consumedSpans' => $consumedSpans,
                         'consumedMaterialTerms' => $consumedMaterialTerms,
+                        'unresolvedNamedIntents' => $unresolvedNamedIntents,
                         'outcome' => $materialResolution['outcome'],
                     ];
                 }
@@ -847,6 +962,7 @@ class ReferenceResolverService
                         'resolvedReferences' => [],
                         'consumedSpans' => $consumedSpans,
                         'consumedMaterialTerms' => $consumedMaterialTerms,
+                        'unresolvedNamedIntents' => $unresolvedNamedIntents,
                         'outcome' => self::buildTypedIntentAmbiguityOutcome(
                             $intent,
                             $matches
@@ -856,6 +972,9 @@ class ReferenceResolverService
             }
 
             if (empty($matches)) {
+                if ($dimension !== 'material_type') {
+                    $unresolvedNamedIntents[] = $intent;
+                }
                 continue;
             }
 
@@ -883,8 +1002,9 @@ class ReferenceResolverService
         return [
             'resolvedFilters' => $filters,
             'resolvedReferences' => $resolved,
-            'consumedSpans' => array_values(array_unique($consumedSpans)),
+            'consumedSpans' => $consumedSpans,
             'consumedMaterialTerms' => array_values(array_unique($consumedMaterialTerms)),
+            'unresolvedNamedIntents' => $unresolvedNamedIntents,
             'outcome' => null,
         ];
     }
@@ -895,13 +1015,30 @@ class ReferenceResolverService
      */
     private static function referencesForTable(array $references, string $sourceTable): array
     {
-        return array_values(array_filter(
+        $tableReferences = array_values(array_filter(
             $references,
             function (array $reference) use ($sourceTable): bool {
                 return trim((string)($reference['source_table'] ?? ($reference['table'] ?? '')))
                     === $sourceTable;
             }
         ));
+
+        $deduped = [];
+        $seen = [];
+        foreach ($tableReferences as $reference) {
+            $sourceId = (string)($reference['source_id'] ?? ($reference['id'] ?? ''));
+            $key = $sourceTable . '|' . $sourceId;
+            if ($sourceId === '') {
+                $key .= '|' . self::normalizeText((string)($reference['name'] ?? ''));
+            }
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $deduped[] = $reference;
+        }
+
+        return $deduped;
     }
 
     /**

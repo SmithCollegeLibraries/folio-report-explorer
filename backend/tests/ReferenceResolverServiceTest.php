@@ -246,6 +246,263 @@ $videoReferences = [
     ['source_table' => 'inventory.material_type__t', 'source_id' => 'mt-film', 'name' => 'Film', 'code' => ''],
 ];
 
+$duplicateIdentityResolution = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Hillyer library.',
+    array_merge($videoReferences, [
+        $videoReferences[1],
+        $videoReferences[3],
+    ])
+);
+assertResolverSame(
+    false,
+    $duplicateIdentityResolution['needsClarification'] ?? null,
+    'Repeated copies of the same authoritative library and canonical material identities must not be ambiguous.'
+);
+assertResolverSame(
+    ['DVD/Blu-ray', 'SC Hillyer Art Library'],
+    array_column($duplicateIdentityResolution['resolvedReferences'] ?? [], 'name'),
+    'Same-ID typed candidates must deduplicate before named and canonical material cardinality checks.'
+);
+
+$duplicateUnknownMaterial = [
+    'source_table' => 'inventory.material_type__t',
+    'source_id' => 'mt-betamax',
+    'name' => 'Betamax',
+    'code' => '',
+];
+$duplicateUnknownResolution = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show Betamax format at Hillyer library.',
+    array_merge($videoReferences, [
+        $duplicateUnknownMaterial,
+        $duplicateUnknownMaterial,
+    ])
+);
+assertResolverSame(
+    false,
+    $duplicateUnknownResolution['needsClarification'] ?? null,
+    'Repeated copies of the same authoritative unknown-material identity must not be ambiguous.'
+);
+assertResolverSame(
+    ['Betamax'],
+    $duplicateUnknownResolution['resolvedFilters'][1]['values'] ?? null,
+    'Same-ID unknown-material candidates must deduplicate before cardinality checks.'
+);
+
+$distinctNamedIdentity = $videoReferences[1];
+$distinctNamedIdentity['source_id'] = 'sc-hillyer-distinct';
+$ambiguousDistinctNamed = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Hillyer library.',
+    array_merge($videoReferences, [$distinctNamedIdentity])
+);
+assertResolverSame(
+    true,
+    $ambiguousDistinctNamed['needsClarification'] ?? null,
+    'Named candidates with distinct authoritative IDs must remain ambiguous.'
+);
+
+$distinctCanonicalIdentity = $videoReferences[3];
+$distinctCanonicalIdentity['source_id'] = 'mt-dvd-distinct';
+$ambiguousDistinctCanonical = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Hillyer library.',
+    array_merge($videoReferences, [$distinctCanonicalIdentity])
+);
+assertResolverSame(
+    true,
+    $ambiguousDistinctCanonical['needsClarification'] ?? null,
+    'Canonical material candidates with distinct authoritative IDs must remain ambiguous.'
+);
+
+$distinctUnknownIdentity = $duplicateUnknownMaterial;
+$distinctUnknownIdentity['source_id'] = 'mt-betamax-distinct';
+$ambiguousDistinctUnknown = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show Betamax format at Hillyer library.',
+    array_merge($videoReferences, [
+        $duplicateUnknownMaterial,
+        $distinctUnknownIdentity,
+    ])
+);
+assertResolverSame(
+    true,
+    $ambiguousDistinctUnknown['needsClarification'] ?? null,
+    'Unknown-material candidates with distinct authoritative IDs must remain ambiguous.'
+);
+
+$repeatedTypedLibrary = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Hillyer library and Hillyer library',
+    [
+        $videoReferences[1],
+        [
+            'source_table' => 'inventory.location__t',
+            'source_id' => 'hillyer-location',
+            'name' => 'Hillyer Library',
+            'code' => '',
+        ],
+    ]
+);
+assertResolverSame(
+    ['SC Hillyer Art Library'],
+    array_column($repeatedTypedLibrary['resolvedReferences'] ?? [], 'name'),
+    'Every repeated typed library span must be consumed before legacy matching can activate a colliding location.'
+);
+assertResolverSame(
+    ['library'],
+    array_column($repeatedTypedLibrary['resolvedFilters'] ?? [], 'dimension'),
+    'Repeated typed library spans must remain scoped to the authoritative library table.'
+);
+
+$unresolvedLibraryWithMaterial = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Riverside library.',
+    array_values(array_filter($videoReferences, function (array $reference): bool {
+        return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
+    }))
+);
+assertResolverSame(
+    ['DVD/Blu-ray'],
+    $unresolvedLibraryWithMaterial['resolvedFilters'][0]['values'] ?? null,
+    'A resolved material sibling must remain available while a named library intent is unresolved.'
+);
+assertResolverSame(
+    ['Riverside library'],
+    array_column($unresolvedLibraryWithMaterial['unresolvedNamedIntents'] ?? [], 'span'),
+    'An unresolved typed library intent must survive resolver output so runtime safe probing cannot be skipped.'
+);
+
+$acceptedTypedLibraryAlias = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Riverside library.',
+    array_values(array_filter($videoReferences, function (array $reference): bool {
+        return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
+    })),
+    [[
+        'alias' => 'Riverside',
+        'clarification_key' => 'reference_alias.riverside',
+        'resolved_filter' => [
+            'table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'operator' => '=',
+            'value' => 'SC Riverside Library',
+        ],
+    ]],
+    ['reference_alias.riverside']
+);
+assertResolverSame(
+    [],
+    $acceptedTypedLibraryAlias['unresolvedNamedIntents'] ?? null,
+    'An accepted learned alias must satisfy its typed named scope without triggering a second safe-probe clarification.'
+);
+assertResolverContains(
+    'SC Riverside Library',
+    implode("\n", $acceptedTypedLibraryAlias['guidanceLines'] ?? []),
+    'Accepted learned-alias guidance must remain available beside typed material guidance.'
+);
+
+$acceptedLibraryBesideUnresolvedLocation = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVDs at Riverside library and Riverside location.',
+    array_values(array_filter($videoReferences, function (array $reference): bool {
+        return ($reference['source_table'] ?? '') === 'inventory.material_type__t';
+    })),
+    [[
+        'alias' => 'Riverside',
+        'clarification_key' => 'reference_alias.riverside_library',
+        'resolved_filter' => [
+            'table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'operator' => '=',
+            'value' => 'SC Riverside Library',
+        ],
+    ]],
+    ['reference_alias.riverside_library']
+);
+assertResolverSame(
+    ['location'],
+    array_column($acceptedLibraryBesideUnresolvedLocation['unresolvedNamedIntents'] ?? [], 'dimension'),
+    'An accepted library alias must not silently satisfy a same-word unresolved location intent.'
+);
+
+$acceptedQualifiedLocationAlias = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show items at Riverside location.',
+    [],
+    [[
+        'alias' => 'Riverside location',
+        'clarification_key' => 'reference_alias.riverside_location',
+        'resolved_filter' => [
+            'table' => 'inventory.location__t',
+            'column' => 'name',
+            'operator' => '=',
+            'value' => 'SC Riverside',
+        ],
+    ]],
+    ['reference_alias.riverside_location']
+);
+assertResolverSame(
+    [],
+    $acceptedQualifiedLocationAlias['unresolvedNamedIntents'] ?? null,
+    'An accepted qualified location alias must satisfy its suffix-extracted location intent.'
+);
+
+if (!class_exists('ReferenceResolverRuntimeTestCommand')) {
+    class ReferenceResolverRuntimeTestCommand
+    {
+        public function queryAll(): array
+        {
+            return [];
+        }
+
+        public function queryColumn(): array
+        {
+            return [];
+        }
+    }
+}
+
+if (!class_exists('ReferenceResolverRuntimeTestDb')) {
+    class ReferenceResolverRuntimeTestDb
+    {
+        public function createCommand($sql, array $params = []): ReferenceResolverRuntimeTestCommand
+        {
+            return new ReferenceResolverRuntimeTestCommand();
+        }
+    }
+}
+
+if (!class_exists('Yii')) {
+    class Yii
+    {
+        public static $app;
+
+        public static function getAlias(string $alias): string
+        {
+            throw new RuntimeException('Use the resolver bundle fallback path in this test.');
+        }
+
+        public static function warning($message, $category = null): void
+        {
+        }
+    }
+}
+
+Yii::$app = (object)[
+    'db' => new ReferenceResolverRuntimeTestDb(),
+    'folioDb' => new ReferenceResolverRuntimeTestDb(),
+];
+$runtimeUnresolvedLibrary = ReferenceResolverService::resolvePrompt(
+    'Show DVDs at Riverside library.'
+);
+assertResolverSame(
+    true,
+    $runtimeUnresolvedLibrary['needsClarification'] ?? null,
+    'Runtime must safe-probe an unresolved typed library even when the DVD sibling produced guidance.'
+);
+assertResolverSame(
+    ['Riverside'],
+    array_column($runtimeUnresolvedLibrary['clarificationItems'] ?? [], 'term'),
+    'Runtime safe-probe clarification must retain the unresolved library term.'
+);
+assertResolverSame(
+    ['DVD/Blu-ray'],
+    $runtimeUnresolvedLibrary['resolvedFilters'][0]['values'] ?? null,
+    'Runtime safe-probe clarification must retain resolved sibling material filters.'
+);
+
 $video = ReferenceResolverService::resolvePromptAgainstReferences(
     'Find all of the video formats at Hillyer library. This can be VHS or DVD.',
     $videoReferences
