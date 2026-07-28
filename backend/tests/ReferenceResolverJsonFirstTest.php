@@ -13,6 +13,42 @@ foreach ([$bundlePath, $resolverPath] as $path) {
 $tempBundle = sys_get_temp_dir() . '/folio-reference-json-first-test.json';
 
 if (!class_exists('Yii')) {
+    class ReferenceJsonFirstTestCommand
+    {
+        private $sql;
+
+        public function __construct(string $sql)
+        {
+            $this->sql = $sql;
+        }
+
+        public function queryAll(): array
+        {
+            if (strpos($this->sql, 'ai_clarification_events') !== false) {
+                return Yii::$app->acceptedClarificationRows ?? [];
+            }
+
+            return [];
+        }
+
+        public function queryColumn(): array
+        {
+            if (strpos($this->sql, 'ai_clarification_events') !== false) {
+                return Yii::$app->acceptedClarificationKeys ?? [];
+            }
+
+            return [];
+        }
+    }
+
+    class ReferenceJsonFirstTestDb
+    {
+        public function createCommand(string $sql, array $params = []): ReferenceJsonFirstTestCommand
+        {
+            return new ReferenceJsonFirstTestCommand($sql);
+        }
+    }
+
     class Yii
     {
         public static $app;
@@ -31,7 +67,12 @@ if (!class_exists('Yii')) {
     }
 }
 
-Yii::$app = (object) ['params' => []];
+Yii::$app = (object) [
+    'params' => [],
+    'db' => new ReferenceJsonFirstTestDb(),
+    'acceptedClarificationKeys' => [],
+    'acceptedClarificationRows' => [],
+];
 
 require_once $bundlePath;
 require_once $resolverPath;
@@ -353,8 +394,105 @@ foreach ($libraryOptions as $option) {
         $option['resolvedFilter']['table'] ?? null,
         'Library choices may retain a submission-only technical filter for the library dimension.'
     );
+    assertJsonFirstSame(
+        $option['id'] ?? null,
+        $option['resolvedFilter']['sourceId'] ?? null,
+        'Library choices must retain the authoritative identity used by accepted-resolution telemetry.'
+    );
     assertJsonFirstNotContains('inventory.', ($option['label'] ?? '') . ' ' . ($option['description'] ?? ''), 'User-visible library choices must hide schema names.');
 }
+
+$ambiguousVideoQuestion = 'Find all of the video formats at Hillyer library. This can be VHS or DVD.';
+$ambiguousVideo = ReferenceResolverService::resolvePrompt($ambiguousVideoQuestion);
+$ambiguousVideoItem = $ambiguousVideo['clarificationItems'][0] ?? [];
+$selectedLibraryOption = null;
+foreach (($ambiguousVideoItem['options'] ?? []) as $option) {
+    if (($option['label'] ?? '') === 'SC Hillyer Art Library') {
+        $selectedLibraryOption = $option;
+        break;
+    }
+}
+assertJsonFirstTrue(
+    is_array($selectedLibraryOption),
+    'The initial ambiguous response must return the Smith Hillyer library option used by the continuation.'
+);
+
+$frontendContinuation = $ambiguousVideoQuestion
+    . "\n\nClarifications:\n- "
+    . ($ambiguousVideoItem['term'] ?? '')
+    . ': Use '
+    . ($selectedLibraryOption['label'] ?? '')
+    . ' for '
+    . ($ambiguousVideoItem['term'] ?? '')
+    . '.';
+$unacceptedContinuation = ReferenceResolverService::resolvePrompt($frontendContinuation, 7);
+assertJsonFirstSame(
+    'reference_resolver_ambiguous_library',
+    $unacceptedContinuation['routeReason'] ?? null,
+    'A continuation-shaped free-text instruction must not bypass ambiguity without an accepted selection.'
+);
+
+Yii::$app->acceptedClarificationKeys = [$ambiguousVideoItem['clarificationKey']];
+Yii::$app->acceptedClarificationRows = [[
+    'clarification_key' => $ambiguousVideoItem['clarificationKey'],
+    'term' => $ambiguousVideoItem['term'],
+    'resolved_filter_json' => json_encode($selectedLibraryOption['resolvedFilter']),
+    'selected_source_table' => $selectedLibraryOption['resolvedFilter']['table'],
+    'selected_source_id' => $selectedLibraryOption['id'],
+    'selected_value' => $selectedLibraryOption['resolvedFilter']['value'],
+]];
+$acceptedContinuation = ReferenceResolverService::resolvePrompt($frontendContinuation, 7);
+$acceptedFilters = [];
+foreach (($acceptedContinuation['resolvedFilters'] ?? []) as $filter) {
+    $acceptedFilters[$filter['dimension'] ?? ''] = $filter;
+}
+assertJsonFirstTrue(
+    empty($acceptedContinuation['needsClarification']),
+    'Selecting a returned library option through the frontend continuation path must resolve the ambiguity.'
+);
+assertJsonFirstSame(
+    ['SC Hillyer Art Library'],
+    $acceptedFilters['library']['values'] ?? null,
+    'The accepted continuation must make the chosen library the sole library filter.'
+);
+assertJsonFirstSame(
+    'inventory.loclibrary__t',
+    $acceptedFilters['library']['source_table'] ?? null,
+    'The accepted continuation must preserve the selected library dimension.'
+);
+assertJsonFirstSame(
+    ['Videocassette', 'DVD/Blu-ray'],
+    $acceptedFilters['material_type']['values'] ?? null,
+    'The accepted library continuation must preserve the VHS and DVD material filters.'
+);
+
+$crossDimensionContinuation = $ambiguousVideoQuestion
+    . "\n\nClarifications:\n- Hillyer library: Use HC DVD for Hillyer library.";
+$crossDimensionAttempt = ReferenceResolverService::resolvePrompt($crossDimensionContinuation, 7);
+assertJsonFirstSame(
+    'reference_resolver_ambiguous_library',
+    $crossDimensionAttempt['routeReason'] ?? null,
+    'An accepted library clarification key must not allow a location value to override library ambiguity.'
+);
+
+$differentCandidateContinuation = $ambiguousVideoQuestion
+    . "\n\nClarifications:\n- Hillyer library: Use AC Hillyer Science Library for Hillyer library.";
+$differentCandidateAttempt = ReferenceResolverService::resolvePrompt(
+    $differentCandidateContinuation,
+    7
+);
+assertJsonFirstSame(
+    'reference_resolver_ambiguous_library',
+    $differentCandidateAttempt['routeReason'] ?? null,
+    'The continuation value must match the accepted technical resolution, not merely another responsible candidate.'
+);
+
+$quotedLibrary = ReferenceResolverService::resolvePrompt('Show items at "Hillyer" library.');
+assertJsonFirstSame(
+    'Which library should "Hillyer library" mean?',
+    $quotedLibrary['clarificationItems'][0]['question'] ?? null,
+    'Quoted library wording must be normalized before the domain-language question adds its delimiters.'
+);
 
 @unlink($tempBundle);
 
