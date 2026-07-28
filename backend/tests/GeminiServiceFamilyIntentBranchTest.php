@@ -149,12 +149,12 @@ $explicitFamilyCandidate = $familyBranch->invoke(
         ],
     ],
     ['familyKey' => 'inventory_library_location_listing'],
-    'For instance number in0001, show title in Josten Library.',
+    'For instance numbers in0001 and in0002, show title in Josten Library.',
     'Smith College',
     ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
     function (): array {
         return [
-            'sql' => 'SELECT inst.title FROM inventory.instance__t inst',
+            'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002','in9999')",
             'dataSource' => 'folio',
             'route' => 'builder_intent',
             'routeReason' => 'family_contract_supported:inventory_library_location_listing',
@@ -165,7 +165,7 @@ $explicitFamilyCandidate = $familyBranch->invoke(
     function (string $prompt, $campus, array $candidate) use (&$familyRepairCalls): array {
         $familyRepairCalls++;
         return [
-            'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001'",
+            'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002')",
             'dataSource' => 'folio',
             'mode' => 'exploratory',
             'route' => 'exploratory_legacy_freeform',
@@ -174,9 +174,9 @@ $explicitFamilyCandidate = $familyBranch->invoke(
         ];
     }
 );
-assertSameValue(1, $familyRepairCalls, 'A routed family candidate that omits an explicit identifier must enter the existing repair seam.');
+assertSameValue(1, $familyRepairCalls, 'A routed family candidate that broadens the explicit identifier set must enter the existing repair seam.');
 assertSameValue(1, $explicitFamilyCandidate['repairAttempts'] ?? null, 'Routed-family explicit repair must report the shared repair count.');
-assertSameValue("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001'", $explicitFamilyCandidate['sql'] ?? null, 'Routed-family explicit repair must return the validated repaired candidate.');
+assertSameValue("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002')", $explicitFamilyCandidate['sql'] ?? null, 'Routed-family explicit repair must return the exact-set repaired candidate.');
 
 $routerFallback = $familyBranch->invoke(
     null,

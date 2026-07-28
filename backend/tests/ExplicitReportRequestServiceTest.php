@@ -101,6 +101,14 @@ $missingIdentifier = ExplicitReportRequestService::validateCandidate(
 );
 explicitAssertSame(['in0002'], $missingIdentifier['missingIdentifiers'], 'Omitted explicit identifiers must be reported.');
 
+$broadenedIdentifier = ExplicitReportRequestService::validateCandidate(
+    "SELECT inst.hrid AS instance_hrid, inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
+    $request
+);
+explicitAssertFalse($broadenedIdentifier['valid'], 'An additional identifier on the authoritative filter column must fail exact-set validation.');
+explicitAssertSame([], $broadenedIdentifier['missingIdentifiers'], 'A broadened candidate may still contain every requested identifier.');
+explicitAssertSame(['in9999'], $broadenedIdentifier['unexpectedIdentifiers'] ?? null, 'Unexpected explicit identifiers must be reported.');
+
 $missingField = ExplicitReportRequestService::validateCandidate(
     "SELECT inst.hrid AS instance_hrid, inst.title, item.barcode FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002') LIMIT 20",
     $request

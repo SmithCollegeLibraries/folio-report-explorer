@@ -359,15 +359,15 @@ $routedGenerationPrompt = \app\services\ExplicitReportRequestService::appendGuid
     \app\services\ExplicitReportRequestService::extract($routedRawQuestion)
 );
 TestTransport::$responses = [
-    geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
-    geminiSql("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiSql("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiSql("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
 ];
 TestTransport::$requests = [];
 $modelEchoRecovery = GeminiService::repairExploratorySqlAfterPreflight(
     $routedRawQuestion,
     'Smith College',
     [
-        'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        'sql' => "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
         'explanation' => $untrustedRoutedExplanation,
         'route' => 'legacy_fallback',
         'routeReason' => 'intent_contract_failed',
@@ -410,15 +410,15 @@ assertContainsText(
 
 TestTransport::$responses = [
     geminiSql(
-        "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
         $untrustedRoutedExplanation
     ),
     geminiSql(
-        "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
         $untrustedRoutedExplanation
     ),
     geminiSql(
-        "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
         $untrustedRoutedExplanation
     ),
 ];

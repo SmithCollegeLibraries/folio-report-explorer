@@ -606,9 +606,9 @@ repairAssertSame('exhausted', terminalTelemetryOutcomes()[0]['outcome'] ?? null,
 
 $explicitRecoveryPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
 TestTransport::$responses = [
-    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
-    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
-    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
 ];
 Yii::$logs = [];
 $explicitRecovery = GeminiService::generateSqlWithShadow($explicitRecoveryPrompt, null, null, true);
@@ -627,8 +627,8 @@ $routedEffectivePrompt = \app\services\ExplicitReportRequestService::appendGuida
     \app\services\ExplicitReportRequestService::extract($routedExplicitPrompt)
 );
 TestTransport::$responses = [
-    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
-    geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
 ];
 TestTransport::$requests = [];
 Yii::$logs = [];
@@ -637,7 +637,7 @@ $routedRepair->setAccessible(true);
 $routedExhausted = $routedRepair->invoke(
     null,
     [
-        'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001' LIMIT 20",
+        'sql' => "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
         'route' => 'builder_intent',
         'routeReason' => 'family_contract_supported:inventory_library_location_listing',
     ],

@@ -6101,6 +6101,15 @@ PROMPT;
                 'guidance' => 'Keep every requested identifier exactly as supplied.',
             ];
         }
+        foreach (($validation['unexpectedIdentifiers'] ?? []) as $unusedValue) {
+            $position++;
+            $violations[] = [
+                'key' => 'explicit_identifier_' . $position,
+                'category' => 'explicit_values',
+                'label' => 'Explicit report identifier',
+                'guidance' => 'Use only the identifiers that were explicitly requested.',
+            ];
+        }
         foreach (($validation['missingFields'] ?? []) as $unusedField) {
             $position++;
             $violations[] = [

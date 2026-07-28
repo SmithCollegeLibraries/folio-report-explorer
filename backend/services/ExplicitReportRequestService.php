@@ -108,13 +108,21 @@ final class ExplicitReportRequestService
     {
         $analysis = ExploratorySqlAnalysisService::analyze($sql);
         $missingIdentifiers = [];
+        $unexpectedIdentifiers = [];
         foreach (($request['identifiers'] ?? []) as $kind => $values) {
             if (!is_array($values)) {
                 continue;
             }
-            foreach ($values as $value) {
-                if (!self::hasIdentifierFilter($analysis, (string)$kind, (string)$value)) {
-                    $missingIdentifiers[] = (string)$value;
+            $requestedValues = self::uniqueNormalizedIdentifiers($values);
+            $actualValues = self::identifierValuesForKind($analysis, (string)$kind);
+            foreach ($requestedValues as $value) {
+                if (!in_array($value, $actualValues, true)) {
+                    $missingIdentifiers[] = $value;
+                }
+            }
+            foreach ($actualValues as $value) {
+                if (!in_array($value, $requestedValues, true)) {
+                    $unexpectedIdentifiers[] = $value;
                 }
             }
         }
@@ -129,8 +137,12 @@ final class ExplicitReportRequestService
 
         $limitValid = self::limitMatches($sql, $request['limit'] ?? null);
         return [
-            'valid' => $missingIdentifiers === [] && $missingFields === [] && $limitValid,
+            'valid' => $missingIdentifiers === []
+                && $unexpectedIdentifiers === []
+                && $missingFields === []
+                && $limitValid,
             'missingIdentifiers' => $missingIdentifiers,
+            'unexpectedIdentifiers' => $unexpectedIdentifiers,
             'missingFields' => $missingFields,
             'limitValid' => $limitValid,
         ];
@@ -259,24 +271,21 @@ final class ExplicitReportRequestService
         return array_values(array_unique($aliases));
     }
 
-    private static function hasIdentifierFilter(array $analysis, string $kind, string $value): bool
+    private static function identifierValuesForKind(array $analysis, string $kind): array
     {
+        $values = [];
         foreach (self::analysisScopes($analysis) as $scope) {
             foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
                 if (!self::predicateMatchesIdentifierKind($scope, $predicate, $kind)) {
                     continue;
                 }
                 foreach (($predicate['values'] ?? []) as $candidateValue) {
-                    if (self::normalizeIdentifier((string)$candidateValue) === self::normalizeIdentifier($value)) {
-                        return true;
-                    }
+                    $values[] = (string)$candidateValue;
                 }
             }
-            if (self::hasUnqualifiedIdentifierFilter($scope, $kind, $value)) {
-                return true;
-            }
+            $values = array_merge($values, self::unqualifiedIdentifierValues($scope, $kind));
         }
-        return false;
+        return self::uniqueNormalizedIdentifiers($values);
     }
 
     private static function predicateMatchesIdentifierKind(array $scope, array $predicate, string $kind): bool
@@ -314,7 +323,7 @@ final class ExplicitReportRequestService
         return $scopes;
     }
 
-    private static function hasUnqualifiedIdentifierFilter(array $scope, string $kind, string $value): bool
+    private static function unqualifiedIdentifierValues(array $scope, string $kind): array
     {
         $expected = [
             'instance_hrid' => ['table' => 'inventory.instance__t', 'column' => 'hrid'],
@@ -323,15 +332,66 @@ final class ExplicitReportRequestService
             'item_id' => ['table' => 'inventory.item__t', 'column' => 'id'],
         ][$kind] ?? null;
         if ($expected === null || !self::scopeHasOnlyExpectedTable($scope, $expected['table'])) {
-            return false;
+            return [];
         }
 
         $where = (string)($scope['predicates']['where'] ?? '');
         $column = preg_quote($expected['column'], '/');
-        $literal = preg_quote(str_replace("'", "''", self::normalizeIdentifier($value)), '/');
-        $equals = '/(?<!\.)\b' . $column . '\s*=\s*\'' . $literal . '\'/i';
-        $inList = '/(?<!\.)\b' . $column . '\s+IN\s*\([^)]*\'' . $literal . '\'/i';
-        return preg_match($equals, $where) === 1 || preg_match($inList, $where) === 1;
+        $literal = "'((?:''|[^'])*)'";
+        $values = [];
+
+        preg_match_all(
+            '/(?<!\.)\b' . $column . '\s*=\s*' . $literal . '/i',
+            $where,
+            $equalities,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+        );
+        foreach ($equalities as $equality) {
+            if (self::isNegatedUnqualifiedPredicate($where, (int)$equality[0][1])) {
+                continue;
+            }
+            $values[] = str_replace("''", "'", (string)$equality[1][0]);
+        }
+
+        preg_match_all(
+            '/(?<!\.)\b' . $column . '\s+IN\s*\(([^)]*)\)/i',
+            $where,
+            $memberships,
+            PREG_SET_ORDER | PREG_OFFSET_CAPTURE
+        );
+        foreach ($memberships as $membership) {
+            if (self::isNegatedUnqualifiedPredicate($where, (int)$membership[0][1])) {
+                continue;
+            }
+            $list = (string)$membership[1][0];
+            if (preg_match('/\A\s*' . $literal . '(?:\s*,\s*' . $literal . ')*\s*\z/', $list) !== 1) {
+                continue;
+            }
+            preg_match_all('/' . $literal . '/', $list, $literals);
+            foreach ($literals[1] as $value) {
+                $values[] = str_replace("''", "'", (string)$value);
+            }
+        }
+
+        return self::uniqueNormalizedIdentifiers($values);
+    }
+
+    private static function isNegatedUnqualifiedPredicate(string $where, int $offset): bool
+    {
+        $prefix = substr($where, 0, $offset);
+        return preg_match('/\bNOT\s*$/i', $prefix) === 1;
+    }
+
+    private static function uniqueNormalizedIdentifiers(array $values): array
+    {
+        $normalized = [];
+        foreach ($values as $value) {
+            $value = self::normalizeIdentifier((string)$value);
+            if (!in_array($value, $normalized, true)) {
+                $normalized[] = $value;
+            }
+        }
+        return $normalized;
     }
 
     private static function scopeHasOnlyExpectedTable(array $scope, string $expectedTable): bool
