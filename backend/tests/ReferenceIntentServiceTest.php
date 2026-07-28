@@ -1122,6 +1122,37 @@ assertIntentSame(
     spansForDimension('films held by Hillyer library', 'library'),
     'Held by after a material atom must remain a structural request boundary.'
 );
+foreach (
+    [
+        'VHS and DVD at Hillyer library',
+        'VHS and DVD held by Hillyer library',
+    ] as $knownMaterialBoundaryPrompt
+) {
+    assertIntentSame(
+        ['Hillyer library'],
+        spansForDimension($knownMaterialBoundaryPrompt, 'library'),
+        'A conjunction of known materials must remain structural boundary evidence.'
+    );
+    assertIntentSame(
+        ['vhs', 'dvd'],
+        materialTerms($knownMaterialBoundaryPrompt),
+        'Known materials before a structural boundary must remain material intents.'
+    );
+}
+
+$ampersandCategoryPrompt = 'Which locations, libraries & campuses have DVDs?';
+foreach (['location', 'library', 'campus'] as $ampersandCategoryDimension) {
+    assertIntentSame(
+        [],
+        spansForDimension($ampersandCategoryPrompt, $ampersandCategoryDimension),
+        'Ampersand-coordinated categories must not become named intents.'
+    );
+}
+assertIntentSame(
+    ['dvd'],
+    materialTerms($ampersandCategoryPrompt),
+    'Ampersand-coordinated category questions must retain material terms.'
+);
 
 $visualBoundaryPrompts = [
     "Hillyer library\nSmith campus",

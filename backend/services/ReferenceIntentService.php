@@ -450,7 +450,7 @@ final class ReferenceIntentService
                     $cursor++;
                     if (
                         isset($tokens[$cursor])
-                        && self::isConnector($tokens[$cursor]['norm'])
+                        && self::isCategoryConnector($tokens[$cursor]['norm'])
                     ) {
                         $cursor++;
                     }
@@ -459,7 +459,7 @@ final class ReferenceIntentService
 
                 if (
                     isset($tokens[$cursor])
-                    && self::isConnector($tokens[$cursor]['norm'])
+                    && self::isCategoryConnector($tokens[$cursor]['norm'])
                 ) {
                     $cursor++;
                     continue;
@@ -511,7 +511,7 @@ final class ReferenceIntentService
         for ($index = 0, $count = count($tokens); $index < $count; $index++) {
             $word = $tokens[$index]['norm'];
             if (!$expectCategory) {
-                if (!self::isConnector($word)) {
+                if (!self::isCategoryConnector($word)) {
                     return false;
                 }
                 $expectCategory = true;
@@ -846,10 +846,42 @@ final class ReferenceIntentService
         if (self::exactKnownMaterialTokens($tokens) !== null) {
             return true;
         }
+        if (self::isKnownMaterialConjunction($tokens)) {
+            return true;
+        }
 
         return self::isGenericVideoTerm(
             implode(' ', array_column($tokens, 'norm'))
         );
+    }
+
+    private static function isKnownMaterialConjunction(array $tokens): bool
+    {
+        $chunks = [];
+        $chunk = [];
+        foreach ($tokens as $token) {
+            if (self::isConnector($token['norm'])) {
+                if ($chunk === []) {
+                    return false;
+                }
+                $chunks[] = $chunk;
+                $chunk = [];
+                continue;
+            }
+            $chunk[] = $token;
+        }
+        if ($chunk === [] || $chunks === []) {
+            return false;
+        }
+        $chunks[] = $chunk;
+
+        foreach ($chunks as $materialTokens) {
+            if (self::exactKnownMaterialTokens($materialTokens) === null) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static function splitQualifiedValues(
@@ -1658,6 +1690,11 @@ final class ReferenceIntentService
     private static function isConnector(string $word): bool
     {
         return in_array($word, ['and', 'or', 'and/or'], true);
+    }
+
+    private static function isCategoryConnector(string $word): bool
+    {
+        return $word === '&' || self::isConnector($word);
     }
 
     private static function isBoundaryPreposition(string $word): bool
