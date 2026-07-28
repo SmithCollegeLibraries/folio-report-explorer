@@ -141,16 +141,7 @@ class MigrationServiceRetryTestSchema
 
     public function getTableSchema(string $table, bool $refresh = false)
     {
-        $tables = [
-            'schema_migrations',
-            'users',
-            'query_jobs',
-            'report_templates',
-            'ai_clarification_events',
-            'ai_query_feedback',
-            'folio_reference_tables',
-            'dashboard_widget_templates',
-        ];
+        $tables = $this->database->tables;
         if (!in_array($table, $tables, true)) {
             return null;
         }
@@ -170,6 +161,18 @@ class MigrationServiceRetryTestDatabase
     public $failReconciliationOnce = true;
     public $transactionActive = false;
     public $transactionSnapshot = null;
+    public $tables = [
+        'schema_migrations',
+        'users',
+        'query_jobs',
+        'report_templates',
+        'ai_clarification_events',
+        'ai_query_feedback',
+        'folio_reference_tables',
+        'dashboard_widget_templates',
+        'ai_report_generations',
+        'ai_report_reviews',
+    ];
 
     public function __construct()
     {
@@ -268,6 +271,20 @@ mkdir($retryMigrationDir, 0775, true);
 $retryMigrationPath = $retryMigrationDir . '/035_budget_year_fund_report.sql';
 file_put_contents($retryMigrationPath, file_get_contents($migrationDir . '/035_budget_year_fund_report.sql'));
 $retryDatabase = new MigrationServiceRetryTestDatabase();
+$migrationAppearsApplied = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
+if (PHP_VERSION_ID < 80100) {
+    $migrationAppearsApplied->setAccessible(true);
+}
+assertMigrationTrue(
+    $migrationAppearsApplied->invoke(null, $retryDatabase, '039_ask_ai_report_review.sql'),
+    'Migration 039 should look applied only when both report persistence tables exist.'
+);
+$retryDatabase->tables = array_values(array_diff($retryDatabase->tables, ['ai_report_reviews']));
+assertMigrationTrue(
+    !$migrationAppearsApplied->invoke(null, $retryDatabase, '039_ask_ai_report_review.sql'),
+    'Migration 039 must not look applied when the review table is absent.'
+);
+$retryDatabase->tables[] = 'ai_report_reviews';
 $firstFailure = null;
 try {
     MigrationService::run($retryDatabase, $retryMigrationDir);

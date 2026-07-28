@@ -125,6 +125,12 @@ $config = [
                 'PUT admin/dashboard-widgets/<id:\d+>' => 'folio-query/admin-widget-update',
                 'DELETE admin/dashboard-widgets/<id:\d+>' => 'folio-query/admin-widget-delete',
 
+                // Admin: review uncertain Ask AI reports
+                'GET admin/report-reviews' => 'folio-query/report-review-list',
+                'GET admin/report-reviews/<id:[\w-]+>' => 'folio-query/report-review-detail',
+                'POST admin/report-reviews/<id:[\w-]+>/claim' => 'folio-query/report-review-claim',
+                'PATCH admin/report-reviews/<id:[\w-]+>' => 'folio-query/report-review-update',
+
                 // Health check
                 'GET health' => 'folio-query/health',
 

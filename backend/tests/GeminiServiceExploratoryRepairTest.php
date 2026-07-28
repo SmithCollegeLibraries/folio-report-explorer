@@ -66,12 +66,40 @@ namespace app\services {
     {
         public static function resolvePrompt(string $prompt, $userId = null): array
         {
-            return ['needsClarification' => false, 'guidanceLines' => []];
+            if (stripos($prompt, 'Hillyer scoped video report') === false) {
+                return ['needsClarification' => false, 'guidanceLines' => [], 'resolvedFilters' => []];
+            }
+
+            return [
+                'needsClarification' => false,
+                'guidanceLines' => [],
+                'resolvedFilters' => [
+                    [
+                        'dimension' => 'library',
+                        'source_table' => 'inventory.loclibrary__t',
+                        'column' => 'name',
+                        'values' => ['SC Hillyer Art Library'],
+                    ],
+                    [
+                        'dimension' => 'material_type',
+                        'source_table' => 'inventory.material_type__t',
+                        'column' => 'name',
+                        'values' => ['Videocassette', 'DVD/Blu-ray'],
+                    ],
+                ],
+            ];
         }
 
         public static function appendGuidanceToPrompt(string $prompt, array $resolution): string
         {
-            return $prompt;
+            if (empty($resolution['resolvedFilters'])) {
+                return $prompt;
+            }
+
+            return $prompt
+                . "\n\nReference resolver guidance:\n"
+                . "- Resolved local reference filter: use exactly inventory.loclibrary__t.name = 'SC Hillyer Art Library'.\n"
+                . "- Resolved local reference filter: use exactly inventory.material_type__t.name IN ('Videocassette', 'DVD/Blu-ray').";
         }
     }
 
@@ -88,6 +116,7 @@ namespace app\services {
             return [
                 'item__t', 'po_line__t', 'purchase_order__t', 'invoice_lines__t',
                 'audit_loan__t', 'holdings_record__t', 'instance__t', 'classification__t',
+                'location__t', 'loclibrary__t', 'material_type__t',
             ];
         }
         public static function discoverTableMapping(): array
@@ -108,6 +137,7 @@ namespace app\services {
                 'location__t' => 'inventory.location__t',
                 'loclibrary__t' => 'inventory.loclibrary__t',
                 'loccampus__t' => 'inventory.loccampus__t',
+                'material_type__t' => 'inventory.material_type__t',
                 'classification__t' => 'classification.classification__t',
             ];
         }
@@ -160,7 +190,13 @@ class Yii
     public static $logs = [];
     public static $aliases = [];
 
-    public static function getAlias($alias) { return self::$aliases[$alias] ?? (__DIR__ . '/../data/settings.json'); }
+    public static function getAlias($alias)
+    {
+        if ($alias === '@app/data/reference_cache.json') {
+            return __DIR__ . '/../data/reference_cache.json';
+        }
+        return self::$aliases[$alias] ?? (__DIR__ . '/../data/settings.json');
+    }
     public static function info($message, $category = null) { self::$logs[] = ['level' => 'info', 'message' => $message, 'category' => $category]; }
     public static function warning($message, $category = null) { self::$logs[] = ['level' => 'warning', 'message' => $message, 'category' => $category]; }
 }
@@ -168,6 +204,7 @@ class Yii
 Yii::$app = (object)['params' => [
     'aiProvider' => 'gemini',
     'geminiApiKey' => 'test-key',
+    'geminiModel' => 'test-model',
     'geminiMaxRetries' => 1,
     'nl2sqlForceLegacy' => false,
     'nl2sqlHardenedPhysicalRoi' => true,
@@ -246,6 +283,21 @@ GROUP BY pc.call_number_class
 SQL;
 }
 
+function scopedVideoSql(string $library, array $materialTypes): string
+{
+    $quotedMaterialTypes = array_map(function (string $value): string {
+        return "'" . str_replace("'", "''", $value) . "'";
+    }, $materialTypes);
+
+    return "SELECT item.id\n"
+        . "FROM inventory.item__t item\n"
+        . "JOIN inventory.location__t location ON location.id = item.effective_location_id\n"
+        . "JOIN inventory.loclibrary__t library ON library.id = location.library_id\n"
+        . "JOIN inventory.material_type__t material_type ON material_type.id = item.material_type_id\n"
+        . "WHERE library.name = '" . str_replace("'", "''", $library) . "'\n"
+        . 'AND material_type.name IN (' . implode(', ', $quotedMaterialTypes) . ')';
+}
+
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
     geminiText('SELECT ii.id FROM inventory.item__t ii'),
@@ -256,6 +308,14 @@ Yii::$logs = [];
 $repaired = GeminiService::generateSqlWithShadow('Show item identifiers for inventory.', 'Smith College', null, true);
 repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $repaired['sql'] ?? null, 'A bad initial table should be replaced by the valid repair candidate.');
 repairAssertSame(1, $repaired['repairAttempts'] ?? null, 'One automatic repair should be reported.');
+repairAssertSame('SELECT mt.id FROM inventory.missing_table__t mt', $repaired['_askEvidence']['initialSql'] ?? null, 'Gemini exploratory repair must retain the genuine pre-repair candidate.');
+repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $repaired['_askEvidence']['finalSql'] ?? null, 'Gemini exploratory repair must retain the validated final candidate.');
+repairAssertSame(1, $repaired['_askEvidence']['repairAttempts'] ?? null, 'Gemini exploratory repair evidence must retain the actual repair count.');
+repairAssertSame('test-model', $repaired['_askEvidence']['modelName'] ?? null, 'Gemini generation must propagate the trusted configured model name.');
+repairAssertSame(GeminiService::LEGACY_PROMPT_VERSION, $repaired['_askEvidence']['promptVersion'] ?? null, 'Gemini generation must propagate the trusted prompt version.');
+repairAssertSame('test', $repaired['_askEvidence']['schemaMetadata']['version'] ?? null, 'Gemini generation must propagate the trusted schema version.');
+repairAssertSame('2026-06-11T15:41:49+00:00', $repaired['_askEvidence']['referenceBundleMetadata']['version'] ?? null, 'Gemini generation must propagate the server-side reference bundle version.');
+repairAssertSame(64, strlen((string)($repaired['_askEvidence']['referenceBundleMetadata']['hash'] ?? '')), 'Gemini generation must propagate a SHA-256 reference bundle hash.');
 repairAssertSame('validated', $repaired['validationSummary']['status'] ?? null, 'Successful exploratory SQL should be marked validated.');
 repairAssertSame(0, count($repaired['assumptions'] ?? []), 'Unrelated exploratory requests should not receive ROI assumptions.');
 repairAssertSame(false, isset($repaired['semanticValidation']), 'Non-applicable exploratory requests should not display a false semantic checklist.');
@@ -263,6 +323,70 @@ repairAssertSame(2, count(TestTransport::$requests), 'Bad-then-valid generation 
 
 $repairPayload = json_encode(TestTransport::$requests[1]);
 repairAssertContains('SELECT mt.id FROM inventory.missing_table__t mt', $repairPayload, 'The repair request should contain the previous SQL candidate.');
+$baselineRepairLogs = Yii::$logs;
+
+TestTransport::$responses = [
+    geminiText(str_replace(
+        "library.name = 'SC Hillyer Art Library'",
+        "location.name = 'HC DVD'",
+        scopedVideoSql('SC Hillyer Art Library', ['Videocassette', 'DVD/Blu-ray'])
+    )),
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['Videocassette', 'DVD/Blu-ray'])),
+];
+TestTransport::$requests = [];
+$resolvedFilterRepair = GeminiService::generateSqlWithShadow(
+    'Hillyer scoped video report',
+    'Smith College',
+    null,
+    true
+);
+repairAssertSame(1, $resolvedFilterRepair['repairAttempts'] ?? null, 'Resolved-filter mismatch should use one bounded repair.');
+repairAssertContains("library.name = 'SC Hillyer Art Library'", $resolvedFilterRepair['sql'] ?? '', 'Repair must restore library scope.');
+repairAssertSame(false, strpos($resolvedFilterRepair['sql'] ?? '', 'HC DVD') !== false, 'Repair must remove the wrong location.');
+repairAssertSame(
+    [
+        [
+            'dimension' => 'library',
+            'source_table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'values' => ['SC Hillyer Art Library'],
+        ],
+        [
+            'dimension' => 'material_type',
+            'source_table' => 'inventory.material_type__t',
+            'column' => 'name',
+            'values' => ['Videocassette', 'DVD/Blu-ray'],
+        ],
+    ],
+    $resolvedFilterRepair['_askEvidence']['resolvedReferenceFilters'] ?? null,
+    'Trusted evidence must contain only the structured resolved filters.'
+);
+$resolvedEvidenceJson = json_encode($resolvedFilterRepair['_askEvidence']['resolvedReferenceFilters'] ?? []);
+repairAssertSame(false, strpos($resolvedEvidenceJson, 'Hillyer scoped video report') !== false, 'Resolved-filter evidence must not contain raw prompts.');
+repairAssertSame(false, strpos($resolvedEvidenceJson, 'Reference resolver guidance') !== false, 'Resolved-filter evidence must not contain rendered guidance.');
+
+TestTransport::$responses = [
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['DVD/Blu-ray'])),
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['DVD/Blu-ray'])),
+    geminiText(scopedVideoSql('SC Hillyer Art Library', ['DVD/Blu-ray'])),
+];
+TestTransport::$requests = [];
+$resolvedFilterExhausted = GeminiService::generateSqlWithShadow(
+    'Hillyer scoped video report exhaustion',
+    'Smith College',
+    null,
+    true
+);
+repairAssertSame(false, isset($resolvedFilterExhausted['sql']), 'Resolved-filter repair exhaustion must not return a candidate for database preflight.');
+repairAssertSame('exploratory_recovery', $resolvedFilterExhausted['route'] ?? null, 'Resolved-filter repair exhaustion must return a no-result recovery.');
+repairAssertSame(2, $resolvedFilterExhausted['repairAttempts'] ?? null, 'Resolved-filter exhaustion must preserve the shared two-repair maximum.');
+repairAssertSame(3, count(TestTransport::$requests), 'Resolved-filter exhaustion must use one initial generation and exactly two repairs.');
+repairAssertSame(
+    'resolved_reference_filter_mismatch',
+    $resolvedFilterExhausted['validationSummary']['failureCategory'] ?? null,
+    'Resolved-filter exhaustion must retain only the safe mismatch category.'
+);
+repairAssertSame(false, strpos(json_encode($resolvedFilterExhausted), 'Reference resolver guidance') !== false, 'Resolved-filter recovery must not leak generated guidance.');
 repairAssertContains('unknown_table', $repairPayload, 'The repair request should contain the safe validation category.');
 repairAssertContains('None documented.', $repairPayload, 'The repair request should safely represent absent assumptions.');
 repairAssertContains('SCOPED SCHEMA', $repairPayload, 'The repair request should contain fresh scoped schema context.');
@@ -270,6 +394,7 @@ repairAssertContains('Smith College', $repairPayload, 'The repair request should
 repairAssertContains('Never include a second SQL statement', $repairPayload, 'The repair response contract should explicitly forbid alternate statements.');
 repairAssertContains('one ```sql code block', $repairPayload, 'The repair response contract should require the parser-supported fenced SQL shape.');
 
+Yii::$logs = $baselineRepairLogs;
 $telemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
 repairAssertSame(false, strpos($telemetry, 'SELECT mt.id FROM inventory.missing_table__t mt') !== false, 'Telemetry must not contain raw candidate SQL.');
 repairAssertSame(false, strpos($telemetry, roiPrompt()) !== false, 'Telemetry must not contain the raw user prompt.');
@@ -293,8 +418,26 @@ repairAssertSame(4, $repairTelemetryCount, 'Bad-then-valid generation should emi
 $terminalOutcomes = terminalTelemetryOutcomes();
 repairAssertSame(0, count($terminalOutcomes), 'Static/model validation must not emit terminal validated before database preflight.');
 
+TestTransport::$responses = [
+    geminiText("SELECT inst.hrid AS instance_hrid, inst.title, item.barcode FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid = 'in0001' LIMIT 20"),
+    geminiText("SELECT inst.hrid AS instance_hrid, inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001', 'in0002') LIMIT 20"),
+];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$explicitValuesResult = GeminiService::generateSqlWithShadow(
+    'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.',
+    null,
+    null,
+    true
+);
+repairAssertSame(1, $explicitValuesResult['repairAttempts'] ?? null, 'An explicit-value omission must enter the existing bounded repair path.');
+repairAssertContains('EXPLICIT REPORT VALUES', json_encode(TestTransport::$requests[0]), 'The generation prompt must include server-authored explicit-value guidance.');
+repairAssertSame(['in0001', 'in0002'], $explicitValuesResult['_askEvidence']['explicitReportRequest']['identifiers']['instance_hrid'] ?? null, 'Server-extracted explicit identifiers must remain trusted Ask evidence.');
+repairAssertSame(['title', 'barcode', 'publication_date'], $explicitValuesResult['_askEvidence']['explicitReportRequest']['requestedFields'] ?? null, 'Server-extracted requested fields must remain trusted Ask evidence.');
+
 Yii::$logs = [];
 $logValidationFailure = new ReflectionMethod(GeminiService::class, 'logValidationFailure');
+$logValidationFailure->setAccessible(true);
 $logValidationFailure->invoke(null, 'legacy_sql_parse', [
     'route' => 'legacy_freeform',
     'routeReason' => 'forced_legacy_mode',
@@ -461,6 +604,57 @@ repairAssertSame($exhaustedPrompt, $exhausted['recoveryContext']['originalQuesti
 repairAssertSame('unknown_table', $exhausted['validationSummary']['failureCategory'] ?? null, 'Recovery should expose only the safe failure category.');
 repairAssertSame('exhausted', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Repair exhaustion should emit a terminal exhausted outcome.');
 
+$explicitRecoveryPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
+TestTransport::$responses = [
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+];
+Yii::$logs = [];
+$explicitRecovery = GeminiService::generateSqlWithShadow($explicitRecoveryPrompt, null, null, true);
+repairAssertSame(false, isset($explicitRecovery['sql']), 'Exhausted explicit-value generation must not return an invalid SQL candidate.');
+repairAssertSame($explicitRecoveryPrompt, $explicitRecovery['recoveryContext']['originalQuestion'] ?? null, 'Recovery context must retain the raw user question, not server guidance.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT VALUES') !== false, 'Exhausted ordinary responses must not expose server-authored explicit-value guidance.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Exhausted ordinary responses must not expose SQL-oriented repair guidance.');
+
+$routedExplicitPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
+$routedReferencePrompt = $routedExplicitPrompt
+    . "\n\nReference resolver guidance:\n"
+    . "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'. "
+    . 'Do not apply this value to library or campus name columns.';
+$routedEffectivePrompt = \app\services\ExplicitReportRequestService::appendGuidance(
+    $routedReferencePrompt,
+    \app\services\ExplicitReportRequestService::extract($routedExplicitPrompt)
+);
+TestTransport::$responses = [
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$routedRepair = new ReflectionMethod(GeminiService::class, 'repairRoutedCandidateMissingExplicitValues');
+$routedRepair->setAccessible(true);
+$routedExhausted = $routedRepair->invoke(
+    null,
+    [
+        'sql' => "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
+        'route' => 'builder_intent',
+        'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+    ],
+    $routedEffectivePrompt,
+    null,
+    $routedExplicitPrompt
+);
+repairAssertSame(2, $routedExhausted['repairAttempts'] ?? null, 'Routed-family explicit repair exhaustion must preserve the shared two-attempt maximum.');
+repairAssertSame(false, isset($routedExhausted['sql']), 'Routed-family explicit repair exhaustion must not return invalid SQL.');
+repairAssertSame($routedExplicitPrompt, $routedExhausted['recoveryContext']['originalQuestion'] ?? null, 'Routed-family exhaustion must retain only the raw user question.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'EXPLICIT REPORT VALUES') !== false, 'Routed-family exhaustion must not expose server guidance.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'Reference resolver guidance') !== false, 'Routed-family exhaustion must not expose resolver schema guidance.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'explicitReportRequest') !== false, 'Routed-family exhaustion must not expose internal explicit-value keys.');
+$routedRepairPayload = json_encode(TestTransport::$requests[0] ?? []);
+repairAssertContains('Reference resolver guidance', $routedRepairPayload, 'Routed-family repair must retain resolver guidance as model-only generation context.');
+repairAssertContains('EXPLICIT REPORT VALUES', $routedRepairPayload, 'Routed-family repair must retain explicit-value guidance as model-only generation context.');
+
 TestTransport::$responses = [
     geminiText(semanticallyFlawedRoiSql()),
     geminiText(semanticallyFlawedRoiSql()),
@@ -593,11 +787,57 @@ repairAssertSame(2, $semanticPreflightExhaustion['repairAttempts'] ?? null, 'Sem
 repairAssertSame(false, isset($semanticPreflightExhaustion['sql']), 'Semantic exhaustion after preflight must not expose rejected SQL.');
 repairAssertSame('semantic_conformance', $semanticPreflightExhaustion['validationSummary']['validatorStage'] ?? null, 'Recovery should identify semantic conformance as the exhausted stage.');
 repairAssertSame(true, count($semanticPreflightExhaustion['unmetRequirements'] ?? []) > 0, 'Recovery should return safe unmet semantic requirements.');
-repairAssertContains("I couldn't produce a report that matched every checked requirement", $semanticPreflightExhaustion['validationSummary']['message'] ?? '', 'Semantic exhaustion should use the checked-requirements recovery message.');
+repairAssertContains('I could not build a report I could safely run', $semanticPreflightExhaustion['validationSummary']['message'] ?? '', 'Semantic exhaustion should use novice-facing recovery copy.');
 repairAssertSame(false, strpos(json_encode($semanticPreflightExhaustion), semanticallyFlawedRoiSql()) !== false, 'Semantic recovery must not leak the rejected SQL candidate.');
 $semanticTelemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
 repairAssertSame(false, strpos($semanticTelemetry, semanticallyFlawedRoiSql()) !== false, 'Semantic telemetry must not expose rejected SQL.');
 repairAssertSame(false, strpos($semanticTelemetry, roiPrompt()) !== false, 'Semantic telemetry must not expose the original prompt.');
+
+$terseFollowUp = 'Use invoice date instead.';
+$followUpGenerationPrompt = implode("\n\n", [
+    'This is a follow-up request to a previously generated library report.',
+    'Previous request: ' . roiPrompt(),
+    'Follow-up request: ' . $terseFollowUp,
+]);
+TestTransport::$responses = [geminiText(semanticallyFlawedRoiSql())];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$followUpSemanticExhaustion = GeminiService::repairExploratorySqlAfterPreflight(
+    $terseFollowUp,
+    'Smith College',
+    [
+        'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
+        'repairAttempts' => 1,
+        'routeReason' => 'unsupported_query_family',
+        'explanation' => 'Preserve the prior ROI report while changing its purchase date basis.',
+    ],
+    'ERROR: column ii.missing_column does not exist at character 15',
+    $followUpGenerationPrompt
+);
+repairAssertSame(1, count(TestTransport::$requests), 'A terse follow-up semantic rejection should use only the one remaining repair call.');
+repairAssertSame(2, $followUpSemanticExhaustion['repairAttempts'] ?? null, 'Terse follow-up semantic rejection must consume the remaining shared repair budget.');
+repairAssertSame(false, isset($followUpSemanticExhaustion['sql']), 'A repair that drops the augmented ROI semantics must be rejected.');
+repairAssertSame(
+    'semantic_conformance',
+    $followUpSemanticExhaustion['validationSummary']['validatorStage'] ?? null,
+    'Terse follow-up recovery should identify semantic conformance as the exhausted stage.'
+);
+$followUpAssumptions = [];
+foreach (($followUpSemanticExhaustion['assumptions'] ?? []) as $assumption) {
+    if (is_array($assumption) && isset($assumption['key'])) {
+        $followUpAssumptions[$assumption['key']] = $assumption['value'] ?? null;
+    }
+}
+repairAssertSame(
+    'invoice_date',
+    $followUpAssumptions['purchase_date_basis'] ?? null,
+    'Post-preflight assumptions must preserve the invoice-date correction from augmented generation context.'
+);
+repairAssertSame(
+    $terseFollowUp,
+    $followUpSemanticExhaustion['recoveryContext']['originalQuestion'] ?? null,
+    'Terse follow-up recovery must still expose only the raw latest question.'
+);
 
 Yii::$logs = [];
 try {

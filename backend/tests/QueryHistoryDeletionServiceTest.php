@@ -28,6 +28,24 @@ CREATE TABLE query_jobs (
 )
 SQL)->execute();
 
+Yii::$app->db->createCommand(<<<'SQL'
+CREATE TABLE ai_report_generations (
+    id VARCHAR(36) PRIMARY KEY,
+    parent_generation_id VARCHAR(36) NULL,
+    query_job_id VARCHAR(36) NULL,
+    original_question TEXT NOT NULL,
+    generated_sql TEXT NULL
+)
+SQL)->execute();
+
+Yii::$app->db->createCommand(<<<'SQL'
+CREATE TABLE ai_report_reviews (
+    id VARCHAR(36) PRIMARY KEY,
+    generation_id VARCHAR(36) NOT NULL,
+    administrator_notes TEXT NULL
+)
+SQL)->execute();
+
 function deletionAssert($condition, $message)
 {
     if (!$condition) {
@@ -51,6 +69,50 @@ function insertDeletionJob($id, $status, $exportPath = null)
 function deletionRowExists($id)
 {
     return QueryJob::find()->where(['id' => $id])->exists();
+}
+
+function insertLinkedDeletionReview($jobId, $suffix)
+{
+    $generationId = 'generation-' . $suffix;
+    Yii::$app->db->createCommand()->insert('ai_report_generations', [
+        'id' => $generationId,
+        'query_job_id' => $jobId,
+        'original_question' => 'Sensitive question ' . $suffix,
+        'generated_sql' => 'SELECT sensitive_' . $suffix,
+    ])->execute();
+    Yii::$app->db->createCommand()->insert('ai_report_reviews', [
+        'id' => 'review-' . $suffix,
+        'generation_id' => $generationId,
+        'administrator_notes' => 'Sensitive notes ' . $suffix,
+    ])->execute();
+
+    return $generationId;
+}
+
+function insertSharedDeletionExecution($sourceGenerationId, $jobId, $suffix)
+{
+    $generationId = 'execution-' . $suffix;
+    Yii::$app->db->createCommand()->insert('ai_report_generations', [
+        'id' => $generationId,
+        'parent_generation_id' => $sourceGenerationId,
+        'query_job_id' => $jobId,
+        'original_question' => 'Execution question ' . $suffix,
+        'generated_sql' => 'SELECT 1',
+    ])->execute();
+    return $generationId;
+}
+
+function linkedDeletionRowsExist($generationId)
+{
+    $generationExists = (int) Yii::$app->db->createCommand(
+        'SELECT COUNT(*) FROM ai_report_generations WHERE id = :id',
+        [':id' => $generationId]
+    )->queryScalar() > 0;
+    $reviewExists = (int) Yii::$app->db->createCommand(
+        'SELECT COUNT(*) FROM ai_report_reviews WHERE generation_id = :id',
+        [':id' => $generationId]
+    )->queryScalar() > 0;
+    return $generationExists || $reviewExists;
 }
 
 function expectDeletionException($class, callable $callback, $message)
@@ -107,6 +169,40 @@ foreach (['completed', 'failed', 'cancelled'] as $terminalStatus) {
     $jobId = $terminalStatus . '-job';
     $service->delete(insertDeletionJob($jobId, $terminalStatus));
     deletionAssert(!deletionRowExists($jobId), "A {$terminalStatus} job should be deleted.");
+}
+
+$linkedJob = insertDeletionJob('linked-job', 'completed');
+$linkedGeneration = insertLinkedDeletionReview('linked-job', 'single');
+$service->delete($linkedJob);
+deletionAssert(!linkedDeletionRowsExist($linkedGeneration), 'Single deletion must remove linked review and generation rows.');
+
+$sharedSource = insertLinkedDeletionReview(null, 'shared-source');
+$sharedFirstJob = insertDeletionJob('shared-first-job', 'completed');
+$sharedSecondJob = insertDeletionJob('shared-second-job', 'completed');
+$sharedFirstExecution = insertSharedDeletionExecution($sharedSource, 'shared-first-job', 'shared-first');
+$sharedSecondExecution = insertSharedDeletionExecution($sharedSource, 'shared-second-job', 'shared-second');
+$service->delete($sharedSecondJob);
+deletionAssert(
+    !linkedDeletionRowsExist($sharedSecondExecution),
+    'Deleting one shared execution must remove its execution child.'
+);
+deletionAssert(
+    linkedDeletionRowsExist($sharedSource) && linkedDeletionRowsExist($sharedFirstExecution),
+    'Deleting one shared execution must retain the reviewed source and sibling execution.'
+);
+$service->delete($sharedFirstJob);
+deletionAssert(
+    !linkedDeletionRowsExist($sharedFirstExecution) && !linkedDeletionRowsExist($sharedSource),
+    'Deleting the last shared execution must remove its child, source generation, and review.'
+);
+
+$batchGenerations = [];
+foreach (['batch-a', 'batch-b'] as $batchJobId) {
+    $batchGenerations[] = insertLinkedDeletionReview($batchJobId, $batchJobId);
+    $service->delete(insertDeletionJob($batchJobId, 'completed'));
+}
+foreach ($batchGenerations as $batchGeneration) {
+    deletionAssert(!linkedDeletionRowsExist($batchGeneration), 'Batch deletion calls must remove every linked review and generation row.');
 }
 
 foreach (['pending', 'running', 'cancelling', 'pending_export'] as $activeStatus) {
@@ -212,6 +308,27 @@ expectDeletionException(
 );
 deletionAssert(file_exists($failedDeletePath), 'A failed export deletion should leave the file in place.');
 deletionAssert(deletionRowExists($failedDeleteId), 'A failed export deletion should retain the history row.');
+
+$rollbackJob = insertDeletionJob('rollback-job', 'completed');
+$rollbackGeneration = insertLinkedDeletionReview('rollback-job', 'rollback');
+Yii::$app->db->open();
+Yii::$app->db->pdo->exec(<<<'SQL'
+CREATE TRIGGER fail_linked_job_delete
+BEFORE DELETE ON query_jobs
+WHEN OLD.id = 'rollback-job'
+BEGIN
+    SELECT RAISE(FAIL, 'forced linked job deletion failure');
+END
+SQL);
+expectDeletionException(
+    Throwable::class,
+    static function () use ($service, $rollbackJob): void {
+        $service->delete($rollbackJob);
+    },
+    'A job deletion failure should escape the transaction.'
+);
+deletionAssert(deletionRowExists('rollback-job'), 'A failed transaction should retain the history row.');
+deletionAssert(linkedDeletionRowsExist($rollbackGeneration), 'A failed transaction must restore linked generation and review rows.');
 
 $missingRowJob = insertDeletionJob('missing-row', 'completed');
 Yii::$app->db->createCommand()->delete('query_jobs', ['id' => 'missing-row'])->execute();

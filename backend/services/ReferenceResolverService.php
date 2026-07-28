@@ -4,6 +4,7 @@ namespace app\services;
 
 require_once __DIR__ . '/ResolverClarificationService.php';
 require_once __DIR__ . '/ReferenceJsonBundleService.php';
+require_once __DIR__ . '/ReferenceIntentService.php';
 require_once __DIR__ . '/ReferenceTextNormalizerService.php';
 
 /**
@@ -105,28 +106,77 @@ class ReferenceResolverService
      * @param array<int, array<string, mixed>> $references
      * @param array<int, array<string, mixed>> $aliases
      * @param array<int, string> $acceptedClarificationKeys
+     * @param array<string, array<string, mixed>> $acceptedClarificationSelections
      * @return array<string, mixed>
      */
     public static function resolvePromptAgainstReferences(
         string $prompt,
         array $references,
         array $aliases = [],
-        array $acceptedClarificationKeys = []
+        array $acceptedClarificationKeys = [],
+        array $acceptedClarificationSelections = []
     ): array {
-        $normalizedPrompt = self::normalizeText($prompt);
+        $intentPrompt = self::promptBeforeFrontendClarifications($prompt);
+        $normalizedPrompt = self::normalizeText($intentPrompt);
         if ($normalizedPrompt === '') {
             return self::emptyResolution();
         }
 
+        $intents = ReferenceIntentService::extract($intentPrompt);
+        $acceptedTypedIntentOverrides = self::buildAcceptedTypedIntentOverrides(
+            $prompt,
+            $intents,
+            $references,
+            $acceptedClarificationKeys,
+            $acceptedClarificationSelections
+        );
+        $typedResolution = self::resolveTypedIntents(
+            $intents,
+            $references,
+            $acceptedTypedIntentOverrides
+        );
+        if (!empty($typedResolution['outcome'])) {
+            return $typedResolution['outcome'];
+        }
+
         $guidanceLines = [];
-        $resolved = [];
+        $resolvedFilters = $typedResolution['resolvedFilters'];
+        $resolved = $typedResolution['resolvedReferences'];
+        $unresolvedNamedIntents = $typedResolution['unresolvedNamedIntents'];
+        $legacyPrompt = self::removeConsumedPromptText(
+            $intentPrompt,
+            $typedResolution['consumedSpans'],
+            $typedResolution['consumedMaterialTerms']
+        );
+        $legacyNormalizedPrompt = self::normalizeText($legacyPrompt);
         foreach ($references as $reference) {
-            $match = self::matchReference($normalizedPrompt, $prompt, $reference);
+            $match = self::matchReference(
+                $legacyNormalizedPrompt,
+                $legacyPrompt,
+                $reference
+            );
             if ($match === null) {
                 continue;
             }
             $resolved[] = $match;
         }
+
+        $dedupedResolved = [];
+        $seenResolved = [];
+        foreach ($resolved as $match) {
+            $key = (string)($match['source_table'] ?? '')
+                . '|'
+                . (string)($match['source_id'] ?? '');
+            if ((string)($match['source_id'] ?? '') === '') {
+                $key .= '|' . self::normalizeText((string)($match['name'] ?? ''));
+            }
+            if (isset($seenResolved[$key])) {
+                continue;
+            }
+            $seenResolved[$key] = true;
+            $dedupedResolved[] = $match;
+        }
+        $resolved = $dedupedResolved;
 
         usort($resolved, function ($left, $right) {
             if ($left['score'] !== $right['score']) {
@@ -180,7 +230,50 @@ class ReferenceResolverService
 
             $clarificationKey = trim((string)($alias['clarification_key'] ?? ('reference_alias.' . str_replace(' ', '_', $normalizedAlias))));
             if (in_array($clarificationKey, $acceptedClarificationKeys, true) && !empty($alias['resolved_filter'])) {
+                $resolvedFilter = is_array($alias['resolved_filter'])
+                    ? $alias['resolved_filter']
+                    : [];
+                $matchingIntents = array_values(array_filter(
+                    $unresolvedNamedIntents,
+                    function (array $intent) use ($aliasText, $resolvedFilter): bool {
+                        return self::acceptedAliasSatisfiesNamedIntent(
+                            $intent,
+                            $aliasText,
+                            $resolvedFilter
+                        );
+                    }
+                ));
+                if (empty($matchingIntents)) {
+                    $guidanceLines[] = self::buildAliasGuidanceLine($alias);
+                    continue;
+                }
+
+                $canonicalMatch = self::canonicalReferenceForAcceptedAlias(
+                    $alias,
+                    $references
+                );
+                if ($canonicalMatch === null) {
+                    return self::buildUnavailableLearnedAliasOutcome($matchingIntents[0]);
+                }
+
+                $aliasIntent = $matchingIntents[0];
+                $aliasIntent['provenance'] = 'accepted_learned_alias';
+                $resolvedFilters[] = self::buildResolvedFilter(
+                    $aliasIntent,
+                    [$canonicalMatch]
+                );
+                $resolved[] = $canonicalMatch;
                 $guidanceLines[] = self::buildAliasGuidanceLine($alias);
+                $unresolvedNamedIntents = array_values(array_filter(
+                    $unresolvedNamedIntents,
+                    function (array $intent) use ($aliasText, $resolvedFilter): bool {
+                        return !self::acceptedAliasSatisfiesNamedIntent(
+                            $intent,
+                            $aliasText,
+                            $resolvedFilter
+                        );
+                    }
+                ));
                 continue;
             }
 
@@ -213,7 +306,11 @@ class ReferenceResolverService
             'needsClarification' => false,
             'guidanceLines' => $guidanceLines,
             'resolvedReferences' => $resolved,
-            'routeReason' => !empty($guidanceLines) ? 'reference_resolver_guidance' : null,
+            'resolvedFilters' => $resolvedFilters,
+            'unresolvedNamedIntents' => $unresolvedNamedIntents,
+            'routeReason' => (!empty($guidanceLines) || !empty($resolvedFilters))
+                ? 'reference_resolver_guidance'
+                : null,
         ];
     }
 
@@ -227,8 +324,41 @@ class ReferenceResolverService
         $references = self::loadEnabledReferenceValues();
         $aliases = self::loadReferenceAliases($userId);
         $acceptedKeys = self::loadAcceptedClarificationKeys($userId);
-        $resolution = self::resolvePromptAgainstReferences($prompt, $references, $aliases, $acceptedKeys);
-        if (!empty($resolution['needsClarification']) || !empty($resolution['guidanceLines'])) {
+        $acceptedSelections = self::loadAcceptedClarificationSelections($userId);
+        $resolution = self::resolvePromptAgainstReferences(
+            $prompt,
+            $references,
+            $aliases,
+            $acceptedKeys,
+            $acceptedSelections
+        );
+        if (!empty($resolution['needsClarification'])) {
+            return $resolution;
+        }
+
+        $unresolvedNamedIntents = $resolution['unresolvedNamedIntents'] ?? [];
+        if (!empty($unresolvedNamedIntents)) {
+            $safeProbeClarification = self::buildSafeProbeClarification(
+                $prompt,
+                $unresolvedNamedIntents
+            );
+            if ($safeProbeClarification !== null) {
+                $safeProbeClarification['guidanceLines'] = array_values(array_unique(array_merge(
+                    $resolution['guidanceLines'] ?? [],
+                    $safeProbeClarification['guidanceLines'] ?? []
+                )));
+                $safeProbeClarification['resolvedReferences'] = array_merge(
+                    $resolution['resolvedReferences'] ?? [],
+                    $safeProbeClarification['resolvedReferences'] ?? []
+                );
+                $safeProbeClarification['resolvedFilters'] = $resolution['resolvedFilters'] ?? [];
+                $safeProbeClarification['unresolvedNamedIntents'] = $unresolvedNamedIntents;
+
+                return $safeProbeClarification;
+            }
+        }
+
+        if (!empty($resolution['guidanceLines'])) {
             return $resolution;
         }
 
@@ -269,16 +399,168 @@ class ReferenceResolverService
     }
 
     /**
+     * @param array<string, mixed> $intent
+     * @param array<string, mixed> $resolvedFilter
+     */
+    private static function acceptedAliasSatisfiesNamedIntent(
+        array $intent,
+        string $aliasText,
+        array $resolvedFilter
+    ): bool {
+        $dimension = (string)($intent['dimension'] ?? '');
+        $intentTable = ReferenceIntentService::tableForDimension($dimension);
+        $aliasTable = trim((string)($resolvedFilter['table'] ?? ''));
+        if ($intentTable === null || $aliasTable !== $intentTable) {
+            return false;
+        }
+
+        $intentValue = self::normalizeNamedIntentSpan(
+            (string)($intent['span'] ?? ''),
+            $dimension
+        );
+        $aliasValue = self::normalizeNamedIntentSpan($aliasText, $dimension);
+
+        return $intentValue !== '' && $intentValue === $aliasValue;
+    }
+
+    /**
+     * @param array<string, mixed> $alias
+     * @param array<int, array<string, mixed>> $references
+     * @return array<string, mixed>|null
+     */
+    private static function canonicalReferenceForAcceptedAlias(
+        array $alias,
+        array $references
+    ) {
+        $filter = $alias['resolved_filter'] ?? null;
+        if (!is_array($filter)) {
+            return null;
+        }
+
+        $sourceTable = trim((string)($filter['table'] ?? ''));
+        $column = trim((string)($filter['column'] ?? ''));
+        $operator = trim((string)($filter['operator'] ?? '='));
+        $expectedName = trim((string)($filter['value'] ?? ''));
+        $expectedSourceId = trim((string)(
+            $filter['sourceId']
+                ?? $filter['source_id']
+                ?? $alias['source_id']
+                ?? ''
+        ));
+        if (
+            $sourceTable === ''
+            || $column !== 'name'
+            || $operator !== '='
+            || $expectedName === ''
+        ) {
+            return null;
+        }
+
+        $matches = [];
+        foreach (self::referencesForTable($references, $sourceTable) as $reference) {
+            $sourceId = trim((string)($reference['source_id'] ?? ($reference['id'] ?? '')));
+            $name = trim((string)($reference['name'] ?? ''));
+            if (
+                self::normalizeText($name) !== self::normalizeText($expectedName)
+                || ($expectedSourceId !== '' && $sourceId !== $expectedSourceId)
+            ) {
+                continue;
+            }
+            $matches[] = self::referenceAsMatch(
+                $reference,
+                2100,
+                'accepted_learned_alias'
+            );
+        }
+
+        return count($matches) === 1 ? $matches[0] : null;
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @return array<string, mixed>
+     */
+    private static function buildUnavailableLearnedAliasOutcome(array $intent): array
+    {
+        $dimension = trim((string)($intent['dimension'] ?? 'reference'));
+        $label = trim(str_replace('_', ' ', $dimension));
+        if ($label === '') {
+            $label = 'reference value';
+        }
+
+        return [
+            'needsClarification' => true,
+            'clarificationType' => 'reference_value_unavailable',
+            'question' => 'I could not find the saved ' . $label
+                . ' in the current library reference data.',
+            'options' => [],
+            'route' => 'clarification',
+            'routeReason' => 'reference_value_unavailable',
+            'dataSource' => null,
+        ];
+    }
+
+    /**
      * @param array<string, mixed> $resolution
      */
     public static function appendGuidanceToPrompt(string $prompt, array $resolution): string
     {
-        $lines = $resolution['guidanceLines'] ?? [];
-        if (empty($lines) || !is_array($lines)) {
+        $lines = [];
+        foreach (($resolution['resolvedFilters'] ?? []) as $filter) {
+            if (is_array($filter)) {
+                $lines[] = self::buildResolvedFilterGuidanceLine($filter);
+            }
+        }
+        foreach (($resolution['guidanceLines'] ?? []) as $line) {
+            $line = (string)$line;
+            if (!self::guidanceLineCoveredByResolvedFilters($line, $resolution['resolvedFilters'] ?? [])) {
+                $lines[] = $line;
+            }
+        }
+        if (empty($lines)) {
             return $prompt;
         }
 
         return rtrim($prompt) . "\n\nReference resolver guidance:\n" . implode("\n", array_map('strval', $lines));
+    }
+
+    /**
+     * @param array<string, mixed> $filter
+     */
+    private static function buildResolvedFilterGuidanceLine(array $filter): string
+    {
+        $table = (string)($filter['source_table'] ?? '');
+        $filterValues = is_array($filter['values'] ?? null) ? $filter['values'] : [];
+        $values = array_values(array_map([self::class, 'quoteLiteral'], $filterValues));
+        $predicate = count($values) === 1
+            ? $table . '.name = ' . $values[0]
+            : $table . '.name IN (' . implode(', ', $values) . ')';
+
+        return '- Resolved local reference filter: use exactly ' . $predicate
+            . '. Apply each value only to this reference dimension.';
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $resolvedFilters
+     */
+    private static function guidanceLineCoveredByResolvedFilters(
+        string $line,
+        array $resolvedFilters
+    ): bool
+    {
+        foreach ($resolvedFilters as $filter) {
+            if (!is_array($filter)) {
+                continue;
+            }
+            $prefix = (string)($filter['source_table'] ?? '') . '.name = ';
+            foreach (($filter['values'] ?? []) as $value) {
+                if (strpos($line, $prefix . self::quoteLiteral((string)$value)) !== false) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -367,8 +649,10 @@ class ReferenceResolverService
 
             $resolvedValue = (string)($row['resolved_value'] ?? '');
             $sourceTable = (string)($row['source_table'] ?? '');
+            $sourceId = (string)($row['source_id'] ?? '');
             $aliases[] = [
                 'alias' => (string)($row['alias'] ?? ''),
+                'source_id' => $sourceId,
                 'clarification_key' => 'reference_alias.' . self::normalizeKey((string)($row['alias'] ?? '')),
                 'confidence' => (string)($row['confidence'] ?? 'learned'),
                 'resolved_filter' => [
@@ -376,6 +660,7 @@ class ReferenceResolverService
                     'column' => 'name',
                     'operator' => '=',
                     'value' => $resolvedValue,
+                    'sourceId' => $sourceId,
                 ],
                 'options' => [
                     [
@@ -388,6 +673,7 @@ class ReferenceResolverService
                             'column' => 'name',
                             'operator' => '=',
                             'value' => $resolvedValue,
+                            'sourceId' => $sourceId,
                         ],
                     ],
                 ],
@@ -424,15 +710,69 @@ class ReferenceResolverService
     }
 
     /**
+     * @return array<string, array<string, mixed>>
+     */
+    private static function loadAcceptedClarificationSelections($userId): array
+    {
+        if (!class_exists('\Yii') || $userId === null || $userId === '') {
+            return [];
+        }
+
+        try {
+            $rows = \Yii::$app->db->createCommand(
+                'SELECT clarification_key, term, resolved_filter_json,
+                        selected_source_table, selected_source_id, selected_value
+                 FROM ai_clarification_events
+                 WHERE user_id = :user_id
+                 ORDER BY id DESC',
+                [':user_id' => (int)$userId]
+            )->queryAll();
+        } catch (\Throwable $e) {
+            return [];
+        }
+
+        $selections = [];
+        $seenKeys = [];
+        foreach ($rows as $row) {
+            $clarificationKey = trim((string)($row['clarification_key'] ?? ''));
+            if ($clarificationKey === '' || isset($seenKeys[$clarificationKey])) {
+                continue;
+            }
+            $seenKeys[$clarificationKey] = true;
+            $resolvedFilter = json_decode(
+                (string)($row['resolved_filter_json'] ?? ''),
+                true
+            );
+            if (!is_array($resolvedFilter)) {
+                continue;
+            }
+            $selections[$clarificationKey] = [
+                'term' => trim((string)($row['term'] ?? '')),
+                'resolved_filter' => $resolvedFilter,
+                'source_table' => trim((string)($row['selected_source_table'] ?? '')),
+                'source_id' => trim((string)($row['selected_source_id'] ?? '')),
+                'value' => trim((string)($row['selected_value'] ?? '')),
+            ];
+        }
+
+        return $selections;
+    }
+
+    /**
      * @return array<string, mixed>|null
      */
-    private static function buildSafeProbeClarification(string $prompt)
+    private static function buildSafeProbeClarification(
+        string $prompt,
+        array $unresolvedNamedIntents = []
+    )
     {
         if (!class_exists('\Yii')) {
             return null;
         }
 
-        $terms = self::extractSafeProbeTerms($prompt);
+        $terms = empty($unresolvedNamedIntents)
+            ? self::extractSafeProbeTerms($prompt)
+            : self::safeProbeTermsForUnresolvedNamedIntents($unresolvedNamedIntents);
         if (empty($terms)) {
             return null;
         }
@@ -454,6 +794,48 @@ class ReferenceResolverService
         }
 
         return self::buildSafeProbeClarificationFromOptions($prompt, $items);
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $intents
+     * @return array<int, array{term: string, trigger: string}>
+     */
+    private static function safeProbeTermsForUnresolvedNamedIntents(array $intents): array
+    {
+        $terms = [];
+        foreach ($intents as $intent) {
+            $span = trim((string)($intent['span'] ?? ''));
+            $dimension = (string)($intent['dimension'] ?? '');
+            if ($span === '' || $dimension === '') {
+                continue;
+            }
+
+            $extractedTerms = self::extractSafeProbeTerms($span);
+            if (empty($extractedTerms)) {
+                $term = self::normalizeNamedIntentSpan($span, $dimension);
+                if ($term === '') {
+                    continue;
+                }
+                $extractedTerms[] = [
+                    'term' => $term,
+                    'trigger' => str_replace('_', ' ', $dimension),
+                ];
+            }
+
+            foreach ($extractedTerms as $termInfo) {
+                $term = trim((string)($termInfo['term'] ?? ''));
+                $trigger = trim((string)($termInfo['trigger'] ?? $dimension));
+                if ($term === '') {
+                    continue;
+                }
+                $terms[strtolower($term . '|' . $trigger)] = [
+                    'term' => $term,
+                    'trigger' => $trigger,
+                ];
+            }
+        }
+
+        return array_values($terms);
     }
 
     /**
@@ -758,11 +1140,782 @@ class ReferenceResolverService
     }
 
     /**
+     * @param array<int, array<string, mixed>> $intents
+     * @param array<int, array<string, mixed>> $references
+     * @return array<string, mixed>
+     */
+    private static function resolveTypedIntents(
+        array $intents,
+        array $references,
+        array $acceptedOverrides = []
+    ): array
+    {
+        $filters = [];
+        $resolved = [];
+        $consumedSpans = [];
+        $consumedMaterialTerms = [];
+        $unresolvedNamedIntents = [];
+        $seenReferences = [];
+
+        foreach ($intents as $intent) {
+            $dimension = (string)($intent['dimension'] ?? '');
+            $sourceTable = ReferenceIntentService::tableForDimension($dimension);
+            if ($sourceTable === null) {
+                continue;
+            }
+
+            $span = trim((string)($intent['span'] ?? ''));
+            if ($span !== '') {
+                $consumedSpans[] = $span;
+            }
+
+            $tableReferences = self::referencesForTable($references, $sourceTable);
+            $overrideKey = self::typedIntentClarificationKey($intent);
+            if (isset($acceptedOverrides[$overrideKey])) {
+                $matches = [$acceptedOverrides[$overrideKey]];
+            } elseif ($dimension === 'material_type') {
+                foreach (($intent['terms'] ?? []) as $term) {
+                    $term = self::normalizeText((string)$term);
+                    if ($term !== '') {
+                        $consumedMaterialTerms[] = $term;
+                    }
+                }
+                $materialResolution = self::resolveMaterialIntent($intent, $tableReferences);
+                if (!empty($materialResolution['outcome'])) {
+                    return [
+                        'resolvedFilters' => [],
+                        'resolvedReferences' => [],
+                        'consumedSpans' => $consumedSpans,
+                        'consumedMaterialTerms' => $consumedMaterialTerms,
+                        'unresolvedNamedIntents' => $unresolvedNamedIntents,
+                        'outcome' => $materialResolution['outcome'],
+                    ];
+                }
+                $matches = $materialResolution['matches'];
+            } else {
+                $matches = self::matchNamedIntent($intent, $tableReferences);
+                if (count($matches) > 1) {
+                    return [
+                        'resolvedFilters' => [],
+                        'resolvedReferences' => [],
+                        'consumedSpans' => $consumedSpans,
+                        'consumedMaterialTerms' => $consumedMaterialTerms,
+                        'unresolvedNamedIntents' => $unresolvedNamedIntents,
+                        'outcome' => self::buildTypedIntentAmbiguityOutcome(
+                            $intent,
+                            $matches
+                        ),
+                    ];
+                }
+            }
+
+            if (empty($matches)) {
+                if ($dimension !== 'material_type') {
+                    $unresolvedNamedIntents[] = $intent;
+                }
+                continue;
+            }
+
+            $dedupedMatches = [];
+            foreach ($matches as $match) {
+                $referenceKey = (string)($match['source_table'] ?? '')
+                    . '|'
+                    . (string)($match['source_id'] ?? '');
+                if ((string)($match['source_id'] ?? '') === '') {
+                    $referenceKey .= '|' . self::normalizeText((string)($match['name'] ?? ''));
+                }
+                if (isset($seenReferences[$referenceKey])) {
+                    continue;
+                }
+                $seenReferences[$referenceKey] = true;
+                $dedupedMatches[] = $match;
+                $resolved[] = $match;
+            }
+
+            if (!empty($dedupedMatches)) {
+                $filters[] = self::buildResolvedFilter($intent, $dedupedMatches);
+            }
+        }
+
+        return [
+            'resolvedFilters' => $filters,
+            'resolvedReferences' => $resolved,
+            'consumedSpans' => $consumedSpans,
+            'consumedMaterialTerms' => array_values(array_unique($consumedMaterialTerms)),
+            'unresolvedNamedIntents' => $unresolvedNamedIntents,
+            'outcome' => null,
+        ];
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $intents
+     * @param array<int, array<string, mixed>> $references
+     * @param array<int, string> $acceptedClarificationKeys
+     * @param array<string, array<string, mixed>> $acceptedClarificationSelections
+     * @return array<string, array<string, mixed>>
+     */
+    private static function buildAcceptedTypedIntentOverrides(
+        string $prompt,
+        array $intents,
+        array $references,
+        array $acceptedClarificationKeys,
+        array $acceptedClarificationSelections
+    ): array {
+        if (
+            empty($acceptedClarificationKeys)
+            || empty($acceptedClarificationSelections)
+        ) {
+            return [];
+        }
+
+        $selections = self::parseFrontendClarificationSelections($prompt);
+        if (empty($selections)) {
+            return [];
+        }
+
+        $overrides = [];
+        foreach ($intents as $intent) {
+            $dimension = (string)($intent['dimension'] ?? '');
+            if ($dimension === '' || $dimension === 'material_type') {
+                continue;
+            }
+
+            $clarificationKey = self::typedIntentClarificationKey($intent);
+            if (!in_array($clarificationKey, $acceptedClarificationKeys, true)) {
+                continue;
+            }
+
+            $sourceTable = ReferenceIntentService::tableForDimension($dimension);
+            $acceptedSelection = $acceptedClarificationSelections[$clarificationKey] ?? null;
+            if ($sourceTable === null || !is_array($acceptedSelection)) {
+                continue;
+            }
+            $acceptedFilter = $acceptedSelection['resolved_filter'] ?? null;
+            if (!is_array($acceptedFilter)) {
+                continue;
+            }
+            $acceptedTable = trim((string)($acceptedFilter['table'] ?? ''));
+            $acceptedColumn = trim((string)($acceptedFilter['column'] ?? ''));
+            $acceptedValue = trim((string)($acceptedFilter['value'] ?? ''));
+            $acceptedSourceId = trim((string)($acceptedSelection['source_id'] ?? ''));
+            $acceptedFilterSourceId = trim((string)($acceptedFilter['sourceId'] ?? ''));
+            if (
+                $acceptedTable !== $sourceTable
+                || $acceptedColumn !== 'name'
+                || $acceptedValue === ''
+                || $acceptedSourceId === ''
+                || $acceptedFilterSourceId === ''
+                || $acceptedSourceId !== $acceptedFilterSourceId
+                || trim((string)($acceptedSelection['source_table'] ?? '')) !== $sourceTable
+                || trim((string)($acceptedSelection['value'] ?? '')) !== $acceptedValue
+            ) {
+                continue;
+            }
+
+            $tableReferences = self::referencesForTable($references, $sourceTable);
+            $responsibleMatches = self::matchNamedIntent($intent, $tableReferences);
+            if (count($responsibleMatches) < 2) {
+                continue;
+            }
+
+            $normalizedSpan = self::normalizeText((string)($intent['span'] ?? ''));
+            if (
+                self::normalizeText((string)($acceptedSelection['term'] ?? ''))
+                !== $normalizedSpan
+            ) {
+                continue;
+            }
+
+            foreach ($selections as $selection) {
+                if (
+                    self::normalizeText((string)($selection['term'] ?? '')) !== $normalizedSpan
+                    || self::normalizeText((string)($selection['repeated_term'] ?? '')) !== $normalizedSpan
+                    || self::normalizeText((string)($selection['value'] ?? ''))
+                        !== self::normalizeText($acceptedValue)
+                ) {
+                    continue;
+                }
+
+                $selectedCandidates = array_values(array_filter(
+                    $responsibleMatches,
+                    function (array $match) use (
+                        $acceptedSourceId,
+                        $acceptedValue,
+                        $sourceTable
+                    ): bool {
+                        return (string)($match['source_table'] ?? '') === $sourceTable
+                            && self::normalizeText((string)($match['name'] ?? ''))
+                                === self::normalizeText($acceptedValue)
+                            && trim((string)($match['source_id'] ?? ''))
+                                === $acceptedSourceId;
+                    }
+                ));
+                if (count($selectedCandidates) !== 1) {
+                    continue;
+                }
+
+                $selectedCandidates[0]['score'] = 2000;
+                $selectedCandidates[0]['matched_by'] = 'accepted_clarification_selection';
+                $overrides[$clarificationKey] = $selectedCandidates[0];
+                break;
+            }
+        }
+
+        return $overrides;
+    }
+
+    /**
+     * @return array<int, array{term: string, value: string, repeated_term: string}>
+     */
+    private static function parseFrontendClarificationSelections(string $prompt): array
+    {
+        if (!preg_match('/\R\RClarifications:\s*\R(.*)$/isu', $prompt, $section)) {
+            return [];
+        }
+
+        $selections = [];
+        foreach (preg_split('/\R/u', (string)$section[1]) ?: [] as $line) {
+            if (!preg_match(
+                '/^\s*-\s*(.+?):\s*Use\s+(.+?)\s+for\s+(.+?)\.\s*$/iu',
+                $line,
+                $match
+            )) {
+                continue;
+            }
+            $selections[] = [
+                'term' => trim((string)$match[1]),
+                'value' => trim((string)$match[2]),
+                'repeated_term' => trim((string)$match[3]),
+            ];
+        }
+
+        return $selections;
+    }
+
+    private static function promptBeforeFrontendClarifications(string $prompt): string
+    {
+        if (preg_match('/^(.*)\R\RClarifications:\s*\R/su', $prompt, $match)) {
+            return rtrim((string)$match[1]);
+        }
+
+        return $prompt;
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     */
+    private static function typedIntentClarificationKey(array $intent): string
+    {
+        return 'reference_' . (string)($intent['dimension'] ?? '') . '_ambiguous.'
+            . self::normalizeKey((string)($intent['span'] ?? ''));
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $references
+     * @return array<int, array<string, mixed>>
+     */
+    private static function referencesForTable(array $references, string $sourceTable): array
+    {
+        $tableReferences = array_values(array_filter(
+            $references,
+            function (array $reference) use ($sourceTable): bool {
+                return trim((string)($reference['source_table'] ?? ($reference['table'] ?? '')))
+                    === $sourceTable;
+            }
+        ));
+
+        $deduped = [];
+        $seen = [];
+        foreach ($tableReferences as $reference) {
+            $sourceId = (string)($reference['source_id'] ?? ($reference['id'] ?? ''));
+            $key = $sourceTable . '|' . $sourceId;
+            if ($sourceId === '') {
+                $key .= '|' . self::normalizeText((string)($reference['name'] ?? ''));
+            }
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $deduped[] = $reference;
+        }
+
+        return $deduped;
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<int, array<string, mixed>> $references
+     * @return array<int, array<string, mixed>>
+     */
+    private static function matchNamedIntent(array $intent, array $references): array
+    {
+        $dimension = (string)($intent['dimension'] ?? '');
+        $rawSpan = trim((string)($intent['span'] ?? ''));
+        $normalizedSpan = self::normalizeNamedIntentSpan($rawSpan, $dimension);
+        if ($normalizedSpan === '') {
+            return [];
+        }
+
+        $matches = [];
+        foreach ($references as $reference) {
+            $match = self::matchReference(
+                $normalizedSpan,
+                $rawSpan,
+                $reference,
+                $dimension
+            );
+            if ($match !== null) {
+                $matches[] = $match;
+            }
+        }
+        if (!empty($matches)) {
+            $bestScore = max(array_column($matches, 'score'));
+            return array_values(array_filter(
+                $matches,
+                function (array $match) use ($bestScore): bool {
+                    return (int)$match['score'] === (int)$bestScore;
+                }
+            ));
+        }
+
+        if ($dimension !== 'library') {
+            return [];
+        }
+
+        $intentTokens = self::distinctiveNamedTokens($normalizedSpan);
+        if (count($intentTokens) !== 1 || strlen($intentTokens[0]) < 5) {
+            return [];
+        }
+
+        $distinctiveMatches = [];
+        foreach ($references as $reference) {
+            $normalizedName = self::normalizeText((string)($reference['name'] ?? ''));
+            if (!self::promptContainsNormalizedTerm($normalizedName, $intentTokens[0])) {
+                continue;
+            }
+            $distinctiveMatches[] = self::referenceAsMatch(
+                $reference,
+                680 + strlen($intentTokens[0]),
+                'typed_distinctive_name'
+            );
+        }
+
+        return $distinctiveMatches;
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<int, array<string, mixed>> $references
+     * @return array<string, mixed>
+     */
+    private static function resolveMaterialIntent(array $intent, array $references): array
+    {
+        $matches = [];
+        $canonicalNames = ReferenceIntentService::canonicalNamesForMaterialIntent($intent);
+        $missingNames = [];
+
+        foreach ($canonicalNames as $canonicalName) {
+            $normalizedCanonicalName = self::normalizeText((string)$canonicalName);
+            $canonicalMatches = array_values(array_filter(
+                $references,
+                function (array $reference) use ($normalizedCanonicalName): bool {
+                    return self::normalizeText((string)($reference['name'] ?? ''))
+                        === $normalizedCanonicalName;
+                }
+            ));
+            if (empty($canonicalMatches)) {
+                $missingNames[] = (string)$canonicalName;
+                continue;
+            }
+            if (count($canonicalMatches) > 1) {
+                return [
+                    'matches' => [],
+                    'outcome' => self::buildTypedIntentAmbiguityOutcome(
+                        $intent,
+                        $canonicalMatches
+                    ),
+                ];
+            }
+            $matches[] = self::referenceAsMatch(
+                $canonicalMatches[0],
+                1900,
+                'typed_material_selector'
+            );
+        }
+
+        if (!empty($missingNames)) {
+            return [
+                'matches' => [],
+                'outcome' => self::buildUnavailableReferenceOutcome(
+                    $intent,
+                    $missingNames
+                ),
+            ];
+        }
+
+        foreach (($intent['terms'] ?? []) as $term) {
+            $normalizedTerm = self::normalizeText((string)$term);
+            if (
+                $normalizedTerm === ''
+                || isset(ReferenceIntentService::MATERIAL_SELECTORS[$normalizedTerm])
+            ) {
+                continue;
+            }
+
+            $exactMatches = array_values(array_filter(
+                $references,
+                function (array $reference) use ($normalizedTerm): bool {
+                    return self::normalizeText((string)($reference['name'] ?? ''))
+                        === $normalizedTerm;
+                }
+            ));
+            $responsibleMatches = $exactMatches;
+            if (empty($responsibleMatches)) {
+                $responsibleMatches = array_values(array_filter(
+                    $references,
+                    function (array $reference) use ($normalizedTerm): bool {
+                        return self::promptContainsNormalizedTerm(
+                            self::normalizeText((string)($reference['name'] ?? '')),
+                            $normalizedTerm
+                        );
+                    }
+                ));
+            }
+
+            if (count($responsibleMatches) !== 1) {
+                return [
+                    'matches' => [],
+                    'outcome' => self::buildTypedIntentAmbiguityOutcome(
+                        $intent,
+                        $responsibleMatches
+                    ),
+                ];
+            }
+
+            $matches[] = self::referenceAsMatch(
+                $responsibleMatches[0],
+                1850,
+                'typed_material_name'
+            );
+        }
+
+        return [
+            'matches' => $matches,
+            'outcome' => null,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<int, array<string, mixed>> $matches
+     * @return array<string, mixed>
+     */
+    private static function buildResolvedFilter(array $intent, array $matches): array
+    {
+        $values = [];
+        $valueMetadata = [];
+        foreach ($matches as $match) {
+            $name = (string)($match['name'] ?? '');
+            if ($name === '' || in_array($name, $values, true)) {
+                continue;
+            }
+            $values[] = $name;
+            $valueMetadata[$name] = is_array($match['metadata'] ?? null)
+                ? $match['metadata']
+                : [];
+        }
+
+        return [
+            'dimension' => (string)($intent['dimension'] ?? ''),
+            'source_table' => (string)($matches[0]['source_table'] ?? ''),
+            'column' => 'name',
+            'values' => $values,
+            'value_metadata' => $valueMetadata,
+            'provenance' => (string)($intent['provenance'] ?? 'explicit_prompt'),
+            'vocabulary_terms' => ($intent['dimension'] ?? null) === 'material_type'
+                ? array_values($intent['terms'] ?? [])
+                : [],
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<int, string> $missingNames
+     * @return array<string, mixed>
+     */
+    private static function buildUnavailableReferenceOutcome(
+        array $intent,
+        array $missingNames
+    ): array {
+        return [
+            'needsClarification' => true,
+            'clarificationType' => 'reference_value_unavailable',
+            'question' => 'I could not find the required video format in the current library reference data.',
+            'options' => [],
+            'route' => 'clarification',
+            'routeReason' => 'reference_value_unavailable',
+            'dataSource' => null,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<int, array<string, mixed>> $matches
+     * @return array<string, mixed>
+     */
+    private static function buildTypedIntentAmbiguityOutcome(
+        array $intent,
+        array $matches
+    ): array {
+        $dimension = (string)($intent['dimension'] ?? 'reference');
+        if ($dimension === 'library' && !empty($matches)) {
+            return self::buildAmbiguousLibraryOutcome($intent, $matches);
+        }
+
+        $span = trim((string)($intent['span'] ?? ''));
+        $label = str_replace('_', ' ', $dimension);
+        $options = [];
+        foreach ($matches as $match) {
+            $reference = isset($match['score'])
+                ? $match
+                : self::referenceAsMatch($match, 0, 'typed_ambiguous');
+            $name = trim((string)($reference['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $options[] = [
+                'id' => (string)($reference['source_id'] ?? ''),
+                'label' => $name,
+                'sourceTable' => (string)($reference['source_table'] ?? ''),
+                'sourceId' => (string)($reference['source_id'] ?? ''),
+                'resolvedFilter' => [
+                    'table' => (string)($reference['source_table'] ?? ''),
+                    'column' => 'name',
+                    'operator' => '=',
+                    'value' => $name,
+                    'sourceId' => (string)($reference['source_id'] ?? ''),
+                ],
+            ];
+        }
+
+        $hasMatches = !empty($matches);
+        $confidence = $hasMatches
+            ? 'ambiguous_' . $dimension . '_reference'
+            : 'unresolved_' . $dimension . '_reference';
+        $reason = $hasMatches
+            ? 'multiple_' . $dimension . '_matches'
+            : 'no_' . $dimension . '_matches';
+        $question = $hasMatches
+            ? 'I found multiple possible ' . $label . ' values.'
+            : 'I could not identify that ' . $label . ' from the current library reference data.';
+
+        return [
+            'needsClarification' => true,
+            'clarificationType' => self::CLARIFICATION_TYPE_BATCH,
+            'clarificationBatchId' => self::newBatchId(),
+            'clarificationItems' => [
+                [
+                    'term' => $span,
+                    'clarificationKey' => 'reference_' . $dimension . '_ambiguous.'
+                        . self::normalizeKey($span),
+                    'question' => 'Which ' . $label . ' should "' . $span . '" mean?',
+                    'confidence' => $confidence,
+                    'reason' => $reason,
+                    'inputType' => 'single_choice',
+                    'freeTextAllowed' => true,
+                    'options' => $options,
+                ],
+            ],
+            'question' => $question,
+            'route' => 'clarification',
+            'routeReason' => 'reference_resolver_ambiguous_' . $dimension,
+            'dataSource' => null,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<int, array<string, mixed>> $matches
+     * @return array<string, mixed>
+     */
+    private static function buildAmbiguousLibraryOutcome(
+        array $intent,
+        array $matches
+    ): array {
+        $span = trim((string)($intent['span'] ?? ''));
+        $displaySpan = trim((string)preg_replace('/["“”]+/u', '', $span));
+        $libraryOptions = [];
+        foreach ($matches as $match) {
+            $reference = isset($match['score'])
+                ? $match
+                : self::referenceAsMatch($match, 0, 'typed_ambiguous');
+            $name = trim((string)($reference['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $metadata = is_array($reference['metadata'] ?? null)
+                ? $reference['metadata']
+                : [];
+            $libraryOptions[] = [
+                'id' => (string)($reference['source_id'] ?? ''),
+                'label' => $name,
+                'description' => trim((string)($metadata['campus_name'] ?? '')),
+                'resolvedFilter' => [
+                    'table' => 'inventory.loclibrary__t',
+                    'column' => 'name',
+                    'operator' => '=',
+                    'value' => $name,
+                    'sourceId' => (string)($reference['source_id'] ?? ''),
+                ],
+            ];
+        }
+
+        return [
+            'needsClarification' => true,
+            'clarificationType' => self::CLARIFICATION_TYPE_BATCH,
+            'clarificationItems' => [
+                [
+                    'term' => $span,
+                    'clarificationKey' => 'reference_library_ambiguous.'
+                        . self::normalizeKey($span),
+                    'question' => 'Which library should "' . $displaySpan . '" mean?',
+                    'confidence' => 'ambiguous_library_reference',
+                    'reason' => 'multiple_library_matches',
+                    'inputType' => 'single_choice',
+                    'freeTextAllowed' => true,
+                    'options' => $libraryOptions,
+                ],
+            ],
+            'route' => 'clarification',
+            'routeReason' => 'reference_resolver_ambiguous_library',
+            'dataSource' => null,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $reference
+     * @return array<string, mixed>
+     */
+    private static function referenceAsMatch(
+        array $reference,
+        int $score,
+        string $matchedBy
+    ): array {
+        return [
+            'source_table' => trim((string)($reference['source_table'] ?? ($reference['table'] ?? ''))),
+            'source_id' => (string)($reference['source_id'] ?? ($reference['id'] ?? '')),
+            'name' => trim((string)($reference['name'] ?? '')),
+            'code' => trim((string)($reference['code'] ?? '')),
+            'metadata' => is_array($reference['metadata'] ?? null)
+                ? $reference['metadata']
+                : [],
+            'score' => $score,
+            'matched_by' => $matchedBy,
+        ];
+    }
+
+    private static function normalizeNamedIntentSpan(
+        string $span,
+        string $dimension
+    ): string {
+        $normalized = self::normalizeText($span);
+        $qualifiers = [
+            'library' => 'librar(?:y|ies)',
+            'location' => '(?:locations?|collections?|stacks?|rooms?|shelving)',
+            'campus' => 'campus(?:es)?',
+            'institution' => 'institutions?',
+            'service_point' => 'service points?',
+        ];
+        if (!isset($qualifiers[$dimension])) {
+            return $normalized;
+        }
+
+        $qualifier = $qualifiers[$dimension];
+        $normalized = preg_replace('/^(?:' . $qualifier . ')\s+/', '', $normalized);
+        $normalized = preg_replace('/\s+(?:' . $qualifier . ')$/', '', (string)$normalized);
+
+        return trim((string)$normalized);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private static function distinctiveNamedTokens(string $normalizedSpan): array
+    {
+        $ignored = [
+            'sc' => true,
+            'ac' => true,
+            'hc' => true,
+            'mh' => true,
+            'um' => true,
+            'rp' => true,
+            'yb' => true,
+            'library' => true,
+            'libraries' => true,
+            'art' => true,
+            'the' => true,
+        ];
+        $tokens = [];
+        foreach (explode(' ', $normalizedSpan) as $token) {
+            if ($token === '' || isset($ignored[$token])) {
+                continue;
+            }
+            $tokens[] = $token;
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * @param array<int, string> $spans
+     * @param array<int, string> $materialTerms
+     */
+    private static function removeConsumedPromptText(
+        string $prompt,
+        array $spans,
+        array $materialTerms
+    ): string {
+        foreach ($spans as $span) {
+            $span = trim((string)$span);
+            if ($span === '') {
+                continue;
+            }
+            $prompt = (string)preg_replace(
+                '/' . preg_quote($span, '/') . '/iu',
+                str_repeat(' ', strlen($span)),
+                $prompt,
+                1
+            );
+        }
+
+        $knownPatterns = [
+            'vhs' => '\bvhs(?:\s+tapes?)?\b',
+            'dvd' => '\b(?:dvds?|dvd\s*\/\s*blu[\s-]?rays?|blu[\s-]?rays?)\b',
+            'film' => '\bfilms?\b',
+        ];
+        foreach ($materialTerms as $term) {
+            $term = self::normalizeText((string)$term);
+            if ($term === '') {
+                continue;
+            }
+            $pattern = $knownPatterns[$term]
+                ?? '\b' . str_replace('\ ', '\s+', preg_quote($term, '/')) . '\b';
+            $prompt = (string)preg_replace('/' . $pattern . '/iu', ' ', $prompt);
+        }
+
+        return $prompt;
+    }
+
+    /**
      * @param array<string, mixed> $reference
      * @return array<string, mixed>|null
      */
-    private static function matchReference(string $normalizedPrompt, string $rawPrompt, array $reference)
-    {
+    private static function matchReference(
+        string $normalizedPrompt,
+        string $rawPrompt,
+        array $reference,
+        ?string $intentDimension = null
+    ) {
         $name = trim((string)($reference['name'] ?? ''));
         $code = trim((string)($reference['code'] ?? ''));
         $sourceTable = trim((string)($reference['source_table'] ?? ($reference['table'] ?? '')));
@@ -775,12 +1928,30 @@ class ReferenceResolverService
         $normalizedCode = self::normalizeText($code);
         $score = 0;
         $matchedBy = '';
+        $effectiveIntentDimension = $intentDimension;
+        if (
+            $effectiveIntentDimension === null
+            && $sourceTable === 'inventory.location__t'
+            && strpos($normalizedNameWithoutPrefix, ' ') !== false
+            && preg_match(
+                '/\b(?:in|at)\s+(?:the\s+)?'
+                    . preg_quote($normalizedNameWithoutPrefix, '/')
+                    . '\b/',
+                $normalizedPrompt
+            ) === 1
+        ) {
+            $effectiveIntentDimension = 'location';
+        }
 
         if (self::promptContainsNormalizedTerm($normalizedPrompt, $normalizedName)) {
             $score = 1000 + strlen($normalizedName);
             $matchedBy = 'name';
         } elseif ($normalizedNameWithoutPrefix !== $normalizedName
-            && self::canMatchNameWithoutPrefix($sourceTable, $normalizedNameWithoutPrefix)
+            && self::canMatchNameWithoutPrefix(
+                $sourceTable,
+                $normalizedNameWithoutPrefix,
+                $effectiveIntentDimension
+            )
             && self::promptContainsNormalizedTerm($normalizedPrompt, $normalizedNameWithoutPrefix)
         ) {
             $score = 700 + strlen($normalizedNameWithoutPrefix);
@@ -790,7 +1961,12 @@ class ReferenceResolverService
             $matchedBy = 'code';
         } elseif (self::isLocationHierarchyTable($sourceTable)) {
             $partialScore = self::scoreLocationHierarchyPartialMatch($normalizedPrompt, $reference, $normalizedNameWithoutPrefix);
-            if ($partialScore > 0) {
+            $hasTypedContext = $intentDimension !== null
+                && ReferenceIntentService::tableForDimension($intentDimension) === $sourceTable;
+            $isSafeLegacyLocationMatch = $intentDimension === null
+                && $sourceTable === 'inventory.location__t'
+                && $partialScore >= 650;
+            if ($partialScore > 0 && ($hasTypedContext || $isSafeLegacyLocationMatch)) {
                 $score = $partialScore;
                 $matchedBy = 'location_hierarchy_partial';
             }
@@ -800,15 +1976,7 @@ class ReferenceResolverService
             return null;
         }
 
-        return [
-            'source_table' => $sourceTable,
-            'source_id' => (string)($reference['source_id'] ?? ($reference['id'] ?? '')),
-            'name' => $name,
-            'code' => $code,
-            'metadata' => is_array($reference['metadata'] ?? null) ? $reference['metadata'] : [],
-            'score' => $score,
-            'matched_by' => $matchedBy,
-        ];
+        return self::referenceAsMatch($reference, $score, $matchedBy);
     }
 
     /**
@@ -887,6 +2055,7 @@ class ReferenceResolverService
             'needsClarification' => false,
             'guidanceLines' => [],
             'resolvedReferences' => [],
+            'resolvedFilters' => [],
             'routeReason' => null,
         ];
     }
@@ -1172,13 +2341,22 @@ class ReferenceResolverService
         return preg_match('/\b' . preg_quote($normalizedTerm, '/') . '\b/', $normalizedPrompt) === 1;
     }
 
-    private static function canMatchNameWithoutPrefix(string $sourceTable, string $normalizedName): bool
-    {
-        if (self::isLocationHierarchyTable($sourceTable)) {
-            return true;
+    private static function canMatchNameWithoutPrefix(
+        string $sourceTable,
+        string $normalizedName,
+        ?string $intentDimension = null
+    ): bool {
+        if ($sourceTable === 'inventory.location__t') {
+            return $intentDimension === 'location'
+                && strpos($normalizedName, ' ') !== false;
         }
 
-        return count(array_filter(explode(' ', trim($normalizedName)))) >= 2;
+        if ($sourceTable === 'inventory.loclibrary__t') {
+            return $intentDimension === 'library';
+        }
+
+        return !self::isLocationHierarchyTable($sourceTable)
+            && strpos($normalizedName, ' ') !== false;
     }
 
     /**

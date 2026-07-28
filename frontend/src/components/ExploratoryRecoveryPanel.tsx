@@ -11,24 +11,20 @@ const REJECTED_REFINEMENT_SUGGESTIONS = [
   'Specify a date range, grouping, and measures.',
 ];
 
-function formatFailureCategory(category?: string): string {
-  if (!category) return 'Validation failure';
-  return category
-    .replace(/[^a-zA-Z0-9]+/g, ' ')
-    .trim()
-    .replace(/^./, (character) => character.toUpperCase());
-}
-
 export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: ExploratoryRecoveryPanelProps) {
   const originalQuestion = response.recoveryContext?.originalQuestion?.trim() || '';
   const isRejected = response.validationSummary?.status === 'rejected';
-  const isSemanticConformanceFailure = response.validationSummary?.validatorStage === 'semantic_conformance';
   const suppliedSuggestions = response.suggestions?.length
     ? response.suggestions
     : response.exploratoryPlan?.suggestions || [];
   const suggestions = isRejected && suppliedSuggestions.length === 0
     ? REJECTED_REFINEMENT_SUGGESTIONS
     : suppliedSuggestions;
+  const recoveryMessage = response.message?.trim()
+    || response.exploratoryNotice?.message?.trim()
+    || (isRejected
+      ? 'Nothing ran or changed. Ask AI could not safely turn this request into a report. Retry the request or refine one part of it below.'
+      : 'No query survived validation. Retry the preserved request or refine one part of it below.');
 
   return (
     <section className="rounded-lg border border-amber-200 bg-amber-50 p-5" aria-labelledby="exploratory-recovery-title">
@@ -36,18 +32,10 @@ export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: Explor
         The request is preserved
       </h2>
       <p className="mt-1 text-sm text-amber-900">
-        {isRejected
-          ? 'Nothing ran or changed. Ask AI could not safely turn this request into a report. Retry the request or refine one part of it below.'
-          : 'No query survived validation. Retry the preserved request or refine one part of it below.'}
+        {recoveryMessage}
       </p>
 
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-        {!isRejected && !isSemanticConformanceFailure && (
-          <div className="rounded-md border border-amber-200 bg-white p-3">
-            <dt className="text-xs font-semibold uppercase tracking-wide text-amber-800">Safe failure category</dt>
-            <dd className="mt-1 text-gray-800">{formatFailureCategory(response.validationSummary?.failureCategory)}</dd>
-          </div>
-        )}
         {(response.attemptedPlan || response.exploratoryPlan?.summary) && (
           <div className="rounded-md border border-amber-200 bg-white p-3">
             <dt className="text-xs font-semibold uppercase tracking-wide text-amber-800">Attempted plan</dt>
@@ -56,14 +44,14 @@ export function ExploratoryRecoveryPanel({ response, onRetry, onRefine }: Explor
         )}
       </dl>
 
-      {response.unmetRequirements && response.unmetRequirements.length > 0 && (
+      {response.recoveryItems && response.recoveryItems.length > 0 && (
         <div className="mt-4">
           <h3 className="text-sm font-semibold text-amber-950">What still needs to be resolved</h3>
           <ul className="mt-2 space-y-1 text-sm text-amber-900">
-            {response.unmetRequirements.map((requirement) => (
-              <li key={requirement.key} className="flex gap-2">
+            {response.recoveryItems.map((item) => (
+              <li key={item} className="flex gap-2">
                 <span aria-hidden="true">•</span>
-                <span>{requirement.label}</span>
+                <span>{item}</span>
               </li>
             ))}
           </ul>

@@ -11,6 +11,7 @@ import ResultsModal from '../components/ResultsModal';
 import { ExploratoryAssumptionsPanel } from '../components/ExploratoryAssumptionsPanel';
 import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel';
 import { ExploratorySemanticValidationPanel } from '../components/ExploratorySemanticValidationPanel';
+import AskTrustNotice from '../components/AskTrustNotice';
 import { useToast } from '../components/ToastProvider';
 import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
@@ -26,6 +27,7 @@ type AskRequest = {
   includeSuggestions?: boolean;
   followUpContext?: FollowUpContext | null;
   allowExploratory?: boolean;
+  parentGenerationId?: string | null;
 };
 
 const CAMPUS_OPTIONS = [
@@ -57,9 +59,11 @@ export const ASK_RESOLVER_LOADING_STEPS = [
 export const ASK_SQL_GENERATION_LOADING_STEPS = [
   'Applying your selected clarification to the request',
   'Checking whether the request now has enough context for SQL generation',
-  'Starting AI SQL generation; review the SQL and results for accuracy',
+  'Starting AI SQL generation and preparing the result',
   'Automatically repairing SQL that does not pass validation',
 ];
+
+export const ASK_REUSE_CANDIDATE_MESSAGE = 'A similar question has been answered successfully before. You can use the previous query, edit it, or generate a new one.';
 
 export type AskProgressPhase = 'checking_request' | 'building_sql_after_clarification';
 
@@ -221,7 +225,7 @@ export function getExploratoryNoticeCopy(
   return {
     title: result.exploratoryNotice?.title?.trim() || 'AI-assisted query',
     message: result.exploratoryNotice?.message?.trim()
-      || 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+      || 'I could not match this request to a verified report pattern, so I built a best-effort query with the assumptions shown here.',
     detail: result.exploratoryNotice?.detail?.trim()
       || (result.mode === 'exploratory'
         ? 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.'
@@ -239,19 +243,6 @@ export function isExploratoryValidationHardStop(
   return summary?.status === 'exhausted' || summary?.status === 'rejected';
 }
 
-function ExploratoryNoticePanel({ result }: { result: NlResponse | null }) {
-  const notice = getExploratoryNoticeCopy(result);
-  if (!notice) return null;
-
-  return (
-    <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-      <div className="font-semibold">{notice.title}</div>
-      <div className="mt-1">{notice.message}</div>
-      {notice.detail && <div className="mt-1 text-xs text-sky-800">{notice.detail}</div>}
-    </div>
-  );
-}
-
 export function formatResolverTrace(trace: ResolverTraceEntry[] | undefined): string[] {
   if (!Array.isArray(trace)) return [];
   return trace
@@ -260,11 +251,9 @@ export function formatResolverTrace(trace: ResolverTraceEntry[] | undefined): st
       if (!label) return '';
       const status = typeof entry.status === 'string' ? entry.status.trim() : '';
       const detail = typeof entry.detail === 'string' ? entry.detail.trim() : '';
-      const technicalDetail = typeof entry.technicalDetail === 'string' ? entry.technicalDetail.trim() : '';
-      const suffix = technicalDetail ? ` (${technicalDetail})` : '';
-      if (detail) return `${label}: ${detail}${suffix}`;
+      if (detail) return `${label}: ${detail}`;
       if (status === 'no_match') return `${label}: no match`;
-      if (status === 'found') return `${label}${suffix}`;
+      if (status === 'found') return label;
       return status ? `${label}: ${status}` : label;
     })
     .filter((line): line is string => line.length > 0);
@@ -477,7 +466,7 @@ export function buildBatchClarificationResolutionInput(
 
 export function buildCurrentAskFollowUpContext(
   previousPrompt: string,
-  result: Pick<NlResponse, 'sql' | 'assumptions'> | null | undefined,
+  result: Pick<NlResponse, 'sql' | 'assumptions' | 'generationId'> | null | undefined,
   previousColumns: string[] = [],
 ): FollowUpContext | null {
   const previousSql = result?.sql?.trim();
@@ -489,6 +478,7 @@ export function buildCurrentAskFollowUpContext(
     previousSql,
     previousColumns,
     ...(result?.assumptions?.length ? { previousAssumptions: result.assumptions } : {}),
+    ...(result?.generationId ? { parentGenerationId: result.generationId } : {}),
   };
 }
 
@@ -524,6 +514,18 @@ export function buildQueryReuseResolvedContext(selectedCampus: string): Record<s
   }
 
   return { campus };
+}
+
+export function buildGeneratedQuerySubmitOptions(
+  result: Pick<NlResponse, 'generationId' | 'sql'>,
+  outputMode: 'table' | 'file',
+  resolvedContext: Record<string, string>,
+) {
+  return {
+    outputMode,
+    resolvedContext,
+    ...(result.generationId ? { generationId: result.generationId } : {}),
+  };
 }
 
 export function formatQueryReuseMatchReason(reason: string): string {
@@ -718,10 +720,11 @@ export default function Ask() {
       sql: result.sql,
       dataSource: result.dataSource || 'folio',
       nlPrompt: questionText,
-      options: {
-        outputMode: outputPref === 'full' ? 'file' : 'table',
-        resolvedContext: buildQueryReuseResolvedContext(selectedCampus),
-      },
+      options: buildGeneratedQuerySubmitOptions(
+        result,
+        outputPref === 'full' ? 'file' : 'table',
+        buildQueryReuseResolvedContext(selectedCampus),
+      ),
     });
   };
 
@@ -747,6 +750,7 @@ export default function Ask() {
           score?: number;
         };
         resolvedContext?: Record<string, string>;
+        generationId?: string;
       };
     }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
     onSuccess: (data) => {
@@ -767,6 +771,7 @@ export default function Ask() {
         request.includeSuggestions ?? true,
         request.followUpContext ?? null,
         request.allowExploratory ?? false,
+        request.parentGenerationId ?? null,
       ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
       setNlResult(data);
@@ -872,6 +877,7 @@ export default function Ask() {
       includeSuggestions: true,
       shouldExecute: true,
       followUpContext: context,
+      parentGenerationId: context?.parentGenerationId ?? null,
     });
   };
 
@@ -970,16 +976,29 @@ export default function Ask() {
   };
 
   const handleUseSuggestion = (suggestedPrompt: string) => {
+    const context = buildCurrentAskFollowUpContext(
+      history[0]?.prompt || prompt,
+      nlResult,
+      results?.columns || [],
+    );
+    setFollowUpContext(context);
     setPrompt(suggestedPrompt);
   };
 
   const handleRunSuggestion = (suggestedPrompt: string) => {
+    const context = buildCurrentAskFollowUpContext(
+      history[0]?.prompt || prompt,
+      nlResult,
+      results?.columns || [],
+    );
     setPrompt(suggestedPrompt);
     setAskProgressPhase('checking_request');
     askMut.mutate({
       question: suggestedPrompt,
       includeSuggestions: true,
       shouldExecute: true,
+      followUpContext: context,
+      parentGenerationId: context?.parentGenerationId ?? null,
     });
   };
 
@@ -1017,6 +1036,7 @@ export default function Ask() {
       shouldExecute: true,
       followUpContext: context,
       allowExploratory: true,
+      parentGenerationId: context.parentGenerationId ?? null,
     });
   };
 
@@ -1031,6 +1051,7 @@ export default function Ask() {
       shouldExecute: true,
       followUpContext: null,
       allowExploratory: true,
+      parentGenerationId: nlResult?.generationId ?? null,
     });
   };
 
@@ -1047,6 +1068,7 @@ export default function Ask() {
       shouldExecute: true,
       followUpContext: null,
       allowExploratory: true,
+      parentGenerationId: nlResult?.generationId ?? null,
     });
   };
 
@@ -1057,8 +1079,6 @@ export default function Ask() {
     const freeText = option ? '' : clarificationFreeText.trim();
     if (!option && !freeText) return;
     const allowExploratory = option?.resolvedFilter?.allowExploratory === true;
-    const refineExploratory = option?.resolvedFilter?.allowExploratory === false
-      && nlResult.needsExploratoryApproval;
 
     await saveClarificationResolutionBestEffort(saveClarificationResolution, {
       originalQuestion,
@@ -1077,13 +1097,8 @@ export default function Ask() {
         includeSuggestions: true,
         shouldExecute: true,
         allowExploratory: true,
+        parentGenerationId: nlResult.generationId ?? null,
       });
-      return;
-    }
-
-    if (refineExploratory) {
-      setNlResult(null);
-      setPrompt(originalQuestion);
       return;
     }
 
@@ -1097,6 +1112,7 @@ export default function Ask() {
       question: clarifiedPrompt,
       includeSuggestions: true,
       shouldExecute: true,
+      parentGenerationId: nlResult.generationId ?? null,
     });
   };
 
@@ -1155,6 +1171,7 @@ export default function Ask() {
       question: clarifiedPrompt,
       includeSuggestions: true,
       shouldExecute: true,
+      parentGenerationId: nlResult.generationId ?? null,
     });
   };
 
@@ -1389,7 +1406,7 @@ export default function Ask() {
                   Previous successful query found
                 </div>
                 <p className="mt-1 text-sm text-folio-900">
-                  A similar question has been answered successfully before. Review the SQL below, edit it if needed, or generate new SQL instead.
+                  {ASK_REUSE_CANDIDATE_MESSAGE}
                 </p>
               </div>
               <span className="shrink-0 rounded border border-folio-200 bg-white px-2 py-1 text-xs font-medium text-folio-700">
@@ -1583,43 +1600,27 @@ export default function Ask() {
 
       {nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
         <div className="mx-auto max-w-3xl p-4 xl:px-6">
-          <div className={`border rounded-lg p-4 ${
-            nlResult.needsExploratoryApproval
-              ? 'border-sky-200 bg-sky-50'
-              : 'border-amber-200 bg-amber-50'
-          }`}>
-            <div className={`text-sm font-semibold mb-1 ${
-              nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-            }`}>
-              {nlResult.needsExploratoryApproval ? 'One detail needed' : 'Clarification needed'}
+          <div className="border rounded-lg p-4 border-amber-200 bg-amber-50">
+            <div className="text-sm font-semibold mb-1 text-amber-900">
+              Clarification needed
             </div>
-            <div className={`text-sm mb-3 ${
-              nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-            }`}>
+            <div className="text-sm mb-3 text-amber-900">
               {nlResult.question || 'Which option did you mean?'}
             </div>
             {nlResult.message && (
-              <div className={`text-sm mb-3 ${
-                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-              }`}>
+              <div className="text-sm mb-3 text-amber-900">
                 {nlResult.message}
               </div>
             )}
             {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
-              <div className={`mb-3 rounded-md border bg-white px-3 py-2 ${
-                nlResult.needsExploratoryApproval ? 'border-sky-200' : 'border-amber-200'
-              }`}>
-                <div className={`text-xs font-semibold uppercase tracking-wide ${
-                  nlResult.needsExploratoryApproval ? 'text-sky-800' : 'text-amber-800'
-                }`}>
+              <div className="mb-3 rounded-md border bg-white px-3 py-2 border-amber-200">
+                <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
                   Resolver checks
                 </div>
                 <ul className="mt-1 space-y-1 text-xs text-gray-700">
                   {formatResolverTrace(nlResult.resolverTrace).map((line) => (
                     <li key={line} className="flex gap-2">
-                      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
-                        nlResult.needsExploratoryApproval ? 'bg-sky-500' : 'bg-amber-500'
-                      }`} />
+                      <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
                       <span>{line}</span>
                     </li>
                   ))}
@@ -1636,11 +1637,7 @@ export default function Ask() {
                 <button
                   key={option.id}
                   onClick={() => handleClarificationChoice(option)}
-                  className={`w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors ${
-                    nlResult.needsExploratoryApproval
-                      ? 'border-sky-200 hover:bg-sky-100'
-                      : 'border-amber-200 hover:bg-amber-100'
-                  }`}
+                  className="w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors border-amber-200 hover:bg-amber-100"
                 >
                   <span>{option.label}</span>
                   {option.recommended && (
@@ -2034,43 +2031,27 @@ export default function Ask() {
 
         {showRightPaneClarifications && nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
           <div className="max-w-4xl mx-auto p-6">
-            <div className={`border rounded-lg p-4 ${
-              nlResult.needsExploratoryApproval
-                ? 'border-sky-200 bg-sky-50'
-                : 'border-amber-200 bg-amber-50'
-            }`}>
-              <div className={`text-sm font-semibold mb-1 ${
-                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-              }`}>
-                {nlResult.needsExploratoryApproval ? 'One detail needed' : 'Clarification needed'}
+            <div className="border rounded-lg p-4 border-amber-200 bg-amber-50">
+              <div className="text-sm font-semibold mb-1 text-amber-900">
+                Clarification needed
               </div>
-              <div className={`text-sm mb-3 ${
-                nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-              }`}>
+              <div className="text-sm mb-3 text-amber-900">
                 {nlResult.question || 'Which option did you mean?'}
               </div>
               {nlResult.message && (
-                <div className={`text-sm mb-3 ${
-                  nlResult.needsExploratoryApproval ? 'text-sky-900' : 'text-amber-900'
-                }`}>
+                <div className="text-sm mb-3 text-amber-900">
                   {nlResult.message}
                 </div>
               )}
               {formatResolverTrace(nlResult.resolverTrace).length > 0 && (
-                <div className={`mb-3 rounded-md border bg-white px-3 py-2 ${
-                  nlResult.needsExploratoryApproval ? 'border-sky-200' : 'border-amber-200'
-                }`}>
-                  <div className={`text-xs font-semibold uppercase tracking-wide ${
-                    nlResult.needsExploratoryApproval ? 'text-sky-800' : 'text-amber-800'
-                  }`}>
+                <div className="mb-3 rounded-md border bg-white px-3 py-2 border-amber-200">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
                     Resolver checks
                   </div>
                   <ul className="mt-1 space-y-1 text-xs text-gray-700">
                     {formatResolverTrace(nlResult.resolverTrace).map((line) => (
                       <li key={line} className="flex gap-2">
-                        <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${
-                          nlResult.needsExploratoryApproval ? 'bg-sky-500' : 'bg-amber-500'
-                        }`} />
+                        <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
                         <span>{line}</span>
                       </li>
                     ))}
@@ -2087,11 +2068,7 @@ export default function Ask() {
                   <button
                     key={option.id}
                     onClick={() => handleClarificationChoice(option)}
-                    className={`w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors ${
-                      nlResult.needsExploratoryApproval
-                        ? 'border-sky-200 hover:bg-sky-100'
-                        : 'border-amber-200 hover:bg-amber-100'
-                    }`}
+                    className="w-full flex items-center justify-between gap-3 text-left bg-white border px-3 py-2 rounded-lg text-sm text-gray-800 transition-colors border-amber-200 hover:bg-amber-100"
                   >
                     <span>{option.label}</span>
                     {option.recommended && (
@@ -2135,7 +2112,12 @@ export default function Ask() {
 
         {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && !isExploratoryValidationHardStop(nlResult.validationSummary) && (
           <div className="mx-auto w-full max-w-6xl p-3 space-y-3">
-            <ExploratoryNoticePanel result={nlResult} />
+            <AskTrustNotice
+              mode={nlResult.mode}
+              reviewRequired={nlResult.reviewRequired}
+              reviewNotice={nlResult.reviewNotice}
+              assumptions={nlResult.assumptions}
+            />
             {nlResult.mode === 'exploratory'
               && ((nlResult.assumptions?.length ?? 0) > 0 || (nlResult.reportDisclosures?.length ?? 0) > 0)
               && (
@@ -2387,7 +2369,16 @@ export default function Ask() {
                         )}
                         {!isRunning ? (
                           <button
-                            onClick={() => nlResult.sql && execMut.mutate({ sql: nlResult.sql, dataSource: nlResult.dataSource || 'folio' })}
+                            onClick={() => nlResult.sql && execMut.mutate({
+                              sql: nlResult.sql,
+                              dataSource: nlResult.dataSource || 'folio',
+                              nlPrompt: history[0]?.prompt || prompt,
+                              options: buildGeneratedQuerySubmitOptions(
+                                nlResult,
+                                outputPref === 'full' ? 'file' : 'table',
+                                buildQueryReuseResolvedContext(selectedCampus),
+                              ),
+                            })}
                             disabled={execMut.isPending || !nlResult.sql}
                             className="flex items-center gap-1 bg-green-600 text-white text-xs px-3 py-1 rounded hover:bg-green-700 disabled:opacity-50"
                           >

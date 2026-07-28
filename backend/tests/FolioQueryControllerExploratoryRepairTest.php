@@ -42,14 +42,84 @@ namespace app\services {
     class GeminiService
     {
         public const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry';
+        public static $preflightRepairCalls = [];
+        public static $generationCalls = [];
+        public static $generationResult = [];
+        public static $generationTransport = [];
+        public static $preflightRepairResult;
+
         public static function isAiTimeoutMessage($message): bool { return false; }
+
+        public static function generateSqlWithShadow(
+            $rawQuestion,
+            $campus = null,
+            $userId = null,
+            $allowExploratory = false,
+            $generationPrompt = null,
+            ?array &$generationTransport = null
+        ): array {
+            self::$generationCalls[] = [
+                'rawQuestion' => $rawQuestion,
+                'campus' => $campus,
+                'userId' => $userId,
+                'allowExploratory' => $allowExploratory,
+                'generationPrompt' => $generationPrompt,
+            ];
+            $generationTransport = self::$generationTransport;
+            return self::$generationResult;
+        }
+
+        public static function repairExploratorySqlAfterPreflight(
+            string $originalQuestion,
+            $campus,
+            array $currentResult,
+            string $preflightError,
+            ?string $generationPrompt = null
+        ): array {
+            self::$preflightRepairCalls[] = [
+                'originalQuestion' => $originalQuestion,
+                'campus' => $campus,
+                'currentResult' => $currentResult,
+                'preflightError' => $preflightError,
+                'generationPrompt' => $generationPrompt,
+            ];
+
+            return self::$preflightRepairResult ?? [
+                'sql' => 'SELECT title FROM inventory.instance__t',
+                'repairAttempts' => 1,
+                'mode' => 'exploratory',
+                'route' => 'exploratory',
+                'routeReason' => 'unsupported_query_family',
+                'referenceResolver' => [
+                    'resolved' => true,
+                    'guidanceLines' => [
+                        "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'.",
+                    ],
+                ],
+            ];
+        }
     }
     class SettingsService {}
     class DatabaseRetryService {}
     class IndexRecommendationService {}
     class Nl2sqlRuntimePreflightService {}
     class ReferenceCacheRefreshService {}
-    class SqlPreflightService {}
+    class SqlPreflightService
+    {
+        public static $calls = [];
+        public static $results = [];
+
+        public static function estimateQueryComplexity($db, string $sql, int $timeoutMs, int $rowLimit, array $params): array
+        {
+            self::$calls[] = [
+                'sql' => $sql,
+                'timeoutMs' => $timeoutMs,
+                'rowLimit' => $rowLimit,
+                'params' => $params,
+            ];
+            return array_shift(self::$results) ?? [];
+        }
+    }
 }
 
 namespace Firebase\JWT { class JWT {} }
@@ -85,11 +155,54 @@ namespace {
         }
     }
 
+    require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
     require_once __DIR__ . '/../controllers/FolioQueryController.php';
+
+    final class CapturingAdministratorReviewService
+    {
+        public $received;
+        public $failure;
+
+        public function recordGeneration(array $context): array
+        {
+            $this->received = $context;
+            if ($this->failure !== null) {
+                throw $this->failure;
+            }
+            return ['generationId' => 'generation-1', 'conversationId' => 'conversation-1'];
+        }
+    }
+
+    final class TestableFolioQueryController extends \app\controllers\FolioQueryController
+    {
+        public $reviewService;
+
+        protected function administratorReviewService()
+        {
+            return $this->reviewService;
+        }
+    }
+
+    final class TestRequest
+    {
+        private $body;
+
+        public function __construct(array $body)
+        {
+            $this->body = $body;
+        }
+
+        public function getBodyParams(): array
+        {
+            return $this->body;
+        }
+    }
 
     Yii::$app = (object) [
         'response' => (object) ['statusCode' => 200, 'format' => null],
         'user' => (object) ['isGuest' => true, 'id' => null, 'identity' => null],
+        'params' => ['queryTimeoutMs' => 30000],
+        'folioDb' => (object) [],
     ];
 
     $controller = new \app\controllers\FolioQueryController('folio-query', null);
@@ -155,6 +268,49 @@ namespace {
     repairAssertSame('validated', $terminalOutcomes[0]['category'] ?? null, 'Successful re-preflight should retain a safe validated category.');
     repairAssertSame('exploratory', $terminalOutcomes[0]['route'] ?? null, 'Terminal validation telemetry should preserve the final exploratory route.');
 
+    $rawFollowUpQuestion = 'Include instance numbers in0001 and in0002. Limit 20.';
+    $modelOnlyGenerationPrompt = implode("\n\n", [
+        'This is a follow-up request to a previously generated library report.',
+        'Previous SQL: SELECT title FROM inventory.instance__t',
+        'Follow-up request: ' . $rawFollowUpQuestion,
+        "Reference resolver guidance:\n- Use inventory.material_type__t.name = 'E-Book'.",
+        "EXPLICIT REPORT VALUES (preserve every value exactly):\n- instance_number: in0001, in0002",
+    ]);
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    $modelContextPreflightCalls = 0;
+    $modelContextResult = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT broken_column FROM inventory.instance__t',
+            'mode' => 'exploratory',
+            'repairAttempts' => 0,
+            'route' => 'exploratory_legacy_freeform',
+            'routeReason' => 'unsupported_query_family',
+        ],
+        $rawFollowUpQuestion,
+        'Smith College',
+        function () use (&$modelContextPreflightCalls): array {
+            $modelContextPreflightCalls++;
+            return $modelContextPreflightCalls === 1
+                ? ['error' => 'column "broken_column" does not exist']
+                : ['rows' => 2, 'cost' => 3.0];
+        },
+        null,
+        $modelOnlyGenerationPrompt
+    );
+    repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'Controller post-preflight failure should invoke the production repair seam once.');
+    repairAssertSame(
+        $rawFollowUpQuestion,
+        \app\services\GeminiService::$preflightRepairCalls[0]['originalQuestion'] ?? null,
+        'Controller post-preflight repair must retain the exact latest raw question.'
+    );
+    repairAssertSame(
+        $modelOnlyGenerationPrompt,
+        \app\services\GeminiService::$preflightRepairCalls[0]['generationPrompt'] ?? null,
+        'Controller post-preflight repair must retain follow-up, resolver, and explicit guidance as model-only context.'
+    );
+    repairAssertSame('SELECT title FROM inventory.instance__t', $modelContextResult['sql'] ?? null, 'Model-context regression should re-preflight the repaired SQL.');
+
     $exhaustedRepairCalls = 0;
     $exhausted = $validateAndRepair->invoke(
         $controller,
@@ -165,6 +321,12 @@ namespace {
             'assumptions' => [['key' => 'purchase_date_basis', 'value' => 'payment_date']],
             'attemptedPlan' => 'Aggregate investment before joining circulation.',
             'suggestions' => ['Use a shorter reporting window.'],
+            '_askEvidence' => [
+                'initialSql' => 'SELECT original_column FROM inventory.instance__t',
+                'finalSql' => 'SELECT missing_column FROM inventory.instance__t',
+                'repairAttempts' => 2,
+                'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+            ],
         ],
         'Compare investment and circulation ROI',
         'Smith College',
@@ -181,10 +343,12 @@ namespace {
     repairAssertSame('exhausted', $exhausted['validationSummary']['status'] ?? null, 'Exhaustion should expose its validation status.');
     repairAssertSame('missing_column', $exhausted['validationSummary']['failureCategory'] ?? null, 'Ordinary database exhaustion should retain its existing safe database category.');
     repairAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion should report the actual repair count.');
+    repairAssertSame('SELECT original_column FROM inventory.instance__t', $exhausted['_askEvidence']['initialSql'] ?? null, 'Controller exhaustion must retain trusted initial candidate evidence until finalization.');
+    repairAssertSame('bundle-hash', $exhausted['_askEvidence']['referenceBundleMetadata']['hash'] ?? null, 'Controller exhaustion must retain trusted provenance until finalization.');
     repairAssertSame(
-        'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
+        'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
         $exhausted['message'] ?? null,
-        'Ordinary database exhaustion should retain its existing generic recovery message.'
+        'Ordinary database exhaustion should use novice-facing recovery copy.'
     );
     repairAssertSame(false, isset($exhausted['unmetRequirements']), 'Ordinary database exhaustion should not acquire semantic requirement fields.');
     repairAssertSame('Compare investment and circulation ROI', $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should preserve the original question.');
@@ -242,9 +406,9 @@ namespace {
     repairAssertSame('semantic_conformance', $semanticExhausted['validationSummary']['validatorStage'] ?? null, 'Controller recovery should preserve the semantic validator stage.');
     repairAssertSame('assumption_mismatch', $semanticExhausted['validationSummary']['failureCategory'] ?? null, 'Controller recovery should preserve the safe semantic category.');
     repairAssertSame(
-        "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption.",
+        'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
         $semanticExhausted['message'] ?? null,
-        'Controller recovery should preserve the reassuring semantic exhaustion message.'
+        'Controller recovery should use novice-facing recovery copy.'
     );
     repairAssertSame(
         [['key' => 'purchase_date_basis', 'label' => 'Use the resolved purchase date basis.']],
@@ -306,7 +470,8 @@ namespace {
     );
     repairAssertSame(0, $canonicalRepairCalls, 'Verified-family preflight failures must retain legacy recovery without Gemini repair.');
     repairAssertSame('exploratory_recovery', $canonicalFailure['route'] ?? null, 'Verified-family preflight failures should retain the legacy continuation route.');
-    repairAssertSame(null, $canonicalFailure['validationSummary'] ?? null, 'Verified-family preflight failures must not be mislabeled as exploratory repair exhaustion.');
+    repairAssertSame('rejected', $canonicalFailure['validationSummary']['status'] ?? null, 'Verified-family preflight failures must use the safe no-SQL recovery status.');
+    repairAssertSame(null, $canonicalFailure['errorType'] ?? null, 'Verified-family preflight failures must remain distinct from exploratory repair exhaustion.');
 
     $cancelRepairCalls = 0;
     try {
@@ -470,6 +635,264 @@ namespace {
     repairAssertSame(1, $validatedPreflightCalls, 'Semantically validated SQL should reach database preflight.');
     repairAssertSame('SELECT purchase_count FROM purchase_data ORDER BY purchase_count DESC', $validatedResult['sql'] ?? null, 'Validated applicable SQL should be returned after preflight.');
 
+    $capturingReview = new CapturingAdministratorReviewService();
+    $finalizingController = new TestableFolioQueryController('folio-query', null);
+    $finalizingController->reviewService = $capturingReview;
+    $finalize = new ReflectionMethod($finalizingController, 'finalizeAskResponse');
+    $finalized = $finalize->invoke($finalizingController, [
+        'mode' => 'exploratory',
+        'route' => 'exploratory_recovery',
+        'validationSummary' => [
+            'status' => 'exhausted',
+            'validatorStage' => 'semantic_conformance',
+            'failureCategory' => 'semantic_coverage_gap',
+        ],
+        'unmetRequirements' => [[
+            'key' => 'purchase_date_basis',
+            'label' => 'Use the resolved purchase date basis.',
+        ]],
+        '_askEvidence' => [
+            'initialSql' => 'SELECT purchase_count FROM purchase_data',
+            'finalSql' => 'SELECT spend FROM invoice.invoices__t',
+            'repairAttempts' => 2,
+        ],
+    ], 'Build ROI', 12, []);
+    repairAssertSame('semantic_conformance', $capturingReview->received['confidenceEvidence']['validatorStage'] ?? null, 'Persistence must receive the internal validator stage.');
+    repairAssertSame('semantic_coverage_gap', $capturingReview->received['confidenceEvidence']['failureCategory'] ?? null, 'Persistence must receive the internal failure category.');
+    repairAssertSame(['purchase_date_basis'], $capturingReview->received['confidenceEvidence']['unmetRequirementKeys'] ?? null, 'Persistence must receive internal requirement keys.');
+    repairAssertSame('generation-1', $finalized['generationId'] ?? null, 'Persisted Ask outcomes must return their generation identifier.');
+    repairAssertSame('conversation-1', $finalized['conversationId'] ?? null, 'Persisted Ask outcomes must return their conversation identifier.');
+    repairAssertSame(true, $finalized['reviewRequired'] ?? null, 'Exhausted outcomes must be flagged for review.');
+    repairAssertSame(null, $capturingReview->received['generatedSql'] ?? null, 'Exhausted rejected SQL must never be persisted as executable generated SQL.');
+    repairAssertSame(true, is_array($capturingReview->received['initialStructure'] ?? null), 'Persistence must receive the exhausted initial candidate structure.');
+    repairAssertSame(true, is_array($capturingReview->received['finalStructure'] ?? null), 'Persistence must receive the exhausted last-candidate structure.');
+    repairAssertSame(true, $capturingReview->received['materialRepair'] ?? null, 'Persistence must classify a structurally changed exhausted repair.');
+    repairAssertSame(false, isset($finalized['validationSummary']['validatorStage']), 'Ordinary responses must omit internal validator stages.');
+    repairAssertSame(false, isset($finalized['validationSummary']['failureCategory']), 'Ordinary responses must omit internal failure categories.');
+    repairAssertSame(false, isset($finalized['unmetRequirements']), 'Ordinary responses must omit internal requirement keys.');
+    repairAssertSame(false, isset($finalized['_askEvidence']), 'Ordinary exhausted responses must omit the trusted evidence envelope.');
+    repairAssertNotContains('purchase_count FROM purchase_data', json_encode($finalized), 'Ordinary exhausted responses must not contain the initial rejected SQL.');
+    repairAssertNotContains('spend FROM invoice.invoices__t', json_encode($finalized), 'Ordinary exhausted responses must not contain the last rejected SQL.');
+
+    $capturingReview->failure = new RuntimeException('database unavailable');
+    $safeSql = $finalize->invoke($finalizingController, [
+        'mode' => 'exploratory',
+        'route' => 'exploratory_legacy_freeform',
+        'sql' => 'SELECT title FROM inventory.instance__t',
+        'validationSummary' => ['status' => 'validated'],
+        'semanticValidation' => [
+            'status' => 'validated',
+            'checkedRequirements' => [['key' => 'private_semantic_rule']],
+        ],
+        '_askEvidence' => [
+            'initialSql' => 'SELECT id FROM inventory.item__t',
+            'finalSql' => 'SELECT title FROM inventory.instance__t',
+            'repairAttempts' => 1,
+            'queryFamily' => 'trusted_exploratory_family',
+            'modelName' => 'trusted-model',
+            'promptVersion' => 'trusted-prompt.v1',
+            'schemaMetadata' => ['version' => 'schema-v1'],
+            'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+        ],
+    ], 'Show titles', 12, []);
+    repairAssertSame('SELECT title FROM inventory.instance__t', $safeSql['sql'] ?? null, 'Persistence failure must not strip otherwise safe SQL.');
+    repairAssertSame(false, isset($safeSql['generationId']), 'Identifiers must only be returned when persistence succeeds.');
+    repairAssertSame(false, isset($safeSql['semanticValidation']), 'Ordinary validated responses must not expose internal semantic requirement keys.');
+    repairAssertSame(true, $capturingReview->received['materialRepair'] ?? null, 'Persistence must classify the genuine Gemini repair as material even without a controller repair.');
+    repairAssertSame('trusted_exploratory_family', $capturingReview->received['queryFamily'] ?? null, 'Persistence must receive the trusted generation family.');
+    repairAssertSame('trusted-model', $capturingReview->received['provenance']['modelName'] ?? null, 'Persistence must receive trusted generation provenance.');
+    repairAssertSame(false, isset($safeSql['_askEvidence']), 'Ordinary responses must not expose trusted internal candidate or provenance fields.');
+
+    $provenancePreflightCalls = 0;
+    $provenanceRepair = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT broken FROM inventory.item__t',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'repairAttempts' => 0,
+            '_askEvidence' => [
+                'initialSql' => 'SELECT original FROM inventory.item__t',
+                'finalSql' => 'SELECT broken FROM inventory.item__t',
+                'repairAttempts' => 0,
+                'queryFamily' => 'inventory_library_location_listing',
+                'compilerVersion' => 'family_compiler_v1',
+                'modelName' => 'trusted-model',
+                'promptVersion' => 'trusted-prompt.v1',
+                'schemaMetadata' => ['version' => 'schema-v1'],
+                'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+            ],
+        ],
+        'Show available items',
+        'Smith College',
+        function () use (&$provenancePreflightCalls): array {
+            $provenancePreflightCalls++;
+            return $provenancePreflightCalls === 1
+                ? ['error' => 'column "broken" does not exist']
+                : ['rows' => 1];
+        },
+        function (): array {
+            return [
+                'sql' => 'SELECT id FROM inventory.item__t',
+                'repairAttempts' => 1,
+                '_askEvidence' => [
+                    'finalSql' => 'SELECT id FROM inventory.item__t',
+                    'repairAttempts' => 1,
+                ],
+            ];
+        }
+    );
+    repairAssertSame('inventory_library_location_listing', $provenanceRepair['_askEvidence']['queryFamily'] ?? null, 'Controller repair must preserve the older trusted family key.');
+    repairAssertSame('bundle-hash', $provenanceRepair['_askEvidence']['referenceBundleMetadata']['hash'] ?? null, 'Controller repair must preserve older trusted reference provenance.');
+    repairAssertSame('family_compiler_v1', $provenanceRepair['_askEvidence']['compilerVersion'] ?? null, 'Controller repair must preserve older trusted compiler provenance.');
+    repairAssertSame('SELECT original FROM inventory.item__t', $provenanceRepair['_askEvidence']['initialSql'] ?? null, 'Controller repair must preserve the genuine original candidate.');
+    repairAssertSame('SELECT id FROM inventory.item__t', $provenanceRepair['_askEvidence']['finalSql'] ?? null, 'Controller repair must update the genuine final candidate.');
+    repairAssertSame(1, $provenanceRepair['_askEvidence']['repairAttempts'] ?? null, 'Controller repair must update the actual repair count.');
+
+    $postGenerationEvidence = [
+        'initialSql' => 'SELECT id FROM inventory.item__t',
+        'finalSql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+        'repairAttempts' => 1,
+        'queryFamily' => 'inventory_library_location_listing',
+        'compilerVersion' => 'family_compiler_v1',
+        'modelName' => 'trusted-model',
+        'promptVersion' => 'trusted-prompt.v1',
+        'schemaMetadata' => ['version' => 'schema-v1'],
+        'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
+    ];
+
+    Yii::$app->response->statusCode = 200;
+    $ordinaryDatabaseRecovery = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+            'mode' => 'canonical',
+            'route' => 'canonical',
+            'repairAttempts' => 1,
+            '_askEvidence' => $postGenerationEvidence,
+        ],
+        'Show available items',
+        'Smith College',
+        function (): array {
+            return ['error' => 'column "holdings_record_id" does not exist'];
+        }
+    );
+    $ordinaryRecoveryRecorder = new CapturingAdministratorReviewService();
+    $ordinaryRecoveryController = new TestableFolioQueryController('folio-query', null);
+    $ordinaryRecoveryController->reviewService = $ordinaryRecoveryRecorder;
+    $ordinaryRecoveryFinalize = new ReflectionMethod($ordinaryRecoveryController, 'finalizeAskResponse');
+    $finalizedOrdinaryRecovery = $ordinaryRecoveryFinalize->invoke(
+        $ordinaryRecoveryController,
+        $ordinaryDatabaseRecovery,
+        'Show available items',
+        12,
+        []
+    );
+    repairAssertSame('inventory_library_location_listing', $ordinaryRecoveryRecorder->received['queryFamily'] ?? null, 'Ordinary database recovery persistence must retain family evidence.');
+    repairAssertSame('trusted-model', $ordinaryRecoveryRecorder->received['provenance']['modelName'] ?? null, 'Ordinary database recovery persistence must retain model provenance.');
+    repairAssertSame('trusted-prompt.v1', $ordinaryRecoveryRecorder->received['provenance']['promptVersion'] ?? null, 'Ordinary database recovery persistence must retain prompt provenance.');
+    repairAssertSame('schema-v1', $ordinaryRecoveryRecorder->received['provenance']['schemaMetadata']['version'] ?? null, 'Ordinary database recovery persistence must retain schema provenance.');
+    repairAssertSame('bundle-hash', $ordinaryRecoveryRecorder->received['provenance']['referenceBundleMetadata']['hash'] ?? null, 'Ordinary database recovery persistence must retain reference provenance.');
+    repairAssertSame('family_compiler_v1', $ordinaryRecoveryRecorder->received['provenance']['compilerVersion'] ?? null, 'Ordinary database recovery persistence must retain compiler provenance.');
+    repairAssertSame('rejected', $ordinaryRecoveryRecorder->received['validationStatus'] ?? null, 'Ordinary database recovery persistence must record the failed candidate as rejected.');
+    repairAssertSame(true, $ordinaryRecoveryRecorder->received['reviewRequired'] ?? null, 'Ordinary database recovery must require administrator review.');
+    repairAssertSame(true, in_array('unable_to_validate', $ordinaryRecoveryRecorder->received['reviewReasons'] ?? [], true), 'Ordinary database recovery must include the unable-to-validate review reason.');
+    repairAssertSame(null, $ordinaryRecoveryRecorder->received['generatedSql'] ?? null, 'Ordinary database recovery must not persist rejected SQL as executable.');
+    repairAssertSame(null, $ordinaryRecoveryRecorder->received['sqlHash'] ?? null, 'Ordinary database recovery must not persist a rejected SQL hash.');
+    repairAssertSame(true, is_array($ordinaryRecoveryRecorder->received['initialStructure'] ?? null), 'Ordinary database recovery persistence must retain initial candidate structure.');
+    repairAssertSame(true, is_array($ordinaryRecoveryRecorder->received['finalStructure'] ?? null), 'Ordinary database recovery persistence must retain final candidate structure.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['_askEvidence']), 'Ordinary database recovery must strip the internal envelope after persistence.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['sql']), 'Ordinary database recovery must not expose generated SQL.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['validationStatus']), 'Ordinary database recovery must not expose validator status.');
+    repairAssertSame('rejected', $finalizedOrdinaryRecovery['validationSummary']['status'] ?? null, 'Ordinary database recovery must expose only the safe no-SQL recovery status.');
+    repairAssertSame('Show available items', $finalizedOrdinaryRecovery['recoveryContext']['originalQuestion'] ?? null, 'Ordinary database recovery must preserve the original question for safe Retry controls.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['failureCategory']), 'Ordinary database recovery must not expose validator category.');
+    repairAssertSame(true, $finalizedOrdinaryRecovery['reviewRequired'] ?? null, 'Ordinary database recovery may expose only the designed review signal.');
+    repairAssertSame(200, Yii::$app->response->statusCode, 'Ordinary database recovery must preserve its HTTP 200 status.');
+    repairAssertSame('I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.', $finalizedOrdinaryRecovery['message'] ?? null, 'Ordinary database recovery must preserve its continuation copy.');
+
+    foreach (['connectivity', 'policy'] as $postGenerationOutcome) {
+        Yii::$app->response->statusCode = 200;
+        $recovery = $validateAndRepair->invoke(
+            $controller,
+            [
+                'sql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+                'mode' => 'exploratory',
+                'route' => 'exploratory_legacy_freeform',
+                'repairAttempts' => 1,
+                '_askEvidence' => $postGenerationEvidence,
+            ],
+            'Show available items',
+            'Smith College',
+            function () use ($postGenerationOutcome): array {
+                return $postGenerationOutcome === 'connectivity'
+                    ? ['error' => 'SQLSTATE[08006] [7] timeout expired']
+                    : ['error' => 'SQLSTATE[42501]: permission denied'];
+            }
+        );
+        $outcomeRecorder = new CapturingAdministratorReviewService();
+        $outcomeController = new TestableFolioQueryController('folio-query', null);
+        $outcomeController->reviewService = $outcomeRecorder;
+        $outcomeFinalize = new ReflectionMethod($outcomeController, 'finalizeAskResponse');
+        $finalizedOutcome = $outcomeFinalize->invoke(
+            $outcomeController,
+            $recovery,
+            'Show available items',
+            12,
+            []
+        );
+        repairAssertSame('bundle-hash', $outcomeRecorder->received['provenance']['referenceBundleMetadata']['hash'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must retain reference provenance.');
+        repairAssertSame('inventory_library_location_listing', $outcomeRecorder->received['queryFamily'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must retain family evidence.');
+        repairAssertSame(true, is_array($outcomeRecorder->received['finalStructure'] ?? null), ucfirst($postGenerationOutcome) . ' recovery persistence must retain final candidate structure.');
+        repairAssertSame('rejected', $outcomeRecorder->received['validationStatus'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must record an explicit rejection.');
+        repairAssertSame(null, $outcomeRecorder->received['generatedSql'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must not retain executable SQL.');
+        repairAssertSame(null, $outcomeRecorder->received['sqlHash'] ?? null, ucfirst($postGenerationOutcome) . ' recovery persistence must not retain an executable SQL hash.');
+        repairAssertSame(
+            $postGenerationOutcome === 'connectivity',
+            $outcomeRecorder->received['reviewRequired'] ?? null,
+            ucfirst($postGenerationOutcome) . ' recovery review policy must distinguish inability to validate from a policy block.'
+        );
+        if ($postGenerationOutcome === 'connectivity') {
+            repairAssertSame(true, in_array('unable_to_validate', $outcomeRecorder->received['reviewReasons'] ?? [], true), 'Connectivity recovery must create unable-to-validate administrator review work.');
+        }
+        repairAssertSame(false, isset($finalizedOutcome['_askEvidence']), ucfirst($postGenerationOutcome) . ' recovery must strip the internal envelope after persistence.');
+        repairAssertSame(false, isset($finalizedOutcome['sql']), ucfirst($postGenerationOutcome) . ' recovery must not expose generated SQL.');
+        repairAssertSame($postGenerationOutcome === 'policy' ? 403 : 200, Yii::$app->response->statusCode, ucfirst($postGenerationOutcome) . ' recovery must preserve its response status.');
+    }
+
+    Yii::$app->response->statusCode = 200;
+    $continuation = new ReflectionMethod($controller, 'buildAskContinuationFromFailure');
+    $cancellationRecovery = $continuation->invoke(
+        $controller,
+        new \app\exceptions\DatabaseQueryCancelledException(),
+        'Show available items',
+        'Smith College'
+    );
+    $attachEvidence = new ReflectionMethod($controller, 'attachTrustedAskEvidence');
+    $cancellationRecovery = $attachEvidence->invoke($controller, $cancellationRecovery, [
+        'sql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
+        '_askEvidence' => $postGenerationEvidence,
+    ]);
+    $cancellationRecorder = new CapturingAdministratorReviewService();
+    $cancellationController = new TestableFolioQueryController('folio-query', null);
+    $cancellationController->reviewService = $cancellationRecorder;
+    $cancellationFinalize = new ReflectionMethod($cancellationController, 'finalizeAskResponse');
+    $finalizedCancellation = $cancellationFinalize->invoke(
+        $cancellationController,
+        $cancellationRecovery,
+        'Show available items',
+        12,
+        []
+    );
+    repairAssertSame('trusted-model', $cancellationRecorder->received['provenance']['modelName'] ?? null, 'Cancellation recovery persistence must retain model provenance.');
+    repairAssertSame('family_compiler_v1', $cancellationRecorder->received['provenance']['compilerVersion'] ?? null, 'Cancellation recovery persistence must retain compiler provenance.');
+    repairAssertSame(true, is_array($cancellationRecorder->received['finalStructure'] ?? null), 'Cancellation recovery persistence must retain final candidate structure.');
+    repairAssertSame('rejected', $cancellationRecorder->received['validationStatus'] ?? null, 'Cancellation recovery persistence must record an explicit rejection.');
+    repairAssertSame(null, $cancellationRecorder->received['generatedSql'] ?? null, 'Cancellation recovery persistence must not retain executable SQL.');
+    repairAssertSame(false, isset($finalizedCancellation['_askEvidence']), 'Cancellation recovery must strip the internal envelope after persistence.');
+    repairAssertSame(false, isset($finalizedCancellation['sql']), 'Cancellation recovery must not expose generated SQL.');
+    repairAssertSame(503, Yii::$app->response->statusCode, 'Cancellation recovery must preserve its 503 response status.');
+
     $freshSemanticPreflightCalls = 0;
     $staleSemanticRepairCalls = 0;
     $staleSemantic = $validateAndRepair->invoke(
@@ -588,16 +1011,149 @@ namespace {
     repairAssertSame(0, $excessiveRepairCalls, 'Excessive incoming repair counts must not permit another repair.');
     repairAssertSame(2, $excessiveAttempts['validationSummary']['repairAttempts'] ?? null, 'Excessive incoming repair counts should be clamped to two.');
 
+    $actionRawQuestion = 'Use invoice date instead.';
+    $actionGenerationPrompt = implode("\n\n", [
+        'This is a follow-up request to a previously generated library report.',
+        'Previous request: Show purchases and circulation ROI by call number.',
+        'Follow-up request: ' . $actionRawQuestion,
+        "Reference resolver guidance:\n- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'.",
+    ]);
+    \app\services\GeminiService::$generationCalls = [];
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    \app\services\GeminiService::$preflightRepairResult = null;
+    \app\services\GeminiService::$generationTransport = [
+        'rawQuestion' => $actionRawQuestion,
+        'generationPrompt' => $actionGenerationPrompt,
+    ];
+    \app\services\GeminiService::$generationResult = [
+        'sql' => 'SELECT broken_column FROM inventory.instance__t',
+        'mode' => 'exploratory',
+        'route' => 'exploratory_legacy_freeform',
+        'routeReason' => 'unsupported_query_family',
+        'repairAttempts' => 0,
+        'referenceResolver' => [
+            'resolved' => true,
+            'guidanceLines' => [
+                "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'.",
+            ],
+        ],
+    ];
+    \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$results = [
+        ['error' => 'column "broken_column" does not exist'],
+        ['rows' => 2, 'cost' => 3.0],
+    ];
+    Yii::$app->request = new TestRequest([
+        'prompt' => $actionRawQuestion,
+        'campus' => 'Smith College',
+        'includeSuggestions' => false,
+    ]);
+    $actionReview = new CapturingAdministratorReviewService();
+    $actionController = new TestableFolioQueryController('folio-query', null);
+    $actionController->reviewService = $actionReview;
+    $actionResponse = $actionController->actionNl();
+
+    repairAssertSame(1, count(\app\services\GeminiService::$generationCalls), 'actionNl should invoke generation exactly once.');
+    repairAssertSame(
+        $actionRawQuestion,
+        \app\services\GeminiService::$generationCalls[0]['rawQuestion'] ?? null,
+        'actionNl generation must receive the exact raw latest question.'
+    );
+    repairAssertSame(
+        $actionRawQuestion,
+        \app\services\GeminiService::$generationCalls[0]['generationPrompt'] ?? null,
+        'A non-follow-up action should initially generate from the unaugmented raw prompt.'
+    );
+    repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'actionNl should enter the default post-preflight repair seam once.');
+    repairAssertSame(
+        $actionRawQuestion,
+        \app\services\GeminiService::$preflightRepairCalls[0]['originalQuestion'] ?? null,
+        'actionNl post-preflight repair must retain the exact raw question.'
+    );
+    repairAssertSame(
+        $actionGenerationPrompt,
+        \app\services\GeminiService::$preflightRepairCalls[0]['generationPrompt'] ?? null,
+        'actionNl post-preflight repair must consume the augmented non-response generation transport.'
+    );
+    repairAssertSame(2, count(\app\services\SqlPreflightService::$calls), 'actionNl should preflight both the initial and repaired candidates.');
+    repairAssertSame('SELECT title FROM inventory.instance__t', $actionResponse['sql'] ?? null, 'actionNl should return the repaired SQL after successful re-preflight.');
+    repairAssertSame(false, isset($actionResponse['referenceResolver']), 'The finalized actionNl browser response must omit internal resolver guidance.');
+    repairAssertNotContains(
+        "inventory.material_type__t.name = 'E-Book'",
+        json_encode($actionResponse),
+        'The finalized actionNl browser response must omit the distinctive resolver schema predicate.'
+    );
+
+    $untrustedActionExplanation = "Plan: filter with inventory.material_type__t.name = 'E-Book'.";
+    \app\services\GeminiService::$generationCalls = [];
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    \app\services\GeminiService::$generationTransport = [
+        'rawQuestion' => $actionRawQuestion,
+        'generationPrompt' => $actionGenerationPrompt,
+    ];
+    \app\services\GeminiService::$generationResult = [
+        'sql' => 'SELECT broken_column FROM inventory.instance__t',
+        'explanation' => $untrustedActionExplanation,
+        'mode' => 'exploratory',
+        'route' => 'legacy_freeform',
+        'routeReason' => 'primary_legacy_mode',
+        'repairAttempts' => 0,
+    ];
+    \app\services\GeminiService::$preflightRepairResult = [
+        'mode' => 'exploratory',
+        'route' => 'exploratory_recovery',
+        'routeReason' => 'primary_legacy_mode',
+        'repairAttempts' => 2,
+        'attemptedPlan' => $untrustedActionExplanation,
+        'assumptions' => [],
+        'suggestions' => [],
+        'validationSummary' => [
+            'status' => 'exhausted',
+            'repairAttempts' => 2,
+            'validatorStage' => 'explicit_values',
+            'failureCategory' => 'missing_explicit_values',
+        ],
+        'recoveryContext' => ['originalQuestion' => $actionRawQuestion],
+    ];
+    \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$results = [
+        ['error' => 'column "broken_column" does not exist'],
+    ];
+    $actionExhaustionReview = new CapturingAdministratorReviewService();
+    $actionExhaustionController = new TestableFolioQueryController('folio-query', null);
+    $actionExhaustionController->reviewService = $actionExhaustionReview;
+    $actionExhaustionResponse = $actionExhaustionController->actionNl();
+
+    repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'Routed action exhaustion should enter the default repair seam once.');
+    repairAssertSame(2, $actionExhaustionResponse['validationSummary']['repairAttempts'] ?? null, 'Final routed action recovery must preserve the shared two-attempt cap.');
+    repairAssertSame(false, isset($actionExhaustionResponse['attemptedPlan']), 'Final routed action recovery must omit an attempted plan without trusted provenance.');
+    repairAssertNotContains(
+        $untrustedActionExplanation,
+        json_encode($actionExhaustionResponse),
+        'The actual finalized actionNl response must not expose the untrusted model explanation.'
+    );
+    repairAssertNotContains(
+        "inventory.material_type__t.name = 'E-Book'",
+        json_encode($actionExhaustionResponse),
+        'The actual finalized routed-exhaustion response must not expose the distinctive resolver predicate.'
+    );
+    \app\services\GeminiService::$preflightRepairResult = null;
+
     $controllerSource = file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');
     repairAssertSame(
         1,
-        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$prompt,\s*\$campus/s', $controllerSource),
-        'Ask should pass the raw user prompt to repair/recovery instead of the expanded follow-up prompt.'
+        preg_match('/generateSqlWithShadow\(\s*\$prompt,\s*\$campus\s*\?:\s*null,\s*\$userId,\s*\$allowExploratory,\s*\$effectivePrompt,\s*\$generationTransport/s', $controllerSource),
+        'Ask generation must cross the service boundary with separate raw and model-only prompts plus non-response transport context.'
     );
     repairAssertSame(
-        0,
-        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$effectivePrompt,/s', $controllerSource),
-        'Ask must not expose the expanded follow-up prompt or previous SQL through repair recovery context.'
+        1,
+        preg_match('/validateAndRepairNlResult\(\s*\$result,\s*\$prompt,\s*\$campus\s*\?:\s*null,\s*null,\s*null,\s*\$generationPrompt/s', $controllerSource),
+        'Ask must pass the raw question and consumed model-only generation context to post-preflight repair.'
+    );
+    repairAssertSame(
+        1,
+        preg_match('/unset\(\$generationTransport\)/', $controllerSource),
+        'Ask must consume the internal generation transport instead of serializing it into the final response.'
     );
 
     fwrite(STDOUT, "FolioQueryController exploratory repair test passed\n");

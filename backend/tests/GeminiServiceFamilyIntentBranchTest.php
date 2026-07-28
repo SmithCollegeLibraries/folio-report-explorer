@@ -7,6 +7,7 @@ $graphServicePath = __DIR__ . '/../services/CanonicalQueryGraphService.php';
 $contractServicePath = __DIR__ . '/../services/QueryFamilyContractService.php';
 $slotServicePath = __DIR__ . '/../services/QueryFamilySlotService.php';
 $compilerServicePath = __DIR__ . '/../services/QueryFamilyCompilerService.php';
+$queryIntentServicePath = __DIR__ . '/../services/QueryIntentService.php';
 $geminiServicePath = __DIR__ . '/../services/GeminiService.php';
 
 foreach ([
@@ -17,6 +18,7 @@ foreach ([
     'QueryFamilyContractService' => $contractServicePath,
     'QueryFamilySlotService' => $slotServicePath,
     'QueryFamilyCompilerService' => $compilerServicePath,
+    'QueryIntentService' => $queryIntentServicePath,
     'GeminiService' => $geminiServicePath,
 ] as $label => $path) {
     if (!file_exists($path)) {
@@ -81,6 +83,7 @@ require_once $graphServicePath;
 require_once $contractServicePath;
 require_once $slotServicePath;
 require_once $compilerServicePath;
+require_once $queryIntentServicePath;
 require_once $geminiServicePath;
 
 use app\services\GeminiService;
@@ -94,6 +97,112 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $familyBranch = new ReflectionMethod(GeminiService::class, 'buildQueryFamilyIntentResponse');
+
+$canonicalEvidence = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_collection_age',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Neilson Library',
+            'location' => 'Neilson Reference',
+            'requested_outputs' => ['average_age_years'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_collection_age'],
+    'What is the average age of the Neilson Reference collection in Neilson Library?',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'canonical-evidence-fingerprint',
+        'schemaVersion' => '2026-07-21T00:00:00Z',
+        'schemaContextHash' => 'schema-context-hash',
+        'schemaContextBytes' => 123,
+    ],
+    function (): array {
+        return [
+            'sql' => 'SELECT 1 AS average_age_years',
+            'dataSource' => 'folio',
+            'route' => 'builder_intent',
+            'routeReason' => 'family_contract_supported:inventory_collection_age',
+            'queryDefinition' => ['tables' => [], 'columns' => [], 'filters' => [], 'joins' => []],
+        ];
+    }
+);
+assertSameValue('inventory_collection_age', $canonicalEvidence['_askEvidence']['queryFamily'] ?? null, 'Canonical family results must retain their trusted family key.');
+assertSameValue('test-model', $canonicalEvidence['_askEvidence']['modelName'] ?? null, 'Canonical family results must retain the configured model provenance.');
+assertSameValue('family_slot_prompt.v1', $canonicalEvidence['_askEvidence']['promptVersion'] ?? null, 'Canonical family results must retain prompt provenance.');
+assertSameValue('2026-07-21T00:00:00Z', $canonicalEvidence['_askEvidence']['schemaMetadata']['version'] ?? null, 'Canonical family results must retain schema provenance.');
+
+$familyRepairCalls = 0;
+$explicitFamilyCandidate = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Josten Library',
+            'requested_outputs' => ['title'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_library_location_listing'],
+    'For instance numbers in0001 and in0002, show title in Josten Library.',
+    'Smith College',
+    ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+    function (): array {
+        return [
+            'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002','in9999')",
+            'dataSource' => 'folio',
+            'route' => 'builder_intent',
+            'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+            'queryDefinition' => ['tables' => [], 'columns' => [], 'filters' => [], 'joins' => []],
+        ];
+    },
+    null,
+    function (string $prompt, $campus, array $candidate) use (&$familyRepairCalls): array {
+        $familyRepairCalls++;
+        return [
+            'sql' => "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002')",
+            'dataSource' => 'folio',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+            'repairAttempts' => 1,
+        ];
+    }
+);
+assertSameValue(1, $familyRepairCalls, 'A routed family candidate that broadens the explicit identifier set must enter the existing repair seam.');
+assertSameValue(1, $explicitFamilyCandidate['repairAttempts'] ?? null, 'Routed-family explicit repair must report the shared repair count.');
+assertSameValue("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002')", $explicitFamilyCandidate['sql'] ?? null, 'Routed-family explicit repair must return the exact-set repaired candidate.');
+
+$routerFallback = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'campus' => 'Smith College',
+            'requested_outputs' => ['title'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_library_location_listing'],
+    'Show available Smith College items',
+    'Smith College',
+    ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+    null,
+    function (): array {
+        return [
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'sql' => 'SELECT id FROM inventory.item__t',
+        ];
+    }
+);
+assertSameValue('exploratory', $routerFallback['mode'] ?? null, 'A known-family router fallback must remain exploratory.');
+assertSameValue('inventory_library_location_listing', $routerFallback['_askEvidence']['queryFamily'] ?? null, 'A known-family router fallback must retain its validated family key.');
 
 $receivedPayload = null;
 $result = $familyBranch->invoke(

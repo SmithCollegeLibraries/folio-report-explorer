@@ -47,6 +47,7 @@ require_once $sqlBuilderPath;
 require_once $geminiServicePath;
 
 use app\services\GeminiService;
+use app\exceptions\ExploratorySqlValidationException;
 
 function assertGuardTrue(bool $condition, string $message): void
 {
@@ -78,6 +79,50 @@ function assertGuardThrows(ReflectionMethod $validator, string $sql, string $exp
 
     fwrite(STDERR, $message . "\nExpected RuntimeException, but no exception was thrown.\n");
     exit(1);
+}
+
+$generateSqlParameters = array_map(function (ReflectionParameter $parameter): string {
+    return $parameter->getName();
+}, (new ReflectionMethod(GeminiService::class, 'generateSql'))->getParameters());
+assertGuardTrue(
+    $generateSqlParameters === ['prompt', 'campus', 'forceLegacy', 'forceIntent', 'originalQuestion', 'resolvedFilters'],
+    'generateSql must preserve Task 12 originalQuestion as the fifth argument and append resolvedFilters as the sixth.'
+);
+
+$postPreflightParameters = array_map(function (ReflectionParameter $parameter): string {
+    return $parameter->getName();
+}, (new ReflectionMethod(GeminiService::class, 'repairExploratorySqlAfterPreflight'))->getParameters());
+assertGuardTrue(
+    $postPreflightParameters === ['originalQuestion', 'campus', 'currentResult', 'preflightError', 'generationPrompt', 'resolvedFilters'],
+    'Post-preflight repair must preserve the raw/generation prompt ordering and append resolved filters.'
+);
+
+$resolvedFilterValidator = new ReflectionMethod(GeminiService::class, 'validateResolvedReferenceSql');
+$resolvedFilterValidator->setAccessible(true);
+$resolvedFilters = [[
+    'dimension' => 'library',
+    'source_table' => 'inventory.loclibrary__t',
+    'column' => 'name',
+    'values' => ['SC Hillyer Art Library'],
+]];
+try {
+    $resolvedFilterValidator->invoke(
+        null,
+        "SELECT item.id\n"
+            . "FROM inventory.item__t item\n"
+            . "JOIN inventory.location__t location ON location.id = item.effective_location_id\n"
+            . "JOIN inventory.loclibrary__t library ON library.id = location.library_id\n"
+            . "WHERE library.name = 'HC DVD'",
+        $resolvedFilters
+    );
+    fwrite(STDERR, "Resolved-reference mismatches must fail before candidate acceptance.\n");
+    exit(1);
+} catch (ExploratorySqlValidationException $exception) {
+    assertGuardTrue($exception->isRepairable(), 'Resolved-reference mismatch must be a repairable exploratory semantic error.');
+    assertGuardTrue(
+        $exception->getSafeCategory() === 'resolved_reference_filter_mismatch',
+        'Resolved-reference mismatch must expose only the stable safe category.'
+    );
 }
 
 $badSql = <<<'SQL'

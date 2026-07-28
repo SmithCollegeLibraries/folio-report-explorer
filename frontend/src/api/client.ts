@@ -44,6 +44,10 @@ import type {
   SchemaIdentity,
   CanonicalTableDetail,
   CanonicalPathResponse,
+  ReportReviewFilters,
+  ReportReviewListResponse,
+  ReportReviewDetail,
+  ReportReviewUpdate,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -214,12 +218,14 @@ export async function askNl(
   includeSuggestions = true,
   followUpContext?: FollowUpContext | null,
   allowExploratory = false,
+  parentGenerationId?: string | null,
 ): Promise<NlResponse> {
   const { data } = await api.post('/nl', {
     prompt,
     campus: campus || null,
     includeSuggestions,
     allowExploratory,
+    ...(parentGenerationId ? { parentGenerationId } : {}),
     ...(followUpContext ? { followUpContext } : {}),
   });
   return data;
@@ -384,6 +390,7 @@ export async function submitQuery(
       score?: number;
     };
     resolvedContext?: Record<string, string>;
+    generationId?: string;
   },
 ): Promise<JobSubmitResponse> {
   const { data } = await api.post('/query/submit', {
@@ -395,6 +402,7 @@ export async function submitQuery(
     ...(options?.outputMode ? { outputMode: options.outputMode } : {}),
     ...(options?.queryReuse ? { queryReuse: options.queryReuse } : {}),
     ...(options?.resolvedContext ? { resolvedContext: options.resolvedContext } : {}),
+    ...(options?.generationId ? { generationId: options.generationId } : {}),
     ...(name ? { name } : {}),
   });
   return data;
@@ -774,3 +782,17 @@ export async function updateAdminWidget(
 export async function deleteAdminWidget(id: number): Promise<void> {
   await api.delete(`/admin/dashboard-widgets/${id}`);
 }
+
+// ─── Administrator Ask AI report reviews ───────────────────────────
+
+export const fetchReportReviews = async (params: ReportReviewFilters): Promise<ReportReviewListResponse> =>
+  (await api.get('/admin/report-reviews', { params })).data;
+
+export const fetchReportReview = async (id: string): Promise<ReportReviewDetail> =>
+  (await api.get(`/admin/report-reviews/${id}`)).data;
+
+export const claimReportReview = async (id: string): Promise<ReportReviewDetail> =>
+  (await api.post(`/admin/report-reviews/${id}/claim`)).data;
+
+export const updateReportReview = async (id: string, input: ReportReviewUpdate): Promise<ReportReviewDetail> =>
+  (await api.patch(`/admin/report-reviews/${id}`, input)).data;

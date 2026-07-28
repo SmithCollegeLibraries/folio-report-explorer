@@ -195,6 +195,22 @@ export default function HistoryResultsModal({
           </div>
         )}
 
+        {item.reviewAdvisory && (
+          <aside
+            role="note"
+            className={`border-b border-l-4 px-6 py-3 text-sm flex-shrink-0 ${
+              item.reviewAdvisory.state === 'superseded'
+                ? 'border-b-sky-200 border-l-sky-500 bg-sky-50 text-sky-950'
+                : 'border-b-amber-200 border-l-amber-500 bg-amber-50 text-amber-950'
+            }`}
+          >
+            <div className="font-semibold">
+              {item.reviewAdvisory.state === 'superseded' ? 'Updated report available' : 'Report limitation noted'}
+            </div>
+            <p className="mt-0.5 leading-5">{item.reviewAdvisory.message}</p>
+          </aside>
+        )}
+
         {/* ── SQL collapsible ── */}
         <div className="border-b flex-shrink-0">
           <button

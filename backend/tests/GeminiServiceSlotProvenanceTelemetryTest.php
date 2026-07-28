@@ -201,7 +201,7 @@ $onlyHoldingResult = $responseBuilder->invoke(
     function (array $normalizedPayload) use (&$onlyHoldingPayload): array {
         $onlyHoldingPayload = $normalizedPayload;
         return [
-            'sql' => 'SELECT only_holding_stub',
+            'sql' => 'SELECT only_holding_stub AS title',
             'dataSource' => 'folio',
             'route' => 'builder_intent',
             'queryDefinition' => [
@@ -262,7 +262,7 @@ $implicitOnlyHoldingResult = $responseBuilder->invoke(
     function (array $normalizedPayload) use (&$onlyHoldingRemovedPayload): array {
         $onlyHoldingRemovedPayload = $normalizedPayload;
         return [
-            'sql' => 'SELECT only_holding_removed_stub',
+            'sql' => 'SELECT only_holding_removed_stub AS title',
             'dataSource' => 'folio',
             'route' => 'builder_intent',
             'queryDefinition' => [

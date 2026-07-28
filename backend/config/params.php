@@ -47,6 +47,7 @@ return [
         ),
         FILTER_VALIDATE_BOOLEAN
     ),
+    'aiReportReviewRetentionDays' => SettingsService::getAiReportReviewRetentionDays(),
     'schemaPath' => dirname(__DIR__) . '/data/folio_schema.json',
     'derivedPath' => dirname(__DIR__) . '/data/folio_derived_tables.json',
     'builderRelationshipOverlayPath' => dirname(__DIR__) . '/data/builder_relationship_overrides.json',

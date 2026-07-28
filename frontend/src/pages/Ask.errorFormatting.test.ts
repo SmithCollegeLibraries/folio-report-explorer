@@ -150,7 +150,7 @@ describe('Ask error formatting', () => {
     expect(input?.items?.[0].selectedValue).toBe('SC Rare Book Collection Reference');
   });
 
-  it('formats resolver trace entries for visible clarification context', () => {
+  it('formats safe resolver trace context without technical schema details', () => {
     const lines = AskPage.formatResolverTrace?.([
       {
         label: 'Checked locations, libraries, campuses, funds, material types, and other report filters for "Riverside"',
@@ -166,8 +166,9 @@ describe('Ask error formatting', () => {
 
     expect(lines).toEqual([
       'Checked locations, libraries, campuses, funds, material types, and other report filters for "Riverside": no match',
-      'Found possible match in contributor/author fields: Riverside Press (inventory.contributor__t.name)',
+      'Found possible match in contributor/author fields: Riverside Press',
     ]);
+    expect(lines?.join(' ')).not.toContain('inventory.contributor__t.name');
   });
 
   it('uses user-facing loading copy for resolver checks before SQL generation', () => {
@@ -247,7 +248,7 @@ describe('Ask error formatting', () => {
     const notice = AskPage.getExploratoryNoticeCopy?.({
       exploratoryNotice: {
         title: 'AI-assisted query',
-        message: 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+        message: 'I could not match this request to a verified report pattern, so I built a best-effort query with the assumptions shown here.',
         detail: 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
         reason: 'unsupported_query_family',
       },
@@ -256,6 +257,7 @@ describe('Ask error formatting', () => {
     expect(notice?.title).toBe('AI-assisted query');
     expect(notice?.message).toContain('best-effort query');
     expect(notice?.message).not.toContain('canonical compiler path');
+    expect(notice?.message).not.toMatch(/review.{0,80}sql|sql.{0,80}review/i);
     expect(notice?.detail).toContain('Similar wording');
   });
 
@@ -268,16 +270,27 @@ describe('Ask error formatting', () => {
     expect(notice?.title).toBe('AI-assisted query');
     expect(notice?.message).toContain('verified report pattern');
     expect(notice?.message).not.toContain('canonical compiler');
+    expect(notice?.message).not.toMatch(/review (the )?(results and )?sql/i);
+  });
+
+  it('keeps SQL inspection optional in progress copy', () => {
+    const copy = AskPage.getAskProgressCopy?.('building_sql_after_clarification');
+
+    expect(copy?.steps.join(' ')).not.toMatch(/review (the )?sql/i);
+  });
+
+  it('offers reuse choices without assigning SQL review to the user', () => {
+    expect(AskPage.ASK_REUSE_CANDIDATE_MESSAGE).toContain('use the previous query');
+    expect(AskPage.ASK_REUSE_CANDIDATE_MESSAGE).not.toMatch(/review (the )?sql/i);
   });
 
   it('does not treat advisory exploratory results as blocking clarifications', () => {
     expect(AskPage.shouldShowBlockingClarification?.({
       needsClarification: false,
-      needsExploratoryApproval: false,
       mode: 'exploratory',
       exploratoryNotice: {
         title: 'AI-assisted query',
-        message: 'I could not match this request to a verified report pattern, so I built a best-effort query. Review the results and SQL before using them.',
+        message: 'I could not match this request to a verified report pattern, so I built a best-effort query with the assumptions shown here.',
       },
     })).toBe(false);
 

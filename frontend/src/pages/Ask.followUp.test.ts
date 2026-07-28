@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildCurrentAskFollowUpContext, buildHistoryFollowUpContext, buildQueryFeedbackInput } from './Ask';
+import {
+  buildCurrentAskFollowUpContext,
+  buildGeneratedQuerySubmitOptions,
+  buildHistoryFollowUpContext,
+  buildQueryFeedbackInput,
+} from './Ask';
 import type { NlResponse } from '../types';
 
 describe('Ask follow-up context helpers', () => {
@@ -7,6 +12,7 @@ describe('Ask follow-up context helpers', () => {
     const result: NlResponse = {
       sql: 'SELECT inst.title FROM inventory.instance__t inst',
       dataSource: 'folio',
+      generationId: 'generation-123',
       assumptions: [{
         key: 'purchase_date_basis',
         label: 'Purchase date',
@@ -23,6 +29,7 @@ describe('Ask follow-up context helpers', () => {
       previousSql: 'SELECT inst.title FROM inventory.instance__t inst',
       previousColumns: ['title'],
       previousAssumptions: result.assumptions,
+      parentGenerationId: 'generation-123',
     });
   });
 
@@ -55,6 +62,18 @@ describe('Ask follow-up context helpers', () => {
       dataSource: 'folio',
       resultAccuracy: 'inaccurate',
       feedbackNote: 'Missing fund filter',
+    });
+  });
+
+  it('keeps the server generation ID on generated query submissions and reruns', () => {
+    expect(buildGeneratedQuerySubmitOptions(
+      { sql: 'SELECT 1', generationId: 'generation-123' },
+      'table',
+      { campus: 'Smith College' },
+    )).toEqual({
+      outputMode: 'table',
+      resolvedContext: { campus: 'Smith College' },
+      generationId: 'generation-123',
     });
   });
 });

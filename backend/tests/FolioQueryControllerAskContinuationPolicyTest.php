@@ -62,9 +62,11 @@ namespace {
     class Yii
     {
         public static $app;
+        public static $warnings = [];
 
         public static function warning($message, $category = 'application')
         {
+            self::$warnings[] = ['message' => $message, 'category' => $category];
         }
     }
 
@@ -98,6 +100,27 @@ namespace {
 
     require_once $controllerPath;
 
+    final class PolicyCapturingReviewService
+    {
+        public $received;
+
+        public function recordGeneration(array $context): array
+        {
+            $this->received = $context;
+            return ['generationId' => 'policy-generation', 'conversationId' => 'policy-conversation'];
+        }
+    }
+
+    final class PolicyFinalizingController extends \app\controllers\FolioQueryController
+    {
+        public $reviewService;
+
+        protected function administratorReviewService()
+        {
+            return $this->reviewService;
+        }
+    }
+
     Yii::$app = (object) [
         'response' => new FakeAskContinuationResponse(),
         'user' => (object) ['isGuest' => true, 'id' => null, 'identity' => null],
@@ -118,9 +141,11 @@ namespace {
     assertSameValue(false, $softFailure['needsExploratoryApproval'] ?? false, 'Soft Ask failures should not require exploratory approval.');
     assertSameValue('ask_generation_recovery', $softFailure['routeReason'] ?? null, 'Soft Ask failures should expose a stable recovery route reason.');
     assertSameValue('AI-assisted query', $softFailure['exploratoryNotice']['title'] ?? null, 'Soft Ask recovery should return advisory notice metadata.');
-    assertContainsText('could not produce fully validated SQL', $softFailure['exploratoryNotice']['message'] ?? '', 'Soft Ask recovery should use staff-facing advisory copy.');
+    assertContainsText('could not build a report I could safely run', $softFailure['exploratoryNotice']['message'] ?? '', 'Soft Ask recovery should use novice-facing recovery copy.');
     assertSameValue('exploratory', $softFailure['mode'] ?? null, 'Soft Ask recovery should be labeled exploratory.');
     assertSameValue(null, $softFailure['errorType'] ?? null, 'Generation recovery should remain distinct from SQL repair exhaustion.');
+    assertSameValue('rejected', $softFailure['validationSummary']['status'] ?? null, 'HTTP-200 generation recovery must use the no-SQL recovery contract.');
+    assertSameValue('Show MRBC Reference Collection titles', $softFailure['recoveryContext']['originalQuestion'] ?? null, 'Generation recovery must preserve the original question for Retry.');
 
     Yii::$app->response->statusCode = 200;
     $postgresFailure = $continuation->invoke(
@@ -136,6 +161,8 @@ namespace {
     assertContainsText('FOLIO reporting database', $postgresFailure['exploratoryNotice']['message'] ?? '', 'Postgres connectivity recovery should name the database connection issue.');
     assertContainsText('VPN', $postgresFailure['exploratoryNotice']['message'] ?? '', 'Postgres connectivity recovery should mention VPN/off-campus access.');
     assertSameValue('postgres_connectivity_recovery', $postgresFailure['route'] ?? null, 'Postgres connectivity should not be routed as SQL repair exhaustion.');
+    assertSameValue('rejected', $postgresFailure['validationSummary']['status'] ?? null, 'HTTP-200 connectivity recovery must use the no-SQL recovery contract.');
+    assertSameValue('Show MRBC Reference Collection titles', $postgresFailure['recoveryContext']['originalQuestion'] ?? null, 'Connectivity recovery must preserve the original question for Retry.');
 
     Yii::$app->response->statusCode = 200;
     $policyFailure = $continuation->invoke(
@@ -147,6 +174,34 @@ namespace {
 
     assertSameValue(403, Yii::$app->response->statusCode, 'Security and patron-PII policy failures should remain blocked.');
     assertContainsText('aggregate', $policyFailure['error'] ?? '', 'Policy blocks should offer an allowed aggregate-reporting alternative.');
+
+    $policyRecorder = new PolicyCapturingReviewService();
+    $policyController = new PolicyFinalizingController('folio-query', null);
+    $policyController->reviewService = $policyRecorder;
+    $finalize = new ReflectionMethod($policyController, 'finalizeAskResponse');
+    $finalizedPolicy = $finalize->invoke(
+        $policyController,
+        $policyFailure,
+        'List all patron emails',
+        17,
+        ['policyBlocked' => true]
+    );
+    assertSameValue(false, $policyRecorder->received['reviewRequired'] ?? null, 'Policy outcomes must be recorded without creating administrator review work.');
+    assertSameValue(true, $policyRecorder->received['policyBlocked'] ?? null, 'Persistence must receive trusted policy-block evidence.');
+    assertSameValue('policy-generation', $finalizedPolicy['generationId'] ?? null, 'Recorded policy outcomes must return their generation identifier.');
+    assertSameValue(false, $finalizedPolicy['reviewRequired'] ?? null, 'Ordinary policy responses must disclose that no review is required.');
+
+    $clarificationRecorder = new PolicyCapturingReviewService();
+    $policyController->reviewService = $clarificationRecorder;
+    $finalizedClarification = $finalize->invoke($policyController, [
+        'route' => 'clarification',
+        'routeReason' => 'ambiguous_reporting_meaning',
+        'needsClarification' => true,
+        'clarificationQuestion' => 'Which reporting meaning do you want?',
+    ], 'Show unused books', 17, []);
+    assertSameValue(false, $clarificationRecorder->received['reviewRequired'] ?? null, 'Clarification outcomes must be recorded without administrator review.');
+    assertSameValue(null, $clarificationRecorder->received['executionMode'] ?? null, 'Clarifications must not acquire an execution mode.');
+    assertSameValue(false, $finalizedClarification['reviewRequired'] ?? null, 'Clarification responses must not be review flagged.');
 
     $controllerSource = file_get_contents($controllerPath);
     assertContainsText(

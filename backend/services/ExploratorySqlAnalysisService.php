@@ -73,6 +73,391 @@ class ExploratorySqlAnalysisService
         ];
     }
 
+    public static function structuralSignature(string $sql): array
+    {
+        $analysis = self::normalizeCteIdentities(self::analyze($sql));
+        $sourceAliases = self::signatureSourceAliases($analysis['sourceAliases'] ?? []);
+        $outputAliases = self::canonicalOutputAliases($analysis['selectItems'] ?? [], $sourceAliases);
+
+        return [
+            'tables' => self::signatureTables($analysis),
+            'joins' => self::signatureJoins($analysis, $sourceAliases),
+            'predicates' => self::signaturePredicates($analysis, $sourceAliases),
+            'groupBy' => self::signatureGroupBy($analysis, $sourceAliases),
+            'measures' => self::signatureMeasures($analysis, $sourceAliases),
+            'outputs' => self::signatureOutputs($analysis, $sourceAliases),
+            'orderBy' => self::signatureOrderBy($analysis, $sourceAliases, $outputAliases),
+            'limit' => self::signatureLimit($analysis),
+            'ambiguous' => !empty($analysis['ambiguous']),
+        ];
+    }
+
+    public static function materiallyDifferent(string $initialSql, string $finalSql): bool
+    {
+        return self::structuralSignature($initialSql) !== self::structuralSignature($finalSql);
+    }
+
+    private static function sortedUnique(array $values): array
+    {
+        $values = array_values(array_unique($values));
+        sort($values, SORT_STRING);
+        return $values;
+    }
+
+    private static function normalizeCteIdentities(array $analysis): array
+    {
+        $identities = [];
+        $position = 0;
+        foreach (array_keys($analysis['ctes'] ?? []) as $name) {
+            $position++;
+            $identities[$name] = 'cte@' . $position;
+        }
+        if ($identities === []) {
+            return $analysis;
+        }
+
+        $analysis['sourceAliases'] = self::replaceCteSources(
+            $analysis['sourceAliases'] ?? [],
+            $identities
+        );
+        $analysis['joins'] = self::replaceCteJoinSources($analysis['joins'] ?? [], $identities);
+
+        $normalizedCtes = [];
+        foreach ($analysis['ctes'] as $name => $cte) {
+            $cte['dependencies'] = array_map(static function (string $dependency) use ($identities): string {
+                return $identities[$dependency] ?? $dependency;
+            }, $cte['dependencies'] ?? []);
+            $cte['sourceAliases'] = self::replaceCteSources($cte['sourceAliases'] ?? [], $identities);
+            $cte['joins'] = self::replaceCteJoinSources($cte['joins'] ?? [], $identities);
+            $normalizedCtes[$identities[$name]] = $cte;
+        }
+        $analysis['ctes'] = $normalizedCtes;
+        return $analysis;
+    }
+
+    private static function replaceCteSources(array $sourceAliases, array $identities): array
+    {
+        foreach ($sourceAliases as &$binding) {
+            if (($binding['kind'] ?? '') === 'cte' && isset($identities[$binding['source'] ?? ''])) {
+                $binding['source'] = $identities[$binding['source']];
+            }
+        }
+        unset($binding);
+        return $sourceAliases;
+    }
+
+    private static function replaceCteJoinSources(array $joins, array $identities): array
+    {
+        foreach ($joins as &$join) {
+            if (($join['sourceKind'] ?? '') === 'cte' && isset($identities[$join['source'] ?? ''])) {
+                $join['source'] = $identities[$join['source']];
+            }
+        }
+        unset($join);
+        return $joins;
+    }
+
+    private static function signatureTables(array $analysis): array
+    {
+        $tables = self::relationOccurrences(
+            $analysis['tables'] ?? [],
+            $analysis['sourceAliases'] ?? []
+        );
+        foreach ($analysis['ctes'] ?? [] as $identity => $cte) {
+            foreach (self::relationOccurrences(
+                $cte['tables'] ?? [],
+                $cte['sourceAliases'] ?? []
+            ) as $table) {
+                $tables[] = $identity . ':' . $table;
+            }
+        }
+        return self::sortedUnique($tables);
+    }
+
+    private static function relationOccurrences(array $tables, array $sourceAliases): array
+    {
+        $occurrences = [];
+        foreach (self::signatureSourceAliases($sourceAliases) as $binding) {
+            if (($binding['kind'] ?? '') === 'table') {
+                $occurrences[] = $binding['source'];
+            }
+        }
+        return $occurrences === [] ? $tables : $occurrences;
+    }
+
+    private static function signatureSourceAliases(array $sourceAliases): array
+    {
+        $totals = [];
+        foreach ($sourceAliases as $binding) {
+            $key = ($binding['kind'] ?? '') . ':' . ($binding['source'] ?? '');
+            $totals[$key] = ($totals[$key] ?? 0) + 1;
+        }
+
+        $occurrences = [];
+        foreach ($sourceAliases as $alias => &$binding) {
+            $key = ($binding['kind'] ?? '') . ':' . ($binding['source'] ?? '');
+            if (($totals[$key] ?? 0) < 2) {
+                continue;
+            }
+            $occurrences[$key] = ($occurrences[$key] ?? 0) + 1;
+            $binding['source'] .= '@' . $occurrences[$key];
+        }
+        unset($binding);
+        return $sourceAliases;
+    }
+
+    private static function canonicalJoins(array $joins, array $sourceAliases): array
+    {
+        $canonical = [];
+        foreach ($joins as $join) {
+            $canonical[] = [
+                'type' => $join['type'] ?? null,
+                'source' => $join['source'] ?? null,
+                'sourceKind' => $join['sourceKind'] ?? null,
+                'predicate' => self::canonicalExpression((string)($join['predicate'] ?? ''), $sourceAliases),
+            ];
+        }
+        usort($canonical, static function (array $left, array $right): int {
+            return strcmp(json_encode($left), json_encode($right));
+        });
+        return $canonical;
+    }
+
+    private static function signatureJoins(array $analysis, array $sourceAliases): array
+    {
+        $joins = self::canonicalJoins($analysis['joins'] ?? [], $sourceAliases);
+        foreach ($analysis['ctes'] ?? [] as $name => $cte) {
+            foreach (self::canonicalJoins(
+                $cte['joins'] ?? [],
+                self::signatureSourceAliases($cte['sourceAliases'] ?? [])
+            ) as $join) {
+                $joins[] = array_merge(['scope' => 'cte:' . $name], $join);
+            }
+        }
+        usort($joins, static function (array $left, array $right): int {
+            return strcmp(json_encode($left), json_encode($right));
+        });
+        return $joins;
+    }
+
+    private static function canonicalPredicates(array $predicates, array $sourceAliases): array
+    {
+        $predicatesByClause = [];
+        foreach (['where', 'having'] as $clause) {
+            $expression = $predicates[$clause] ?? null;
+            if ($expression === null || $expression === '') {
+                continue;
+            }
+            foreach (self::canonicalConjunction($expression, $sourceAliases) as $predicate) {
+                $predicatesByClause[] = $clause . ':' . $predicate;
+            }
+        }
+        return self::sortedUnique($predicatesByClause);
+    }
+
+    private static function canonicalConjunction(string $expression, array $sourceAliases): array
+    {
+        try {
+            $tokens = SqlSelectStructureService::tokenizeForAnalysis($expression);
+        } catch (\InvalidArgumentException $exception) {
+            return [self::canonicalExpression($expression, $sourceAliases)];
+        }
+        $parts = [];
+        $start = 0;
+        $base = self::baseDepth($tokens);
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) === $base && self::isKeyword($token, 'AND')) {
+                $parts[] = array_slice($tokens, $start, $index - $start);
+                $start = $index + 1;
+            }
+        }
+        $parts[] = array_slice($tokens, $start);
+
+        $expressions = array_map(static function (array $part) use ($sourceAliases): string {
+            return self::canonicalTokenExpression($part, $sourceAliases);
+        }, $parts);
+        return self::sortedUnique($expressions);
+    }
+
+    private static function signaturePredicates(array $analysis, array $sourceAliases): array
+    {
+        $predicates = self::canonicalPredicates($analysis['predicates'] ?? [], $sourceAliases);
+        foreach ($analysis['ctes'] ?? [] as $name => $cte) {
+            foreach (self::canonicalPredicates(
+                $cte['predicates'] ?? [],
+                self::signatureSourceAliases($cte['sourceAliases'] ?? [])
+            ) as $predicate) {
+                $predicates[] = 'cte:' . $name . ':' . $predicate;
+            }
+        }
+        return self::sortedUnique($predicates);
+    }
+
+    private static function canonicalExpressionSet(array $expressions, array $sourceAliases): array
+    {
+        return self::sortedUnique(self::canonicalExpressions($expressions, $sourceAliases));
+    }
+
+    private static function signatureGroupBy(array $analysis, array $sourceAliases): array
+    {
+        $groupBy = self::canonicalExpressionSet($analysis['groupBy'] ?? [], $sourceAliases);
+        foreach ($analysis['ctes'] ?? [] as $name => $cte) {
+            foreach (self::canonicalExpressionSet(
+                $cte['groupBy'] ?? [],
+                self::signatureSourceAliases($cte['sourceAliases'] ?? [])
+            ) as $expression) {
+                $groupBy[] = 'cte:' . $name . ':' . $expression;
+            }
+        }
+        return self::sortedUnique($groupBy);
+    }
+
+    private static function canonicalExpressions(array $expressions, array $sourceAliases): array
+    {
+        return array_map(static function ($expression) use ($sourceAliases): string {
+            return self::canonicalExpression((string)$expression, $sourceAliases);
+        }, $expressions);
+    }
+
+    private static function measureExpressions(array $selectItems, array $sourceAliases): array
+    {
+        $measures = [];
+        foreach ($selectItems as $item) {
+            if (!empty($item['aggregate'])) {
+                $measures[] = self::canonicalExpression((string)($item['expression'] ?? ''), $sourceAliases);
+            }
+        }
+        return $measures;
+    }
+
+    private static function signatureMeasures(array $analysis, array $sourceAliases): array
+    {
+        $measures = self::measureExpressions($analysis['selectItems'] ?? [], $sourceAliases);
+        foreach ($analysis['ctes'] ?? [] as $name => $cte) {
+            foreach (self::measureExpressions(
+                $cte['selectItems'] ?? [],
+                self::signatureSourceAliases($cte['sourceAliases'] ?? [])
+            ) as $measure) {
+                $measures[] = 'cte:' . $name . ':' . $measure;
+            }
+        }
+        return $measures;
+    }
+
+    private static function outputExpressions(array $selectItems, array $sourceAliases): array
+    {
+        return array_map(static function (array $item) use ($sourceAliases): string {
+            return self::canonicalExpression((string)($item['expression'] ?? ''), $sourceAliases);
+        }, $selectItems);
+    }
+
+    private static function signatureOutputs(array $analysis, array $sourceAliases): array
+    {
+        $outputs = self::outputExpressions($analysis['selectItems'] ?? [], $sourceAliases);
+        foreach ($analysis['ctes'] ?? [] as $name => $cte) {
+            foreach (self::outputExpressions(
+                $cte['selectItems'] ?? [],
+                self::signatureSourceAliases($cte['sourceAliases'] ?? [])
+            ) as $output) {
+                $outputs[] = 'cte:' . $name . ':' . $output;
+            }
+        }
+        return $outputs;
+    }
+
+    private static function canonicalOutputAliases(array $selectItems, array $sourceAliases): array
+    {
+        $aliases = [];
+        foreach ($selectItems as $item) {
+            if (($item['alias'] ?? null) !== null) {
+                $aliases[$item['alias']] = self::canonicalExpression(
+                    (string)($item['expression'] ?? ''),
+                    $sourceAliases
+                );
+            }
+        }
+        return $aliases;
+    }
+
+    private static function canonicalOrderBy(array $orderBy, array $sourceAliases, array $outputAliases): array
+    {
+        $canonical = [];
+        foreach ($orderBy as $item) {
+            $expression = (string)($item['expression'] ?? '');
+            $canonicalExpression = $outputAliases[$expression]
+                ?? self::canonicalExpression($expression, $sourceAliases);
+            $canonical[] = [
+                'expression' => $canonicalExpression,
+                'direction' => $item['direction'] ?? 'ASC',
+            ];
+        }
+        return $canonical;
+    }
+
+    private static function signatureOrderBy(
+        array $analysis,
+        array $sourceAliases,
+        array $outputAliases
+    ): array {
+        $orderBy = self::canonicalOrderBy($analysis['orderBy'] ?? [], $sourceAliases, $outputAliases);
+        foreach ($analysis['ctes'] ?? [] as $name => $cte) {
+            $cteSourceAliases = self::signatureSourceAliases($cte['sourceAliases'] ?? []);
+            $cteOutputAliases = self::canonicalOutputAliases($cte['selectItems'] ?? [], $cteSourceAliases);
+            foreach (self::canonicalOrderBy(
+                $cte['orderBy'] ?? [],
+                $cteSourceAliases,
+                $cteOutputAliases
+            ) as $item) {
+                $orderBy[] = array_merge(['scope' => 'cte:' . $name], $item);
+            }
+        }
+        return $orderBy;
+    }
+
+    private static function signatureLimit(array $analysis)
+    {
+        if (empty($analysis['ctes'])) {
+            return $analysis['limit'] ?? null;
+        }
+
+        $cteLimits = [];
+        foreach ($analysis['ctes'] as $name => $cte) {
+            $cteLimits[$name] = $cte['limit'] ?? null;
+        }
+        ksort($cteLimits, SORT_STRING);
+        return [
+            'final' => $analysis['limit'] ?? null,
+            'ctes' => $cteLimits,
+        ];
+    }
+
+    private static function canonicalExpression(string $expression, array $sourceAliases): string
+    {
+        try {
+            $tokens = SqlSelectStructureService::tokenizeForAnalysis($expression);
+        } catch (\InvalidArgumentException $exception) {
+            return trim($expression);
+        }
+        return self::canonicalTokenExpression($tokens, $sourceAliases);
+    }
+
+    private static function canonicalTokenExpression(array $tokens, array $sourceAliases): string
+    {
+        foreach ($tokens as $index => &$token) {
+            if (($token['kind'] ?? '') !== 'identifier'
+                || ($tokens[$index + 1]['value'] ?? '') !== '.') {
+                continue;
+            }
+            $alias = $token['value'];
+            if (isset($sourceAliases[$alias]['source'])) {
+                $token['value'] = $sourceAliases[$alias]['source'];
+                $token['quoted'] = false;
+            }
+        }
+        unset($token);
+        return self::expressionText($tokens);
+    }
+
     private static function parseCtes(array $tokens): array
     {
         $result = ['ctes' => [], 'finalTokens' => $tokens, 'ambiguous' => false];
@@ -137,6 +522,8 @@ class ExploratorySqlAnalysisService
                 'predicates' => $scope['predicates'],
                 'groupBy' => $scope['groupBy'],
                 'joins' => $scope['joins'],
+                'orderBy' => $scope['orderBy'],
+                'limit' => $scope['limit'],
                 'ambiguous' => $scope['ambiguous'],
             ];
             $knownCtes[] = $name;
@@ -330,6 +717,7 @@ class ExploratorySqlAnalysisService
         }
         $scope['predicates'] = [
             'where' => $whereTokens === [] ? null : self::expressionText($whereTokens),
+            'having' => null,
             'joins' => array_values(array_filter(array_column($scope['joins'], 'predicate'))),
             'dateColumns' => self::datePredicateColumns($allPredicateTokens),
             'dateWindows' => $dateWindows,
@@ -338,6 +726,15 @@ class ExploratorySqlAnalysisService
             'columnComparisons' => $columnComparisons,
         ];
         if ($predicateAmbiguous) {
+            $scope['ambiguous'] = true;
+        }
+        $havingTokens = self::clauseSlice(
+            $tokens,
+            'HAVING',
+            ['ORDER BY', 'LIMIT', 'OFFSET', 'FETCH', 'WINDOW', 'FOR']
+        );
+        $scope['predicates']['having'] = $havingTokens === [] ? null : self::expressionText($havingTokens);
+        if ($havingTokens !== [] && !empty(self::analyzeConjunction($havingTokens)['ambiguous'])) {
             $scope['ambiguous'] = true;
         }
         foreach ($scope['joins'] as &$join) {
@@ -1388,6 +1785,7 @@ class ExploratorySqlAnalysisService
             'selectItems' => [],
             'predicates' => [
                 'where' => null,
+                'having' => null,
                 'joins' => [],
                 'dateColumns' => [],
                 'dateWindows' => [],

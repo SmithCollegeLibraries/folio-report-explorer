@@ -171,18 +171,44 @@ namespace {
     $completed->status = 'completed';
     $completed->user_id = 1;
     $completed->result_columns = json_encode(['title']);
+    $completed->metadata = json_encode([
+        'askAiProvenance' => [
+            'generationId' => 'generation-from-history-job',
+        ],
+    ]);
     \app\models\QueryJob::$jobs = ['done-job' => $completed];
     Yii::$app->response->statusCode = 200;
 
     $historyContext = $normalize->invoke($controller, [
         'jobId' => 'done-job',
         'source' => 'history',
+        'parentGenerationId' => 'spoofed-client-generation',
     ]);
 
     assertSameValue('history', $historyContext['source'] ?? null, 'History follow-up context should preserve the history source.');
     assertSameValue('Original MRBC title list', $historyContext['previousPrompt'] ?? null, 'History follow-up context should use the job name as the previous prompt.');
     assertSameValue('SELECT inst.title FROM inventory.instance__t inst', $historyContext['previousSql'] ?? null, 'History follow-up context should use stored job SQL.');
     assertSameValue(['title'], $historyContext['previousColumns'] ?? null, 'History follow-up context should expose stored result columns.');
+    assertSameValue('generation-from-history-job', $historyContext['parentGenerationId'] ?? null, 'History follow-up lineage must come from server-written job provenance, not client context.');
+    $resolveParent = new ReflectionMethod($controller, 'resolveAskParentGenerationId');
+    assertSameValue(
+        'generation-from-history-job',
+        $resolveParent->invoke(
+            $controller,
+            ['parentGenerationId' => 'spoofed-client-generation'],
+            $historyContext
+        ),
+        'Server-written history lineage must override a client-supplied parent generation.'
+    );
+    assertSameValue(
+        'generation-from-current-result',
+        $resolveParent->invoke(
+            $controller,
+            ['parentGenerationId' => 'generation-from-current-result'],
+            ['source' => 'ask']
+        ),
+        'Current Ask follow-ups must carry the top-level parent generation supplied by the current result.'
+    );
 
     $longPrompt = 'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.';
     $truncated = new \app\models\QueryJob();

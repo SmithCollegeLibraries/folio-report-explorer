@@ -28,9 +28,9 @@ assertContainsText(
     'Invalid structured intent responses should log a legacy fallback route instead of surfacing a builder error.'
 );
 assertContainsText(
-    '$fallback = self::generateSql($prompt, $campus, true);',
+    '$fallback = self::generateSql($prompt, $campus, true, false, $originalQuestion);',
     $source,
-    'Invalid structured intent responses should retry through legacy SQL generation.'
+    'Invalid structured intent responses should retry through legacy SQL generation while preserving the raw question.'
 );
 assertContainsText(
     '$fallback[\'routeReason\'] = $reason;',

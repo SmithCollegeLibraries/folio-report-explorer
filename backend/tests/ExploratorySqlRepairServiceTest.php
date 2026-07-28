@@ -60,21 +60,35 @@ $outcome = ExploratorySqlRepairService::run(
         'campus' => 'main',
         'assumptions' => [['key' => 'period', 'value' => 'current_year']],
         'attemptedPlan' => 'Read inventory items.',
+        'attemptedPlanProvenance' => 'server_defaults',
+        'modelCandidateExplanation' => 'The model tried an inventory item query.',
         'semanticContract' => ['contractVersion' => 1, 'applicable' => false],
         'unsafeExtra' => 'must not reach the attempt',
     ]
 );
 
 assertSameValue('validated', $outcome['status'], 'A repairable first failure should be repaired.');
-assertSameValue(['sql' => 'SELECT id FROM inventory.item__t'], $outcome['result'], 'The validated attempt result should be returned.');
+assertSameValue('SELECT id FROM inventory.item__t', $outcome['result']['sql'] ?? null, 'The validated attempt result should be returned.');
 assertSameValue(1, $outcome['repairAttempts'], 'One repair should be recorded.');
+assertSameValue(
+    [
+        'initialSql' => 'SELECT bad_column FROM inventory.item__t',
+        'finalSql' => 'SELECT id FROM inventory.item__t',
+        'repairAttempts' => 1,
+    ],
+    $outcome['result']['_askEvidence'] ?? null,
+    'A repaired result must retain the genuine initial candidate, final candidate, and repair count as trusted internal evidence.'
+);
 assertSameValue(2, $calls, 'Only initial generation and one repair should run.');
 assertSameValue(
     [
         'originalQuestion' => 'Show items',
+        'generationPrompt' => '',
         'campus' => 'main',
         'assumptions' => [['key' => 'period', 'value' => 'current_year']],
         'attemptedPlan' => 'Read inventory items.',
+        'attemptedPlanProvenance' => 'server_defaults',
+        'modelCandidateExplanation' => 'The model tried an inventory item query.',
         'semanticContract' => ['contractVersion' => 1, 'applicable' => false],
         'safeViolations' => [],
         'repairNumber' => 0,
@@ -122,6 +136,9 @@ assertSameValue(
 assertFalseValue(isset($exhausted['result']), 'Exhaustion must not expose an unvalidated result.');
 assertFalseValue(isset($exhausted['candidateSql']), 'Exhaustion must not expose candidate SQL.');
 assertFalseValue(isset($exhausted['message']), 'Exhaustion must not expose an internal exception message.');
+assertSameValue('SELECT internal_candidate_1', $exhausted['_askEvidence']['initialSql'] ?? null, 'Exhausted trusted evidence must retain the initial rejected candidate.');
+assertSameValue('SELECT internal_candidate_3', $exhausted['_askEvidence']['finalSql'] ?? null, 'Exhausted trusted evidence must retain the last rejected candidate.');
+assertSameValue(2, $exhausted['_askEvidence']['repairAttempts'] ?? null, 'Exhausted trusted evidence must retain the bounded repair count.');
 
 $policyCalls = 0;
 try {
@@ -184,6 +201,8 @@ assertSameValue(2, $preflightOutcome['repairAttempts'], 'A successful remaining 
 assertSameValue(1, $preflightCalls, 'One used repair should leave only one repair call available.');
 assertSameValue(2, $preflightContexts[0]['repairNumber'], 'The remaining repair should preserve shared repair numbering.');
 assertSameValue('database_preflight', $preflightContexts[0]['validatorStage'], 'The remaining repair should receive the preflight stage.');
+assertSameValue('SELECT missing FROM inventory.item__t', $preflightOutcome['result']['_askEvidence']['initialSql'] ?? null, 'A supplied preflight failure candidate must become the initial trusted candidate when no older candidate is available.');
+assertSameValue('SELECT id FROM inventory.item__t', $preflightOutcome['result']['_askEvidence']['finalSql'] ?? null, 'A successful preflight repair must retain its final candidate.');
 
 $semanticViolations = [[
     'key' => 'purchase_date_basis',
@@ -217,10 +236,14 @@ assertSameValue(
     $semanticOutcome['unmetRequirements'],
     'Recovery should contain stable keys and user-readable labels only.'
 );
+$ordinarySemanticOutcome = $semanticOutcome;
+unset($ordinarySemanticOutcome['_askEvidence']);
 assertFalseValue(
-    strpos(json_encode($semanticOutcome), 'private_candidate_') !== false,
-    'Recovery must not expose rejected SQL.'
+    strpos(json_encode($ordinarySemanticOutcome), 'private_candidate_') !== false,
+    'Recovery fields outside the trusted envelope must not expose rejected SQL.'
 );
+assertSameValue('SELECT private_candidate_1', $semanticOutcome['_askEvidence']['initialSql'] ?? null, 'Trusted semantic exhaustion evidence must retain the first candidate.');
+assertSameValue('SELECT private_candidate_3', $semanticOutcome['_askEvidence']['finalSql'] ?? null, 'Trusted semantic exhaustion evidence must retain the last candidate.');
 assertFalseValue(
     strpos(json_encode($semanticOutcome), 'raw semantic evidence') !== false,
     'Recovery must not expose internal evidence.'

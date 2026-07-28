@@ -59,6 +59,22 @@ function assertGeneratedJsonContains(string $needle, string $haystack, string $m
     }
 }
 
+function assertGeneratedJsonNotContains(string $needle, string $haystack, string $message): void
+{
+    if (strpos($haystack, $needle) !== false) {
+        fwrite(STDERR, $message . "\nUnexpected: {$needle}\nActual:\n{$haystack}\n");
+        exit(1);
+    }
+}
+
+function assertGeneratedJsonSame($expected, $actual, string $message): void
+{
+    if ($expected !== $actual) {
+        fwrite(STDERR, $message . "\nExpected: " . var_export($expected, true) . "\nActual: " . var_export($actual, true) . "\n");
+        exit(1);
+    }
+}
+
 $resolution = ReferenceResolverService::resolvePrompt('Show me all of the items in josten treasure and treasure folio.');
 $guidance = implode("\n", $resolution['guidanceLines'] ?? []);
 assertGeneratedJsonTrue(empty($resolution['needsClarification']), 'Generated JSON should confidently resolve Josten Treasure and Treasure Folio.');
@@ -72,5 +88,54 @@ assertGeneratedJsonContains("inventory.loclibrary__t.name = 'SC Josten Library'"
 $codeResolution = ReferenceResolverService::resolvePrompt('Show me items in location code SJTR.');
 $codeGuidance = implode("\n", $codeResolution['guidanceLines'] ?? []);
 assertGeneratedJsonContains("inventory.location__t.name = 'SC Josten Treasure'", $codeGuidance, 'Generated JSON should resolve SJTR as inventory.location__t.');
+
+$videoResolution = ReferenceResolverService::resolvePrompt(
+    'Find all of the video formats at Hillyer library. This can be VHS or DVD.'
+);
+$videoGuidance = implode("\n", $videoResolution['guidanceLines'] ?? []);
+assertGeneratedJsonTrue(empty($videoResolution['needsClarification']), 'The reported prompt must resolve from the active generated JSON bundle.');
+assertGeneratedJsonContains("inventory.loclibrary__t.name = 'SC Hillyer Art Library'", $videoGuidance, 'Hillyer must resolve as a library.');
+assertGeneratedJsonContains("'Videocassette'", $videoGuidance, 'VHS must resolve through the material-type cache.');
+assertGeneratedJsonContains("'DVD/Blu-ray'", $videoGuidance, 'DVD must resolve through the material-type cache.');
+assertGeneratedJsonNotContains('HC DVD', $videoGuidance, 'Material vocabulary must not drift to the Hampshire location.');
+
+$videoFilters = [];
+foreach (($videoResolution['resolvedFilters'] ?? []) as $filter) {
+    $videoFilters[$filter['dimension'] ?? ''] = $filter;
+}
+assertGeneratedJsonSame(
+    'inventory.loclibrary__t',
+    $videoFilters['library']['source_table'] ?? null,
+    'The structured Hillyer filter must retain the canonical library table.'
+);
+assertGeneratedJsonSame(
+    ['SC Hillyer Art Library'],
+    $videoFilters['library']['values'] ?? null,
+    'The structured Hillyer filter must retain the exact canonical library value.'
+);
+assertGeneratedJsonSame(
+    'Smith College',
+    $videoFilters['library']['value_metadata']['SC Hillyer Art Library']['campus_name'] ?? null,
+    'The structured Hillyer filter must retain Smith College campus context.'
+);
+assertGeneratedJsonSame(
+    'inventory.material_type__t',
+    $videoFilters['material_type']['source_table'] ?? null,
+    'The structured video filter must retain the canonical material-type table.'
+);
+assertGeneratedJsonSame(
+    ['Videocassette', 'DVD/Blu-ray'],
+    $videoFilters['material_type']['values'] ?? null,
+    'The structured video filter must retain exact canonical material values in selector order.'
+);
+assertGeneratedJsonSame(
+    ['vhs', 'dvd'],
+    $videoFilters['material_type']['vocabulary_terms'] ?? null,
+    'The structured video filter must retain the explicit vocabulary terms.'
+);
+assertGeneratedJsonTrue(
+    !in_array('HC DVD', $videoFilters['material_type']['values'] ?? [], true),
+    'The structured material filter must exclude the HC DVD location.'
+);
 
 fwrite(STDOUT, "ReferenceResolver generated JSON test passed\n");

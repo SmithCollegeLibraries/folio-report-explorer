@@ -360,6 +360,11 @@ assertContainsText(
     'Only-holding location listings should include holdings call number when requested.'
 );
 assertContainsText(
+    'ii.title AS title',
+    $listingOnlyHoldingSql,
+    'Only-holding location listings must alias title for explicit output validation.'
+);
+assertContainsText(
     'WHERE NOT EXISTS (',
     $listingOnlyHoldingSql,
     'Only-holding location listing queries should include a NOT EXISTS anti-holdings predicate.'

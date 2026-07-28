@@ -21,6 +21,11 @@ use app\services\ReferenceCacheRefreshService;
 use app\services\ReferenceJsonBundleService;
 use app\services\SqlPreflightService;
 use app\services\SqlSelectStructureService;
+use app\services\AdministratorReviewService;
+use app\services\AskConfidenceClassificationService;
+use app\services\AskGenerationEvidenceService;
+use app\services\AskResponseContractService;
+use app\services\AskUserExplanationService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -32,6 +37,11 @@ use app\models\DummyIdentity;
 use Firebase\JWT\JWT;
 
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
+require_once __DIR__ . '/../services/AdministratorReviewService.php';
+require_once __DIR__ . '/../services/AskConfidenceClassificationService.php';
+require_once __DIR__ . '/../services/AskGenerationEvidenceService.php';
+require_once __DIR__ . '/../services/AskResponseContractService.php';
+require_once __DIR__ . '/../services/AskUserExplanationService.php';
 
 /**
  * FolioQueryController — REST API for the FOLIO Report Explorer.
@@ -69,7 +79,7 @@ class FolioQueryController extends Controller
             'class' => \yii\filters\Cors::class,
             'cors' => [
                 'Origin' => ['*'],
-                'Access-Control-Request-Method' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+                'Access-Control-Request-Method' => ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
                 'Access-Control-Request-Headers' => ['*'],
                 'Access-Control-Allow-Credentials' => false,
                 'Access-Control-Max-Age' => 86400,
@@ -111,11 +121,24 @@ class FolioQueryController extends Controller
                             'local-alloc-delete', 'local-alloc-copy-year',
                             'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
                             'admin-widget-create', 'admin-widget-update', 'admin-widget-delete',
+                            'report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update',
                         ],
                         'roles' => ['@'],
                         'matchCallback' => function ($rule, $action) {
-                            $identity = $this->getAppIdentity();
-                            return $identity && $identity->isAdmin();
+                            return $this->isPersistedAdministrator();
+                        },
+                    ],
+                    // Stable API denial for authenticated non-administrators.
+                    [
+                        'allow' => false,
+                        'actions' => [
+                            'report-review-list', 'report-review-detail',
+                            'report-review-claim', 'report-review-update',
+                        ],
+                        'roles' => ['@'],
+                        'denyCallback' => function ($rule, $action) {
+                            Yii::$app->response->statusCode = 403;
+                            Yii::$app->response->data = ['error' => 'Forbidden'];
                         },
                     ],
                     // Any authenticated user
@@ -196,6 +219,38 @@ class FolioQueryController extends Controller
             return false;
         }
         return true;
+    }
+
+    /**
+     * Enforce administrator access in every environment and return stable API copy.
+     * Authentication still runs through AccessControl in production, while this
+     * guard owns the role check and stable response in every environment.
+     *
+     * @return array|null
+     */
+    private function requireAdministrator(): ?array
+    {
+        if ($this->isPersistedAdministrator()) {
+            return null;
+        }
+
+        Yii::$app->response->statusCode = 403;
+        return ['error' => 'Forbidden'];
+    }
+
+    private function isPersistedAdministrator(): bool
+    {
+        $user = Yii::$app->user;
+        $identity = $user->identity;
+        if ($user->isGuest || !($identity instanceof User)) {
+            return false;
+        }
+
+        return User::find()->where([
+            'id' => (int)$identity->getId(),
+            'role' => 'admin',
+            'is_approved' => 1,
+        ])->exists();
     }
 
     /**
@@ -359,11 +414,13 @@ class FolioQueryController extends Controller
      */
     private function validateAndRepairNlResult(
         array $result,
-        string $prompt,
+        string $rawQuestion,
         $campus,
         ?callable $preflight = null,
-        ?callable $repair = null
+        ?callable $repair = null,
+        ?string $generationPrompt = null
     ): array {
+        $generationPrompt = $generationPrompt === null ? $rawQuestion : $generationPrompt;
         if (isset($result['sql']) || array_key_exists('repairAttempts', $result)) {
             $result['repairAttempts'] = $this->clampExploratoryRepairAttempts(
                 $result['repairAttempts'] ?? 0
@@ -372,19 +429,20 @@ class FolioQueryController extends Controller
         $preflight = $preflight ?: function (string $sql, string $dataSource): array {
             return $this->estimateQueryComplexity($sql, $dataSource) ?? [];
         };
-        $repair = $repair ?: function (string $question, $campusScope, array $currentResult, string $error): array {
+        $repair = $repair ?: function (string $question, $campusScope, array $currentResult, string $error) use ($generationPrompt): array {
             return GeminiService::repairExploratorySqlAfterPreflight(
                 $question,
                 $campusScope,
                 $currentResult,
-                $error
+                $error,
+                $generationPrompt
             );
         };
 
         while (isset($result['sql'])) {
             $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
             if (!$this->isSafeSelectNlSql((string)$result['sql'])) {
-                return $this->buildUnsafeGeneratedSqlResponse($result, $prompt, $campus);
+                return $this->buildUnsafeGeneratedSqlResponse($result, $rawQuestion, $campus);
             }
 
             if (!empty($result['semanticContractApplicable'])
@@ -392,7 +450,7 @@ class FolioQueryController extends Controller
             ) {
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     $campus,
                     'semantic_coverage_gap'
                 );
@@ -402,11 +460,11 @@ class FolioQueryController extends Controller
             try {
                 $estimate = $preflight((string)$result['sql'], $dataSource);
             } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'cancelled', 'database_cancelled');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
                 throw $exception;
             }
             if (!isset($estimate['error'])) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'validated', 'validated');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'validated', 'validated');
                 return $result;
             }
 
@@ -420,39 +478,52 @@ class FolioQueryController extends Controller
                 [
                     'route' => $result['route'] ?? null,
                     'routeReason' => $result['routeReason'] ?? null,
-                    'promptFingerprint' => $this->fingerprintPrompt($prompt),
+                    'promptFingerprint' => $this->fingerprintPrompt($rawQuestion),
                     'repairAttempts' => (int)($result['repairAttempts'] ?? 0),
                 ]
             );
 
             if ($this->isAskPostgresConnectivityFailure($error)) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'connectivity_failure', 'database_connectivity');
-                return $this->buildAskPostgresConnectivityRecovery(
-                    $prompt,
-                    $campus,
-                    'ask_sql_preflight_recovery'
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'connectivity_failure', 'database_connectivity');
+                return $this->attachTrustedAskEvidence(
+                    $this->buildAskPostgresConnectivityRecovery(
+                        $rawQuestion,
+                        $campus,
+                        'ask_sql_preflight_recovery'
+                    ),
+                    $result
                 );
             }
             if ($this->isAskPreflightCancellationFailure($error)) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'cancelled', 'database_cancelled');
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
                 throw new \app\exceptions\DatabaseQueryCancelledException();
             }
             if ($this->isAskPreflightPolicyFailure($error)) {
-                $this->logExploratoryTerminalOutcome($result, $prompt, 'policy_blocked', 'policy_blocked');
-                return $this->buildAskContinuationFromFailure(
-                    new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.'),
-                    $prompt,
-                    $campus,
-                    'ask_sql_preflight_recovery'
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'policy_blocked', 'policy_blocked');
+                return $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure(
+                        new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.'),
+                        $rawQuestion,
+                        $campus,
+                        'ask_sql_preflight_recovery'
+                    ),
+                    $result
                 );
             }
 
             if (!$this->isExploratoryRepairEligible($result)) {
-                return $this->buildAskContinuationFromFailure(
-                    new \RuntimeException('Generated query failed database validation.'),
-                    $prompt,
-                    $campus,
-                    'ask_sql_preflight_recovery'
+                $result['_askEvidence'] = array_merge(
+                    is_array($result['_askEvidence'] ?? null) ? $result['_askEvidence'] : [],
+                    ['validationStatus' => 'rejected']
+                );
+                return $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure(
+                        new \RuntimeException('Generated query failed database validation.'),
+                        $rawQuestion,
+                        $campus,
+                        'ask_sql_preflight_recovery'
+                    ),
+                    $result
                 );
             }
 
@@ -460,23 +531,29 @@ class FolioQueryController extends Controller
             if ($repairAttempts >= 2) {
                 $this->logExploratoryTerminalOutcome(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     'exhausted',
                     $this->classifyPreflightErrorFamily($error)
                 );
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     $campus,
                     $this->classifyPreflightErrorFamily($error)
                 );
             }
 
             $previousResult = $result;
-            $repairResult = $repair($prompt, $campus, $result, $error);
+            $repairResult = $repair($rawQuestion, $campus, $result, $error);
             if (!is_array($repairResult)) {
                 $repairResult = [];
             }
+            $previousEvidence = is_array($previousResult['_askEvidence'] ?? null)
+                ? $previousResult['_askEvidence']
+                : [];
+            $repairEvidence = is_array($repairResult['_askEvidence'] ?? null)
+                ? $repairResult['_askEvidence']
+                : [];
             unset($previousResult['semanticValidation']);
             $result = array_replace($previousResult, $repairResult);
             if (!array_key_exists('sql', $repairResult)) {
@@ -491,13 +568,22 @@ class FolioQueryController extends Controller
             );
             $result['mode'] = 'exploratory';
             $result['route'] = 'exploratory';
+            if ($previousEvidence !== [] || $repairEvidence !== []) {
+                $result['_askEvidence'] = array_merge($previousEvidence, $repairEvidence, [
+                    'initialSql' => $previousEvidence['initialSql']
+                        ?? $repairEvidence['initialSql']
+                        ?? null,
+                    'finalSql' => isset($result['sql']) ? (string)$result['sql'] : ($repairEvidence['finalSql'] ?? null),
+                    'repairAttempts' => $result['repairAttempts'],
+                ]);
+            }
 
             if (!isset($result['sql'])) {
                 $failureCategory = (string)($result['validationSummary']['failureCategory']
                     ?? $this->classifyPreflightErrorFamily($error));
                 return $this->buildExploratoryRepairExhaustedResponse(
                     $result,
-                    $prompt,
+                    $rawQuestion,
                     $campus,
                     $failureCategory
                 );
@@ -596,12 +682,9 @@ class FolioQueryController extends Controller
         $semanticExhaustion = $validatorStage === 'semantic_conformance';
         $response = [
             'needsClarification' => false,
-            'needsExploratoryApproval' => false,
             'mode' => 'exploratory',
             'errorType' => 'sql_repair_exhausted',
-            'message' => $semanticExhaustion
-                ? "I couldn't produce a report that matched every checked requirement. Nothing ran or changed. Your request is preserved so you can retry or adjust an assumption."
-                : 'I could not validate a safe executable query after the automatic repair attempts. Your request and assumptions are preserved below so you can retry or adjust them.',
+            'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
             'route' => 'exploratory_recovery',
             'routeReason' => 'sql_repair_exhausted',
             'validationSummary' => [
@@ -620,6 +703,22 @@ class FolioQueryController extends Controller
                 $response[$field] = $result[$field];
             }
         }
+        if (($result['_attemptedPlanProvenance'] ?? null) === 'server_defaults'
+            && isset($response['attemptedPlan'])
+        ) {
+            $response['_attemptedPlanProvenance'] = 'server_defaults';
+        }
+
+        $resultEvidence = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
+        $response['_askEvidence'] = array_merge($resultEvidence, [
+            'finalSql' => isset($result['sql'])
+                ? (string)$result['sql']
+                : ($resultEvidence['finalSql'] ?? null),
+            'repairAttempts' => $repairAttempts,
+            'validationStatus' => 'exhausted',
+        ]);
 
         if ($semanticExhaustion) {
             $response['validationSummary']['validatorStage'] = 'semantic_conformance';
@@ -703,6 +802,7 @@ class FolioQueryController extends Controller
         $response['message'] = "I couldn't safely turn this request into a report. Nothing ran or changed. Retry the request or refine one part of it.";
         $response['routeReason'] = 'unsafe_generated_sql';
         $response['validationSummary']['status'] = 'rejected';
+        $response['_askEvidence']['validationStatus'] = 'rejected';
         unset($response['sql']);
         return $response;
     }
@@ -800,14 +900,23 @@ class FolioQueryController extends Controller
         $previousColumns = method_exists($job, 'getDecodedColumns')
             ? $job->getDecodedColumns()
             : [];
+        $metadata = $this->decodeQueryJobMetadata($job);
+        $askAiProvenance = is_array($metadata['askAiProvenance'] ?? null)
+            ? $metadata['askAiProvenance']
+            : [];
+        $parentGenerationId = trim((string)($askAiProvenance['generationId'] ?? ''));
 
-        return [
+        $resolved = [
             'source' => 'history',
             'jobId' => $jobId,
             'previousPrompt' => $this->getQueryJobOriginalPrompt($job) ?: 'Previous historical query',
             'previousSql' => $previousSql,
             'previousColumns' => is_array($previousColumns) ? array_values(array_filter(array_map('strval', $previousColumns))) : [],
         ];
+        if ($parentGenerationId !== '') {
+            $resolved['parentGenerationId'] = $parentGenerationId;
+        }
+        return $resolved;
     }
 
     /**
@@ -1159,6 +1268,8 @@ class FolioQueryController extends Controller
     public function actionQuerySubmit()
     {
         $body = Yii::$app->request->getBodyParams();
+        $executionGenerationRequest = null;
+        $administratorReviewService = null;
 
         $sql = $body['sql'] ?? null;
         $params = $body['params'] ?? [];
@@ -1191,6 +1302,30 @@ class FolioQueryController extends Controller
         }
 
         $sql = SqlBuilderService::normalizeForExecution($sql);
+
+        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
+        if ((string)$source === 'nl' && $generationId !== '') {
+            $userId = $this->getCurrentUserId();
+            if ($userId === null) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'This generated query is not available for execution.'];
+            }
+            $administratorReviewService = $this->administratorReviewService();
+            try {
+                $administratorReviewService->assertExecutionGenerationOwned(
+                    $generationId,
+                    $userId
+                );
+            } catch (\DomainException $exception) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'This generated query is not available for execution.'];
+            }
+            $executionGenerationRequest = [
+                'generationId' => $generationId,
+                'userId' => $userId,
+                'normalizedSql' => $sql,
+            ];
+        }
 
         // Safety validation
         try {
@@ -1259,9 +1394,51 @@ class FolioQueryController extends Controller
                 $job->estimated_cost = ($cost !== null) ? min((float)$cost, 1.0e15) : null;
             }
         }
-        if (!$job->save()) {
+        $jobSaveErrors = [];
+        try {
+            QueryJob::getDb()->transaction(function () use (
+                $job,
+                $executionGenerationRequest,
+                $administratorReviewService,
+                &$jobSaveErrors
+            ): void {
+                if (!$job->save()) {
+                    $jobSaveErrors = $job->errors;
+                    throw new \RuntimeException('query_job_save_failed');
+                }
+
+                if (
+                    $executionGenerationRequest !== null
+                    && $administratorReviewService !== null
+                ) {
+                    $executionGeneration = $administratorReviewService
+                        ->resolveExecutionGeneration(
+                            $executionGenerationRequest['generationId'],
+                            $executionGenerationRequest['userId'],
+                            $executionGenerationRequest['normalizedSql']
+                        );
+                    $administratorReviewService->linkExecutionGeneration(
+                        $executionGeneration['generation'],
+                        (string)$job->id,
+                        $executionGeneration['provenanceGeneration']
+                    );
+                }
+            });
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'This generated query is not available for execution.'];
+        } catch (\Throwable $exception) {
+            Yii::warning(
+                'Atomic query submission persistence failed: '
+                    . $exception->getMessage(),
+                'query.submit'
+            );
             Yii::$app->response->statusCode = 500;
-            return ['error' => 'Failed to create job', 'details' => $job->errors];
+            $response = ['error' => 'Failed to create job'];
+            if ($jobSaveErrors !== []) {
+                $response['details'] = $jobSaveErrors;
+            }
+            return $response;
         }
 
         Yii::$app->response->statusCode = 202;
@@ -1626,7 +1803,14 @@ class FolioQueryController extends Controller
                     'nl2sql.prompt_block'
                 );
                 Yii::$app->response->statusCode = 403;
-                return ['error' => 'Queries about patron personal information or individual patron records are not supported. This system provides aggregate and operational library reporting only.'];
+                return $this->finalizeAskResponse([
+                    'error' => 'Queries about patron personal information or individual patron records are not supported. This system provides aggregate and operational library reporting only.',
+                    'route' => 'blocked',
+                    'routeReason' => 'ask_policy_block',
+                ], $prompt, $userId, [
+                    'policyBlocked' => true,
+                    'parentGenerationId' => $body['parentGenerationId'] ?? null,
+                ]);
             }
         }
 
@@ -1641,6 +1825,8 @@ class FolioQueryController extends Controller
             }
         }
 
+        $followUpContext = null;
+        $parentGenerationId = null;
         try {
             $followUpContext = $this->normalizeFollowUpContext($body['followUpContext'] ?? null);
             if (($body['followUpContext'] ?? null) !== null && $followUpContext === null) {
@@ -1652,21 +1838,53 @@ class FolioQueryController extends Controller
                     409 => 'History job is not completed.',
                 ];
                 Yii::$app->response->statusCode = $status;
-                return ['error' => $messages[$status] ?? 'Invalid follow-up context.'];
+                $rawFollowUpContext = $body['followUpContext'] ?? null;
+                $isHistoryFollowUp = is_array($rawFollowUpContext)
+                    && ($rawFollowUpContext['source'] ?? null) === 'history';
+                return $this->finalizeAskResponse([
+                    'error' => $messages[$status] ?? 'Invalid follow-up context.',
+                    'route' => 'follow_up_context_rejected',
+                    'routeReason' => 'invalid_follow_up_context',
+                ], $prompt, $userId, [
+                    'followUpContext' => null,
+                    'parentGenerationId' => $isHistoryFollowUp
+                        ? null
+                        : ($body['parentGenerationId'] ?? null),
+                ]);
             }
+            $parentGenerationId = $this->resolveAskParentGenerationId(
+                $body,
+                $followUpContext
+            );
 
             $effectivePrompt = $followUpContext !== null
                 ? $this->buildFollowUpPrompt($prompt, $followUpContext)
                 : $prompt;
 
-            $result = GeminiService::generateSqlWithShadow($effectivePrompt, $campus ?: null, $userId, $allowExploratory);
+            $generationTransport = null;
+            $result = GeminiService::generateSqlWithShadow(
+                $prompt,
+                $campus ?: null,
+                $userId,
+                $allowExploratory,
+                $effectivePrompt,
+                $generationTransport
+            );
+            $generationPrompt = is_array($generationTransport)
+                ? (string)($generationTransport['generationPrompt'] ?? $effectivePrompt)
+                : $effectivePrompt;
+            unset($generationTransport);
+            $initialSql = isset($result['sql']) ? (string)$result['sql'] : null;
             if (!isset($result['dataSource'])) {
                 $result['dataSource'] = 'folio';
             }
             $result = $this->validateAndRepairNlResult(
                 $result,
                 $prompt,
-                $campus ?: null
+                $campus ?: null,
+                null,
+                null,
+                $generationPrompt
             );
 
             if (!array_key_exists('suggestions', $result)) {
@@ -1688,12 +1906,43 @@ class FolioQueryController extends Controller
                 }
             }
 
-            return $result;
+            return $this->finalizeAskResponse($result, $prompt, $userId, [
+                'campus' => $campus ?: null,
+                'followUpContext' => $followUpContext,
+                'parentGenerationId' => $parentGenerationId,
+                'initialSql' => $initialSql,
+            ]);
         } catch (\InvalidArgumentException $e) {
-            return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
+            return $this->finalizeAskResponse(
+                $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure($e, $prompt, $campus ?? null),
+                    isset($result) && is_array($result) ? $result : []
+                ),
+                $prompt,
+                $userId,
+                [
+                    'campus' => $campus ?? null,
+                    'followUpContext' => $followUpContext,
+                    'parentGenerationId' => $parentGenerationId,
+                    'initialSql' => $initialSql ?? null,
+                ]
+            );
         } catch (\RuntimeException $e) {
             if ($e instanceof \app\exceptions\DatabaseQueryCancelledException) {
-                return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
+                return $this->finalizeAskResponse(
+                    $this->attachTrustedAskEvidence(
+                        $this->buildAskContinuationFromFailure($e, $prompt, $campus ?? null),
+                        isset($result) && is_array($result) ? $result : []
+                    ),
+                    $prompt,
+                    $userId,
+                    [
+                        'campus' => $campus ?? null,
+                        'followUpContext' => $followUpContext,
+                        'parentGenerationId' => $parentGenerationId,
+                        'initialSql' => $initialSql ?? null,
+                    ]
+                );
             }
             if (GeminiService::isAiTimeoutMessage($e->getMessage())) {
                 Yii::warning(
@@ -1701,13 +1950,406 @@ class FolioQueryController extends Controller
                     'nl2sql.timeout'
                 );
                 Yii::$app->response->statusCode = 504;
-                return [
+                return $this->finalizeAskResponse([
                     'errorType' => 'ai_timeout',
                     'error' => 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.',
-                ];
+                    'route' => 'ai_timeout',
+                    'routeReason' => 'ai_provider_timeout',
+                ], $prompt, $userId, [
+                    'campus' => $campus ?? null,
+                    'followUpContext' => $followUpContext,
+                    'parentGenerationId' => $parentGenerationId,
+                    'initialSql' => $initialSql ?? null,
+                ]);
             }
-            return $this->buildAskContinuationFromFailure($e, $effectivePrompt ?? $prompt, $campus ?? null);
+            return $this->finalizeAskResponse(
+                $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure($e, $prompt, $campus ?? null),
+                    isset($result) && is_array($result) ? $result : []
+                ),
+                $prompt,
+                $userId,
+                [
+                    'campus' => $campus ?? null,
+                    'followUpContext' => $followUpContext,
+                    'parentGenerationId' => $parentGenerationId,
+                    'initialSql' => $initialSql ?? null,
+                ]
+            );
         }
+    }
+
+    private function resolveAskParentGenerationId(array $body, $followUpContext): ?string
+    {
+        if (
+            is_array($followUpContext)
+            && ($followUpContext['source'] ?? null) === 'history'
+        ) {
+            $trustedHistoryGenerationId = trim((string)(
+                $followUpContext['parentGenerationId'] ?? ''
+            ));
+            return $trustedHistoryGenerationId === ''
+                ? null
+                : $trustedHistoryGenerationId;
+        }
+
+        $parentGenerationId = trim((string)($body['parentGenerationId'] ?? ''));
+        return $parentGenerationId === '' ? null : $parentGenerationId;
+    }
+
+    private function finalizeAskResponse(array $result, string $prompt, $userId, array $context): array
+    {
+        $result = AskResponseContractService::normalizeMode($result);
+        $evidence = AskGenerationEvidenceService::build($result, $context + ['prompt' => $prompt]);
+        $classification = AskConfidenceClassificationService::classify($evidence);
+        try {
+            $record = $this->administratorReviewService()->recordGeneration(
+                $evidence + $classification + ['userId' => $userId]
+            );
+            $result['generationId'] = $record['generationId'];
+            $result['conversationId'] = $record['conversationId'];
+        } catch (\Throwable $exception) {
+            Yii::warning('Ask review persistence failed: ' . get_class($exception), 'nl2sql.review');
+        }
+        $result['reviewRequired'] = $classification['reviewRequired'];
+        $result['reviewNotice'] = AskUserExplanationService::notice(
+            (string)($result['mode'] ?? ''),
+            (bool)$classification['reviewRequired'],
+            $classification['reviewReasons'],
+            is_array($result['assumptions'] ?? null) ? $result['assumptions'] : []
+        );
+        unset($result['semanticValidation'], $result['_askEvidence']);
+        return AskResponseContractService::toUserResponse($result);
+    }
+
+    private function attachTrustedAskEvidence(array $response, array $generatedResult): array
+    {
+        $evidence = is_array($generatedResult['_askEvidence'] ?? null)
+            ? $generatedResult['_askEvidence']
+            : [];
+
+        if (!isset($evidence['finalSql']) && isset($generatedResult['sql'])) {
+            $evidence['finalSql'] = (string)$generatedResult['sql'];
+        }
+        if (!isset($evidence['repairAttempts']) && array_key_exists('repairAttempts', $generatedResult)) {
+            $evidence['repairAttempts'] = $this->clampExploratoryRepairAttempts(
+                $generatedResult['repairAttempts']
+            );
+        }
+        $evidence = array_merge(
+            $evidence,
+            is_array($response['_askEvidence'] ?? null) ? $response['_askEvidence'] : []
+        );
+        $failureStatus = $this->askFailureValidationStatus($response);
+        if ($failureStatus !== null) {
+            $evidence['validationStatus'] = $failureStatus;
+        }
+        if ($evidence !== []) {
+            $response['_askEvidence'] = $evidence;
+        }
+        return $response;
+    }
+
+    private function askFailureValidationStatus(array $response): ?string
+    {
+        $status = (string)($response['validationSummary']['status'] ?? '');
+        if ($status === 'exhausted') {
+            return 'exhausted';
+        }
+        if ($status === 'rejected') {
+            return 'rejected';
+        }
+
+        $route = (string)($response['route'] ?? '');
+        if (
+            array_key_exists('error', $response)
+            || trim((string)($response['errorType'] ?? '')) !== ''
+            || in_array($route, [
+                'blocked',
+                'exploratory_recovery',
+                'postgres_connectivity_recovery',
+                'database_cancelled',
+                'ai_timeout',
+                'follow_up_context_rejected',
+            ], true)
+        ) {
+            return 'rejected';
+        }
+
+        return null;
+    }
+
+    protected function administratorReviewService()
+    {
+        return new AdministratorReviewService();
+    }
+
+    /**
+     * GET /api/admin/report-reviews
+     */
+    public function actionReportReviewList()
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        $limit = max(1, min(100, (int)Yii::$app->request->get('limit', 25)));
+        $offset = max(0, (int)Yii::$app->request->get('offset', 0));
+        $allowedStatuses = ['pending', 'in_review', 'resolved', 'dismissed'];
+        $allowedDispositions = $this->reportReviewDispositions();
+        $status = strtolower(trim((string)Yii::$app->request->get('status', 'pending')));
+        if (!in_array($status, $allowedStatuses, true)) {
+            $status = 'pending';
+        }
+        $disposition = strtolower(trim((string)Yii::$app->request->get('disposition', '')));
+
+        $query = (new \yii\db\Query())
+            ->from(['r' => 'ai_report_reviews'])
+            ->innerJoin(['g' => 'ai_report_generations'], 'g.id = r.generation_id')
+            ->where(['r.status' => $status]);
+        if (in_array($disposition, $allowedDispositions, true)) {
+            $query->andWhere(['r.disposition' => $disposition]);
+        }
+
+        $total = (int)(clone $query)->count('*', Yii::$app->db);
+        $rows = $query
+            ->select($this->reportReviewSummarySelect())
+            ->orderBy(['r.created_at' => SORT_ASC, 'r.id' => SORT_ASC])
+            ->limit($limit)
+            ->offset($offset)
+            ->all(Yii::$app->db);
+
+        return [
+            'items' => array_map([$this, 'mapReportReviewSummary'], $rows),
+            'pagination' => [
+                'limit' => $limit,
+                'offset' => $offset,
+                'total' => $total,
+            ],
+        ];
+    }
+
+    /**
+     * GET /api/admin/report-reviews/<id>
+     */
+    public function actionReportReviewDetail($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        $row = $this->reportReviewDetailRow((string)$id);
+        if ($row === null) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Review not found'];
+        }
+
+        return $this->mapReportReviewDetail($row);
+    }
+
+    /**
+     * POST /api/admin/report-reviews/<id>/claim
+     */
+    public function actionReportReviewClaim($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        try {
+            $this->administratorReviewService()->claim((string)$id, (int)$this->getCurrentUserId());
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Review is no longer available to claim'];
+        }
+
+        return $this->actionReportReviewDetail((string)$id);
+    }
+
+    /**
+     * PATCH /api/admin/report-reviews/<id>
+     */
+    public function actionReportReviewUpdate($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        if (!is_array($body) || ($body !== [] && array_keys($body) === range(0, count($body) - 1))) {
+            return $this->invalidReportReviewUpdate('Request body must be a JSON object');
+        }
+        $status = strtolower(trim((string)($body['status'] ?? '')));
+        $disposition = strtolower(trim((string)($body['disposition'] ?? '')));
+        $advisoryState = strtolower(trim((string)($body['advisoryState'] ?? 'none')));
+        $supersededByJobId = isset($body['supersededByJobId'])
+            ? trim((string)$body['supersededByJobId'])
+            : null;
+        $notes = trim((string)($body['notes'] ?? ''));
+        if (array_key_exists('takeover', $body) && !is_bool($body['takeover'])) {
+            return $this->invalidReportReviewUpdate('takeover must be a boolean');
+        }
+        $takeover = $body['takeover'] ?? false;
+
+        if (!in_array($status, ['resolved', 'dismissed'], true)) {
+            return $this->invalidReportReviewUpdate('status must be resolved or dismissed');
+        }
+        if (!in_array($disposition, $this->reportReviewDispositions(), true)) {
+            return $this->invalidReportReviewUpdate('A valid disposition is required');
+        }
+        if (!in_array($advisoryState, ['none', 'cautioned', 'superseded'], true)) {
+            return $this->invalidReportReviewUpdate('Invalid advisory state');
+        }
+        if ($status === 'dismissed' && $advisoryState !== 'none') {
+            return $this->invalidReportReviewUpdate('Dismissed reviews cannot change report advisory state');
+        }
+        if ($advisoryState === 'superseded') {
+            if ($supersededByJobId === null || $supersededByJobId === '') {
+                return $this->invalidReportReviewUpdate('A superseded review requires a replacement job');
+            }
+        } elseif ($supersededByJobId !== null && $supersededByJobId !== '') {
+            return $this->invalidReportReviewUpdate('A replacement job is allowed only for supersession');
+        } else {
+            $supersededByJobId = null;
+        }
+
+        try {
+            if ($status === 'dismissed') {
+                $this->administratorReviewService()->dismiss(
+                    (string)$id,
+                    (int)$this->getCurrentUserId(),
+                    $disposition,
+                    $notes,
+                    $takeover
+                );
+            } else {
+                $this->administratorReviewService()->resolve(
+                    (string)$id,
+                    (int)$this->getCurrentUserId(),
+                    $disposition,
+                    $notes,
+                    $advisoryState,
+                    $supersededByJobId,
+                    $takeover
+                );
+            }
+        } catch (\InvalidArgumentException $exception) {
+            return $this->invalidReportReviewUpdate('Invalid review update');
+        } catch (\DomainException $exception) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Review is no longer available to update'];
+        }
+
+        return $this->actionReportReviewDetail((string)$id);
+    }
+
+    private function invalidReportReviewUpdate(string $message): array
+    {
+        Yii::$app->response->statusCode = 422;
+        return ['error' => 'Invalid review update', 'detail' => $message];
+    }
+
+    private function reportReviewDispositions(): array
+    {
+        return [
+            'acceptable',
+            'assumption_change',
+            'deterministic_candidate',
+            'generation_defect',
+            'data_unavailable',
+            'specialist_interpretation',
+        ];
+    }
+
+    private function reportReviewSummarySelect(): array
+    {
+        return [
+            'id' => 'r.id',
+            'generationId' => 'r.generation_id',
+            'status' => 'r.status',
+            'disposition' => 'r.disposition',
+            'advisoryState' => 'r.advisory_state',
+            'supersededByJobId' => 'r.superseded_by_job_id',
+            'reviewedBy' => 'r.reviewed_by',
+            'claimedAt' => 'r.claimed_at',
+            'resolvedAt' => 'r.resolved_at',
+            'createdAt' => 'r.created_at',
+            'updatedAt' => 'r.updated_at',
+            'question' => 'g.original_question',
+            'queryJobId' => 'g.query_job_id',
+            'userId' => 'g.user_id',
+            'executionMode' => 'g.execution_mode',
+            'route' => 'g.route',
+            'routeReason' => 'g.route_reason',
+            'validationStatus' => 'g.validation_status',
+            'reviewReasonsJson' => 'g.review_reasons_json',
+        ];
+    }
+
+    private function reportReviewDetailRow(string $id): ?array
+    {
+        $select = array_merge($this->reportReviewSummarySelect(), [
+            'administratorNotes' => 'r.administrator_notes',
+            'conversationId' => 'g.conversation_id',
+            'parentGenerationId' => 'g.parent_generation_id',
+            'followUpContextJson' => 'g.follow_up_context',
+            'responseMode' => 'g.response_mode',
+            'generatedSql' => 'g.generated_sql',
+            'sqlHash' => 'g.sql_hash',
+            'assumptionsJson' => 'g.assumptions_json',
+            'userNoticeJson' => 'g.user_notice_json',
+            'confidenceEvidenceJson' => 'g.confidence_evidence_json',
+            'initialStructureJson' => 'g.initial_structure_json',
+            'finalStructureJson' => 'g.final_structure_json',
+            'provenanceJson' => 'g.provenance_json',
+            'generationCreatedAt' => 'g.created_at',
+            'linkedAt' => 'g.linked_at',
+        ]);
+        $row = (new \yii\db\Query())
+            ->select($select)
+            ->from(['r' => 'ai_report_reviews'])
+            ->innerJoin(['g' => 'ai_report_generations'], 'g.id = r.generation_id')
+            ->where(['r.id' => $id])
+            ->one(Yii::$app->db);
+
+        return $row === false ? null : $row;
+    }
+
+    private function mapReportReviewSummary(array $row): array
+    {
+        $row['reviewedBy'] = $row['reviewedBy'] === null ? null : (int)$row['reviewedBy'];
+        $row['userId'] = $row['userId'] === null ? null : (int)$row['userId'];
+        $row['reviewReasons'] = $this->decodeReportReviewJson($row['reviewReasonsJson'], []);
+        unset($row['reviewReasonsJson']);
+        return $row;
+    }
+
+    private function mapReportReviewDetail(array $row): array
+    {
+        $row = $this->mapReportReviewSummary($row);
+        $jsonFields = [
+            'followUpContextJson' => ['followUpContext', null],
+            'assumptionsJson' => ['assumptions', []],
+            'userNoticeJson' => ['userNotice', null],
+            'confidenceEvidenceJson' => ['confidenceEvidence', []],
+            'initialStructureJson' => ['initialStructure', null],
+            'finalStructureJson' => ['finalStructure', null],
+            'provenanceJson' => ['provenance', []],
+        ];
+        foreach ($jsonFields as $source => $mapping) {
+            $row[$mapping[0]] = $this->decodeReportReviewJson($row[$source], $mapping[1]);
+            unset($row[$source]);
+        }
+        return $row;
+    }
+
+    private function decodeReportReviewJson($value, $fallback)
+    {
+        if ($value === null || $value === '') {
+            return $fallback;
+        }
+        $decoded = json_decode((string)$value, true);
+        return json_last_error() === JSON_ERROR_NONE ? $decoded : $fallback;
     }
 
     private function buildAskContinuationFromFailure(
@@ -1718,7 +2360,19 @@ class FolioQueryController extends Controller
     ): array {
         $message = trim($error->getMessage());
         if ($error instanceof \app\exceptions\DatabaseQueryCancelledException) {
-            return $this->buildDatabaseCancelledResponse();
+            $response = $this->buildDatabaseCancelledResponse();
+            $response['validationSummary'] = [
+                'status' => 'rejected',
+                'repairAttempts' => 0,
+            ];
+            $response['recoveryContext'] = [
+                'originalQuestion' => $prompt,
+                'campus' => $campus,
+            ];
+            $response['_askEvidence'] = [
+                'validationStatus' => 'rejected',
+            ];
+            return $response;
         }
         // Prefer the typed policy violation; fall back to message matching for
         // policy errors that bubble up from elsewhere as plain exceptions.
@@ -1728,6 +2382,9 @@ class FolioQueryController extends Controller
                 'error' => $this->buildAskPolicyBlockMessage($message),
                 'route' => 'blocked',
                 'routeReason' => 'ask_policy_block',
+                '_askEvidence' => [
+                    'validationStatus' => 'rejected',
+                ],
             ];
         }
 
@@ -1743,12 +2400,11 @@ class FolioQueryController extends Controller
 
         return [
             'needsClarification' => false,
-            'needsExploratoryApproval' => false,
             'mode' => 'exploratory',
-            'message' => 'I could not produce fully validated SQL for this request. Review the details below, then refine the request or try again.',
+            'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
             'exploratoryNotice' => [
                 'title' => 'AI-assisted query',
-                'message' => 'I could not produce fully validated SQL for this request. Review the details below, then refine the request or try again.',
+                'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
                 'detail' => 'Similar wording may produce different SQL until this request type is reviewed and promoted to a verified report pattern.',
                 'reason' => $routeReason,
             ],
@@ -1758,7 +2414,12 @@ class FolioQueryController extends Controller
             'suggestions' => [],
             'route' => 'exploratory_recovery',
             'routeReason' => $routeReason,
+            'validationSummary' => [
+                'status' => 'rejected',
+                'repairAttempts' => 0,
+            ],
             'recoveryContext' => [
+                'originalQuestion' => $prompt,
                 'campus' => $campus,
                 'promptFingerprint' => $this->fingerprintPrompt($prompt),
             ],
@@ -1791,7 +2452,6 @@ class FolioQueryController extends Controller
 
         return [
             'needsClarification' => false,
-            'needsExploratoryApproval' => false,
             'mode' => 'exploratory',
             'errorType' => 'postgres_connectivity',
             'message' => $message,
@@ -1807,7 +2467,12 @@ class FolioQueryController extends Controller
             'suggestions' => [],
             'route' => 'postgres_connectivity_recovery',
             'routeReason' => $routeReason,
+            'validationSummary' => [
+                'status' => 'rejected',
+                'repairAttempts' => 0,
+            ],
             'recoveryContext' => [
+                'originalQuestion' => $prompt,
                 'campus' => $campus,
                 'promptFingerprint' => $this->fingerprintPrompt($prompt),
             ],
@@ -3967,6 +4632,8 @@ class FolioQueryController extends Controller
             return ['error' => 'User not found'];
         }
 
+        $reviewService = new AdministratorReviewService(Yii::$app->db);
+        $reviewService->purgeUserContent((int) $id);
         $user->delete();
         return ['success' => true];
     }
@@ -4018,11 +4685,26 @@ class FolioQueryController extends Controller
         $offset       = (int) (Yii::$app->request->get('offset', 0));
         $statusFilter = Yii::$app->request->get('status', 'all');
         $mineOnly     = filter_var(Yii::$app->request->get('mine', false), FILTER_VALIDATE_BOOLEAN);
+        $advisoryReviewSubquery = "(SELECT r2.id
+            FROM ai_report_generations linked_generation
+            INNER JOIN ai_report_reviews r2
+                ON r2.generation_id = linked_generation.id
+                OR r2.generation_id = linked_generation.parent_generation_id
+            WHERE linked_generation.query_job_id = qj.id
+              AND r2.advisory_state IN ('cautioned', 'superseded')
+            ORDER BY r2.updated_at DESC, r2.id DESC
+            LIMIT 1)";
 
         $query = QueryJob::find()
-            ->select(['qj.*', 'u.email AS runBy'])
+            ->select([
+                'qj.*',
+                'u.email AS runBy',
+                'r.advisory_state AS reviewAdvisoryState',
+                'r.superseded_by_job_id AS reviewSupersededByJobId',
+            ])
             ->alias('qj')
             ->leftJoin('users u', 'u.id = qj.user_id')
+            ->leftJoin('ai_report_reviews r', 'r.id = ' . $advisoryReviewSubquery)
             ->orderBy(['qj.completed_at' => SORT_DESC, 'qj.created_at' => SORT_DESC])
             ->limit(min($limit, 100))
             ->offset($offset);
@@ -4060,7 +4742,7 @@ class FolioQueryController extends Controller
                     || ($userId !== null && (int) $job['user_id'] === (int) $userId);
                 $terminal = in_array($job['status'], ['completed', 'failed', 'cancelled'], true);
                 $canDelete = $authorized && $terminal;
-                return [
+                $item = [
                     'jobId'           => $job['id'],
                     'name'            => $job['name'] ?? null,
                     'status'          => $job['status'],
@@ -4077,6 +4759,28 @@ class FolioQueryController extends Controller
                     'runBy'           => $job['runBy'] ?? null,
                     'canDelete'       => $canDelete,
                 ];
+
+                if (($job['reviewAdvisoryState'] ?? null) === 'cautioned') {
+                    $item['reviewAdvisory'] = [
+                        'state' => 'cautioned',
+                        'message' => 'A reporting specialist identified an important limitation in this result.',
+                    ];
+                } elseif (($job['reviewAdvisoryState'] ?? null) === 'superseded') {
+                    if (!empty($job['reviewSupersededByJobId'])) {
+                        $item['reviewAdvisory'] = [
+                            'state' => 'superseded',
+                            'message' => 'A corrected version of this report is available.',
+                            'supersededByJobId' => $job['reviewSupersededByJobId'],
+                        ];
+                    } else {
+                        $item['reviewAdvisory'] = [
+                            'state' => 'superseded',
+                            'message' => 'A corrected version of this report was created, but it is no longer available in your history.',
+                        ];
+                    }
+                }
+
+                return $item;
             }, $jobs),
         ];
     }

@@ -2,6 +2,10 @@
 
 namespace app\commands;
 
+use app\services\AdministratorReviewService;
+use app\services\SettingsService;
+use DateTimeImmutable;
+use DateTimeZone;
 use Yii;
 use yii\console\Controller;
 use yii\console\ExitCode;
@@ -77,6 +81,8 @@ class CleanupController extends Controller
 
         $this->actionJobs();
         $this->stdout("\n");
+        $this->actionReviews();
+        $this->stdout("\n");
         $this->actionLogs();
         $this->stdout("\n");
         $this->actionTruncate();
@@ -86,6 +92,31 @@ class CleanupController extends Controller
         $this->actionStats();
 
         return ExitCode::OK;
+    }
+
+    /**
+     * Purge expired Ask AI generation evidence and administrator reviews.
+     */
+    public function actionReviews()
+    {
+        $retentionDays = SettingsService::getAiReportReviewRetentionDays();
+        $this->stdout("Cleaning Ask AI review content older than {$retentionDays} days...\n");
+
+        if ($this->dryRun) {
+            $this->stdout("  Dry run: review content was not deleted\n");
+            return ExitCode::OK;
+        }
+
+        $service = new AdministratorReviewService(Yii::$app->db);
+        $deleted = $service->purgeExpired($retentionDays, $this->reviewCleanupNow());
+        $this->stdout("  Deleted {$deleted} generation records\n");
+
+        return ExitCode::OK;
+    }
+
+    protected function reviewCleanupNow(): DateTimeImmutable
+    {
+        return new DateTimeImmutable('now', new DateTimeZone('UTC'));
     }
 
     /**
