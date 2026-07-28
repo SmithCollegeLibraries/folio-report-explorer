@@ -96,8 +96,7 @@ resolvedReferenceAssertValid(
 
 $lowerSql = resolvedReferenceCompleteSql(
     "LOWER(lib.name) = LOWER('SC Hillyer Art Library')"
-    . " AND (LOWER(mt.name) = LOWER('Videocassette')"
-    . " OR LOWER(mt.name) = LOWER('DVD/Blu-ray'))"
+    . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')"
 );
 resolvedReferenceAssertValid(
     $lowerSql,
@@ -330,6 +329,212 @@ resolvedReferenceAssertMismatch(
     resolvedReferenceCompleteSql("lib.name LIKE 'SC Under_score Library'"),
     $underscoreFilters,
     'LIKE underscore wildcards must not be mistaken for literal canonical characters.'
+);
+
+$escapedLikeFilters = [[
+    'dimension' => 'library',
+    'source_table' => 'inventory.loclibrary__t',
+    'column' => 'name',
+    'values' => ['SC Under_score 100% Library'],
+    'value_metadata' => ['SC Under_score 100% Library' => ['campus_name' => 'Smith College']],
+    'provenance' => 'explicit_prompt',
+    'vocabulary_terms' => [],
+]];
+resolvedReferenceAssertValid(
+    resolvedReferenceCompleteSql("lib.name LIKE 'SC Under\\_score 100\\% Library'"),
+    $escapedLikeFilters,
+    'Default PostgreSQL LIKE escapes must preserve literal underscore and percent characters.'
+);
+resolvedReferenceAssertValid(
+    resolvedReferenceCompleteSql("lib.name ILIKE 'sc under!_score 100!% library' ESCAPE '!'"),
+    $escapedLikeFilters,
+    'An explicit one-character LIKE escape must preserve the complete canonical value.'
+);
+resolvedReferenceAssertMismatch(
+    resolvedReferenceCompleteSql("lib.name LIKE 'SC Under!_score 100% Library' ESCAPE '!'"),
+    $escapedLikeFilters,
+    'An unescaped LIKE percent must still fail when a custom escape is present.'
+);
+resolvedReferenceAssertMismatch(
+    resolvedReferenceCompleteSql("lib.name LIKE 'SC Under!!_score 100!% Library' ESCAPE '!!'"),
+    $escapedLikeFilters,
+    'A multi-character LIKE ESCAPE expression must fail closed.'
+);
+
+$multipleLibraryFilters = [
+    $resolvedFilters[0],
+    [
+        'dimension' => 'library',
+        'source_table' => 'inventory.loclibrary__t',
+        'column' => 'name',
+        'values' => ['SC Neilson Library'],
+        'value_metadata' => [
+            'SC Neilson Library' => ['campus_name' => 'Smith College'],
+        ],
+        'provenance' => 'explicit_prompt',
+        'vocabulary_terms' => [],
+    ],
+];
+resolvedReferenceAssertValid(
+    resolvedReferenceCompleteSql(
+        "lib.name IN ('SC Hillyer Art Library', 'SC Neilson Library')"
+    ),
+    $multipleLibraryFilters,
+    'Separate Task 2 filters for one table and dimension must combine into one authoritative set.'
+);
+resolvedReferenceAssertMismatch(
+    resolvedReferenceCompleteSql("lib.name = 'SC Hillyer Art Library'"),
+    $multipleLibraryFilters,
+    'A combined same-dimension authoritative set must still reject a missing value.'
+);
+
+$unsupportedBooleanAndScopeSql = [
+    'cross-dimension OR' => resolvedReferenceCompleteSql(
+        "lib.name = 'SC Hillyer Art Library'"
+        . " OR mt.name IN ('Videocassette', 'DVD/Blu-ray')"
+    ),
+    'dead TRUE branch' => resolvedReferenceCompleteSql(
+        "(lib.name = 'SC Hillyer Art Library'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')) OR TRUE"
+    ),
+    'dead FALSE conjunction' => resolvedReferenceCompleteSql(
+        "FALSE AND lib.name = 'SC Hillyer Art Library'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')"
+    ),
+    'unused CTE' => <<<'SQL'
+WITH filtered AS (
+    SELECT lib.id
+    FROM inventory.loclibrary__t lib
+    JOIN inventory.material_type__t mt ON TRUE
+    WHERE lib.name = 'SC Hillyer Art Library'
+      AND mt.name IN ('Videocassette', 'DVD/Blu-ray')
+)
+SELECT 1
+SQL
+    ,
+    'unfiltered UNION branch' => <<<'SQL'
+SELECT lib.id
+FROM inventory.loclibrary__t lib
+JOIN inventory.material_type__t mt ON TRUE
+WHERE lib.name = 'SC Hillyer Art Library'
+  AND mt.name IN ('Videocassette', 'DVD/Blu-ray')
+UNION ALL
+SELECT id FROM inventory.item__t
+SQL
+    ,
+    'nested SELECT' => <<<'SQL'
+SELECT filtered.id
+FROM (
+    SELECT lib.id
+    FROM inventory.loclibrary__t lib
+    JOIN inventory.material_type__t mt ON TRUE
+    WHERE lib.name = 'SC Hillyer Art Library'
+      AND mt.name IN ('Videocassette', 'DVD/Blu-ray')
+) filtered
+SQL
+    ,
+    'EXISTS subquery' => <<<'SQL'
+SELECT item.id
+FROM inventory.item__t item
+WHERE EXISTS (
+    SELECT 1
+    FROM inventory.loclibrary__t lib
+    JOIN inventory.material_type__t mt ON TRUE
+    WHERE lib.name = 'SC Hillyer Art Library'
+      AND mt.name IN ('Videocassette', 'DVD/Blu-ray')
+)
+SQL
+    ,
+    'CASE branch' => resolvedReferenceCompleteSql(
+        "CASE WHEN lib.name = 'SC Hillyer Art Library'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')"
+        . " THEN TRUE ELSE TRUE END"
+    ),
+    'JOIN-only predicates' => <<<'SQL'
+SELECT item.id
+FROM inventory.item__t item
+JOIN inventory.loclibrary__t lib
+  ON lib.name = 'SC Hillyer Art Library'
+JOIN inventory.material_type__t mt
+  ON mt.name IN ('Videocassette', 'DVD/Blu-ray')
+WHERE item.id IS NOT NULL
+SQL
+    ,
+];
+foreach ($unsupportedBooleanAndScopeSql as $case => $sql) {
+    resolvedReferenceAssertMismatch(
+        $sql,
+        $resolvedFilters,
+        'Unsupported Boolean or SELECT scope must fail closed: ' . $case
+    );
+}
+
+$expressionBoundaryBypasses = [
+    'field-first concatenation' => "lib.name = 'SC Hillyer Art Library' || ' wrong'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')",
+    'literal-first concatenation' => "'SC Hillyer Art Library' = lib.name || ' wrong'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')",
+    'LIKE concatenation' => "lib.name LIKE 'SC Hillyer Art Library' || '%'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')",
+    'cast equality literal' => "lib.name = 'SC Hillyer Art Library'::text"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')",
+    'cast LOWER expression' => "LOWER(lib.name) = LOWER('SC Hillyer Art Library')::text"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')",
+    'cast IN literal' => "lib.name = 'SC Hillyer Art Library'"
+        . " AND mt.name IN ('Videocassette'::text, 'DVD/Blu-ray')",
+    'ESCAPE concatenation' => "lib.name LIKE 'SC Hillyer Art Library' ESCAPE '!' || '?'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')",
+];
+foreach ($expressionBoundaryBypasses as $case => $where) {
+    resolvedReferenceAssertMismatch(
+        resolvedReferenceCompleteSql($where),
+        $resolvedFilters,
+        'A supported predicate prefix with an expression suffix must fail closed: ' . $case
+    );
+}
+
+$dollarQuotedDecoySql = <<<'SQL'
+SELECT $filters$
+FROM inventory.loclibrary__t lib
+JOIN inventory.material_type__t mt ON TRUE
+WHERE lib.name = 'SC Hillyer Art Library'
+  AND mt.name IN ('Videocassette', 'DVD/Blu-ray')
+$filters$
+SQL;
+resolvedReferenceAssertMismatch(
+    $dollarQuotedDecoySql,
+    $resolvedFilters,
+    'Predicates and tables inside a tagged dollar-quoted string must be masked.'
+);
+
+$untaggedDollarQuotedDecoySql = <<<'SQL'
+SELECT $$
+FROM inventory.loclibrary__t lib
+JOIN inventory.material_type__t mt ON TRUE
+WHERE lib.name = 'SC Hillyer Art Library'
+  AND mt.name IN ('Videocassette', 'DVD/Blu-ray')
+$$
+SQL;
+resolvedReferenceAssertMismatch(
+    $untaggedDollarQuotedDecoySql,
+    $resolvedFilters,
+    'Predicates and tables inside an untagged dollar-quoted string must be masked.'
+);
+
+$nestedCommentDecoySql = <<<'SQL'
+SELECT 1
+/* outer comment starts
+   /* nested comment */
+   FROM inventory.loclibrary__t lib
+   JOIN inventory.material_type__t mt ON TRUE
+   WHERE lib.name = 'SC Hillyer Art Library'
+     AND mt.name IN ('Videocassette', 'DVD/Blu-ray')
+*/
+SQL;
+resolvedReferenceAssertMismatch(
+    $nestedCommentDecoySql,
+    $resolvedFilters,
+    'Predicates and tables inside a nested block comment must remain masked.'
 );
 
 resolvedReferenceAssertMismatch(
