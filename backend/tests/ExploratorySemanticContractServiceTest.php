@@ -18,7 +18,7 @@ $assumptions = ExploratoryQueryDefaultsService::resolve($question);
 $legacyOptions = ['physicalRoiPolicyVersion' => 'legacy'];
 $contract = ExploratorySemanticContractService::build($question, 'Smith College', $assumptions, 'unsupported_query_family', $legacyOptions);
 
-contractAssertSame(1, $contract['contractVersion'], 'The contract must be versioned.');
+contractAssertSame(2, $contract['contractVersion'], 'The contract must be versioned.');
 contractAssertSame(true, $contract['applicable'], 'Cross-domain call-number ROI must receive semantic protection.');
 contractAssertSame('cross_domain_call_number_roi', $contract['concept'], 'The motivating request must use the ROI contract.');
 contractAssertSame('complete', $contract['coverageStatus'], 'Every ROI requirement must have a registered rule.');
@@ -232,5 +232,178 @@ contractAssertSame(
 
 $simple = ExploratorySemanticContractService::build('List item barcodes', null, [], 'unsupported_query_family', $legacyOptions);
 contractAssertSame(false, $simple['applicable'], 'An unrelated simple request must not receive an ROI checklist.');
+
+$organizationQuestion = 'List all statistics notes in organization interfaces limited to the AC acquisition unit';
+$organizationContract = ExploratorySemanticContractService::build(
+    $organizationQuestion,
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(true, $organizationContract['applicable'], 'Organization-owned AC scope must receive semantic protection.');
+contractAssertSame('organization_acquisition_unit_scope', $organizationContract['concept'], 'The organization concept must be selected.');
+contractAssertSame(
+    ['organization_interface_relationship', 'organization_acquisition_unit_relationship', 'organization_acquisition_unit_code'],
+    array_column($organizationContract['requirements'], 'key'),
+    'The organization contract must expose all enforceable relationships.'
+);
+contractAssertSame('AC', $organizationContract['requirements'][2]['parameters']['code'] ?? null, 'The requested acquisition-unit code must be retained.');
+contractAssertSame('complete', $organizationContract['coverageStatus'], 'Every organization requirement must have a registered validator rule.');
+
+$organizationWithoutScope = ExploratorySemanticContractService::build(
+    'List all statistics notes in organization interfaces',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(false, $organizationWithoutScope['applicable'], 'Organization interface reports without acquisition-unit scope must not receive this contract.');
+
+$accountScope = ExploratorySemanticContractService::build(
+    'List organization accounts assigned to acquisition unit AC',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(false, $accountScope['applicable'], 'Account-owned acquisition-unit scope must remain outside the organization-level contract.');
+
+$orderScope = ExploratorySemanticContractService::build(
+    'Which vendors did we place AC purchase orders with?',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(false, $orderScope['applicable'], 'Order-domain vendor reports must remain outside the organization-owned contract.');
+
+$contextualOrderWording = ExploratorySemanticContractService::build(
+    'List statistics notes in organization interfaces used for orders, limited to the AC acquisition unit',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(
+    true,
+    $contextualOrderWording['applicable'],
+    'Contextual order vocabulary must not disable protection for requested interface statistics-note output.'
+);
+
+foreach ([
+    'List purchase-order-related organization interface statistics notes for acquisition unit AC',
+    'Show all order-related statistics notes in organization interfaces for acquisition unit AC',
+] as $transactionModifierQuestion) {
+    contractAssertSame(
+        true,
+        ExploratorySemanticContractService::build(
+            $transactionModifierQuestion,
+            null,
+            [],
+            'unsupported_query_family'
+        )['applicable'],
+        'Transaction-related adjectives must not replace the requested interface statistics-note domain: ' . $transactionModifierQuestion
+    );
+}
+
+foreach ([
+    'List orders related to organization interfaces for acquisition unit AC',
+    'Show invoices related to organization interfaces for acquisition unit AC',
+    'Count vouchers related to interface statistics notes for acquisition unit AC',
+    'List orders related via organization interfaces for acquisition unit AC',
+    'Show invoices related through organization interfaces for acquisition unit AC',
+    'Count vouchers related by interface statistics notes for acquisition unit AC',
+] as $relatedTransactionalFactQuestion) {
+    contractAssertSame(
+        false,
+        ExploratorySemanticContractService::build(
+            $relatedTransactionalFactQuestion,
+            null,
+            [],
+            'unsupported_query_family'
+        )['applicable'],
+        'Unhyphenated transaction-related constructions must remain requested facts: ' . $relatedTransactionalFactQuestion
+    );
+}
+
+$invoiceFactRequest = ExploratorySemanticContractService::build(
+    'Count invoices by organization interface for acquisition unit AC',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(false, $invoiceFactRequest['applicable'], 'Explicit invoice fact requests must remain outside the organization contract.');
+
+$invoiceListFactRequest = ExploratorySemanticContractService::build(
+    'I need a list of all invoices by organization interface for acquisition unit AC',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(false, $invoiceListFactRequest['applicable'], 'Natural list-of invoice wording must remain outside the organization contract.');
+
+foreach ([
+    'How many invoices are there by organization interface for acquisition unit AC?',
+    'Give me invoices by organization interface for acquisition unit AC',
+    'Display purchase orders with interface statistics notes for acquisition unit AC',
+    'Invoices by organization interface for acquisition unit AC',
+] as $transactionalFactQuestion) {
+    contractAssertSame(
+        false,
+        ExploratorySemanticContractService::build(
+            $transactionalFactQuestion,
+            null,
+            [],
+            'unsupported_query_family'
+        )['applicable'],
+        'Common transactional fact-request wording must remain outside the organization contract: ' . $transactionalFactQuestion
+    );
+}
+
+$mixedVoucherFactRequest = ExploratorySemanticContractService::build(
+    'List vouchers and interface statistics notes for AC acquisition unit',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(false, $mixedVoucherFactRequest['applicable'], 'Explicit voucher fact requests must remain outside the organization contract.');
+
+$postUnitCode = ExploratorySemanticContractService::build(
+    'List organizations in acquisition unit AC',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(
+    'AC',
+    $postUnitCode['requirements'][1]['parameters']['code'] ?? null,
+    'The preposition before acquisition unit must not be mistaken for its code.'
+);
+contractAssertSame(
+    'AC',
+    $postUnitCode['permittedFilters']['acquisition_unit']['value'] ?? null,
+    'The permitted acquisition-unit filter must retain the post-unit AC code.'
+);
+
+$limitedPostUnitCode = ExploratorySemanticContractService::build(
+    'List organizations limited to acquisition unit AC',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(
+    'AC',
+    $limitedPostUnitCode['requirements'][1]['parameters']['code'] ?? null,
+    'The word to before acquisition unit must not be extracted as a code.'
+);
+
+$organizationRecordScope = ExploratorySemanticContractService::build(
+    'List organizations limited to acquisition unit AC',
+    null,
+    [],
+    'unsupported_query_family'
+);
+contractAssertSame(true, $organizationRecordScope['applicable'], 'Organization record output may use organization-level acquisition scope.');
+contractAssertSame(
+    ['organization_acquisition_unit_relationship', 'organization_acquisition_unit_code'],
+    array_column($organizationRecordScope['requirements'], 'key'),
+    'Organization records that do not request interfaces must not require the interface bridge.'
+);
 
 fwrite(STDOUT, "Exploratory semantic contract service test passed\n");

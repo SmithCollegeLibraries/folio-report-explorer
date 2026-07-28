@@ -56,6 +56,58 @@ function assertSameValue($expected, $actual, string $message): void
     }
 }
 
+if (!method_exists(GeminiService::class, 'buildOrganizationAcquisitionUnitGuidance')) {
+    fwrite(STDERR, "The shared organization acquisition-unit guidance builder is missing.\n");
+    exit(1);
+}
+$organizationGuidanceBuilder = new ReflectionMethod(
+    GeminiService::class,
+    'buildOrganizationAcquisitionUnitGuidance'
+);
+if (PHP_VERSION_ID < 80500) {
+    $organizationGuidanceBuilder->setAccessible(true);
+}
+$organizationGuidance = $organizationGuidanceBuilder->invoke(null);
+foreach ([
+    'organizations.organizations__t__interfaces',
+    'organizations.organizations__t__acq_unit_ids',
+    'orders.acquisitions_unit__t',
+    'purchase_order__t__acq_unit_ids.id is the purchase order ID',
+    'acquisition-unit codes use exact equality',
+    'Organization and interface reference-data listings do not require an artificial purchase-order campus path',
+] as $guidanceAnchor) {
+    assertContainsText(
+        $guidanceAnchor,
+        $organizationGuidance,
+        'The shared organization guidance must describe every authoritative relationship and carve-out.'
+    );
+}
+
+if (!method_exists(GeminiService::class, 'semanticContractQuestion')) {
+    fwrite(STDERR, "The raw-question semantic contract selector is missing.\n");
+    exit(1);
+}
+$semanticQuestionSelector = new ReflectionMethod(GeminiService::class, 'semanticContractQuestion');
+if (PHP_VERSION_ID < 80500) {
+    $semanticQuestionSelector->setAccessible(true);
+}
+$rawOrganizationQuestion = 'List organization interfaces limited to the AC acquisition unit';
+$resolverAugmentedQuestion = $rawOrganizationQuestion
+    . "\n\nReference resolver guidance: purchase orders are transaction records.";
+assertSameValue(
+    $rawOrganizationQuestion,
+    $semanticQuestionSelector->invoke(null, $rawOrganizationQuestion, $resolverAugmentedQuestion),
+    'Resolver-augmented transactional vocabulary must not change contract applicability.'
+);
+$trustedFollowUpEnvelope = "This is a follow-up request to a previously generated library report.\n\n"
+    . "Previous request: Show ROI for purchases and circulation by call number.\n"
+    . "Follow-up request: Use invoice date instead.";
+assertSameValue(
+    $trustedFollowUpEnvelope,
+    $semanticQuestionSelector->invoke(null, 'Use invoice date instead.', $trustedFollowUpEnvelope),
+    'A trusted follow-up envelope must retain the prior request semantics for contract classification.'
+);
+
 $guidanceBuilder = new ReflectionMethod(GeminiService::class, 'buildLegacyPromptFamilyGuidance');
 if (PHP_VERSION_ID < 80500) {
     $guidanceBuilder->setAccessible(true);

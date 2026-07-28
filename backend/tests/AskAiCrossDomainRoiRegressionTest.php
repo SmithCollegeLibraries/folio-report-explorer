@@ -303,7 +303,7 @@ roiRegressionAssertSame($validRoiSql, $repaired['sql'] ?? null, 'The motivating 
 roiRegressionAssertSame(1, $repaired['repairAttempts'] ?? null, 'Five semantic defects should trigger one automatic repair.');
 roiRegressionAssertSame('validated', $repaired['validationSummary']['status'] ?? null, 'The repaired candidate should be marked validated.');
 roiRegressionAssertSame('validated', $repaired['semanticValidation']['status'] ?? null, 'Returned exploratory SQL must pass semantic conformance.');
-roiRegressionAssertSame(1, $repaired['semanticValidation']['contractVersion'] ?? null, 'The response must identify the checked contract version.');
+roiRegressionAssertSame(2, $repaired['semanticValidation']['contractVersion'] ?? null, 'The response must identify the checked contract version.');
 roiRegressionAssertSame(12, count($repaired['semanticValidation']['checkedRequirements'] ?? []), 'Every ROI requirement must be checked.');
 roiRegressionAssertSame('unsupported_query_family', $repaired['routeReason'] ?? null, 'The motivating request should enter exploratory generation through normal unsupported-family routing.');
 roiRegressionAssertSame(false, isset($repaired['needsExploratoryApproval']), 'Unsupported routing should omit the obsolete exploratory approval gate.');

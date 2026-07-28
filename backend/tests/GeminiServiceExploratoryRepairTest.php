@@ -116,7 +116,9 @@ namespace app\services {
             return [
                 'item__t', 'po_line__t', 'purchase_order__t', 'invoice_lines__t',
                 'audit_loan__t', 'holdings_record__t', 'instance__t', 'classification__t',
-                'location__t', 'loclibrary__t', 'material_type__t',
+                'location__t', 'loclibrary__t', 'material_type__t', 'organizations__t',
+                'organizations__t__interfaces', 'interfaces__t',
+                'organizations__t__acq_unit_ids', 'acquisitions_unit__t',
             ];
         }
         public static function discoverTableMapping(): array
@@ -139,6 +141,10 @@ namespace app\services {
                 'loccampus__t' => 'inventory.loccampus__t',
                 'material_type__t' => 'inventory.material_type__t',
                 'classification__t' => 'classification.classification__t',
+                'organizations__t' => 'organizations.organizations__t',
+                'organizations__t__interfaces' => 'organizations.organizations__t__interfaces',
+                'interfaces__t' => 'organizations.interfaces__t',
+                'organizations__t__acq_unit_ids' => 'organizations.organizations__t__acq_unit_ids',
             ];
         }
 
@@ -298,6 +304,34 @@ function scopedVideoSql(string $library, array $materialTypes): string
         . 'AND material_type.name IN (' . implode(', ', $quotedMaterialTypes) . ')';
 }
 
+function validOrganizationInterfaceSql(): string
+{
+    return <<<'SQL'
+SELECT intf.statistics_notes
+FROM organizations.organizations__t AS org
+JOIN organizations.organizations__t__interfaces AS oi ON oi.id = org.id
+JOIN organizations.interfaces__t AS intf ON intf.id = oi.interfaces
+JOIN organizations.organizations__t__acq_unit_ids AS ou ON ou.id = org.id
+JOIN orders.acquisitions_unit__t AS au ON au.id = ou.acq_unit_ids
+WHERE au.name = 'AC'
+  AND intf.statistics_notes IS NOT NULL
+LIMIT 100
+SQL;
+}
+
+function invalidOrganizationInterfaceSql(): string
+{
+    return <<<'SQL'
+SELECT intf.statistics_notes
+FROM organizations.interfaces__t AS intf
+JOIN organizations.organizations__t AS org ON intf.id = org.id
+JOIN orders.purchase_order__t__acq_unit_ids AS po_units ON po_units.id = org.id
+JOIN orders.acquisitions_unit__t AS au ON au.id = po_units.acq_unit_ids
+WHERE au.name = 'AC'
+LIMIT 100
+SQL;
+}
+
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
     geminiText('SELECT ii.id FROM inventory.item__t ii'),
@@ -321,9 +355,70 @@ repairAssertSame(0, count($repaired['assumptions'] ?? []), 'Unrelated explorator
 repairAssertSame(false, isset($repaired['semanticValidation']), 'Non-applicable exploratory requests should not display a false semantic checklist.');
 repairAssertSame(2, count(TestTransport::$requests), 'Bad-then-valid generation should make one initial request and one repair request.');
 
+$initialPayload = json_encode(TestTransport::$requests[0]);
 $repairPayload = json_encode(TestTransport::$requests[1]);
 repairAssertContains('SELECT mt.id FROM inventory.missing_table__t mt', $repairPayload, 'The repair request should contain the previous SQL candidate.');
+foreach ([
+    'organizations.organizations__t__interfaces',
+    'organizations.organizations__t__acq_unit_ids',
+    'orders.acquisitions_unit__t',
+    'purchase_order__t__acq_unit_ids.id is the purchase order ID',
+    'acquisition-unit codes use exact equality',
+] as $organizationGuidanceAnchor) {
+    repairAssertContains(
+        $organizationGuidanceAnchor,
+        $initialPayload,
+        'Initial exploratory generation must include the shared organization relationship guidance.'
+    );
+    repairAssertContains(
+        $organizationGuidanceAnchor,
+        $repairPayload,
+        'Exploratory repair must include the same organization relationship guidance.'
+    );
+}
 $baselineRepairLogs = Yii::$logs;
+
+$organizationQuestion = 'List all statistics notes in organization interfaces limited to the AC acquisition unit';
+TestTransport::$responses = [
+    geminiText(invalidOrganizationInterfaceSql()),
+    geminiText(validOrganizationInterfaceSql()),
+];
+TestTransport::$requests = [];
+$organizationRepair = GeminiService::generateSqlWithShadow(
+    $organizationQuestion,
+    null,
+    null,
+    true
+);
+repairAssertSame(1, $organizationRepair['repairAttempts'] ?? null, 'Invalid organization joins must enter one bounded repair.');
+repairAssertSame(validOrganizationInterfaceSql(), $organizationRepair['sql'] ?? null, 'Repair must restore both authoritative organization bridges.');
+repairAssertSame('validated', $organizationRepair['semanticValidation']['status'] ?? null, 'The repaired organization candidate must satisfy its semantic contract.');
+repairAssertSame(true, $organizationRepair['semanticContractApplicable'] ?? null, 'Organization acquisition-unit requests must retain an applicable semantic contract.');
+repairAssertContains(
+    'organization_interface_relationship',
+    json_encode(TestTransport::$requests[1]),
+    'The repair request must identify the failed interface relationship safely.'
+);
+
+TestTransport::$responses = [
+    geminiText(invalidOrganizationInterfaceSql()),
+    geminiText(invalidOrganizationInterfaceSql()),
+    geminiText(invalidOrganizationInterfaceSql()),
+];
+TestTransport::$requests = [];
+$organizationExhaustion = GeminiService::generateSqlWithShadow(
+    $organizationQuestion,
+    null,
+    null,
+    true
+);
+repairAssertSame(2, $organizationExhaustion['repairAttempts'] ?? null, 'Organization semantic repair must use the shared two-attempt budget.');
+repairAssertSame(false, isset($organizationExhaustion['sql']), 'Rejected organization SQL must not be exposed.');
+repairAssertContains(
+    'I could not build a report I could safely run',
+    $organizationExhaustion['validationSummary']['message'] ?? '',
+    'Organization exhaustion must use family-neutral safe recovery.'
+);
 
 TestTransport::$responses = [
     geminiText(str_replace(

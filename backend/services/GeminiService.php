@@ -373,7 +373,7 @@ class GeminiService
         $attemptedPlan = ExploratoryQueryDefaultsService::buildPromptGuidance($assumptions);
         $useHardenedPhysicalRoi = self::useHardenedPhysicalRoi();
         $semanticContract = ExploratorySemanticContractService::build(
-            $generationPrompt,
+            self::semanticContractQuestion($rawQuestion, $generationPrompt),
             is_string($campus) ? $campus : null,
             $assumptions,
             $reason,
@@ -435,9 +435,12 @@ class GeminiService
         }
 
         if (($outcome['status'] ?? null) !== 'validated') {
-            $compiledFallback = $useHardenedPhysicalRoi
-                ? HardenedPhysicalRoiSqlCompilerService::compile($semanticContract)
-                : ExploratoryRoiSqlCompilerService::compile($semanticContract);
+            $compiledFallback = null;
+            if (($semanticContract['concept'] ?? null) === 'cross_domain_call_number_roi') {
+                $compiledFallback = $useHardenedPhysicalRoi
+                    ? HardenedPhysicalRoiSqlCompilerService::compile($semanticContract)
+                    : ExploratoryRoiSqlCompilerService::compile($semanticContract);
+            }
             if ($compiledFallback !== null) {
                 try {
                     $compiledFallback = self::validateCompiledExploratoryFallback(
@@ -1244,9 +1247,11 @@ PROMPT;
   IMPORTANT: acquisitions_unit__t.name stores 2-letter abbreviation codes (SC, AC, MH, UM, HC, RP, YB) — NOT full campus names. Use au.name = '{$acqCode}' (exact string match). Never use LOWER(au.name) = LOWER('Smith College') or any full-name comparison.
 
   NEVER skip campus filtering for finance/acquisitions queries. Do not omit the acquisitions unit join.
-  System-wide reference data (material types, instance types, fund types, fiscal years, etc.) does NOT need campus filtering.";
+  System-wide reference data (material types, instance types, fund types, fiscal years, etc.) does NOT need campus filtering.
+  Organization and interface reference-data listings do not require an artificial purchase-order campus path. When the user explicitly requests organization acquisition-unit scope, use the organization acquisition-unit bridge.";
         }
 
+      $organizationAcquisitionUnitGuidance = self::buildOrganizationAcquisitionUnitGuidance();
       $legacyPromptFamilyGuidance = self::buildLegacyPromptFamilyGuidance($originalQuestion, $campus);
     $legacyPromptUserInput = self::buildLegacyPromptUserInput($prompt, $campus, $originalQuestion);
 
@@ -1328,6 +1333,7 @@ RULES:
     Never output multiple semicolon-delimited statements, even if the user asks for "also"
     or multiple follow-ups in one prompt. If needed, combine logic into one query.
 {$campusRule}
+{$organizationAcquisitionUnitGuidance}
 {$legacyPromptFamilyGuidance}
 
 SCHEMA:
@@ -1757,6 +1763,30 @@ PROMPT-SPECIFIC GUIDANCE:
 - Never use metadata__created_date, status__date, or cataloged_date as the age source for collection-age reports.
 - For collection-age prompts with library or collection scope, join inventory.item__t.effective_location_id -> inventory.location__t -> inventory.loclibrary__t -> inventory.loccampus__t and apply separate library-name and location-name filters instead of collapsing both concepts into one inventory.location__t keyword match.
 GUIDANCE;
+    }
+
+    private static function buildOrganizationAcquisitionUnitGuidance(): string
+    {
+        return <<<'GUIDANCE'
+ORGANIZATION RELATIONSHIPS — MANDATORY WHEN APPLICABLE:
+- Reach organizations.interfaces__t through organizations.organizations__t__interfaces: the bridge id is the organization ID and its interfaces column is the interface ID.
+- Scope an organization by acquisition unit through organizations.organizations__t__acq_unit_ids, then join its acq_unit_ids column to orders.acquisitions_unit__t.id.
+- Do not join an organization ID directly to organizations.interfaces__t.id.
+- Do not substitute organizations.organizations__t__accounts__acq_unit_ids; that bridge is account-level.
+- orders.purchase_order__t__acq_unit_ids.id is the purchase order ID, never an organization ID. It is valid for order-domain reports when joined to orders.purchase_order__t.id and the purchase order vendor joins to the organization.
+- Stored acquisition-unit codes use exact equality with canonical casing, for example au.name = 'AC'. Do not use wildcard matching.
+- Organization and interface reference-data listings do not require an artificial purchase-order campus path.
+GUIDANCE;
+    }
+
+    private static function semanticContractQuestion(
+        string $rawQuestion,
+        string $generationPrompt
+    ): string {
+        $trustedFollowUpPrefix = 'This is a follow-up request to a previously generated library report.';
+        return strpos(ltrim($generationPrompt), $trustedFollowUpPrefix) === 0
+            ? $generationPrompt
+            : $rawQuestion;
     }
 
     private static function buildLegacyPromptUserInput(
@@ -5989,7 +6019,7 @@ PROMPT;
             'attemptedPlanProvenance' => 'server_defaults',
             'modelCandidateExplanation' => $modelCandidateExplanation,
             'semanticContract' => ExploratorySemanticContractService::build(
-                $generationPrompt,
+                self::semanticContractQuestion($originalQuestion, $generationPrompt),
                 is_string($campus) ? $campus : null,
                 $assumptions,
                 (string)($currentResult['routeReason'] ?? 'preflight_validation_failed'),
@@ -6096,6 +6126,7 @@ Use only supplied schema tables and columns. Never access blocked data or produc
 Return the corrected query in one ```sql code block, followed by a concise explanation and a final line exactly like DATA SOURCE: folio.
 Never include a second SQL statement, an alternate query, or a semicolon inside the SQL code block.
 PROMPT;
+        $systemPrompt .= "\n\n" . self::buildOrganizationAcquisitionUnitGuidance();
 
         $semanticGuidance = [];
         foreach (($context['safeViolations'] ?? []) as $violation) {

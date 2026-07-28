@@ -6,12 +6,16 @@ require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
 
 class ExploratorySemanticContractService
 {
-    private const CONTRACT_VERSION = 1;
+    private const CONTRACT_VERSION = 2;
 
     private const EXPLORATORY_ROUTE_REASONS = [
         'unsupported_query_family',
         'user_requested_exploratory_generation',
         'canonical_path_unavailable_for_marc_source_records',
+    ];
+
+    private const ACQUISITION_UNIT_CODES = [
+        'SC', 'AC', 'MH', 'UM', 'HC', 'RP', 'YB',
     ];
 
     private const ROI_RULES = [
@@ -39,16 +43,18 @@ class ExploratorySemanticContractService
         string $routeReason,
         array $options = []
     ): array {
-        if (!self::isExploratoryRouteReason($routeReason) || !self::isCrossDomainCallNumberRoi($question)) {
-            return [
-                'contractVersion' => self::CONTRACT_VERSION,
-                'applicable' => false,
-                'concept' => null,
-                'requirements' => [],
-                'permittedFilters' => [],
-                'coverageStatus' => 'not_applicable',
-                'uncoveredRequirementKeys' => [],
-            ];
+        if (!self::isExploratoryRouteReason($routeReason)) {
+            return self::notApplicableContract();
+        }
+        $organizationCode = self::organizationAcquisitionUnitCode($question);
+        if ($organizationCode !== null && self::isOrganizationAcquisitionUnitQuestion($question)) {
+            return self::organizationAcquisitionUnitContract(
+                $organizationCode,
+                self::requestsOrganizationInterfaces($question)
+            );
+        }
+        if (!self::isCrossDomainCallNumberRoi($question)) {
+            return self::notApplicableContract();
         }
 
         $values = self::assumptionValues($assumptions);
@@ -134,6 +140,63 @@ class ExploratorySemanticContractService
         return $contract;
     }
 
+    private static function notApplicableContract(): array
+    {
+        return [
+            'contractVersion' => self::CONTRACT_VERSION,
+            'applicable' => false,
+            'concept' => null,
+            'requirements' => [],
+            'permittedFilters' => [],
+            'coverageStatus' => 'not_applicable',
+            'uncoveredRequirementKeys' => [],
+        ];
+    }
+
+    private static function organizationAcquisitionUnitContract(
+        string $code,
+        bool $requiresInterfaceRelationship
+    ): array
+    {
+        $requirements = [];
+        if ($requiresInterfaceRelationship) {
+            $requirements[] = self::requirement(
+                'organization_interface_relationship',
+                'Organization interfaces use the organization interfaces bridge.'
+            );
+        }
+        $requirements = array_merge($requirements, [
+            self::requirement(
+                'organization_acquisition_unit_relationship',
+                'Organization acquisition-unit scope uses the organization acquisition-unit bridge.'
+            ),
+            self::requirement(
+                'organization_acquisition_unit_code',
+                'The requested acquisition-unit code is matched exactly.',
+                ['code' => $code]
+            ),
+        ]);
+        $coverage = self::auditCoverage(
+            $requirements,
+            ExploratorySqlSemanticValidatorService::supportedRuleKeys()
+        );
+
+        return [
+            'contractVersion' => self::CONTRACT_VERSION,
+            'applicable' => true,
+            'concept' => 'organization_acquisition_unit_scope',
+            'requirements' => $coverage['requirements'],
+            'permittedFilters' => [
+                'acquisition_unit' => [
+                    'value' => $code,
+                    'provenance' => 'explicit_prompt',
+                ],
+            ],
+            'coverageStatus' => $coverage['coverageStatus'],
+            'uncoveredRequirementKeys' => $coverage['uncoveredRequirementKeys'],
+        ];
+    }
+
     public static function auditCoverage(array $requirements, array $supportedRuleKeys): array
     {
         $supported = array_flip($supportedRuleKeys);
@@ -168,6 +231,111 @@ class ExploratorySemanticContractService
             && preg_match('/\b(?:roi|return on investment|checkouts? per dollar|cost per (?:checkout|use))\b/', (string)$normalized) === 1;
     }
 
+    private static function isOrganizationAcquisitionUnitQuestion(string $question): bool
+    {
+        $classificationQuestion = preg_replace(
+            '/\b(?:purchase(?:-|\s+)orders?|orders?|invoices?|vouchers?)-related\b/i',
+            ' ',
+            $question
+        );
+        $normalized = strtolower((string)$classificationQuestion);
+        $normalized = preg_replace('/[^a-z0-9]+/', ' ', $normalized);
+        $normalized = preg_replace('/\s+/', ' ', trim((string)$normalized));
+
+        if (preg_match('/\baccounts?\b/', (string)$normalized) === 1) {
+            return false;
+        }
+        $hasTransactionalVocabulary = preg_match(
+            '/\b(?:purchase orders?|orders?|p os?|invoices?|vouchers?)\b/',
+            (string)$normalized
+        ) === 1;
+        if ($hasTransactionalVocabulary
+            && (!self::requestsOrganizationInterfaces($question)
+                || self::requestsTransactionalFact((string)$normalized))) {
+            return false;
+        }
+
+        return preg_match(
+            '/\b(?:organizations?|organization interfaces?|interfaces?|statistics notes?|vendors?|vendor metadata)\b/',
+            (string)$normalized
+        ) === 1
+            && preg_match('/\bacquisitions?\s+units?\b/', (string)$normalized) === 1;
+    }
+
+    private static function requestsOrganizationInterfaces(string $question): bool
+    {
+        return preg_match(
+            '/\b(?:interfaces?|statistics notes?)\b/i',
+            $question
+        ) === 1;
+    }
+
+    private static function requestsTransactionalFact(string $normalized): bool
+    {
+        $transaction = '(?:purchase orders?|orders?|p os?|invoices?|vouchers?)';
+        if (preg_match(
+            '/\b(?:list|show|count|analy[sz]e|report(?:\s+on)?|find|return|display|give(?:\s+(?:me|us))?|how\s+many)'
+            . '\s+(?:(?:me|us|a|an|the|all|of)\s+){0,4}' . $transaction . '\b/',
+            $normalized
+        ) === 1) {
+            return true;
+        }
+        if (preg_match('/^' . $transaction . '\b/', $normalized) === 1
+            || preg_match(
+                '/\b(?:and|plus|along\s+with)\s+(?:all\s+)?' . $transaction . '\b/',
+                $normalized
+            ) === 1) {
+            return true;
+        }
+        $codes = strtolower(implode('|', self::ACQUISITION_UNIT_CODES));
+        if (preg_match(
+            '/\b(?:' . $codes . ')\s+' . $transaction . '\b/',
+            $normalized
+        ) === 1) {
+            return true;
+        }
+
+        $transactionMatch = [];
+        $interfaceMatch = [];
+        $hasTransaction = preg_match(
+            '/\b' . $transaction . '\b/',
+            $normalized,
+            $transactionMatch,
+            PREG_OFFSET_CAPTURE
+        ) === 1;
+        $hasInterfaceOutput = preg_match(
+            '/\b(?:interfaces?|statistics notes?)\b/',
+            $normalized,
+            $interfaceMatch,
+            PREG_OFFSET_CAPTURE
+        ) === 1;
+        return $hasTransaction && $hasInterfaceOutput
+            && $transactionMatch[0][1] < $interfaceMatch[0][1];
+    }
+
+    private static function organizationAcquisitionUnitCode(string $question): ?string
+    {
+        if (preg_match(
+            '/\bacquisitions?[\s-]+units?(?:\s+code)?\s+([a-z]{2})\b/i',
+            $question,
+            $matches
+        ) === 1) {
+            $code = strtoupper($matches[1]);
+            return in_array($code, self::ACQUISITION_UNIT_CODES, true)
+                ? $code : null;
+        }
+        if (preg_match(
+            '/\b([a-z]{2})\s+acquisitions?[\s-]+units?\b/i',
+            $question,
+            $matches
+        ) === 1) {
+            $code = strtoupper($matches[1]);
+            return in_array($code, self::ACQUISITION_UNIT_CODES, true)
+                ? $code : null;
+        }
+        return null;
+    }
+
     private static function assumptionValues(array $assumptions): array
     {
         $values = [];
@@ -190,7 +358,7 @@ class ExploratorySemanticContractService
     {
         return [
             'key' => $key,
-            'rule' => self::ROI_RULES[$key],
+            'rule' => self::ROI_RULES[$key] ?? $key,
             'label' => $label,
             'parameters' => $parameters,
         ];

@@ -22,6 +22,9 @@ class ExploratorySqlSemanticValidatorService
         'currency_separation' => 'validateCurrencySeparation',
         'governed_filters' => 'validateGovernedFilters',
         'numeric_output_types' => 'validateNumericOutputTypes',
+        'organization_interface_relationship' => 'validateOrganizationInterfaceRelationship',
+        'organization_acquisition_unit_relationship' => 'validateOrganizationAcquisitionUnitRelationship',
+        'organization_acquisition_unit_code' => 'validateOrganizationAcquisitionUnitCode',
     ];
 
     private const GUIDANCE = [
@@ -40,6 +43,9 @@ class ExploratorySqlSemanticValidatorService
         'currency_separation' => 'Keep unlike invoice currencies in separate ROI groups.',
         'governed_filters' => 'Remove filters that were not permitted by the request contract.',
         'numeric_output_types' => 'Return analytical measures as numeric values without display formatting.',
+        'organization_interface_relationship' => 'Join organization interfaces through organizations.organizations__t__interfaces.interfaces = organizations.interfaces__t.id.',
+        'organization_acquisition_unit_relationship' => 'Scope organizations through organizations.organizations__t__acq_unit_ids.acq_unit_ids = orders.acquisitions_unit__t.id.',
+        'organization_acquisition_unit_code' => 'Match the requested acquisition-unit code exactly in WHERE or an INNER JOIN.',
     ];
 
     public static function supportedRuleKeys(): array
@@ -60,11 +66,16 @@ class ExploratorySqlSemanticValidatorService
         }
 
         $analysis = ExploratorySqlAnalysisService::analyze($sql);
+        $unsupportedOrganizationCteShape =
+            ($contract['concept'] ?? null) === 'organization_acquisition_unit_scope'
+            && ($analysis['ctes'] ?? []) !== [];
         $checked = [];
         $violations = [];
         foreach (($contract['requirements'] ?? []) as $requirement) {
             $rule = (string)($requirement['rule'] ?? '');
-            if (!isset(self::RULE_METHODS[$rule]) || !empty($analysis['ambiguous'])) {
+            if (!isset(self::RULE_METHODS[$rule])
+                || !empty($analysis['ambiguous'])
+                || $unsupportedOrganizationCteShape) {
                 $violations[] = self::violation(
                     $requirement,
                     'semantic_coverage_gap',
@@ -108,6 +119,164 @@ class ExploratorySqlSemanticValidatorService
         }
         return $spend !== null && self::qualifyingWindow($spend, $expected) !== null
             ? null : self::GUIDANCE['purchase_date_basis'];
+    }
+
+    private static function validateOrganizationInterfaceRelationship(
+        array $analysis,
+        array $requirement,
+        array $contract
+    ): ?string {
+        foreach (self::reachableScopes($analysis) as $scope) {
+            if (self::hasOrganizationInterfaceRelationship($scope)) {
+                return null;
+            }
+        }
+        return self::GUIDANCE['organization_interface_relationship'];
+    }
+
+    private static function validateOrganizationAcquisitionUnitRelationship(
+        array $analysis,
+        array $requirement,
+        array $contract
+    ): ?string {
+        $requiresInterface = self::contractHasRequirement(
+            $contract,
+            'organization_interface_relationship'
+        );
+        foreach (self::reachableScopes($analysis) as $scope) {
+            if (self::hasOrganizationAcquisitionRelationship(
+                $scope,
+                $requiresInterface
+            )) {
+                return null;
+            }
+        }
+        return self::GUIDANCE['organization_acquisition_unit_relationship'];
+    }
+
+    private static function validateOrganizationAcquisitionUnitCode(
+        array $analysis,
+        array $requirement,
+        array $contract
+    ): ?string {
+        $expected = (string)($requirement['parameters']['code'] ?? '');
+        if ($expected === '') {
+            return self::GUIDANCE['organization_acquisition_unit_code'];
+        }
+        $requiresInterface = self::contractHasRequirement(
+            $contract,
+            'organization_interface_relationship'
+        );
+        foreach (self::reachableScopes($analysis) as $scope) {
+            if (!self::hasOrganizationAcquisitionRelationship(
+                $scope,
+                $requiresInterface
+            )) {
+                continue;
+            }
+            $unit = self::aliasForSource($scope, 'orders.acquisitions_unit__t');
+            foreach (($scope['predicates']['literalPredicates'] ?? []) as $predicate) {
+                if (($predicate['column'] ?? null) === $unit . '.name'
+                    && ($predicate['operator'] ?? null) === '='
+                    && ($predicate['values'] ?? []) === [$expected]
+                    && empty($predicate['negated'])
+                    && self::isEnforcingFact($predicate)) {
+                    return null;
+                }
+            }
+        }
+        return self::GUIDANCE['organization_acquisition_unit_code'];
+    }
+
+    private static function contractHasRequirement(array $contract, string $key): bool
+    {
+        foreach (($contract['requirements'] ?? []) as $requirement) {
+            if (($requirement['key'] ?? null) === $key) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static function hasOrganizationInterfaceRelationship(array $scope): bool
+    {
+        $organization = self::aliasForSource(
+            $scope,
+            'organizations.organizations__t'
+        );
+        $interface = self::aliasForSource($scope, 'organizations.interfaces__t');
+        $bridge = self::aliasForSource(
+            $scope,
+            'organizations.organizations__t__interfaces'
+        );
+        if ($interface === null || $bridge === null
+            || !self::hasEnforcingColumnEquality(
+                $scope,
+                $interface . '.id',
+                $bridge . '.interfaces'
+            )) {
+            return false;
+        }
+        return $organization === null
+            || !self::hasEnforcingColumnEquality(
+                $scope,
+                $interface . '.id',
+                $organization . '.id'
+            );
+    }
+
+    private static function hasOrganizationAcquisitionRelationship(
+        array $scope,
+        bool $requiresInterface
+    ): bool {
+        $organization = self::aliasForSource(
+            $scope,
+            'organizations.organizations__t'
+        );
+        $interfaceBridge = self::aliasForSource(
+            $scope,
+            'organizations.organizations__t__interfaces'
+        );
+        $unitBridge = self::aliasForSource(
+            $scope,
+            'organizations.organizations__t__acq_unit_ids'
+        );
+        $unit = self::aliasForSource($scope, 'orders.acquisitions_unit__t');
+        if ($unitBridge === null || $unit === null
+            || ($requiresInterface
+                && !self::hasOrganizationInterfaceRelationship($scope))
+            || !self::hasEnforcingColumnEquality(
+                $scope,
+                $unit . '.id',
+                $unitBridge . '.acq_unit_ids'
+            )) {
+            return false;
+        }
+
+        $connectedToOrganization = $organization !== null
+            && self::hasEnforcingColumnEquality(
+                $scope,
+                $unitBridge . '.id',
+                $organization . '.id'
+            );
+        $connectedToInterfaceBridge = $interfaceBridge !== null
+            && self::hasEnforcingColumnEquality(
+                $scope,
+                $unitBridge . '.id',
+                $interfaceBridge . '.id'
+            );
+        $bothConnectedToOrganization = $organization !== null
+            && $interfaceBridge !== null
+            && $connectedToOrganization
+            && self::hasEnforcingColumnEquality(
+                $scope,
+                $interfaceBridge . '.id',
+                $organization . '.id'
+            );
+        if ($requiresInterface) {
+            return $connectedToInterfaceBridge || $bothConnectedToOrganization;
+        }
+        return $connectedToOrganization;
     }
 
     private static function validateInvestmentCostBasis(array $analysis, array $requirement, array $contract): ?string
@@ -2176,6 +2345,9 @@ class ExploratorySqlSemanticValidatorService
             'currency_separation' => 'grain_mismatch',
             'governed_filters' => 'unrequested_filter',
             'numeric_output_types' => 'output_type_mismatch',
+            'organization_interface_relationship' => 'relationship_mismatch',
+            'organization_acquisition_unit_relationship' => 'scope_mismatch',
+            'organization_acquisition_unit_code' => 'scope_mismatch',
         ];
         return $categories[$key] ?? 'semantic_coverage_gap';
     }
