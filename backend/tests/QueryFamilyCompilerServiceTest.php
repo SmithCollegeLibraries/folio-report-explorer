@@ -626,6 +626,67 @@ assertSameValue(
     'Top-items query definitions should preserve material-type filtering on the requested book scope.'
 );
 
+$compiledHillyerVideos = QueryFamilyCompilerService::compileToQueryDefinition([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'library' => 'SC Hillyer Art Library',
+        'material_type' => ['Videocassette', 'DVD/Blu-ray'],
+        'requested_outputs' => ['title', 'material_type'],
+        'match_policy' => 'exact_phrase',
+    ],
+]);
+assertSameValue(
+    [
+        'table' => 'inventory_material_types',
+        'column' => 'name',
+        'op' => 'IN',
+        'value' => ['Videocassette', 'DVD/Blu-ray'],
+    ],
+    $compiledHillyerVideos['filters'][1] ?? null,
+    'Resolved VHS and DVD vocabulary should compile to one exact material-type IN filter.'
+);
+assertSameValue(
+    [
+        ['table' => 'inventory_material_types', 'column' => 'name', 'alias' => 'material_type'],
+        ['table' => 'inventory_instances', 'column' => 'title'],
+    ],
+    $compiledHillyerVideos['columns'] ?? null,
+    'Implicit physical-video listings should be able to return the canonical material type beside each title.'
+);
+
+$onlyHoldingHillyerVideos = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'library' => 'SC Hillyer Art Library',
+        'location' => 'SC Art Zine Collection',
+        'material_type' => ['Videocassette', 'DVD/Blu-ray'],
+        'only_holding_location' => true,
+        'requested_outputs' => ['title', 'material_type'],
+        'match_policy' => 'exact_phrase',
+    ],
+]);
+assertContainsText(
+    'imt.name AS material_type',
+    $onlyHoldingHillyerVideos['sql'] ?? '',
+    'Only-holding listings should preserve a requested material-type output.'
+);
+assertContainsText(
+    'JOIN inventory.material_type__t imt ON imt.id = it.material_type_id',
+    $onlyHoldingHillyerVideos['sql'] ?? '',
+    'Only-holding listings should join the canonical material-type table through inventory items.'
+);
+assertContainsText(
+    'imt.name IN (',
+    $onlyHoldingHillyerVideos['sql'] ?? '',
+    'Only-holding listings should preserve all resolved material types in one IN predicate.'
+);
+assertSameValue(
+    true,
+    in_array('Videocassette', $onlyHoldingHillyerVideos['params'] ?? [], true)
+        && in_array('DVD/Blu-ray', $onlyHoldingHillyerVideos['params'] ?? [], true),
+    'Only-holding material-type parameters should retain both canonical physical-video values.'
+);
+
 $topItemsBuilt = QueryFamilyCompilerService::compileToSql([
     'familyKey' => 'circulation_top_items',
     'slots' => [

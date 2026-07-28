@@ -162,6 +162,7 @@
                     "contributor_name",
                     "instance_hrid",
                     "instance_number",
+                    "material_type",
                     "pub_date",
                     "publication_date",
                     "title"

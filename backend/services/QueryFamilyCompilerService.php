@@ -116,7 +116,16 @@ class QueryFamilyCompilerService
             array_splice($tables, 1, 0, ['inventory_instance__t__contributors']);
         }
 
-        if (in_array($familyKey, ['inventory_contributor_campus_item_barcode', 'inventory_library_location_listing', 'circulation_top_items'], true) && !empty($slots['material_type'])) {
+        if (
+            in_array($familyKey, ['inventory_contributor_campus_item_barcode', 'inventory_library_location_listing', 'circulation_top_items'], true)
+            && (
+                !empty($slots['material_type'])
+                || (
+                    $familyKey === 'inventory_library_location_listing'
+                    && in_array('material_type', (array)($slots['requested_outputs'] ?? []), true)
+                )
+            )
+        ) {
             $tables[] = 'inventory_material_types';
         }
 
@@ -161,6 +170,9 @@ class QueryFamilyCompilerService
                     break;
                 case 'item_id':
                     $columns[] = ['table' => 'inventory_items', 'column' => 'id', 'alias' => 'item_id'];
+                    break;
+                case 'material_type':
+                    $columns[] = ['table' => 'inventory_material_types', 'column' => 'name', 'alias' => 'material_type'];
                     break;
                 case 'publication_date':
                     $columns[] = ['table' => 'inventory_instances', 'column' => 'dates__date1', 'alias' => 'publication_date'];
@@ -376,7 +388,10 @@ class QueryFamilyCompilerService
             ];
         }
 
-        if (!empty($slots['material_type'])) {
+        if (
+            !empty($slots['material_type'])
+            || in_array('material_type', (array)($slots['requested_outputs'] ?? []), true)
+        ) {
             $joins[] = [
                 'from_table' => 'inventory_items',
                 'from_column' => 'material_type_id',
@@ -446,7 +461,10 @@ class QueryFamilyCompilerService
             ];
         }
 
-        if (!empty($slots['material_type'])) {
+        if (
+            !empty($slots['material_type'])
+            || in_array('material_type', (array)($slots['requested_outputs'] ?? []), true)
+        ) {
             $joins[] = [
                 'from_table' => 'inventory_items',
                 'from_column' => 'material_type_id',
@@ -462,6 +480,9 @@ class QueryFamilyCompilerService
     {
         $filters = self::indexFilters($queryDef['filters'] ?? []);
         $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : ['title'];
+        $materialTypeFilterKey = self::filterKey('inventory_material_types', 'name');
+        $needsMaterialTypeJoin = isset($filters[$materialTypeFilterKey])
+            || in_array('material_type', $requestedOutputs, true);
         $requiresItemOutput = false;
         $selectColumns = [];
 
@@ -491,6 +512,10 @@ class QueryFamilyCompilerService
                 case 'item_id':
                     $requiresItemOutput = true;
                     $selectColumns[] = 'it.id AS item_id';
+                    break;
+                case 'material_type':
+                    $requiresItemOutput = true;
+                    $selectColumns[] = 'imt.name AS material_type';
                     break;
                 case 'publication_date':
                     $selectColumns[] = 'ii.dates__date1 AS publication_date';
@@ -530,6 +555,7 @@ class QueryFamilyCompilerService
         foreach ([
             ['inventory_libraries', 'name', 'il.name'],
             ['inventory_campuses', 'name', 'ic.name'],
+            ['inventory_material_types', 'name', 'imt.name'],
         ] as $filterSpec) {
             $key = self::filterKey($filterSpec[0], $filterSpec[1]);
             if (!isset($filters[$key])) {
@@ -580,7 +606,8 @@ class QueryFamilyCompilerService
             . "JOIN inventory.location__t tl ON tl.id = th.effective_location_id\n"
             . "JOIN inventory.loclibrary__t il ON tl.library_id = il.id\n"
             . "JOIN inventory.loccampus__t ic ON il.campus_id = ic.id\n"
-            . ($requiresItemOutput ? "JOIN inventory.item__t it ON it.holdings_record_id = th.holdings_record_id\n" : '')
+            . (($requiresItemOutput || $needsMaterialTypeJoin) ? "JOIN inventory.item__t it ON it.holdings_record_id = th.holdings_record_id\n" : '')
+            . ($needsMaterialTypeJoin ? "JOIN inventory.material_type__t imt ON imt.id = it.material_type_id\n" : '')
             . self::inventoryListingContributorJoin($requestedOutputs)
             . "WHERE NOT EXISTS (\n"
             . "    SELECT 1\n"
@@ -616,7 +643,7 @@ class QueryFamilyCompilerService
             return false;
         }
 
-        return trim((string)($slots['material_type'] ?? '')) !== ''
+        return self::slotHasValue($slots['material_type'] ?? null)
             || trim((string)($slots['item_status'] ?? '')) !== '';
     }
 
@@ -637,6 +664,9 @@ class QueryFamilyCompilerService
                 case 'instance_number':
                     $selectColumns[] = 'inst.hrid AS instance_hrid';
                     break;
+                case 'material_type':
+                    $selectColumns[] = 'imt.name AS material_type_name';
+                    break;
                 case 'title':
                     $selectColumns[] = 'inst.title AS instance_title';
                     break;
@@ -653,13 +683,27 @@ class QueryFamilyCompilerService
         $where = ['camp.code = :p0'];
         $parameterIndex = 1;
 
-        $materialType = trim((string)($slots['material_type'] ?? ''));
-        if ($materialType !== '') {
-            $placeholder = ':p' . $parameterIndex++;
-            $params[$placeholder] = strtolower($materialType);
-            $where[] = "ii.material_type_id = (\n"
-                . "        SELECT id FROM inventory.material_type__t WHERE LOWER(name) = {$placeholder} LIMIT 1\n"
-                . "      )";
+        $materialType = $slots['material_type'] ?? null;
+        $requiresMaterialTypeJoin = is_array($materialType)
+            || in_array('material_type', $requestedOutputs, true);
+        if (self::slotHasValue($materialType)) {
+            if (is_array($materialType)) {
+                $placeholders = [];
+                foreach ($materialType as $value) {
+                    $placeholder = ':p' . $parameterIndex++;
+                    $placeholders[] = $placeholder;
+                    $params[$placeholder] = strtolower(trim((string)$value));
+                }
+                $where[] = 'LOWER(imt.name) IN (' . implode(', ', $placeholders) . ')';
+            } else {
+                $placeholder = ':p' . $parameterIndex++;
+                $params[$placeholder] = strtolower(trim((string)$materialType));
+                $where[] = $requiresMaterialTypeJoin
+                    ? "LOWER(imt.name) = {$placeholder}"
+                    : "ii.material_type_id = (\n"
+                        . "        SELECT id FROM inventory.material_type__t WHERE LOWER(name) = {$placeholder} LIMIT 1\n"
+                        . "      )";
+            }
         }
 
         $itemStatus = trim((string)($slots['item_status'] ?? ''));
@@ -680,6 +724,7 @@ class QueryFamilyCompilerService
             . "    JOIN inventory.location__t loc ON ii.effective_location_id = loc.id\n"
             . "    JOIN inventory.loclibrary__t lib ON loc.library_id = lib.id\n"
             . "    JOIN inventory.loccampus__t camp ON lib.campus_id = camp.id\n"
+            . ($requiresMaterialTypeJoin ? "    JOIN inventory.material_type__t imt ON ii.material_type_id = imt.id\n" : '')
             . "    WHERE " . implode("\n      AND ", $where) . "\n"
             . "  )\n"
             . "  SELECT " . implode(', ', self::campusScopedItemFilterOutputAliases($requestedOutputs)) . "\n"
@@ -704,6 +749,9 @@ class QueryFamilyCompilerService
                 case 'instance_number':
                     $aliases[] = 'instance_hrid';
                     break;
+                case 'material_type':
+                    $aliases[] = 'material_type_name';
+                    break;
                 case 'title':
                     $aliases[] = 'instance_title';
                     break;
@@ -718,13 +766,22 @@ class QueryFamilyCompilerService
         $requested = array_fill_keys(array_map('strval', $requestedOutputs), true);
         $ordered = [];
 
-        foreach (['title', 'barcode', 'instance_number', 'instance_hrid'] as $outputField) {
+        foreach (['title', 'material_type', 'barcode', 'instance_number', 'instance_hrid'] as $outputField) {
             if (isset($requested[$outputField])) {
                 $ordered[] = $outputField;
             }
         }
 
         return $ordered === [] ? $requestedOutputs : $ordered;
+    }
+
+    private static function slotHasValue($value): bool
+    {
+        if (is_array($value)) {
+            return $value !== [];
+        }
+
+        return is_scalar($value) && trim((string)$value) !== '';
     }
 
     /**

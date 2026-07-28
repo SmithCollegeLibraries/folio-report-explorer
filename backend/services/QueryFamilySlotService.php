@@ -94,11 +94,13 @@ class QueryFamilySlotService
                 continue;
             }
 
-            $normalizedValue = self::normalizeSlotValue($slotName, $value);
+            $normalizedValue = self::normalizeSlotValue($familyKey, $slotName, $value);
             if ($normalizedValue === null) {
                 $message = $slotName === 'year_buckets'
                     ? 'year_buckets must be a non-empty array of 4-digit years.'
-                    : 'Slot values must be non-empty strings.';
+                    : ($slotName === 'material_type'
+                        ? 'material_type must be a non-empty string or, for inventory listings, a non-empty array of strings.'
+                        : 'Slot values must be non-empty strings.');
                 $errors[] = self::err('slots.' . $slotName, 'type', $message);
                 continue;
             }
@@ -259,6 +261,9 @@ class QueryFamilySlotService
                 case 'item_id':
                     $select[] = ['table' => 'inventory_items', 'column' => 'id', 'alias' => 'item_id'];
                     break;
+                case 'material_type':
+                    $select[] = ['table' => 'inventory_material_types', 'column' => 'name', 'alias' => 'material_type'];
+                    break;
                 case 'publication_date':
                     $select[] = ['table' => 'inventory_instances', 'column' => 'dates__date1', 'alias' => 'publication_date'];
                     break;
@@ -329,7 +334,7 @@ class QueryFamilySlotService
         return $normalizedPayload;
     }
 
-    public static function buildSlotFilter(string $slotName, string $table, string $column, string $value, string $matchPolicy): array
+    public static function buildSlotFilter(string $slotName, string $table, string $column, $value, string $matchPolicy): array
     {
         $normalized = self::resolveSlotMatch($slotName, $value, $matchPolicy);
         return [
@@ -340,8 +345,15 @@ class QueryFamilySlotService
         ];
     }
 
-    public static function resolveSlotMatch(string $slotName, string $value, string $matchPolicy): array
+    public static function resolveSlotMatch(string $slotName, $value, string $matchPolicy): array
     {
+        if ($slotName === 'material_type' && is_array($value)) {
+            return [
+                'op' => 'IN',
+                'value' => self::normalizeStringList($value),
+            ];
+        }
+
         $normalizedValue = self::stripWildcards(trim($value));
         if ($slotName === 'location') {
             $normalizedValue = self::normalizeLocationScopeLabel($normalizedValue);
@@ -417,9 +429,12 @@ class QueryFamilySlotService
         }
 
         if ($slotName === 'library' || $slotName === 'location') {
+            $isCanonicalStoredName = preg_match('/^[A-Z]{2,6}\s+\S/', $normalizedValue) === 1;
             return [
                 'op' => 'ILIKE',
-                'value' => '%' . $normalizedValue . '%',
+                'value' => $effectiveMatchPolicy === 'exact_phrase' && $isCanonicalStoredName
+                    ? $normalizedValue
+                    : '%' . $normalizedValue . '%',
             ];
         }
 
@@ -557,7 +572,7 @@ class QueryFamilySlotService
             );
     }
 
-    private static function normalizeSlotValue(string $slotName, $value)
+    private static function normalizeSlotValue(string $familyKey, string $slotName, $value)
     {
         if ($slotName === 'year_buckets') {
             return self::normalizeYearBuckets($value);
@@ -567,7 +582,53 @@ class QueryFamilySlotService
             return self::normalizeBooleanSlotValue($value);
         }
 
+        if (
+            $familyKey === 'inventory_library_location_listing'
+            && $slotName === 'material_type'
+            && is_array($value)
+        ) {
+            return self::normalizeMaterialTypeList($value);
+        }
+
         return self::normalizeScalarSlotValue($value);
+    }
+
+    private static function normalizeStringList(array $values): array
+    {
+        $normalized = [];
+        foreach ($values as $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+
+            $value = trim((string)$value);
+            if ($value !== '' && !in_array($value, $normalized, true)) {
+                $normalized[] = $value;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private static function normalizeMaterialTypeList(array $values): ?array
+    {
+        $normalized = [];
+        foreach ($values as $value) {
+            if (!is_scalar($value)) {
+                return null;
+            }
+
+            $value = trim((string)$value);
+            if ($value === '') {
+                return null;
+            }
+
+            if (!in_array($value, $normalized, true)) {
+                $normalized[] = $value;
+            }
+        }
+
+        return $normalized === [] ? null : $normalized;
     }
 
     private static function isGenericPlaceholderSlotValue(string $slotName, $value): bool

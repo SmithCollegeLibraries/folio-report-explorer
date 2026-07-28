@@ -3592,6 +3592,12 @@ PROMPT;
         );
         $intent = $recoveredIntent['intent'];
         $slotProvenance = $recoveredIntent['slotProvenance'] ?? [];
+        $intent = self::applyResolvedReferenceFiltersToFamilyIntent(
+            $intent,
+            $resolvedFilters,
+            $originalQuestion,
+            $slotProvenance
+        );
         $telemetryContext = self::withSlotProvenanceTelemetry(
             $telemetryContext,
             $slotProvenance
@@ -3944,6 +3950,11 @@ PROMPT;
 
     private static function recoverInventoryListingFamilySlotsFromPrompt(array $slots, string $prompt, array $slotProvenance = []): array
     {
+        if (!is_array($slots['requested_outputs'] ?? null) || $slots['requested_outputs'] === []) {
+            $slots['requested_outputs'] = ['title'];
+            $slotProvenance['requested_outputs'] = 'documented_default';
+        }
+
         if (self::promptRequestsInventoryListingCallNumber($prompt)) {
             $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
             $requestedOutputs[] = 'call_number';
@@ -4036,6 +4047,94 @@ PROMPT;
             'slots' => $slots,
             'slotProvenance' => $slotProvenance,
         ];
+    }
+
+    private static function applyResolvedReferenceFiltersToFamilyIntent(
+        array $intent,
+        array $resolvedFilters,
+        string $originalQuestion,
+        array &$slotProvenance
+    ): array {
+        if (
+            trim((string)($intent['familyKey'] ?? '')) !== 'inventory_library_location_listing'
+            || !is_array($intent['slots'] ?? null)
+        ) {
+            return $intent;
+        }
+
+        $slotByDimension = [
+            'campus' => 'campus',
+            'library' => 'library',
+            'location' => 'location',
+            'material_type' => 'material_type',
+        ];
+        $expectedTables = [
+            'campus' => 'inventory.loccampus__t',
+            'library' => 'inventory.loclibrary__t',
+            'location' => 'inventory.location__t',
+            'material_type' => 'inventory.material_type__t',
+        ];
+        $applied = false;
+
+        foreach ($resolvedFilters as $filter) {
+            if (!is_array($filter)) {
+                continue;
+            }
+
+            $dimension = strtolower(trim((string)($filter['dimension'] ?? '')));
+            $slotName = $slotByDimension[$dimension] ?? null;
+            if (
+                $slotName === null
+                || strtolower(trim((string)($filter['source_table'] ?? ''))) !== $expectedTables[$dimension]
+                || strtolower(trim((string)($filter['column'] ?? ''))) !== 'name'
+            ) {
+                continue;
+            }
+
+            $values = [];
+            foreach ((array)($filter['values'] ?? []) as $value) {
+                if (!is_scalar($value)) {
+                    continue;
+                }
+                $value = trim((string)$value);
+                if ($value !== '' && !in_array($value, $values, true)) {
+                    $values[] = $value;
+                }
+            }
+            if ($values === []) {
+                continue;
+            }
+
+            $intent['slots'][$slotName] = $dimension === 'material_type' && count($values) > 1
+                ? $values
+                : $values[0];
+            $slotProvenance[$slotName] = 'reference_resolver';
+            $applied = true;
+        }
+
+        if ($applied) {
+            $intent['slots']['match_policy'] = 'exact_phrase';
+            $slotProvenance['match_policy'] = 'reference_resolver';
+        }
+
+        if (
+            isset($intent['slots']['material_type'])
+            && !self::promptMentionsCoveredInventoryOutputs($originalQuestion)
+        ) {
+            $outputs = is_array($intent['slots']['requested_outputs'] ?? null)
+                ? $intent['slots']['requested_outputs']
+                : [];
+            if (!in_array('material_type', $outputs, true)) {
+                $outputs[] = 'material_type';
+            }
+            if (!in_array('title', $outputs, true)) {
+                $outputs[] = 'title';
+            }
+            $intent['slots']['requested_outputs'] = $outputs;
+            $slotProvenance['requested_outputs'] = 'documented_default';
+        }
+
+        return $intent;
     }
 
     private static function removeInventoryListingLocationMasqueradingAsLibrary(array $slots, string $prompt, array &$slotProvenance): array
@@ -7964,11 +8063,18 @@ PROMPT;
             return false;
         }
 
+        if (self::promptMentionsUnsupportedInventoryListingConstraint($prompt)) {
+            return false;
+        }
+
         if (self::promptMentionsExplicitInstanceHridList($prompt)) {
             return false;
         }
 
-        if (!self::promptMentionsCoveredInventoryOutputs($prompt)) {
+        if (
+            !self::promptMentionsCoveredInventoryOutputs($prompt)
+            && !self::promptMentionsInventoryListingSubject($prompt)
+        ) {
             return false;
         }
 
@@ -7979,8 +8085,9 @@ PROMPT;
             return false;
         }
 
-        $hasListingLanguage = preg_match('/\b(list|listing|show|create)\b/i', $prompt) === 1;
-        $hasInventoryNoun = self::promptMentionsCoveredInventoryOutputs($prompt) || preg_match('/\b(record|records|book|books|catalog|catalogue)\b/i', $prompt) === 1;
+        $hasListingLanguage = preg_match('/\b(list|listing|show|find|create)\b/i', $prompt) === 1;
+        $hasInventoryNoun = self::promptMentionsCoveredInventoryOutputs($prompt)
+            || self::promptMentionsInventoryListingSubject($prompt);
 
         if (!$hasListingLanguage || !$hasInventoryNoun) {
             return false;
@@ -8029,6 +8136,20 @@ PROMPT;
         return preg_match('/\b(publisher|publishers|publication\s+place|place\s+of\s+publication)\b/i', (string)$prompt) === 1;
     }
 
+    private static function promptMentionsUnsupportedInventoryListingConstraint($prompt): bool
+    {
+        $prompt = (string)$prompt;
+        if (preg_match('/\b(?:18|19|20|21)\d{2}\b/', $prompt) === 1) {
+            return true;
+        }
+
+        return preg_match(
+            '/\b(subject|language|genre|classification|isbn|issn|titled)\b'
+                . '|\b(?:published|released|issued|created|acquired|cataloged)\s+(?:in|before|after|since|between)\b/i',
+            $prompt
+        ) === 1;
+    }
+
     private static function promptMentionsExplicitInstanceHridList($prompt): bool
     {
         if (preg_match('/\binstance\s+(?:numbers?|ids?)\s+below\b/i', (string)$prompt) === 1) {
@@ -8042,6 +8163,14 @@ PROMPT;
     private static function promptMentionsCoveredInventoryOutputs($prompt)
     {
         return preg_match('/\b(barcode|barcodes|item id|item ids|instance number|instance numbers|publication date|pub date|title|titles)\b/', (string)$prompt) === 1;
+    }
+
+    private static function promptMentionsInventoryListingSubject($prompt): bool
+    {
+        return preg_match(
+            '/\b(video|videos|vhs|dvd|dvds|blu[- ]?ray|blu[- ]?rays|videocassette|videocassettes|film|films)\b/i',
+            (string)$prompt
+        ) === 1;
     }
 
     private static function promptMentionsMarcConstraint($prompt)

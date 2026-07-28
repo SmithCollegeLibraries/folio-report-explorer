@@ -5,6 +5,7 @@ $sqlBuilderPath = __DIR__ . '/../services/SqlBuilderService.php';
 $graphBuilderPath = __DIR__ . '/../services/CanonicalQueryGraphArtifactBuilder.php';
 $graphServicePath = __DIR__ . '/../services/CanonicalQueryGraphService.php';
 $contractServicePath = __DIR__ . '/../services/QueryFamilyContractService.php';
+$manifestServicePath = __DIR__ . '/../services/QueryFamilySchemaManifestService.php';
 $slotServicePath = __DIR__ . '/../services/QueryFamilySlotService.php';
 $compilerServicePath = __DIR__ . '/../services/QueryFamilyCompilerService.php';
 $queryIntentServicePath = __DIR__ . '/../services/QueryIntentService.php';
@@ -16,6 +17,7 @@ foreach ([
     'CanonicalQueryGraphArtifactBuilder' => $graphBuilderPath,
     'CanonicalQueryGraphService' => $graphServicePath,
     'QueryFamilyContractService' => $contractServicePath,
+    'QueryFamilySchemaManifestService' => $manifestServicePath,
     'QueryFamilySlotService' => $slotServicePath,
     'QueryFamilyCompilerService' => $compilerServicePath,
     'QueryIntentService' => $queryIntentServicePath,
@@ -39,6 +41,9 @@ if (!class_exists('Yii')) {
             }
             if ($alias === '@app/data/query_family_contracts.json') {
                 return __DIR__ . '/../data/query_family_contracts.json';
+            }
+            if ($alias === '@app/data/query_family_schema_manifests.json') {
+                return __DIR__ . '/../data/query_family_schema_manifests.json';
             }
             if ($alias === '@app/data/table_mapping_cache.json') {
                 return __DIR__ . '/../data/table_mapping_cache.json';
@@ -81,12 +86,14 @@ require_once $sqlBuilderPath;
 require_once $graphBuilderPath;
 require_once $graphServicePath;
 require_once $contractServicePath;
+require_once $manifestServicePath;
 require_once $slotServicePath;
 require_once $compilerServicePath;
 require_once $queryIntentServicePath;
 require_once $geminiServicePath;
 
 use app\services\GeminiService;
+use app\services\FolioSchemaService;
 
 function assertSameValue($expected, $actual, string $message): void
 {
@@ -97,6 +104,152 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $familyBranch = new ReflectionMethod(GeminiService::class, 'buildQueryFamilyIntentResponse');
+
+$mapProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredMap');
+$mapProperty->setValue(null, [
+    'inventory_instances' => 'inventory.instance__t',
+    'inventory_holdings' => 'inventory.holdings_record__t',
+    'inventory_items' => 'inventory.item__t',
+    'inventory_locations' => 'inventory.location__t',
+    'inventory_libraries' => 'inventory.loclibrary__t',
+    'inventory_campuses' => 'inventory.loccampus__t',
+    'inventory_material_types' => 'inventory.material_type__t',
+]);
+$columnProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredColumns');
+$columnCache = json_decode((string)file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
+$columnProperty->setValue(null, is_array($columnCache['columns'] ?? null) ? $columnCache['columns'] : []);
+$subtableProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredSubtables');
+$subtableProperty->setValue(null, []);
+
+$resolvedVideoPayload = null;
+$resolvedVideoResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'library' => 'Hillyer library',
+            'material_type' => 'DVD',
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_library_location_listing'],
+    'show me all of the vhs and dvds at Hillyer library',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+    ],
+    function (array $normalizedPayload) use (&$resolvedVideoPayload): array {
+        $resolvedVideoPayload = $normalizedPayload;
+        return [
+            'sql' => "SELECT inst.title, imt.name AS material_type\n"
+                . "FROM inventory.instance__t inst\n"
+                . "JOIN inventory.holdings_record__t hr ON hr.instance_id = inst.id\n"
+                . "JOIN inventory.item__t ii ON ii.holdings_record_id = hr.id\n"
+                . "JOIN inventory.location__t loc ON loc.id = ii.effective_location_id\n"
+                . "JOIN inventory.loclibrary__t lib ON lib.id = loc.library_id\n"
+                . "JOIN inventory.material_type__t imt ON imt.id = ii.material_type_id\n"
+                . "WHERE lib.name = 'SC Hillyer Art Library'\n"
+                . "AND imt.name IN ('Videocassette', 'DVD/Blu-ray')",
+            'dataSource' => 'folio',
+            'route' => 'builder_intent',
+            'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+            'queryDefinition' => ['tables' => [], 'columns' => [], 'filters' => [], 'joins' => []],
+        ];
+    },
+    null,
+    null,
+    'show me all of the vhs and dvds at Hillyer library',
+    [
+        [
+            'dimension' => 'library',
+            'source_table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'values' => ['SC Hillyer Art Library'],
+        ],
+        [
+            'dimension' => 'material_type',
+            'source_table' => 'inventory.material_type__t',
+            'column' => 'name',
+            'values' => ['Videocassette', 'DVD/Blu-ray'],
+        ],
+    ]
+);
+assertSameValue(
+    ['SC Hillyer Art Library'],
+    [$resolvedVideoPayload['slots']['library'] ?? null],
+    'Resolved library vocabulary should replace the model alias before deterministic compilation.'
+);
+assertSameValue(
+    ['Videocassette', 'DVD/Blu-ray'],
+    $resolvedVideoPayload['slots']['material_type'] ?? null,
+    'Both resolved physical-video material types should reach deterministic compilation.'
+);
+assertSameValue(
+    ['material_type', 'title'],
+    $resolvedVideoPayload['slots']['requested_outputs'] ?? null,
+    'An implicit video listing should receive useful deterministic default outputs instead of failing slot validation.'
+);
+assertSameValue(
+    'builder_intent',
+    $resolvedVideoResult['route'] ?? null,
+    'A resolved physical-video library listing should return a verified builder result rather than exploratory recovery.'
+);
+
+$compiledResolvedVideoResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_library_location_listing',
+        'slots' => [
+            'library' => 'Hillyer library',
+            'material_type' => 'DVD',
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_library_location_listing'],
+    'show me all of the vhs and dvds at Hillyer library',
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+    ],
+    null,
+    null,
+    null,
+    'show me all of the vhs and dvds at Hillyer library',
+    [
+        [
+            'dimension' => 'library',
+            'source_table' => 'inventory.loclibrary__t',
+            'column' => 'name',
+            'values' => ['SC Hillyer Art Library'],
+            'value_metadata' => [
+                'SC Hillyer Art Library' => ['campus_name' => 'Smith College'],
+            ],
+        ],
+        [
+            'dimension' => 'material_type',
+            'source_table' => 'inventory.material_type__t',
+            'column' => 'name',
+            'values' => ['Videocassette', 'DVD/Blu-ray'],
+        ],
+    ]
+);
+assertSameValue(
+    'builder_intent',
+    $compiledResolvedVideoResult['route'] ?? null,
+    'The real compiler should keep a Hillyer VHS/DVD request on the verified builder route.'
+);
+assertSameValue(
+    true,
+    strpos((string)($compiledResolvedVideoResult['sql'] ?? ''), "il1.name ILIKE 'SC Hillyer Art Library'") !== false,
+    'The real compiler should scope Hillyer through inventory.loclibrary__t with its canonical name.'
+);
+assertSameValue(
+    true,
+    strpos((string)($compiledResolvedVideoResult['sql'] ?? ''), "imt.name IN ('Videocassette', 'DVD/Blu-ray')") !== false,
+    'The real compiler should preserve both canonical physical-video material types in one exact IN predicate.'
+);
 
 $canonicalEvidence = $familyBranch->invoke(
     null,

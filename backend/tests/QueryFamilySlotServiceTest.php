@@ -74,6 +74,49 @@ assertSameValue(
     'Collection-age library scope should remain recoverable from direct library wording rather than being marked explicit-only.'
 );
 
+$multiMaterialListingValidation = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'library' => 'SC Hillyer Art Library',
+        'material_type' => ['Videocassette', 'DVD/Blu-ray'],
+        'requested_outputs' => ['title', 'material_type'],
+        'match_policy' => 'exact_phrase',
+    ],
+]);
+assertSameValue(
+    true,
+    $multiMaterialListingValidation['valid'] ?? null,
+    'Inventory listings should accept a canonical set of material types resolved from user vocabulary such as VHS and DVD.'
+);
+assertSameValue(
+    ['Videocassette', 'DVD/Blu-ray'],
+    $multiMaterialListingValidation['normalizedPayload']['slots']['material_type'] ?? null,
+    'Canonical material-type sets should retain resolver order and values during slot normalization.'
+);
+assertSameValue(
+    'SC Hillyer Art Library',
+    QueryFamilySlotService::resolveSlotMatch(
+        'library',
+        'SC Hillyer Art Library',
+        'exact_phrase'
+    )['value'] ?? null,
+    'Canonical resolver-backed library names should compile as exact case-insensitive values rather than wildcard matches.'
+);
+$malformedMultiMaterialListing = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_library_location_listing',
+    'slots' => [
+        'library' => 'SC Hillyer Art Library',
+        'material_type' => ['Videocassette', ['invalid']],
+        'requested_outputs' => ['title'],
+        'match_policy' => 'exact_phrase',
+    ],
+]);
+assertSameValue(
+    false,
+    $malformedMultiMaterialListing['valid'] ?? null,
+    'Material-type arrays with non-scalar members must be rejected rather than partially normalized.'
+);
+
 $collectionAgeLocationOnlyValidation = QueryFamilySlotService::validateFamilyPayload([
     'familyKey' => 'inventory_collection_age',
     'slots' => [

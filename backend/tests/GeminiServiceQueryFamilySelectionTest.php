@@ -111,6 +111,51 @@ assertSameValue(
     'Title-only inventory listing prompts with explicit location scope should resolve onto the deterministic inventory listing family.'
 );
 
+$implicitOutputVideoListingPrompt = 'show me all of the vhs and dvds at Hillyer library';
+$resolvedImplicitOutputVideoListing = $familyResolver->invoke(
+    null,
+    $implicitOutputVideoListingPrompt,
+    'Smith College'
+);
+assertSameValue(
+    'inventory_library_location_listing',
+    $resolvedImplicitOutputVideoListing['familyKey'] ?? null,
+    'Library-scoped physical-video listings should use the deterministic inventory family even when the user does not name result columns.'
+);
+assertSameValue(
+    'inventory_library_location_listing',
+    $familyResolver->invoke(
+        null,
+        'Find all of the video formats at Hillyer library. This can be VHS or DVD.',
+        'Smith College'
+    )['familyKey'] ?? null,
+    'Find-all wording for a library-scoped physical-video listing should use the same deterministic inventory family as show-all wording.'
+);
+assertSameValue(
+    'inventory_library_location_listing',
+    $familyResolver->invoke(
+        null,
+        'Find all DVDs at the library called Hillyer Library.',
+        'Smith College'
+    )['familyKey'] ?? null,
+    'Exact-name wording for a called library should remain on the verified physical-video listing route.'
+);
+assertSameValue(
+    null,
+    $familyResolver->invoke(null, 'Show all patron records at Hillyer library.', 'Smith College'),
+    'Implicit-output routing must not treat generic records at a library as inventory items.'
+);
+assertSameValue(
+    null,
+    $familyResolver->invoke(null, 'Find all books published in 2024 at Hillyer library.', 'Smith College'),
+    'Implicit-output physical-video routing must not absorb book requests whose publication-year constraint is unsupported by the listing family.'
+);
+assertSameValue(
+    null,
+    $familyResolver->invoke(null, 'Find all DVDs published in 2024 at Hillyer library.', 'Smith College'),
+    'Physical-video routing must not silently discard a publication-year constraint that the listing family cannot represent.'
+);
+
 $materialStatusCampusListingPrompt = 'List of items with material type "e-book" and item status of "in process". Include title, barcode and instance number at Smith College';
 assertSameValue(
     'inventory_library_location_listing',
