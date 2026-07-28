@@ -12,6 +12,7 @@ describe('Ask follow-up context helpers', () => {
     const result: NlResponse = {
       sql: 'SELECT inst.title FROM inventory.instance__t inst',
       dataSource: 'folio',
+      generationId: 'generation-123',
       assumptions: [{
         key: 'purchase_date_basis',
         label: 'Purchase date',
@@ -28,6 +29,7 @@ describe('Ask follow-up context helpers', () => {
       previousSql: 'SELECT inst.title FROM inventory.instance__t inst',
       previousColumns: ['title'],
       previousAssumptions: result.assumptions,
+      parentGenerationId: 'generation-123',
     });
   });
 

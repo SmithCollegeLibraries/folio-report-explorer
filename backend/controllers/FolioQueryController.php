@@ -900,14 +900,23 @@ class FolioQueryController extends Controller
         $previousColumns = method_exists($job, 'getDecodedColumns')
             ? $job->getDecodedColumns()
             : [];
+        $metadata = $this->decodeQueryJobMetadata($job);
+        $askAiProvenance = is_array($metadata['askAiProvenance'] ?? null)
+            ? $metadata['askAiProvenance']
+            : [];
+        $parentGenerationId = trim((string)($askAiProvenance['generationId'] ?? ''));
 
-        return [
+        $resolved = [
             'source' => 'history',
             'jobId' => $jobId,
             'previousPrompt' => $this->getQueryJobOriginalPrompt($job) ?: 'Previous historical query',
             'previousSql' => $previousSql,
             'previousColumns' => is_array($previousColumns) ? array_values(array_filter(array_map('strval', $previousColumns))) : [],
         ];
+        if ($parentGenerationId !== '') {
+            $resolved['parentGenerationId'] = $parentGenerationId;
+        }
+        return $resolved;
     }
 
     /**
@@ -1757,7 +1766,10 @@ class FolioQueryController extends Controller
                     'error' => 'Queries about patron personal information or individual patron records are not supported. This system provides aggregate and operational library reporting only.',
                     'route' => 'blocked',
                     'routeReason' => 'ask_policy_block',
-                ], $prompt, $userId, ['policyBlocked' => true]);
+                ], $prompt, $userId, [
+                    'policyBlocked' => true,
+                    'parentGenerationId' => $body['parentGenerationId'] ?? null,
+                ]);
             }
         }
 
@@ -1772,6 +1784,8 @@ class FolioQueryController extends Controller
             }
         }
 
+        $followUpContext = null;
+        $parentGenerationId = null;
         try {
             $followUpContext = $this->normalizeFollowUpContext($body['followUpContext'] ?? null);
             if (($body['followUpContext'] ?? null) !== null && $followUpContext === null) {
@@ -1783,15 +1797,24 @@ class FolioQueryController extends Controller
                     409 => 'History job is not completed.',
                 ];
                 Yii::$app->response->statusCode = $status;
+                $rawFollowUpContext = $body['followUpContext'] ?? null;
+                $isHistoryFollowUp = is_array($rawFollowUpContext)
+                    && ($rawFollowUpContext['source'] ?? null) === 'history';
                 return $this->finalizeAskResponse([
                     'error' => $messages[$status] ?? 'Invalid follow-up context.',
                     'route' => 'follow_up_context_rejected',
                     'routeReason' => 'invalid_follow_up_context',
                 ], $prompt, $userId, [
                     'followUpContext' => null,
-                    'parentGenerationId' => $body['parentGenerationId'] ?? null,
+                    'parentGenerationId' => $isHistoryFollowUp
+                        ? null
+                        : ($body['parentGenerationId'] ?? null),
                 ]);
             }
+            $parentGenerationId = $this->resolveAskParentGenerationId(
+                $body,
+                $followUpContext
+            );
 
             $effectivePrompt = $followUpContext !== null
                 ? $this->buildFollowUpPrompt($prompt, $followUpContext)
@@ -1845,7 +1868,7 @@ class FolioQueryController extends Controller
             return $this->finalizeAskResponse($result, $prompt, $userId, [
                 'campus' => $campus ?: null,
                 'followUpContext' => $followUpContext,
-                'parentGenerationId' => $body['parentGenerationId'] ?? null,
+                'parentGenerationId' => $parentGenerationId,
                 'initialSql' => $initialSql,
             ]);
         } catch (\InvalidArgumentException $e) {
@@ -1856,7 +1879,12 @@ class FolioQueryController extends Controller
                 ),
                 $prompt,
                 $userId,
-                ['initialSql' => $initialSql ?? null]
+                [
+                    'campus' => $campus ?? null,
+                    'followUpContext' => $followUpContext,
+                    'parentGenerationId' => $parentGenerationId,
+                    'initialSql' => $initialSql ?? null,
+                ]
             );
         } catch (\RuntimeException $e) {
             if ($e instanceof \app\exceptions\DatabaseQueryCancelledException) {
@@ -1867,7 +1895,12 @@ class FolioQueryController extends Controller
                     ),
                     $prompt,
                     $userId,
-                    ['initialSql' => $initialSql ?? null]
+                    [
+                        'campus' => $campus ?? null,
+                        'followUpContext' => $followUpContext,
+                        'parentGenerationId' => $parentGenerationId,
+                        'initialSql' => $initialSql ?? null,
+                    ]
                 );
             }
             if (GeminiService::isAiTimeoutMessage($e->getMessage())) {
@@ -1881,7 +1914,12 @@ class FolioQueryController extends Controller
                     'error' => 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.',
                     'route' => 'ai_timeout',
                     'routeReason' => 'ai_provider_timeout',
-                ], $prompt, $userId, ['initialSql' => $initialSql ?? null]);
+                ], $prompt, $userId, [
+                    'campus' => $campus ?? null,
+                    'followUpContext' => $followUpContext,
+                    'parentGenerationId' => $parentGenerationId,
+                    'initialSql' => $initialSql ?? null,
+                ]);
             }
             return $this->finalizeAskResponse(
                 $this->attachTrustedAskEvidence(
@@ -1890,9 +1928,32 @@ class FolioQueryController extends Controller
                 ),
                 $prompt,
                 $userId,
-                ['initialSql' => $initialSql ?? null]
+                [
+                    'campus' => $campus ?? null,
+                    'followUpContext' => $followUpContext,
+                    'parentGenerationId' => $parentGenerationId,
+                    'initialSql' => $initialSql ?? null,
+                ]
             );
         }
+    }
+
+    private function resolveAskParentGenerationId(array $body, $followUpContext): ?string
+    {
+        if (
+            is_array($followUpContext)
+            && ($followUpContext['source'] ?? null) === 'history'
+        ) {
+            $trustedHistoryGenerationId = trim((string)(
+                $followUpContext['parentGenerationId'] ?? ''
+            ));
+            return $trustedHistoryGenerationId === ''
+                ? null
+                : $trustedHistoryGenerationId;
+        }
+
+        $parentGenerationId = trim((string)($body['parentGenerationId'] ?? ''));
+        return $parentGenerationId === '' ? null : $parentGenerationId;
     }
 
     private function finalizeAskResponse(array $result, string $prompt, $userId, array $context): array

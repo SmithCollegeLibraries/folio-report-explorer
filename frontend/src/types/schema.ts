@@ -387,6 +387,7 @@ export interface NlResponse {
 
 export interface FollowUpContext {
   source: 'ask' | 'history';
+  parentGenerationId?: string;
   previousPrompt?: string;
   previousSql?: string;
   previousColumns?: string[];

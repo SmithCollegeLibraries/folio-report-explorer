@@ -218,12 +218,14 @@ export async function askNl(
   includeSuggestions = true,
   followUpContext?: FollowUpContext | null,
   allowExploratory = false,
+  parentGenerationId?: string | null,
 ): Promise<NlResponse> {
   const { data } = await api.post('/nl', {
     prompt,
     campus: campus || null,
     includeSuggestions,
     allowExploratory,
+    ...(parentGenerationId ? { parentGenerationId } : {}),
     ...(followUpContext ? { followUpContext } : {}),
   });
   return data;

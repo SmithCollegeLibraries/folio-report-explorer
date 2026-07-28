@@ -27,6 +27,7 @@ type AskRequest = {
   includeSuggestions?: boolean;
   followUpContext?: FollowUpContext | null;
   allowExploratory?: boolean;
+  parentGenerationId?: string | null;
 };
 
 const CAMPUS_OPTIONS = [
@@ -465,7 +466,7 @@ export function buildBatchClarificationResolutionInput(
 
 export function buildCurrentAskFollowUpContext(
   previousPrompt: string,
-  result: Pick<NlResponse, 'sql' | 'assumptions'> | null | undefined,
+  result: Pick<NlResponse, 'sql' | 'assumptions' | 'generationId'> | null | undefined,
   previousColumns: string[] = [],
 ): FollowUpContext | null {
   const previousSql = result?.sql?.trim();
@@ -477,6 +478,7 @@ export function buildCurrentAskFollowUpContext(
     previousSql,
     previousColumns,
     ...(result?.assumptions?.length ? { previousAssumptions: result.assumptions } : {}),
+    ...(result?.generationId ? { parentGenerationId: result.generationId } : {}),
   };
 }
 
@@ -769,6 +771,7 @@ export default function Ask() {
         request.includeSuggestions ?? true,
         request.followUpContext ?? null,
         request.allowExploratory ?? false,
+        request.parentGenerationId ?? null,
       ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
       setNlResult(data);
@@ -874,6 +877,7 @@ export default function Ask() {
       includeSuggestions: true,
       shouldExecute: true,
       followUpContext: context,
+      parentGenerationId: context?.parentGenerationId ?? null,
     });
   };
 
@@ -972,16 +976,29 @@ export default function Ask() {
   };
 
   const handleUseSuggestion = (suggestedPrompt: string) => {
+    const context = buildCurrentAskFollowUpContext(
+      history[0]?.prompt || prompt,
+      nlResult,
+      results?.columns || [],
+    );
+    setFollowUpContext(context);
     setPrompt(suggestedPrompt);
   };
 
   const handleRunSuggestion = (suggestedPrompt: string) => {
+    const context = buildCurrentAskFollowUpContext(
+      history[0]?.prompt || prompt,
+      nlResult,
+      results?.columns || [],
+    );
     setPrompt(suggestedPrompt);
     setAskProgressPhase('checking_request');
     askMut.mutate({
       question: suggestedPrompt,
       includeSuggestions: true,
       shouldExecute: true,
+      followUpContext: context,
+      parentGenerationId: context?.parentGenerationId ?? null,
     });
   };
 
@@ -1019,6 +1036,7 @@ export default function Ask() {
       shouldExecute: true,
       followUpContext: context,
       allowExploratory: true,
+      parentGenerationId: context.parentGenerationId ?? null,
     });
   };
 
@@ -1033,6 +1051,7 @@ export default function Ask() {
       shouldExecute: true,
       followUpContext: null,
       allowExploratory: true,
+      parentGenerationId: nlResult?.generationId ?? null,
     });
   };
 
@@ -1049,6 +1068,7 @@ export default function Ask() {
       shouldExecute: true,
       followUpContext: null,
       allowExploratory: true,
+      parentGenerationId: nlResult?.generationId ?? null,
     });
   };
 
@@ -1077,6 +1097,7 @@ export default function Ask() {
         includeSuggestions: true,
         shouldExecute: true,
         allowExploratory: true,
+        parentGenerationId: nlResult.generationId ?? null,
       });
       return;
     }
@@ -1091,6 +1112,7 @@ export default function Ask() {
       question: clarifiedPrompt,
       includeSuggestions: true,
       shouldExecute: true,
+      parentGenerationId: nlResult.generationId ?? null,
     });
   };
 
@@ -1149,6 +1171,7 @@ export default function Ask() {
       question: clarifiedPrompt,
       includeSuggestions: true,
       shouldExecute: true,
+      parentGenerationId: nlResult.generationId ?? null,
     });
   };
 

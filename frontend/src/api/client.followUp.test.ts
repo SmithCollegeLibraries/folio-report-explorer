@@ -34,23 +34,33 @@ describe('API client follow-up context', () => {
     const { askNl } = await import('./client');
     post.mockResolvedValueOnce({ data: { sql: 'SELECT 1', dataSource: 'folio' } });
 
-    await askNl('include call numbers', 'Smith College', true, {
-      source: 'ask',
-      previousPrompt: 'original',
-      previousSql: 'SELECT inst.title FROM inventory.instance__t inst',
-      previousColumns: ['title'],
-    });
+    await askNl(
+      'include call numbers',
+      'Smith College',
+      true,
+      {
+        source: 'ask',
+        previousPrompt: 'original',
+        previousSql: 'SELECT inst.title FROM inventory.instance__t inst',
+        previousColumns: ['title'],
+        parentGenerationId: 'generation-123',
+      },
+      false,
+      'generation-123',
+    );
 
     expect(post).toHaveBeenCalledWith('/nl', {
       prompt: 'include call numbers',
       campus: 'Smith College',
       includeSuggestions: true,
       allowExploratory: false,
+      parentGenerationId: 'generation-123',
       followUpContext: {
         source: 'ask',
         previousPrompt: 'original',
         previousSql: 'SELECT inst.title FROM inventory.instance__t inst',
         previousColumns: ['title'],
+        parentGenerationId: 'generation-123',
       },
     });
   });
