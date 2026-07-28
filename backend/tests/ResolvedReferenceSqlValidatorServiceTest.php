@@ -187,6 +187,22 @@ resolvedReferenceAssertValid(
     'Hierarchy predicates matching resolved metadata must be accepted.'
 );
 
+$unsupportedHierarchyPredicates = [
+    'unresolved exact location' => "lib.name = 'SC Hillyer Art Library'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')"
+        . " AND loc.name = 'HC DVD'",
+    'unsupported location expression' => "lib.name = 'SC Hillyer Art Library'"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')"
+        . " AND COALESCE(loc.name, '') = 'HC DVD'",
+];
+foreach ($unsupportedHierarchyPredicates as $case => $where) {
+    resolvedReferenceAssertMismatch(
+        resolvedReferenceCompleteSql($where),
+        $resolvedFilters,
+        'Every positive hierarchy predicate must be backed by an allowed set: ' . $case
+    );
+}
+
 $positiveWithNegatedDecoysSql = resolvedReferenceCompleteSql(
     "lib.name = 'SC Hillyer Art Library'"
     . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')"

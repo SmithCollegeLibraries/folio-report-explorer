@@ -22,6 +22,14 @@ final class ResolvedReferenceSqlValidatorService
         'inventory.material_type__t' => 'material_type',
     ];
 
+    private const HIERARCHY_DIMENSIONS = [
+        'institution',
+        'campus',
+        'library',
+        'location',
+        'service_point',
+    ];
+
     private const ALIAS_STOP_WORDS = [
         'where', 'join', 'inner', 'left', 'right', 'full', 'cross', 'natural',
         'outer', 'on', 'using', 'group', 'order', 'having', 'limit', 'offset',
@@ -49,6 +57,7 @@ final class ResolvedReferenceSqlValidatorService
         }
         $terms = self::conjunctiveTerms($whereSql, $whereCode);
         $positivePredicates = self::positiveNameValues($terms, $aliases);
+        self::assertSupportedHierarchyPredicates($terms, $aliases);
 
         foreach ($expectedFilters as $filter) {
             $actualValues = [];
@@ -485,6 +494,89 @@ final class ResolvedReferenceSqlValidatorService
         return $predicates;
     }
 
+    private static function assertSupportedHierarchyPredicates(array $terms, array $aliases): void
+    {
+        foreach ($terms as $term) {
+            if (!self::containsHierarchyNameField($term, $aliases)) {
+                continue;
+            }
+
+            if (!empty(self::positiveNameValues([$term], $aliases))) {
+                continue;
+            }
+
+            if (self::isSupportedNegativeHierarchyPredicate($term, $aliases)) {
+                continue;
+            }
+
+            self::mismatch();
+        }
+    }
+
+    private static function containsHierarchyNameField(string $term, array $aliases): bool
+    {
+        $identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)';
+        $reference = $identifier . '(?:\s*\.\s*' . $identifier . ')*';
+        preg_match_all('/(' . $reference . '\s*\.\s*(?:"name"|name))/i', $term, $matches);
+
+        foreach ($matches[1] as $field) {
+            if (self::isHierarchyNameField((string) $field, $aliases)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static function isSupportedNegativeHierarchyPredicate(string $term, array $aliases): bool
+    {
+        $identifier = '(?:"(?:[^"]|"")*"|[A-Za-z_][A-Za-z0-9_$]*)';
+        $reference = $identifier . '(?:\s*\.\s*' . $identifier . ')*';
+        $nameField = '(' . $reference . '\s*\.\s*(?:"name"|name))';
+        $literal = "('(?:''|[^'])*')";
+        $literalToken = "'(?:''|[^'])*'";
+        $patterns = [
+            '/\A' . $nameField . '\s*(?:<>|!=)\s*' . $literal . '\z/i',
+            '/\A' . $literal . '\s*(?:<>|!=)\s*' . $nameField . '\z/i',
+            '/\A' . $nameField . '\s+NOT\s+(?:ILIKE|LIKE)\s+' . $literal
+                . '(?:\s+ESCAPE\s+' . $literal . ')?\z/i',
+            '/\A' . $nameField . '\s+NOT\s+IN\s*\(\s*' . $literalToken
+                . '(?:\s*,\s*' . $literalToken . ')*\s*\)\z/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $term, $match) !== 1) {
+                continue;
+            }
+
+            foreach ($match as $candidate) {
+                if (is_string($candidate) && self::isHierarchyNameField($candidate, $aliases)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static function isHierarchyNameField(string $field, array $aliases): bool
+    {
+        $field = self::normalizeQualifiedIdentifier($field);
+        $parts = explode('.', $field);
+        if (count($parts) < 2 || array_pop($parts) !== 'name') {
+            return false;
+        }
+
+        $reference = implode('.', $parts);
+        $sourceTable = $aliases[$reference] ?? null;
+        $dimension = is_string($sourceTable)
+            ? (self::TABLE_DIMENSIONS[$sourceTable] ?? null)
+            : null;
+
+        return is_string($dimension)
+            && in_array($dimension, self::HIERARCHY_DIMENSIONS, true);
+    }
+
     private static function exactLikeValue(string $literal, ?string $escapeLiteral): string
     {
         $pattern = self::unquoteSqlLiteral($literal);
@@ -646,7 +738,16 @@ final class ResolvedReferenceSqlValidatorService
 
         foreach ($positivePredicates as $predicate) {
             $dimension = self::TABLE_DIMENSIONS[$predicate['source_table']] ?? null;
-            if ($dimension === null || !isset($allowedValues[$dimension])) {
+            if ($dimension === null) {
+                continue;
+            }
+            if (
+                in_array($dimension, self::HIERARCHY_DIMENSIONS, true)
+                && !isset($allowedValues[$dimension])
+            ) {
+                self::mismatch();
+            }
+            if (!isset($allowedValues[$dimension])) {
                 continue;
             }
 
