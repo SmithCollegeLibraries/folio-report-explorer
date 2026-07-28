@@ -126,6 +126,15 @@ assertSameValue(
     'inventory_library_location_listing',
     $familyResolver->invoke(
         null,
+        'show me a list of vhs and dvds at Hillyer library',
+        'Smith College'
+    )['familyKey'] ?? null,
+    'List-of wording should reach the verified inventory family after qualified library resolution.'
+);
+assertSameValue(
+    'inventory_library_location_listing',
+    $familyResolver->invoke(
+        null,
         'Find all of the video formats at Hillyer library. This can be VHS or DVD.',
         'Smith College'
     )['familyKey'] ?? null,

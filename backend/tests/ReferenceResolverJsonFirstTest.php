@@ -224,6 +224,47 @@ assertJsonFirstContains("inventory.material_type__t.name = 'Videocassette'", $vi
 assertJsonFirstContains("inventory.material_type__t.name = 'DVD/Blu-ray'", $videoGuidance, 'DVD must resolve to DVD/Blu-ray.');
 assertJsonFirstNotContains('HC DVD', $videoGuidance, 'Material vocabulary must not activate the Hampshire location.');
 
+$listVideoResolution = ReferenceResolverService::resolvePrompt(
+    'show me a list of vhs and dvds at Hillyer library'
+);
+$listVideoGuidance = implode("\n", $listVideoResolution['guidanceLines'] ?? []);
+assertJsonFirstTrue(
+    empty($listVideoResolution['needsClarification']),
+    'List-of wording with a qualified Hillyer library phrase must resolve without generic library ambiguity.'
+);
+assertJsonFirstContains(
+    "inventory.loclibrary__t.name = 'SC Hillyer Art Library'",
+    $listVideoGuidance,
+    'List-of wording must retain Hillyer as a library-table filter.'
+);
+assertJsonFirstNotContains(
+    'AC African Writers eBooks',
+    json_encode($listVideoResolution),
+    'A resolved qualified library must not fall through to generic Amherst location ambiguity.'
+);
+foreach ([
+    'Please show me a list of VHS and DVDs at Hillyer library',
+    'Could you show me a list of VHS and DVDs at Hillyer library',
+    'Can I see a list of VHS and DVDs at Hillyer library',
+    'I need a list of VHS and DVDs at Hillyer library',
+] as $listVideoPromptVariant) {
+    $variantResolution = ReferenceResolverService::resolvePrompt($listVideoPromptVariant);
+    assertJsonFirstTrue(
+        empty($variantResolution['needsClarification']),
+        'Equivalent list-of request scaffolding must resolve without generic library ambiguity.'
+    );
+    assertJsonFirstSame(
+        ['SC Hillyer Art Library'],
+        $variantResolution['resolvedFilters'][0]['values'] ?? null,
+        'Equivalent list-of request scaffolding must preserve the canonical Hillyer library filter.'
+    );
+    assertJsonFirstSame(
+        ['Videocassette', 'DVD/Blu-ray'],
+        $variantResolution['resolvedFilters'][1]['values'] ?? null,
+        'Equivalent list-of request scaffolding must preserve both canonical video material filters.'
+    );
+}
+
 $genericVideoResolution = ReferenceResolverService::resolvePrompt('Show video materials at Hillyer library.');
 $genericVideoGuidance = implode("\n", $genericVideoResolution['guidanceLines'] ?? []);
 assertJsonFirstTrue(empty($genericVideoResolution['needsClarification']), 'Generic video must resolve from canonical JSON material rows.');

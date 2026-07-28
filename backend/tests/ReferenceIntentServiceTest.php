@@ -69,6 +69,37 @@ assertIntentSame(['vhs', 'dvd'], $reported[1]['terms'] ?? null, 'Explicit format
 assertIntentSame(null, $reported[1]['selector'] ?? null, 'Explicit terms must not retain the default group selector.');
 assertIntentSame(true, $reported[1]['explicit'] ?? null, 'Explicit formats must retain provenance.');
 
+$listRequest = ReferenceIntentService::extract(
+    'show me a list of vhs and dvds at Hillyer library'
+);
+assertIntentSame(
+    'Hillyer library',
+    $listRequest[0]['span'] ?? null,
+    'A list-of request must keep only the qualified library phrase as the library intent.'
+);
+assertIntentSame(
+    ['vhs', 'dvd'],
+    $listRequest[1]['terms'] ?? null,
+    'A list-of request must preserve the explicit material terms before the library boundary.'
+);
+foreach ([
+    'Please show me a list of VHS and DVDs at Hillyer library',
+    'Could you show me a list of VHS and DVDs at Hillyer library',
+    'Can I see a list of VHS and DVDs at Hillyer library',
+    'I need a list of VHS and DVDs at Hillyer library',
+] as $listRequestVariant) {
+    assertIntentSame(
+        ['Hillyer library'],
+        spansForDimension($listRequestVariant, 'library'),
+        'Command scaffolding variants must retain only the qualified library phrase.'
+    );
+    assertIntentSame(
+        ['vhs', 'dvd'],
+        materialTerms($listRequestVariant),
+        'Command scaffolding variants must preserve the explicit video material terms.'
+    );
+}
+
 $generic = ReferenceIntentService::extract('Show video materials at Hillyer library.');
 assertIntentSame('physical_video', $generic[1]['selector'] ?? null, 'Generic video must select physical video.');
 assertIntentSame(false, $generic[1]['explicit'] ?? null, 'The generic video group is a documented default.');

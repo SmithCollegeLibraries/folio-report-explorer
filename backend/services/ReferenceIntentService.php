@@ -1357,15 +1357,7 @@ final class ReferenceIntentService
             && ($words[1] ?? null) === 'you'
             && in_array($words[2] ?? null, $commands, true)
         ) {
-            $index = 3;
-            if (($words[$index] ?? null) === 'me') {
-                $index++;
-            }
-
-            return self::afterRequestObjectBoundary(
-                array_slice($tokens, $index),
-                true
-            );
+            return self::afterCommandScaffolding($tokens, 3);
         }
 
         if (
@@ -1373,7 +1365,7 @@ final class ReferenceIntentService
             && ($words[1] ?? null) === 'i'
             && in_array($words[2] ?? null, ['see', 'find', 'get'], true)
         ) {
-            return array_slice($tokens, 3);
+            return self::afterCommandScaffolding($tokens, 3);
         }
 
         if ($words[0] === 'how' && ($words[1] ?? null) === 'many') {
@@ -1405,15 +1397,7 @@ final class ReferenceIntentService
             $words[0] === 'please'
             && in_array($words[1] ?? null, $commands, true)
         ) {
-            $index = 2;
-            if (($words[$index] ?? null) === 'me') {
-                $index++;
-            }
-
-            return self::afterRequestObjectBoundary(
-                array_slice($tokens, $index),
-                true
-            );
+            return self::afterCommandScaffolding($tokens, 2);
         }
 
         if ($words[0] === 'i' && ($words[1] ?? null) === 'need') {
@@ -1425,29 +1409,11 @@ final class ReferenceIntentService
                 $index++;
             }
 
-            return array_slice($tokens, $index);
+            return self::afterCommandScaffolding($tokens, $index);
         }
 
         if (in_array($words[0], $commands, true)) {
-            $index = 1;
-            if (($words[$index] ?? null) === 'me') {
-                $index++;
-            }
-            while (
-                $index < $count
-                && in_array(
-                    $words[$index],
-                    ['all', 'the', 'of', 'item', 'items', 'this', 'can', 'be'],
-                    true
-                )
-            ) {
-                $index++;
-            }
-
-            return self::afterRequestObjectBoundary(
-                array_slice($tokens, $index),
-                true
-            );
+            return self::afterCommandScaffolding($tokens, 1);
         }
 
         if (self::isBoundaryPreposition($words[0])) {
@@ -1455,6 +1421,40 @@ final class ReferenceIntentService
         }
 
         return self::afterRequestObjectBoundary($tokens, false);
+    }
+
+    private static function afterCommandScaffolding(array $tokens, int $index): array
+    {
+        $words = array_column($tokens, 'norm');
+        $count = count($words);
+
+        if (($words[$index] ?? null) === 'me') {
+            $index++;
+        }
+        if (in_array($words[$index] ?? null, ['a', 'an', 'the'], true)) {
+            $index++;
+        }
+        if (in_array($words[$index] ?? null, ['list', 'listing'], true)) {
+            $index++;
+            if (($words[$index] ?? null) === 'of') {
+                $index++;
+            }
+        }
+        while (
+            $index < $count
+            && in_array(
+                $words[$index],
+                ['all', 'the', 'of', 'item', 'items', 'this', 'can', 'be'],
+                true
+            )
+        ) {
+            $index++;
+        }
+
+        return self::afterRequestObjectBoundary(
+            array_slice($tokens, $index),
+            true
+        );
     }
 
     private static function afterRequestObjectBoundary(
