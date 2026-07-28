@@ -1267,6 +1267,10 @@ class ReferenceResolverService
         array $matches
     ): array {
         $dimension = (string)($intent['dimension'] ?? 'reference');
+        if ($dimension === 'library' && !empty($matches)) {
+            return self::buildAmbiguousLibraryOutcome($intent, $matches);
+        }
+
         $span = trim((string)($intent['span'] ?? ''));
         $label = str_replace('_', ' ', $dimension);
         $options = [];
@@ -1323,6 +1327,63 @@ class ReferenceResolverService
             'question' => $question,
             'route' => 'clarification',
             'routeReason' => 'reference_resolver_ambiguous_' . $dimension,
+            'dataSource' => null,
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $intent
+     * @param array<int, array<string, mixed>> $matches
+     * @return array<string, mixed>
+     */
+    private static function buildAmbiguousLibraryOutcome(
+        array $intent,
+        array $matches
+    ): array {
+        $span = trim((string)($intent['span'] ?? ''));
+        $libraryOptions = [];
+        foreach ($matches as $match) {
+            $reference = isset($match['score'])
+                ? $match
+                : self::referenceAsMatch($match, 0, 'typed_ambiguous');
+            $name = trim((string)($reference['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $metadata = is_array($reference['metadata'] ?? null)
+                ? $reference['metadata']
+                : [];
+            $libraryOptions[] = [
+                'id' => (string)($reference['source_id'] ?? ''),
+                'label' => $name,
+                'description' => trim((string)($metadata['campus_name'] ?? '')),
+                'resolvedFilter' => [
+                    'table' => 'inventory.loclibrary__t',
+                    'column' => 'name',
+                    'operator' => '=',
+                    'value' => $name,
+                ],
+            ];
+        }
+
+        return [
+            'needsClarification' => true,
+            'clarificationType' => self::CLARIFICATION_TYPE_BATCH,
+            'clarificationItems' => [
+                [
+                    'term' => $span,
+                    'clarificationKey' => 'reference_library_ambiguous.'
+                        . self::normalizeKey($span),
+                    'question' => 'Which library should "' . $span . '" mean?',
+                    'confidence' => 'ambiguous_library_reference',
+                    'reason' => 'multiple_library_matches',
+                    'inputType' => 'single_choice',
+                    'freeTextAllowed' => true,
+                    'options' => $libraryOptions,
+                ],
+            ],
+            'route' => 'clarification',
+            'routeReason' => 'reference_resolver_ambiguous_library',
             'dataSource' => null,
         ];
     }
