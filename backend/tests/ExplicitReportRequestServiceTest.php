@@ -151,4 +151,54 @@ $unqualifiedIdentifier = ExplicitReportRequestService::validateCandidate(
 );
 explicitAssertTrue($unqualifiedIdentifier['valid'], 'An unqualified identifier predicate on one unambiguous relation must satisfy validation.');
 
+$outputListWithTrailingWords = ExplicitReportRequestService::extract(
+    'show me all of the vhs and dvds in hillyer library. Include the title, call number, barcode, circulation information'
+);
+explicitAssertSame(
+    [],
+    $outputListWithTrailingWords['identifiers'],
+    'A barcode named in an output list must not capture the words that follow it as barcode values.'
+);
+explicitAssertSame(
+    ['title', 'barcode'],
+    $outputListWithTrailingWords['requestedFields'],
+    'A barcode named in an output list remains a requested output field.'
+);
+
+$outputListLedByIdentifierLabel = ExplicitReportRequestService::extract(
+    'Show me all items in Hillyer. Include the barcode, title, call number'
+);
+explicitAssertSame(
+    [],
+    $outputListLedByIdentifierLabel['identifiers'],
+    'An output list beginning with an identifier label must not capture the remaining field names as values.'
+);
+
+$outputListJoinedByAnd = ExplicitReportRequestService::extract(
+    'Include the title, call number, and barcode, circulation information'
+);
+explicitAssertSame(
+    [],
+    $outputListJoinedByAnd['identifiers'],
+    'A comma-separated output list joined by "and" must not turn its labels into identifier anchors.'
+);
+
+$prepositionalBarcodes = ExplicitReportRequestService::extract(
+    'Show titles for barcodes 31600001234 and 31600005678.'
+);
+explicitAssertSame(
+    ['31600001234', '31600005678'],
+    $prepositionalBarcodes['identifiers']['item_barcode'] ?? null,
+    'Barcodes introduced by a filter preposition must still be extracted.'
+);
+
+$introducedBarcodes = ExplicitReportRequestService::extract(
+    'Include the title. Item barcodes are 31600001234, 31600005678.'
+);
+explicitAssertSame(
+    ['31600001234', '31600005678'],
+    $introducedBarcodes['identifiers']['item_barcode'] ?? null,
+    'Barcodes introduced by an explicit value marker must still be extracted.'
+);
+
 fwrite(STDOUT, "ExplicitReportRequestService test passed\n");

@@ -11,6 +11,14 @@ final class ExplicitReportRequestService
 {
     private const MAX_IDENTIFIERS = 500;
 
+    // An identifier label only introduces values when the request frames it as a
+    // filter ("for barcode X") or marks the values explicitly ("barcodes are X").
+    // A bare label is an output field name ("include the title, barcode, ...")
+    // and must not swallow the words that follow it.
+    private const IDENTIFIER_FILTER_LEAD_INS = '(?:for|where|with|using|matching|filtered\s+by)';
+
+    private const IDENTIFIER_VALUE_MARKERS = '(?:are|is|of|:|=)';
+
     private const OUTPUT_PATTERNS = [
         'title' => '/\btitles?\b/i',
         'barcode' => '/\bbarcodes?\b/i',
@@ -25,7 +33,7 @@ final class ExplicitReportRequestService
             'instance_hrid',
             self::extractAnchoredValues(
                 $prompt,
-                '/\binstance\s*(?:numbers?|hrids?)\b\s*(?:are|is|of|:|=)?\s*/i',
+                self::anchorPattern('instance\s*(?:numbers?|hrids?)'),
                 '/^in[0-9][a-z0-9_-]*$/i'
             )
         );
@@ -34,7 +42,7 @@ final class ExplicitReportRequestService
             'item_barcode',
             self::extractAnchoredValues(
                 $prompt,
-                '/\b(?:item\s+)?barcodes?\b\s*(?:are|is|of|:|=)?\s*/i',
+                self::anchorPattern('(?:item\s+)?barcodes?'),
                 '/^[a-z0-9_-]+$/i'
             )
         );
@@ -43,7 +51,7 @@ final class ExplicitReportRequestService
             'instance_id',
             self::extractAnchoredValues(
                 $prompt,
-                '/\binstance\s+ids?\b\s*(?:are|is|of|:|=)?\s*/i',
+                self::anchorPattern('instance\s+ids?'),
                 '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i'
             )
         );
@@ -52,7 +60,7 @@ final class ExplicitReportRequestService
             'item_id',
             self::extractAnchoredValues(
                 $prompt,
-                '/\bitem\s+ids?\b\s*(?:are|is|of|:|=)?\s*/i',
+                self::anchorPattern('item\s+ids?'),
                 '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i'
             )
         );
@@ -146,6 +154,23 @@ final class ExplicitReportRequestService
             'missingFields' => $missingFields,
             'limitValid' => $limitValid,
         ];
+    }
+
+    private static function anchorPattern(string $label): string
+    {
+        $article = '(?:an?\s+|the\s+)?';
+
+        return '/(?:'
+            // "for barcode X", "filtered by instance number Y"
+            . '\b' . self::IDENTIFIER_FILTER_LEAD_INS . '\s+' . $article . $label . '\b\s*'
+            . self::IDENTIFIER_VALUE_MARKERS . '?'
+            // "instance IDs X and item IDs Y" — a conjunction continues an
+            // identifier phrase, but not a comma-separated output list
+            // ("title, call number, and barcode, ...").
+            . '|(?<![,;])\s+and\s+' . $article . $label . '\b\s*' . self::IDENTIFIER_VALUE_MARKERS . '?'
+            // "barcodes are X, Y", "instance HRIDs: X"
+            . '|\b' . $label . '\b\s*' . self::IDENTIFIER_VALUE_MARKERS
+            . ')\s*/i';
     }
 
     private static function extractAnchoredValues(string $prompt, string $anchorPattern, string $valuePattern): array
