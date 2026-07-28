@@ -469,6 +469,16 @@ foreach ($unsupportedBooleanAndScopeSql as $case => $sql) {
     );
 }
 
+resolvedReferenceAssertMismatch(
+    resolvedReferenceCompleteSql(
+        "item.id IS NULL BETWEEN item.id IS NULL"
+        . " AND (lib.name = 'SC Hillyer Art Library')"
+        . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')"
+    ),
+    $resolvedFilters,
+    'A required reference comparison used as a BETWEEN bound must fail closed.'
+);
+
 $expressionBoundaryBypasses = [
     'field-first concatenation' => "lib.name = 'SC Hillyer Art Library' || ' wrong'"
         . " AND mt.name IN ('Videocassette', 'DVD/Blu-ray')",

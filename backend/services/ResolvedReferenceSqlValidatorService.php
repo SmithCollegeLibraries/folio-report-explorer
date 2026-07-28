@@ -44,6 +44,9 @@ final class ResolvedReferenceSqlValidatorService
         $expectedFilters = self::combinedExpectedFilters($resolvedFilters, $aliases);
         $whereSql = substr($sql, $whereStart, $whereEnd - $whereStart);
         $whereCode = substr($structureCode, $whereStart, $whereEnd - $whereStart);
+        if (preg_match('/\bBETWEEN\b/i', $whereCode) === 1) {
+            self::mismatch();
+        }
         $terms = self::conjunctiveTerms($whereSql, $whereCode);
         $positivePredicates = self::positiveNameValues($terms, $aliases);
 
