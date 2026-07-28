@@ -226,4 +226,285 @@ $acceptedSafeProbe = ReferenceResolverService::buildSafeProbeClarificationFromOp
 assertResolverSame(false, $acceptedSafeProbe['needsClarification'] ?? null, 'Accepted safe-probe clarification should not ask the same question again.');
 assertResolverContains('inventory.instance__t__contributors.contributors__name', implode("\n", $acceptedSafeProbe['guidanceLines'] ?? []), 'Accepted safe-probe clarification should become SQL guidance.');
 
+$videoReferences = [
+    [
+        'source_table' => 'inventory.location__t',
+        'source_id' => 'hc-dvd',
+        'name' => 'HC DVD',
+        'code' => 'HCDVD',
+        'metadata' => ['library_name' => 'HC Harold F. Johnson Library', 'campus_name' => 'Hampshire College'],
+    ],
+    [
+        'source_table' => 'inventory.loclibrary__t',
+        'source_id' => 'sc-hillyer',
+        'name' => 'SC Hillyer Art Library',
+        'code' => 'SCHIL',
+        'metadata' => ['campus_name' => 'Smith College'],
+    ],
+    ['source_table' => 'inventory.material_type__t', 'source_id' => 'mt-vhs', 'name' => 'Videocassette', 'code' => ''],
+    ['source_table' => 'inventory.material_type__t', 'source_id' => 'mt-dvd', 'name' => 'DVD/Blu-ray', 'code' => ''],
+    ['source_table' => 'inventory.material_type__t', 'source_id' => 'mt-film', 'name' => 'Film', 'code' => ''],
+];
+
+$video = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Find all of the video formats at Hillyer library. This can be VHS or DVD.',
+    $videoReferences
+);
+assertResolverSame(false, $video['needsClarification'] ?? null, 'Known library and formats must resolve directly.');
+assertResolverSame([
+    [
+        'dimension' => 'library',
+        'source_table' => 'inventory.loclibrary__t',
+        'column' => 'name',
+        'values' => ['SC Hillyer Art Library'],
+        'value_metadata' => [
+            'SC Hillyer Art Library' => ['campus_name' => 'Smith College'],
+        ],
+        'provenance' => 'explicit_prompt',
+        'vocabulary_terms' => [],
+    ],
+    [
+        'dimension' => 'material_type',
+        'source_table' => 'inventory.material_type__t',
+        'column' => 'name',
+        'values' => ['Videocassette', 'DVD/Blu-ray'],
+        'value_metadata' => [
+            'Videocassette' => [],
+            'DVD/Blu-ray' => [],
+        ],
+        'provenance' => 'explicit_prompt',
+        'vocabulary_terms' => ['vhs', 'dvd'],
+    ],
+], $video['resolvedFilters'] ?? null, 'Resolver must return table-scoped structured filters.');
+assertResolverSame(
+    false,
+    in_array('HC DVD', array_column($video['resolvedReferences'] ?? [], 'name'), true),
+    'DVD vocabulary must not activate a location row.'
+);
+assertResolverSame(
+    false,
+    strpos(implode("\n", $video['guidanceLines'] ?? []), 'HC DVD') !== false,
+    'DVD vocabulary must not add HC DVD guidance.'
+);
+
+$genericVideo = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show video materials at Hillyer library.',
+    $videoReferences
+);
+assertResolverSame(
+    ['Videocassette', 'DVD/Blu-ray', 'Film'],
+    $genericVideo['resolvedFilters'][1]['values'] ?? null,
+    'Generic video must select the complete physical-video group in selector order.'
+);
+assertResolverSame(
+    'documented_default',
+    $genericVideo['resolvedFilters'][1]['provenance'] ?? null,
+    'Generic video must retain its documented-default provenance.'
+);
+
+foreach ([
+    'DVDs at Hillyer library.' => ['DVD/Blu-ray'],
+    'VHS at Hillyer library.' => ['Videocassette'],
+    'Films at Hillyer library.' => ['Film'],
+] as $materialPrompt => $expectedNames) {
+    $materialResolution = ReferenceResolverService::resolvePromptAgainstReferences(
+        $materialPrompt,
+        $videoReferences
+    );
+    assertResolverSame(
+        $expectedNames,
+        $materialResolution['resolvedFilters'][1]['values'] ?? null,
+        'Explicit material vocabulary must narrow the physical-video group.'
+    );
+}
+
+$allMaterials = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show all materials at Hillyer library.',
+    $videoReferences
+);
+assertResolverSame(
+    ['library'],
+    array_column($allMaterials['resolvedFilters'] ?? [], 'dimension'),
+    'All materials must preserve only the library filter.'
+);
+
+$missingCanonical = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show video materials at Hillyer library.',
+    array_merge(
+        array_values(array_filter($videoReferences, function (array $reference): bool {
+            return ($reference['name'] ?? '') !== 'Videocassette';
+        })),
+        [[
+            'source_table' => 'inventory.material_type__t',
+            'source_id' => 'mt-similar-vhs',
+            'name' => 'Video Cassette',
+            'code' => '',
+        ]]
+    )
+);
+assertResolverSame(true, $missingCanonical['needsClarification'] ?? null, 'A missing canonical material row must stop resolution.');
+assertResolverSame('reference_value_unavailable', $missingCanonical['routeReason'] ?? null, 'Missing canonical rows need a stable unavailable reason.');
+assertResolverContains('video format', strtolower($missingCanonical['question'] ?? ''), 'Unavailable material responses must use domain language.');
+assertResolverSame(false, strpos($missingCanonical['question'] ?? '', 'inventory.') !== false, 'Unavailable material responses must not expose schema names.');
+
+$hcDvdLocation = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show items in location HC DVD.',
+    $videoReferences
+);
+assertResolverSame([
+    [
+        'dimension' => 'location',
+        'source_table' => 'inventory.location__t',
+        'column' => 'name',
+        'values' => ['HC DVD'],
+        'value_metadata' => [
+            'HC DVD' => ['library_name' => 'HC Harold F. Johnson Library', 'campus_name' => 'Hampshire College'],
+        ],
+        'provenance' => 'explicit_prompt',
+        'vocabulary_terms' => [],
+    ],
+], $hcDvdLocation['resolvedFilters'] ?? null, 'Explicit HC DVD location intent must stay in the location dimension.');
+assertResolverSame(
+    ['HC DVD'],
+    array_column($hcDvdLocation['resolvedReferences'] ?? [], 'name'),
+    'An explicit location span must consume overlapping DVD material vocabulary.'
+);
+
+$artVideoReferences = array_merge($videoReferences, [[
+    'source_table' => 'inventory.location__t',
+    'source_id' => 'sc-art-video',
+    'name' => 'SC Art Video',
+    'code' => 'SCARTV',
+    'metadata' => ['library_name' => 'SC Hillyer Art Library', 'campus_name' => 'Smith College'],
+]]);
+$artVideoLocation = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show items in SC Art Video location.',
+    $artVideoReferences
+);
+assertResolverSame(
+    ['SC Art Video'],
+    $artVideoLocation['resolvedFilters'][0]['values'] ?? null,
+    'An explicit SC Art Video location must resolve only against the location table.'
+);
+assertResolverSame(
+    ['location'],
+    array_column($artVideoLocation['resolvedFilters'] ?? [], 'dimension'),
+    'Video inside an explicit location span must not add a material filter.'
+);
+
+$unqualifiedDvd = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show DVD holdings.',
+    $videoReferences
+);
+assertResolverSame(
+    false,
+    in_array('HC DVD', array_column($unqualifiedDvd['resolvedReferences'] ?? [], 'name'), true),
+    'One-word campus-prefix-free location vocabulary must not activate without location intent.'
+);
+
+$unqualifiedLocationRemainders = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Compare archives and reference holdings.',
+    [
+        [
+            'source_table' => 'inventory.location__t',
+            'source_id' => 'sc-archives',
+            'name' => 'SC Archives',
+            'code' => 'SCARCH',
+        ],
+        [
+            'source_table' => 'inventory.location__t',
+            'source_id' => 'sc-neilson-reference',
+            'name' => 'SC Neilson Reference',
+            'code' => 'SCNREF',
+        ],
+    ]
+);
+assertResolverSame(
+    [],
+    $unqualifiedLocationRemainders['resolvedReferences'] ?? null,
+    'One-word archives and reference remainders must not activate location rows without typed context.'
+);
+
+$uniqueUnknownFormat = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show Betamax format at Hillyer library.',
+    array_merge($videoReferences, [[
+        'source_table' => 'inventory.material_type__t',
+        'source_id' => 'mt-betamax',
+        'name' => 'Betamax',
+        'code' => '',
+    ]])
+);
+assertResolverSame(
+    ['Betamax'],
+    $uniqueUnknownFormat['resolvedFilters'][1]['values'] ?? null,
+    'A uniquely matching unknown qualified format must resolve within the material-type table.'
+);
+assertResolverSame(
+    ['betamax'],
+    $uniqueUnknownFormat['resolvedFilters'][1]['vocabulary_terms'] ?? null,
+    'Unknown qualified format vocabulary must retain normalized provenance.'
+);
+
+$missingUnknownFormat = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show Betamax format at Hillyer library.',
+    array_merge($videoReferences, [[
+        'source_table' => 'inventory.location__t',
+        'source_id' => 'loc-betamax',
+        'name' => 'SC Betamax',
+        'code' => 'SCBETA',
+    ]])
+);
+assertResolverSame(true, $missingUnknownFormat['needsClarification'] ?? null, 'An unknown qualified format with no responsible material match must clarify.');
+assertResolverSame('reference_resolver_ambiguous_material_type', $missingUnknownFormat['routeReason'] ?? null, 'Unknown-format clarification needs a stable route reason.');
+assertResolverSame([], $missingUnknownFormat['clarificationItems'][0]['options'] ?? null, 'Unknown-format no-match clarification must not invent options.');
+
+$ambiguousUnknownFormat = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show Betamax format at Hillyer library.',
+    array_merge($videoReferences, [
+        [
+            'source_table' => 'inventory.material_type__t',
+            'source_id' => 'mt-betamax-standard',
+            'name' => 'Betamax Standard',
+            'code' => '',
+        ],
+        [
+            'source_table' => 'inventory.material_type__t',
+            'source_id' => 'mt-betamax-professional',
+            'name' => 'Professional Betamax',
+            'code' => '',
+        ],
+    ])
+);
+assertResolverSame(true, $ambiguousUnknownFormat['needsClarification'] ?? null, 'Multiple responsible unknown-format matches must clarify.');
+assertResolverSame(
+    ['Betamax Standard', 'Professional Betamax'],
+    array_column($ambiguousUnknownFormat['clarificationItems'][0]['options'] ?? [], 'label'),
+    'Unknown-format clarification options must come only from the material-type table in source order.'
+);
+
+$coordinatedLegacyLocations = ReferenceResolverService::resolvePromptAgainstReferences(
+    'Show me all of the items in josten treasure and treasure folio.',
+    [
+        [
+            'source_table' => 'inventory.location__t',
+            'source_id' => 'loc-josten-treasure',
+            'name' => 'SC Josten Treasure',
+            'code' => 'SJTR',
+            'search_tokens' => ['josten', 'sc', 'sjtr', 'treasure'],
+        ],
+        [
+            'source_table' => 'inventory.location__t',
+            'source_id' => 'loc-josten-treasure-folio',
+            'name' => 'SC Josten Treasure Folio',
+            'code' => 'SJTF',
+            'search_tokens' => ['folio', 'josten', 'sc', 'sjtf', 'treasure'],
+        ],
+    ]
+);
+assertResolverSame(
+    ['SC Josten Treasure', 'SC Josten Treasure Folio'],
+    array_column($coordinatedLegacyLocations['resolvedReferences'] ?? [], 'name'),
+    'Legacy multi-token location matching must retain coordinated Josten and Treasure Folio behavior.'
+);
+
 fwrite(STDOUT, "ReferenceResolverService test passed\n");
