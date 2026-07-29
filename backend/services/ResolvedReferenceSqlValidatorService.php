@@ -463,8 +463,9 @@ final class ResolvedReferenceSqlValidatorService
             }
 
             // LOWER(x.name) IN (LOWER('a'), 'b') — the case-insensitive list
-            // form the generation prompt asks for. Each element may be a bare
-            // literal or a LOWER()-wrapped literal.
+            // form the generation prompt asks for. Wrapped literals may retain
+            // canonical casing; bare literals must already be lowercase so the
+            // SQL comparison has the same semantics.
             if (
                 preg_match(
                     '/\ALOWER\s*\(\s*' . $nameField . '\s*\)\s+IN\s*\((.*)\)\z/is',
@@ -484,13 +485,27 @@ final class ResolvedReferenceSqlValidatorService
                     continue;
                 }
 
-                preg_match_all('/' . $literalToken . '/', $loweredList, $loweredLiterals);
-                foreach ($loweredLiterals[0] as $valueLiteral) {
+                preg_match_all(
+                    '/(?:LOWER\s*\(\s*(' . $literalToken . ')\s*\)|('
+                        . $literalToken . '))/i',
+                    $loweredList,
+                    $loweredLiterals,
+                    PREG_SET_ORDER
+                );
+                foreach ($loweredLiterals as $loweredLiteral) {
+                    $wrappedLiteral = $loweredLiteral[1] ?? '';
+                    $valueLiteral = $wrappedLiteral !== ''
+                        ? $wrappedLiteral
+                        : ($loweredLiteral[2] ?? '');
+                    $value = self::unquoteSqlLiteral($valueLiteral);
+                    if ($wrappedLiteral === '' && self::lowercase($value) !== $value) {
+                        self::mismatch();
+                    }
                     self::appendResolvedPredicate(
                         $predicates,
                         $aliases,
                         $match[1],
-                        self::unquoteSqlLiteral($valueLiteral)
+                        $value
                     );
                 }
                 continue;
@@ -681,11 +696,7 @@ final class ResolvedReferenceSqlValidatorService
             }
 
             $text = preg_replace('/\s+/u', ' ', trim((string) $value));
-            if (function_exists('mb_strtolower')) {
-                $text = mb_strtolower((string) $text, 'UTF-8');
-            } else {
-                $text = strtolower((string) $text);
-            }
+            $text = self::lowercase((string) $text);
             $normalized[(string) $text] = true;
         }
 
@@ -693,6 +704,15 @@ final class ResolvedReferenceSqlValidatorService
         sort($set, SORT_STRING);
 
         return $set;
+    }
+
+    private static function lowercase(string $value): string
+    {
+        if (function_exists('mb_strtolower')) {
+            return mb_strtolower($value, 'UTF-8');
+        }
+
+        return strtolower($value);
     }
 
     private static function assertNoWrongHierarchyValues(

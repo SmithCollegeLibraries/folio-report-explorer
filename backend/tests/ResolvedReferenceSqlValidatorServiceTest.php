@@ -592,6 +592,15 @@ resolvedReferenceAssertValid(
 resolvedReferenceAssertMismatch(
     resolvedReferenceCompleteSql(
         "lib.name = 'SC Hillyer Art Library'"
+        . " AND LOWER(mt.name) IN ('Videocassette', 'DVD/Blu-ray')"
+    ),
+    $resolvedFilters,
+    'Bare literals compared with a lowered name column must already be lowercase.'
+);
+
+resolvedReferenceAssertMismatch(
+    resolvedReferenceCompleteSql(
+        "lib.name = 'SC Hillyer Art Library'"
         . " AND LOWER(mt.name) IN (LOWER('Videocassette'))"
     ),
     $resolvedFilters,
