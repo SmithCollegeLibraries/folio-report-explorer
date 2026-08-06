@@ -25,6 +25,7 @@ import {
   readReportParamsFromSearch,
   writeReportParamsToSearch,
 } from '../utils/reports';
+import type { ReportExportKind } from '../types';
 
 export default function ReportDetail() {
   const navigate = useNavigate();
@@ -122,10 +123,12 @@ export default function ReportDetail() {
     mutationFn: ({
       params,
       outputMode,
+      exportKind,
     }: {
       params: Record<string, string>;
       outputMode: 'table' | 'file';
-    }) => runReport(reportId, params, { outputMode }),
+      exportKind?: ReportExportKind;
+    }) => runReport(reportId, params, { outputMode, exportKind }),
     onSuccess: (data, variables) => {
       setActiveJobId(data.jobId);
       setLastRunParams({ ...variables.params });
@@ -133,10 +136,10 @@ export default function ReportDetail() {
   });
 
   const handleRun = useCallback(
-    (outputMode: 'table' | 'file') => {
+    (outputMode: 'table' | 'file', exportKind?: ReportExportKind) => {
       const nextParams = { ...paramValues };
       resetJob();
-      runMut.mutate({ params: nextParams, outputMode });
+      runMut.mutate({ params: nextParams, outputMode, exportKind });
     },
     [paramValues, resetJob, runMut],
   );
@@ -316,7 +319,7 @@ export default function ReportDetail() {
                       Run Report
                     </button>
                     <button
-                      onClick={() => handleRun('file')}
+                      onClick={() => handleRun('file', 'worklist')}
                       disabled={runMut.isPending || !paramsReady || !hasRequiredParams}
                       className="flex items-center gap-2 rounded-xl border border-green-300 px-4 py-2.5 text-sm font-medium text-green-700 transition-colors hover:bg-green-50 disabled:opacity-50"
                     >
@@ -327,6 +330,20 @@ export default function ReportDetail() {
                       )}
                       Export CSV
                     </button>
+                    {report.identifierExportAvailable && (
+                      <button
+                        onClick={() => handleRun('file', 'identifier')}
+                        disabled={runMut.isPending || !paramsReady || !hasRequiredParams}
+                        className="flex items-center gap-2 rounded-xl border border-green-300 px-4 py-2.5 text-sm font-medium text-green-700 transition-colors hover:bg-green-50 disabled:opacity-50"
+                      >
+                        {runMut.isPending ? (
+                          <Loader2 size={14} className="animate-spin" />
+                        ) : (
+                          <Play size={14} />
+                        )}
+                        Export FOLIO UUID list
+                      </button>
+                    )}
                   </>
                 ) : (
                   <button

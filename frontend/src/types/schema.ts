@@ -269,6 +269,7 @@ export interface ExecuteResponse {
   dataSource?: 'folio' | 'local' | 'composite';
   outputMode?: 'table' | 'file';
   downloadUrl?: string;
+  truncated?: boolean;
 }
 
 /** NL→SQL response */
@@ -596,6 +597,7 @@ export interface JobStatusResponse {
   rowCount?: number;
   executionTimeMs?: number;
   error?: string;
+  truncated?: boolean;
 }
 
 // ─── Report Template types ────────────────────────────────────────
@@ -648,6 +650,7 @@ export interface ReportTemplate {
   createdAt: string;
   updatedAt: string;
   selectOptions?: Record<string, { value: string; label: string }[]>;
+  identifierExportAvailable?: boolean;
 }
 
 /** Response from POST /reports/generate (AI-generated template preview) */
@@ -663,6 +666,8 @@ export interface ReportGenerateResponse {
 }
 
 /** Response from POST /reports/:id/run */
+export type ReportExportKind = 'worklist' | 'identifier';
+
 export interface ReportRunResponse {
   jobId: string;
   status: JobStatus;

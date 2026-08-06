@@ -113,6 +113,7 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
               sql: status.sql,
               outputMode: 'file',
               downloadUrl: status.downloadUrl,
+              truncated: status.truncated,
             });
           } else {
             // Convert to ExecuteResponse
@@ -122,6 +123,7 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
               rowCount: status.rowCount || 0,
               executionTimeMs: status.executionTimeMs || 0,
               sql: status.sql,
+              truncated: status.truncated,
             });
           }
         } else if (status.status === 'failed') {

@@ -21,6 +21,7 @@ import type {
   ReportSummary,
   ReportTemplate,
   ReportGenerateResponse,
+  ReportExportKind,
   ReportRunResponse,
   TrainingHint,
   TrainingHintInput,
@@ -514,14 +515,18 @@ export async function getReport(id: number): Promise<ReportTemplate> {
 export async function runReport(
   id: number,
   params: Record<string, string>,
-  options?: { outputMode?: 'table' | 'file' },
+  options?: { outputMode?: 'table' | 'file'; exportKind?: ReportExportKind },
 ): Promise<ReportRunResponse> {
   const payload: {
     params: Record<string, string>;
     outputMode?: 'table' | 'file';
+    exportKind?: ReportExportKind;
   } = { params };
   if (options?.outputMode) {
     payload.outputMode = options.outputMode;
+  }
+  if (options?.exportKind) {
+    payload.exportKind = options.exportKind;
   }
   const { data } = await api.post(`/reports/${id}/run`, payload);
   return data;

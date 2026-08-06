@@ -63,4 +63,22 @@ describe('useJobPolling cancellation', () => {
     expect(result.current.isRunning).toBe(false);
     expect(result.current.error).toBe('Query was cancelled');
   });
+
+  it('keeps a completed report truncation flag in its table results', async () => {
+    vi.mocked(checkJobStatus).mockResolvedValue({
+      ...pendingStatus,
+      status: 'completed',
+      outputMode: 'table',
+      columns: ['Instance UUID'],
+      rows: [{ 'Instance UUID': 'instance-1' }],
+      rowCount: 100000,
+      executionTimeMs: 18,
+      truncated: true,
+    });
+
+    const { result } = renderHook(() => useJobPolling('job-1'));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(result.current.results?.truncated).toBe(true);
+  });
 });

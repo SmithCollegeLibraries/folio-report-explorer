@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ReportDetail from './ReportDetail';
@@ -233,5 +233,95 @@ describe('Reports', () => {
     expect(
       screen.queryByRole('button', { name: /how to read this report/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it('offers a FOLIO UUID export only when the report advertises the capability', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const { getReport, runReport } = await import('../api/client');
+    vi.mocked(getReport).mockResolvedValue({
+      id: 8,
+      slug: 'marc-bibliographic-records-missing-tag',
+      name: 'MARC Bibliographic Records Missing a Tag',
+      description: 'Finds records missing a MARC tag.',
+      category: 'cataloging',
+      sqlTemplate: 'select 1',
+      parameters: [],
+      defaultLimit: 100000,
+      isActive: true,
+      createdBy: 'manual',
+      createdAt: '2026-08-06T00:00:00Z',
+      updatedAt: '2026-08-06T00:00:00Z',
+      selectOptions: {},
+      identifierExportAvailable: true,
+    });
+    vi.mocked(runReport).mockResolvedValue({
+      jobId: 'job-8',
+      status: 'pending',
+      reportName: 'MARC Bibliographic Records Missing a Tag',
+      outputMode: 'file',
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/reports/8']}>
+          <Routes>
+            <Route path="/reports/:id" element={<ReportDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'Run Report' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export FOLIO UUID list' }));
+
+    await waitFor(() => {
+      expect(runReport).toHaveBeenCalledWith(8, {}, {
+        outputMode: 'file',
+        exportKind: 'identifier',
+      });
+    });
+  });
+
+  it('does not offer a FOLIO UUID export without the report capability', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const { getReport } = await import('../api/client');
+    vi.mocked(getReport).mockResolvedValue({
+      id: 1,
+      slug: 'budget-report',
+      name: 'Budget Report by Material Type',
+      description: 'Summarizes expenditures by material type.',
+      category: 'acquisitions',
+      sqlTemplate: 'select 1',
+      parameters: [],
+      defaultLimit: 10000,
+      isActive: true,
+      createdBy: 'manual',
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T00:00:00Z',
+      selectOptions: {},
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/reports/1']}>
+          <Routes>
+            <Route path="/reports/:id" element={<ReportDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole('button', { name: 'Run Report' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Export FOLIO UUID list' })).not.toBeInTheDocument();
   });
 });
