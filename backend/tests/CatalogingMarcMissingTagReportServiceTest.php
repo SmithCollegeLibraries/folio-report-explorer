@@ -60,6 +60,9 @@ namespace {
         public function queryOne()
         {
             if (strpos($this->sql, 'FROM inventory.location__t') !== false) {
+                if (($this->params[':location_id'] ?? null) !== $this->db->expectedLocationId) {
+                    throw new \RuntimeException('Location lookup must use the validated location UUID parameter.');
+                }
                 return $this->db->location;
             }
             if (strpos($this->sql, 'to_regclass') !== false) {
@@ -71,6 +74,7 @@ namespace {
 
     final class MarcCompilerFakeDb
     {
+        public string $expectedLocationId = '11111111-1111-4111-8111-111111111111';
         public ?array $location = ['name' => 'Main Library', 'code' => 'MAIN'];
         public array $tables = ['marctab.mt856' => 'marctab.mt856'];
 
@@ -146,6 +150,33 @@ namespace {
     marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"marcTag"}]']), marcCompilerInputs(), $db), 'Duplicated parameter definitions must be rejected.');
     marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"extra"}]']), marcCompilerInputs(), $db), 'Extra parameter definitions must be rejected.');
     marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTagExtra"}]']), marcCompilerInputs(), $db), 'Prefix-colliding parameter names must be rejected.');
+
+    $nestedOrderAndLimit = str_replace(
+        ")\nSELECT\n",
+        "    ORDER BY instance.title\n    LIMIT 100001\n)\nSELECT\n",
+        $report->sql_template
+    );
+    $nestedOrderAndLimit = str_replace(
+        "\nORDER BY target_instances.title NULLS LAST,\n         target_instances.instance_hrid NULLS LAST,\n         target_instances.instance_uuid\nLIMIT 100001",
+        '',
+        $nestedOrderAndLimit
+    );
+    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $nestedOrderAndLimit]), marcCompilerInputs(), $db), 'A tampered template with nested-only ORDER BY and LIMIT must fail the canonical contract.');
+    $nestedCompiledSql = str_replace(
+        ")\nSELECT\n",
+        "    ORDER BY instance.title\n    LIMIT 100001\n)\nSELECT\n",
+        $effective['sql']
+    );
+    $nestedCompiledSql = str_replace(
+        "\nORDER BY target_instances.title NULLS LAST,\n         target_instances.instance_hrid NULLS LAST,\n         target_instances.instance_uuid\nLIMIT 100001",
+        '',
+        $nestedCompiledSql
+    );
+    $compiledSqlValidator = new \ReflectionMethod(CatalogingMarcMissingTagReportService::class, 'assertCompiledSql');
+    marcCompilerAssertThrows(fn () => $compiledSqlValidator->invoke(null, $nestedCompiledSql), 'ORDER BY and LIMIT inside a CTE must not satisfy the top-level compiled SQL contract.');
+    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace("AND instance.source = 'MARC'", '', $report->sql_template)]), marcCompilerInputs(), $db), 'Removing the MARC source guard must be rejected.');
+    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('marc_tag.instance_id = target_instances.instance_uuid', 'marc_tag.instance_id = target_instances.instance_hrid', $report->sql_template)]), marcCompilerInputs(), $db), 'Changing the UUID anti-join must be rejected.');
+    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('FROM {{marc_table}} AS marc_tag', 'FROM folio_source_record.marctab AS marc_tag /* {{marc_table}} */', $report->sql_template)]), marcCompilerInputs(), $db), 'Substituting another MARC source while retaining the token must be rejected.');
 
     $missingTableDb = new MarcCompilerFakeDb();
     $missingTableDb->tables = [];

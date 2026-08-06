@@ -166,6 +166,7 @@ $effective = [
 SqlBuilderService::validateSafety($effective['sql']);
 SqlBuilderService::validateTablePolicy($effective['sql']);
 assertThrowsPolicy('SELECT * FROM folio_source_record.marctab');
+assertThrowsPolicy('SELECT * FROM "folio_source_record"."marctab"');
 assertThrowsPolicy('SELECT jsonb_array_elements(parsed_record__content) FROM folio_source_record.records__t');
 
 fwrite(STDOUT, "SqlBuilderService policy violation test passed\n");

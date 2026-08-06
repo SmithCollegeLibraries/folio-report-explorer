@@ -811,10 +811,12 @@ class SqlBuilderService
     public static function validateTablePolicy($sql)
     {
         $sql = (string)$sql;
-        if (preg_match('/\bfolio_source_record\.marctab\b/i', $sql) === 1) {
-            throw new \app\exceptions\PolicyViolationException(
-                'Use a marctab.mtNNN per-field table instead of folio_source_record.marctab.'
-            );
+        foreach (SqlSelectStructureService::extractTableReferences($sql) as $reference) {
+            if (strtolower($reference) === 'folio_source_record.marctab') {
+                throw new \app\exceptions\PolicyViolationException(
+                    'Use a marctab.mtNNN per-field table instead of folio_source_record.marctab.'
+                );
+            }
         }
         if (
             stripos($sql, 'folio_source_record.records__t') !== false

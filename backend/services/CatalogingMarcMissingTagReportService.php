@@ -4,6 +4,8 @@ namespace app\services;
 
 use app\models\ReportTemplate;
 
+require_once __DIR__ . '/SqlSelectStructureService.php';
+
 /**
  * Resolves the two reviewed structural slots in the fixed MARC missing-tag
  * report. All client-supplied values remain PDO parameters.
@@ -17,6 +19,7 @@ final class CatalogingMarcMissingTagReportService
     public const FETCH_ROW_LIMIT = 100001;
 
     private const EXPECTED_PARAMETER_NAMES = ['locationId', 'locationBasis', 'marcTag'];
+    private const CANONICAL_TEMPLATE_SHA256 = 'aa19ffbe4b6407dfbc163b82fad04e44c329d7e06bc851c50d41301fc7b5eea8';
 
     private const LOCATION_FRAGMENTS = [
         'effective_item' => "FROM inventory.item__t item\nJOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = item.effective_location_id",
@@ -39,6 +42,7 @@ final class CatalogingMarcMissingTagReportService
         }
 
         self::assertParameterDefinitions($report);
+        self::assertTemplateContract((string) $report->sql_template);
 
         $locationId = $inputs['locationId'] ?? null;
         if (!is_string($locationId) || preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $locationId) !== 1) {
@@ -136,15 +140,44 @@ final class CatalogingMarcMissingTagReportService
         }
     }
 
+    private static function assertTemplateContract(string $sql): void
+    {
+        if (!hash_equals(self::CANONICAL_TEMPLATE_SHA256, hash('sha256', $sql))) {
+            throw new \InvalidArgumentException('MARC report SQL template does not match the reviewed cataloging report contract.');
+        }
+    }
+
     private static function assertCompiledSql(string $sql): void
     {
         if (preg_match('/\{\{[^{}]+\}\}/', $sql) === 1) {
             throw new \InvalidArgumentException('Compiled SQL contains an unresolved structural token.');
         }
-        if (preg_match_all('/\bORDER\s+BY\b/i', $sql) !== 1) {
+        $tokens = SqlSelectStructureService::tokenizeForAnalysis($sql);
+        $topLevelOrderByCount = 0;
+        $topLevelNumericLimits = [];
+
+        foreach ($tokens as $index => $token) {
+            if (($token['depth'] ?? -1) !== 0) {
+                continue;
+            }
+            if (strtoupper((string) $token['value']) === 'ORDER'
+                && isset($tokens[$index + 1])
+                && ($tokens[$index + 1]['depth'] ?? -1) === 0
+                && strtoupper((string) $tokens[$index + 1]['value']) === 'BY') {
+                $topLevelOrderByCount++;
+            }
+            if (strtoupper((string) $token['value']) === 'LIMIT'
+                && isset($tokens[$index + 1])
+                && ($tokens[$index + 1]['depth'] ?? -1) === 0
+                && ($tokens[$index + 1]['kind'] ?? '') === 'number') {
+                $topLevelNumericLimits[] = (string) $tokens[$index + 1]['value'];
+            }
+        }
+
+        if ($topLevelOrderByCount !== 1) {
             throw new \InvalidArgumentException('Compiled SQL must contain exactly one top-level ORDER BY clause.');
         }
-        if (preg_match_all('/\bLIMIT\s+100001\b/i', $sql) !== 1 || preg_match_all('/\bLIMIT\s+\d+\b/i', $sql) !== 1) {
+        if ($topLevelNumericLimits !== [(string) self::FETCH_ROW_LIMIT]) {
             throw new \InvalidArgumentException('Compiled SQL must contain exactly one LIMIT 100001 clause.');
         }
     }
