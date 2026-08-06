@@ -150,21 +150,31 @@ namespace {
         return false;
     }
 
+    function marcPostgresNormalizeLocationIds(array $ids)
+    {
+        $normalized = [];
+        foreach ($ids as $id) {
+            if (!is_string($id) || preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $id) !== 1) {
+                marcPostgresFail("FOLIO_DB_TEST_LOCATION_IDS contains an invalid UUID: {$id}");
+            }
+            $normalized[] = strtolower($id);
+        }
+        return array_values(array_unique($normalized));
+    }
+
     function marcPostgresActiveLocations(\PDO $pdo)
     {
         $requested = trim((string)getenv('FOLIO_DB_TEST_LOCATION_IDS'));
         if ($requested !== '') {
-            $ids = array_values(array_unique(array_filter(array_map('trim', explode(',', $requested)))));
-            if (count($ids) === 0) {
+            $requestedIds = array_values(array_filter(array_map('trim', explode(',', $requested))));
+            if (count($requestedIds) === 0) {
                 marcPostgresFail('FOLIO_DB_TEST_LOCATION_IDS did not contain a UUID.');
             }
+            $ids = marcPostgresNormalizeLocationIds($requestedIds);
 
             $placeholders = [];
             $params = [];
             foreach ($ids as $index => $id) {
-                if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $id) !== 1) {
-                    marcPostgresFail("FOLIO_DB_TEST_LOCATION_IDS contains an invalid UUID: {$id}");
-                }
                 $placeholder = ':requested_location_' . $index;
                 $placeholders[] = $placeholder;
                 $params[$placeholder] = $id;
@@ -238,6 +248,10 @@ SQL;
         ];
         if (!marcPostgresPlanTouchesForbiddenSource($forbiddenPlan)) {
             marcPostgresFail('Plan guard must reject a folio_source_record.marctab node represented by PostgreSQL JSON fields.');
+        }
+        $upperCaseUuid = '11111111-1111-4111-8111-ABCDEFABCDEF';
+        if (marcPostgresNormalizeLocationIds([$upperCaseUuid]) !== [strtolower($upperCaseUuid)]) {
+            marcPostgresFail('Location overrides must normalize valid UUID spellings before active-location comparison.');
         }
         fwrite(STDOUT, "Cataloging MARC missing-tag PostgreSQL plan guard self-check passed.\n");
         exit(0);
