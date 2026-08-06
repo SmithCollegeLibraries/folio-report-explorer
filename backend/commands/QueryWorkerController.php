@@ -7,6 +7,7 @@ use yii\console\Controller;
 use app\models\QueryJob;
 use app\services\DatabaseRetryService;
 use app\services\QueryJobCancellationService;
+use app\services\ReportExecutionContractService;
 
 /**
  * QueryWorkerController — background worker that picks up pending query jobs
@@ -251,10 +252,18 @@ class QueryWorkerController extends Controller
                 return;
             }
 
+            $contract = ReportExecutionContractService::fromJob($job);
+            $truncated = false;
+            if ($contract !== null) {
+                $trimmed = ReportExecutionContractService::trimRows($rows, $contract);
+                $rows = $trimmed['rows'];
+                $truncated = $trimmed['truncated'];
+            }
+
             $executionTime = round((microtime(true) - $startTime) * 1000);
             $columns = !empty($rows) ? array_keys($rows[0]) : [];
 
-            $job->markCompleted($columns, $rows, $executionTime);
+            $job->markCompleted($columns, $rows, $executionTime, $truncated);
             $this->stdout("Job {$job->id} completed: {$job->row_count} rows in {$executionTime}ms\n");
 
             // Also log to query_log for history
