@@ -37,6 +37,19 @@ vi.mock('../api/client', async () => {
           createdAt: '2026-04-01T00:00:00Z',
         },
       ],
+      cataloging: [
+        {
+          id: 8,
+          slug: 'marc-bibliographic-records-missing-tag',
+          name: 'MARC Bibliographic Records Missing a Tag',
+          description: 'Finds MARC bibliographic records missing a selected tag.',
+          category: 'cataloging',
+          parameterCount: 3,
+          defaultLimit: 100000,
+          createdBy: 'manual',
+          createdAt: '2026-08-06T00:00:00Z',
+        },
+      ],
     }),
     deleteReport: vi.fn(),
     getReport: vi.fn(),
@@ -71,6 +84,7 @@ describe('Reports', () => {
 
     expect(await screen.findByRole('heading', { name: 'Acquisitions' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Cataloging' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^All$/i })).not.toBeInTheDocument();
   });
 

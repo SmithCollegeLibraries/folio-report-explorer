@@ -6,6 +6,7 @@ export const REPORT_CATEGORIES: { key: ReportCategory; label: string }[] = [
   { key: 'inventory', label: 'Inventory' },
   { key: 'circulation', label: 'Circulation' },
   { key: 'users', label: 'Users' },
+  { key: 'cataloging', label: 'Cataloging' },
   { key: 'other', label: 'Other' },
 ];
 

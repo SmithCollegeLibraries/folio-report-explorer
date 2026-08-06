@@ -11,15 +11,18 @@ export default function ParamInput({
   options?: { value: string; label: string }[];
   onChange: (value: string) => void;
 }) {
+  const inputId = `report-param-${param.name}`;
+
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-gray-600">
+      <label htmlFor={inputId} className="mb-1 block text-xs font-medium text-gray-600">
         {param.label}
         {param.required && <span className="ml-0.5 text-red-400">*</span>}
       </label>
 
       {param.type === 'select' && options ? (
         <select
+          id={inputId}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
@@ -33,6 +36,7 @@ export default function ParamInput({
         </select>
       ) : param.type === 'boolean' ? (
         <select
+          id={inputId}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
@@ -43,6 +47,7 @@ export default function ParamInput({
         </select>
       ) : param.type === 'list' ? (
         <textarea
+          id={inputId}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={param.placeholder || 'One value per line'}
@@ -50,10 +55,14 @@ export default function ParamInput({
         />
       ) : (
         <input
+          id={inputId}
           type={param.type === 'date' ? 'date' : param.type === 'number' ? 'number' : 'text'}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={param.placeholder}
+          inputMode={param.input_mode}
+          pattern={param.pattern}
+          maxLength={param.max_length}
           className="w-full rounded-lg border border-stone-300 px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
         />
       )}

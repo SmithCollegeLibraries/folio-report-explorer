@@ -600,7 +600,7 @@ export interface JobStatusResponse {
 
 // ─── Report Template types ────────────────────────────────────────
 
-export type ReportCategory = 'acquisitions' | 'circulation' | 'inventory' | 'finance' | 'users' | 'other';
+export type ReportCategory = 'acquisitions' | 'circulation' | 'inventory' | 'finance' | 'users' | 'cataloging' | 'other';
 
 /** Parameter definition for a report template */
 export interface ReportParam {
@@ -614,6 +614,9 @@ export interface ReportParam {
   description?: string;
   wrap?: 'like';
   options_sql?: string;
+  input_mode?: 'numeric';
+  pattern?: '[0-9]{3}';
+  max_length?: 3;
 }
 
 /** Report template summary (list view) */
