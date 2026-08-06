@@ -81,9 +81,8 @@ final class CatalogingMarcMissingTagReportService
         self::assertParameterDefinitions($report);
         self::assertTemplateContract((string) $report->sql_template);
 
-        $scope = CatalogingMarcLocationScopeService::resolve(
+        $scope = CatalogingMarcLocationScopeService::validate(
             $inputs,
-            $folioDb,
             ['effective_item', 'permanent_item', 'permanent_holdings']
         );
         $locationIds = $scope['locationIds'];
@@ -109,6 +108,8 @@ final class CatalogingMarcMissingTagReportService
         if (preg_match('/\{\{[^{}]+\}\}/', $resolvedSql) === 1) {
             throw new \InvalidArgumentException('Report template contains an unresolved structural token.');
         }
+
+        $scope = CatalogingMarcLocationScopeService::resolveLocations($scope, $folioDb);
 
         $table = $folioDb->createCommand(
             'SELECT to_regclass(:table_name)',

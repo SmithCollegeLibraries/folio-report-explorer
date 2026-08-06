@@ -14,6 +14,11 @@ final class CatalogingMarcLocationScopeService
 
     public static function resolve(array $inputs, $folioDb, array $allowedBases): array
     {
+        return self::resolveLocations(self::validate($inputs, $allowedBases), $folioDb);
+    }
+
+    public static function validate(array $inputs, array $allowedBases): array
+    {
         $rawIds = $inputs['locationIds'] ?? null;
         if (!is_string($rawIds) || trim($rawIds) === '') {
             throw new \InvalidArgumentException('At least one location is required.');
@@ -40,6 +45,17 @@ final class CatalogingMarcLocationScopeService
             || !array_key_exists($basis, self::LOCATION_FRAGMENTS)) {
             throw new \InvalidArgumentException('A supported location basis is required.');
         }
+
+        return [
+            'locationIds' => $locationIds,
+            'locationBasis' => $basis,
+            'locationFragment' => self::LOCATION_FRAGMENTS[$basis],
+        ];
+    }
+
+    public static function resolveLocations(array $scope, $folioDb): array
+    {
+        $locationIds = $scope['locationIds'];
 
         $lookupParams = [];
         $placeholders = [];
@@ -72,8 +88,8 @@ final class CatalogingMarcLocationScopeService
 
         return [
             'locationIds' => $locationIds,
-            'locationBasis' => $basis,
-            'locationFragment' => self::LOCATION_FRAGMENTS[$basis],
+            'locationBasis' => $scope['locationBasis'],
+            'locationFragment' => $scope['locationFragment'],
             'location' => $location,
             'locations' => $locations,
         ];

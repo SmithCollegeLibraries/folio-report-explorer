@@ -66,6 +66,7 @@ namespace {
             if (strpos($this->sql, 'FROM inventory.location__t') === false) {
                 throw new \RuntimeException('Unexpected queryAll lookup: ' . $this->sql);
             }
+            $this->db->locationLookupCount++;
             $this->db->locationLookupSql = $this->sql;
             $this->db->locationLookupParams = $this->params;
             $requested = array_values($this->params);
@@ -87,6 +88,7 @@ namespace {
     {
         public $locations = [];
         public $tables = ['marctab.mt856' => 'marctab.mt856'];
+        public $locationLookupCount = 0;
         public $locationLookupSql = '';
         public $locationLookupParams = [];
 
@@ -114,10 +116,12 @@ namespace {
 
     $mainId = '11111111-1111-4111-8111-111111111111';
     $scienceId = '22222222-2222-4222-8222-222222222222';
+    $inactiveId = '33333333-3333-4333-8333-333333333333';
     $db = new MultiLocationDb();
     $db->locations = [
         ['id' => $mainId, 'name' => 'Main Library', 'code' => 'MAIN'],
         ['id' => $scienceId, 'name' => 'Science Library', 'code' => 'SCI'],
+        ['id' => $inactiveId, 'name' => 'Closed Library', 'code' => 'CLOSED', 'is_active' => false],
     ];
     $report = multiLocationReport();
     $baseInputs = [
@@ -164,11 +168,43 @@ namespace {
         'One selected location must retain its real filename metadata.'
     );
 
+    $inactive = CatalogingMarcMissingTagReportService::build(
+        $report,
+        array_replace($baseInputs, ['locationIds' => $inactiveId]),
+        $db
+    );
+    multiLocationSame(
+        ['id' => $inactiveId, 'name' => 'Closed Library', 'code' => 'CLOSED'],
+        $inactive['location'] ?? null,
+        'An existing inactive location must remain resolvable for saved URLs.'
+    );
+
+    $locationLookupsBeforeInvalidTag = $db->locationLookupCount;
+    multiLocationThrows(
+        function () use ($report, $baseInputs, $db) {
+            CatalogingMarcMissingTagReportService::build(
+                $report,
+                array_replace($baseInputs, [
+                    'locationIds' => '44444444-4444-4444-8444-444444444444',
+                    'marcTag' => '000',
+                ]),
+                $db
+            );
+        },
+        'MARC tag must be exactly three ASCII digits from 001 through 999.',
+        'MARC tag validation must take precedence over a missing location.'
+    );
+    multiLocationSame(
+        $locationLookupsBeforeInvalidTag,
+        $db->locationLookupCount,
+        'Invalid MARC tags must fail before the location lookup runs.'
+    );
+
     foreach ([
         ['', 'At least one location is required.'],
         ['not-a-uuid', 'Every selected location must be a valid UUID.'],
         [$mainId . ',' . $mainId, 'Selected locations must be unique.'],
-        [$mainId . ',33333333-3333-4333-8333-333333333333', 'A selected location no longer exists.'],
+        [$mainId . ',44444444-4444-4444-8444-444444444444', 'A selected location no longer exists.'],
     ] as $invalidCase) {
         multiLocationThrows(
             function () use ($report, $baseInputs, $db, $invalidCase) {
