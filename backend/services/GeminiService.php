@@ -7598,7 +7598,7 @@ Return ONLY a JSON object (no markdown, no code blocks) with this structure:
   "slug": "kebab-case-name",
   "name": "Human Readable Report Name",
   "description": "What this report shows and why it's useful.",
-  "category": "acquisitions|circulation|inventory|finance|users|other",
+  "category": "acquisitions|circulation|inventory|finance|users|cataloging|other",
   "sqlTemplate": "SELECT ... FROM ... WHERE col LIKE :param ...",
   "parameters": [
     {
@@ -7752,7 +7752,7 @@ Return ONLY a JSON object (no markdown, no code blocks) with this structure:
   "slug": "kebab-case-name",
   "name": "Human Readable Report Name",
   "description": "What this report shows and why it's useful.",
-  "category": "acquisitions|circulation|inventory|finance|users|other",
+  "category": "acquisitions|circulation|inventory|finance|users|cataloging|other",
   "sqlTemplate": "SELECT ... FROM ... WHERE col = :param ...",
   "parameters": [
     {

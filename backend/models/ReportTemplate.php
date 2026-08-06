@@ -18,6 +18,7 @@ use yii\db\ActiveRecord;
  * @property string $parameters   JSON array of parameter definitions
  * @property string $data_source  folio|local|composite
  * @property string $composite_config JSON config for cross-DB reports
+ * @property string|null $execution_config JSON metadata used by report execution
  * @property int $default_limit
  * @property int $is_active
  * @property string $created_by   'manual' or 'ai'
@@ -32,6 +33,7 @@ class ReportTemplate extends ActiveRecord
     const CAT_INVENTORY    = 'inventory';
     const CAT_FINANCE      = 'finance';
     const CAT_USERS        = 'users';
+    const CAT_CATALOGING   = 'cataloging';
     const CAT_OTHER        = 'other';
 
     public static function tableName()
@@ -56,7 +58,7 @@ class ReportTemplate extends ActiveRecord
             [['category'], 'in', 'range' => [
                 self::CAT_ACQUISITIONS, self::CAT_CIRCULATION,
                 self::CAT_INVENTORY, self::CAT_FINANCE,
-                self::CAT_USERS, self::CAT_OTHER,
+                self::CAT_USERS, self::CAT_CATALOGING, self::CAT_OTHER,
             ]],
             [['default_limit'], 'integer', 'min' => 1, 'max' => 100000],
             [['is_active'], 'boolean'],

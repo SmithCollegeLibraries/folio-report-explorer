@@ -35,6 +35,10 @@ assertMigrationTrue(strpos($schemaSql, 'filename') !== false, 'schema_migrations
 
 $repoAudit = MigrationService::auditDirectory($migrationDir);
 assertMigrationSame([], $repoAudit['duplicateNumbers'], 'Checked-in migrations should not have duplicate numeric prefixes.');
+assertMigrationTrue(
+    !isset($repoAudit['duplicateNumbers']['040']),
+    'Migration 040 must have a unique numeric prefix.'
+);
 
 $tempDir = sys_get_temp_dir() . '/migration-service-test-' . uniqid('', true);
 mkdir($tempDir, 0775, true);

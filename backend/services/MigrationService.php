@@ -252,7 +252,8 @@ class MigrationService
             }
         }
 
-        return self::budgetYearFundReportPaymentDistributionsAppearComplete($db);
+        return self::budgetYearFundReportPaymentDistributionsAppearComplete($db)
+            && self::marcMissingTagReportAppearsComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -339,9 +340,34 @@ class MigrationService
                 return self::budgetYearFundReportPaymentDistributionsAppearComplete($db);
             case '039_ask_ai_report_review.sql':
                 return self::hasTable($db, 'ai_report_generations') && self::hasTable($db, 'ai_report_reviews');
+            case '040_cataloging_marc_missing_tag_report.sql':
+                return self::marcMissingTagReportAppearsComplete($db);
         }
 
         return false;
+    }
+
+    private static function marcMissingTagReportAppearsComplete($db): bool
+    {
+        return self::hasColumn($db, 'report_templates', 'execution_config')
+            && self::columnTypeContains($db, 'report_templates', 'category', "'cataloging'")
+            && self::rowExists(
+                $db,
+                'report_templates',
+                'slug = :slug AND category = :category AND default_limit = :limit'
+                    . ' AND sql_template LIKE :location_token'
+                    . ' AND sql_template LIKE :marc_token'
+                    . ' AND sql_template LIKE :sentinel'
+                    . ' AND execution_config IS NOT NULL',
+                [
+                    ':slug' => 'marc-bibliographic-records-missing-tag',
+                    ':category' => 'cataloging',
+                    ':limit' => 100000,
+                    ':location_token' => '%{{location_from}}%',
+                    ':marc_token' => '%{{marc_table}}%',
+                    ':sentinel' => '%LIMIT 100001%',
+                ]
+            );
     }
 
     private static function budgetYearFundReportAppearsComplete($db): bool
