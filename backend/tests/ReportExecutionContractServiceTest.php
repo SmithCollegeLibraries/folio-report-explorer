@@ -155,6 +155,16 @@ namespace {
     executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Persisted contracts must require a positive report template ID.');
     $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, ['publicRowCap' => true])]);
     executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Persisted contracts must reject non-integer row caps.');
+    $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, ['exportKind' => 'identifier'])]);
+    executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Identifier contracts must use the identifier filename suffix.');
+    foreach ([
+        ['reportSlug' => ' marc-bibliographic-records-missing-tag'],
+        ['identifierExport' => ['sourceColumn' => 'Instance UUID ', 'header' => 'UUID']],
+        ['identifierExport' => ['sourceColumn' => 'Instance UUID', 'header' => ' UUID']],
+    ] as $nonCanonicalPatch) {
+        $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, $nonCanonicalPatch)]);
+        executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Persisted contract fields must already be canonical and unpadded.');
+    }
 
     fwrite(STDOUT, "Report execution contract service tests passed\n");
 }

@@ -88,14 +88,19 @@ final class ReportExecutionContractService
             throw new \InvalidArgumentException('Stored report execution metadata is invalid.');
         }
         $reportTemplateId = self::positiveInteger($contract['reportTemplateId'] ?? null, 'report template ID');
-        self::nonEmptyString($contract['reportSlug'] ?? null, 'report slug');
+        self::canonicalFilenameComponent($contract['reportSlug'] ?? null, 'report slug');
         $identifierExport = $contract['identifierExport'] ?? null;
-        if (!is_array($identifierExport)
-            || self::nonEmptyString($identifierExport['sourceColumn'] ?? null, 'identifier source column') === ''
-            || self::nonEmptyString($identifierExport['header'] ?? null, 'identifier export header') === '') {
+        if (!is_array($identifierExport)) {
             throw new \InvalidArgumentException('Stored identifier export metadata is invalid.');
         }
-        self::assertSafeFilename($contract['downloadFilename'] ?? null);
+        self::canonicalString($identifierExport['sourceColumn'] ?? null, 'identifier source column');
+        self::canonicalString($identifierExport['header'] ?? null, 'identifier export header');
+        $downloadFilename = $contract['downloadFilename'] ?? null;
+        self::assertSafeFilename($downloadFilename);
+        $suffix = $contract['exportKind'] === 'identifier' ? '-folio-uuids.csv' : '-worklist.csv';
+        if (substr($downloadFilename, -strlen($suffix)) !== $suffix) {
+            throw new \InvalidArgumentException('Stored report execution filename does not match its export kind.');
+        }
         $contract['reportTemplateId'] = $reportTemplateId;
         $contract['publicRowCap'] = $publicRowCap;
         $contract['fetchRowLimit'] = $fetchRowLimit;
@@ -174,6 +179,14 @@ final class ReportExecutionContractService
         return trim($value);
     }
 
+    private static function canonicalString($value, string $label): string
+    {
+        if (!is_string($value) || $value === '' || trim($value) !== $value) {
+            throw new \InvalidArgumentException("Stored report execution {$label} must already be canonical.");
+        }
+        return $value;
+    }
+
     private static function filenameComponent($value, string $label): string
     {
         $value = self::nonEmptyString($value, $label);
@@ -187,6 +200,15 @@ final class ReportExecutionContractService
             throw new \InvalidArgumentException("Report execution {$label} cannot be normalized into a filename.");
         }
         return $value;
+    }
+
+    private static function canonicalFilenameComponent($value, string $label): string
+    {
+        $canonical = self::filenameComponent($value, $label);
+        if ($canonical !== $value) {
+            throw new \InvalidArgumentException("Stored report execution {$label} must already be canonical.");
+        }
+        return $canonical;
     }
 
     private static function assertSafeFilename($value): void
