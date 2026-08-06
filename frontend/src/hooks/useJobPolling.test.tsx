@@ -81,4 +81,27 @@ describe('useJobPolling cancellation', () => {
 
     expect(result.current.results?.truncated).toBe(true);
   });
+
+  it('keeps a completed report truncation flag and download metadata in file results', async () => {
+    vi.mocked(checkJobStatus).mockResolvedValue({
+      ...pendingStatus,
+      status: 'completed',
+      outputMode: 'file',
+      columns: ['UUID'],
+      rows: [{ UUID: 'instance-1' }],
+      rowCount: 100000,
+      executionTimeMs: 18,
+      downloadUrl: '/api/query/export/job-1',
+      truncated: true,
+    });
+
+    const { result } = renderHook(() => useJobPolling('job-1'));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(result.current.results).toMatchObject({
+      outputMode: 'file',
+      downloadUrl: '/api/query/export/job-1',
+      truncated: true,
+    });
+  });
 });
