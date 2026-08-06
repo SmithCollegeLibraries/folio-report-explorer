@@ -155,11 +155,11 @@ class ReportTemplate extends ActiveRecord
      * @param array $userInputs Key-value map of user inputs
      * @return array ['sql' => string, 'params' => array] Ready for PDO execution
      */
-    public function bindParams($userInputs)
+    public function bindParams($userInputs, $sqlTemplate = null)
     {
         $paramDefs = $this->getDecodedParameters();
         $boundParams = [];
-        $sql = $this->sql_template;
+        $sql = $sqlTemplate === null ? $this->sql_template : (string)$sqlTemplate;
 
         foreach ($paramDefs as $def) {
             $name = $def['name'];

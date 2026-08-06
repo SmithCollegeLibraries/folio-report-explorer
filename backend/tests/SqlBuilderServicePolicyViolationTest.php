@@ -41,6 +41,17 @@ function assertSameValue($expected, $actual, string $message): void
     }
 }
 
+function assertThrowsPolicy(string $sql): void
+{
+    try {
+        SqlBuilderService::validateTablePolicy($sql);
+    } catch (\InvalidArgumentException $exception) {
+        return;
+    }
+    fwrite(STDERR, "Expected SQL policy rejection: {$sql}\n");
+    exit(1);
+}
+
 // Harmless words inside SELECT values must not be confused with executable SQL.
 $safeSelectAccepted = true;
 try {
@@ -148,5 +159,13 @@ foreach ([
         'A discovered subtable of a blocked patron-data parent must inherit the parent policy block.'
     );
 }
+
+$effective = [
+    'sql' => 'WITH target_instances AS MATERIALIZED (SELECT instance.id AS instance_uuid FROM inventory.item__t item JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id JOIN inventory.instance__t instance ON instance.id = holdings.instance_id JOIN inventory.location__t location ON location.id = item.effective_location_id WHERE location.id = :locationId AND instance.source = \'MARC\') SELECT target_instances.instance_uuid FROM target_instances WHERE NOT EXISTS (SELECT 1 FROM marctab.mt856 AS marc_tag WHERE marc_tag.instance_id = target_instances.instance_uuid) ORDER BY target_instances.instance_uuid LIMIT 100001',
+];
+SqlBuilderService::validateSafety($effective['sql']);
+SqlBuilderService::validateTablePolicy($effective['sql']);
+assertThrowsPolicy('SELECT * FROM folio_source_record.marctab');
+assertThrowsPolicy('SELECT jsonb_array_elements(parsed_record__content) FROM folio_source_record.records__t');
 
 fwrite(STDOUT, "SqlBuilderService policy violation test passed\n");

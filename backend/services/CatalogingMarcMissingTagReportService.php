@@ -1,0 +1,151 @@
+<?php
+
+namespace app\services;
+
+use app\models\ReportTemplate;
+
+/**
+ * Resolves the two reviewed structural slots in the fixed MARC missing-tag
+ * report. All client-supplied values remain PDO parameters.
+ */
+final class CatalogingMarcMissingTagReportService
+{
+    public const REPORT_SLUG = 'marc-bibliographic-records-missing-tag';
+    public const LOCATION_TOKEN = '{{location_from}}';
+    public const MARC_TABLE_TOKEN = '{{marc_table}}';
+    public const PUBLIC_ROW_CAP = 100000;
+    public const FETCH_ROW_LIMIT = 100001;
+
+    private const EXPECTED_PARAMETER_NAMES = ['locationId', 'locationBasis', 'marcTag'];
+
+    private const LOCATION_FRAGMENTS = [
+        'effective_item' => "FROM inventory.item__t item\nJOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = item.effective_location_id",
+        'permanent_item' => "FROM inventory.item__t item\nJOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = item.permanent_location_id",
+        'permanent_holdings' => "FROM inventory.holdings_record__t holdings\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = holdings.permanent_location_id",
+    ];
+
+    public static function supports(ReportTemplate $report): bool
+    {
+        return $report->slug === self::REPORT_SLUG;
+    }
+
+    /**
+     * @return array{sql:string,params:array,location:array{id:string,name:mixed,code:mixed},marcTag:string,locationName:mixed,locationCode:mixed}
+     */
+    public static function build(ReportTemplate $report, array $inputs, $folioDb): array
+    {
+        if (!self::supports($report)) {
+            throw new \InvalidArgumentException('Unsupported report template.');
+        }
+
+        self::assertParameterDefinitions($report);
+
+        $locationId = $inputs['locationId'] ?? null;
+        if (!is_string($locationId) || preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $locationId) !== 1) {
+            throw new \InvalidArgumentException('A valid location UUID is required.');
+        }
+
+        $locationBasis = $inputs['locationBasis'] ?? null;
+        if (!is_string($locationBasis) || !array_key_exists($locationBasis, self::LOCATION_FRAGMENTS)) {
+            throw new \InvalidArgumentException('A supported location basis is required.');
+        }
+
+        $marcTag = $inputs['marcTag'] ?? null;
+        if (!is_string($marcTag) || preg_match('/^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/D', $marcTag) !== 1) {
+            throw new \InvalidArgumentException('MARC tag must be exactly three ASCII digits from 001 through 999.');
+        }
+
+        $template = (string) $report->sql_template;
+        self::assertSingleStructuralToken($template, self::LOCATION_TOKEN);
+        self::assertSingleStructuralToken($template, self::MARC_TABLE_TOKEN);
+
+        $locationFragment = self::LOCATION_FRAGMENTS[$locationBasis];
+        $marcTable = 'marctab.mt' . $marcTag;
+        if (strpos($locationFragment, ':') !== false || strpos($marcTable, ':') !== false) {
+            throw new \InvalidArgumentException('Structural SQL replacements cannot contain bind markers.');
+        }
+
+        $resolvedSql = str_replace(self::LOCATION_TOKEN, $locationFragment, $template);
+        $resolvedSql = str_replace(self::MARC_TABLE_TOKEN, $marcTable, $resolvedSql);
+        if (preg_match('/\{\{[^{}]+\}\}/', $resolvedSql) === 1) {
+            throw new \InvalidArgumentException('Report template contains an unresolved structural token.');
+        }
+
+        $location = $folioDb->createCommand(
+            'SELECT name, code FROM inventory.location__t WHERE id = :location_id',
+            [':location_id' => $locationId]
+        )->queryOne();
+        if (!is_array($location)) {
+            throw new \InvalidArgumentException('The selected location no longer exists.');
+        }
+
+        $table = $folioDb->createCommand(
+            'SELECT to_regclass(:table_name)',
+            [':table_name' => $marcTable]
+        )->queryOne();
+        $resolvedTable = is_array($table) ? reset($table) : null;
+        if ($resolvedTable === null || $resolvedTable === false || $resolvedTable === '') {
+            throw new \InvalidArgumentException("Reporting schema is missing the expected MARC tag table {$marcTable}.");
+        }
+
+        $bound = $report->bindParams($inputs, $resolvedSql);
+        self::assertCompiledSql((string) ($bound['sql'] ?? ''));
+
+        return [
+            'sql' => $bound['sql'],
+            'params' => $bound['params'],
+            'location' => [
+                'id' => $locationId,
+                'name' => $location['name'] ?? null,
+                'code' => $location['code'] ?? null,
+            ],
+            'marcTag' => $marcTag,
+            'locationName' => $location['name'] ?? null,
+            'locationCode' => $location['code'] ?? null,
+        ];
+    }
+
+    private static function assertParameterDefinitions(ReportTemplate $report): void
+    {
+        $names = [];
+        foreach ($report->getDecodedParameters() as $definition) {
+            $name = $definition['name'] ?? null;
+            if (!is_string($name) || $name === '') {
+                throw new \InvalidArgumentException('MARC report parameter definitions must each have a name.');
+            }
+            $names[] = $name;
+        }
+
+        if (count($names) !== count(self::EXPECTED_PARAMETER_NAMES) || count(array_unique($names)) !== count($names) || array_diff($names, self::EXPECTED_PARAMETER_NAMES) || array_diff(self::EXPECTED_PARAMETER_NAMES, $names)) {
+            throw new \InvalidArgumentException('MARC report must declare exactly locationId, locationBasis, and marcTag once each.');
+        }
+
+        foreach ($names as $name) {
+            foreach ($names as $otherName) {
+                if ($name !== $otherName && strpos($name, $otherName) === 0) {
+                    throw new \InvalidArgumentException('MARC report parameter names must not prefix-collide.');
+                }
+            }
+        }
+    }
+
+    private static function assertSingleStructuralToken(string $sql, string $token): void
+    {
+        if (substr_count($sql, $token) !== 1) {
+            throw new \InvalidArgumentException("Report template must contain exactly one {$token} token.");
+        }
+    }
+
+    private static function assertCompiledSql(string $sql): void
+    {
+        if (preg_match('/\{\{[^{}]+\}\}/', $sql) === 1) {
+            throw new \InvalidArgumentException('Compiled SQL contains an unresolved structural token.');
+        }
+        if (preg_match_all('/\bORDER\s+BY\b/i', $sql) !== 1) {
+            throw new \InvalidArgumentException('Compiled SQL must contain exactly one top-level ORDER BY clause.');
+        }
+        if (preg_match_all('/\bLIMIT\s+100001\b/i', $sql) !== 1 || preg_match_all('/\bLIMIT\s+\d+\b/i', $sql) !== 1) {
+            throw new \InvalidArgumentException('Compiled SQL must contain exactly one LIMIT 100001 clause.');
+        }
+    }
+}
