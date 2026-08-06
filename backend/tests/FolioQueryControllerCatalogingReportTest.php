@@ -201,7 +201,7 @@ namespace {
 
     // A missing compiler branch would call the fixed report's legacy binder and throw.
     $small = runCatalogingReport(['params' => validCatalogingParams(), 'outputMode' => 'table']);
-    catalogingAssertSame('table', $small['outputMode'] ?? null, 'Small fixed reports must retain table output.');
+    catalogingAssertSame('file', $small['outputMode'] ?? null, 'Governed fixed reports must always route to file output.');
     catalogingAssertSame('marctab.mt856', preg_match('/FROM\s+(marctab\.mt\d{3})/i', catalogingLastJob()->sql_text, $matches) ? strtolower($matches[1]) : null, 'The compiler-selected MARC tag table must be queued.');
     catalogingAssertSame(1, count(\app\services\SqlBuilderService::$safetyCalls), 'Compiled fixed SQL must receive safety validation.');
     catalogingAssertSame(1, count(\app\services\SqlBuilderService::$policyCalls), 'Compiled fixed SQL must receive table-policy validation.');

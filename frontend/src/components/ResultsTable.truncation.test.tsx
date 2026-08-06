@@ -47,4 +47,25 @@ describe('ResultsTable truncation feedback', () => {
       '/api/query/export/job-8',
     );
   });
+
+  it('surfaces skipped non-conforming identifiers beside the export warning', () => {
+    render(
+      <ResultsTable
+        data={{
+          columns: ['UUID'],
+          rows: [{ UUID: 'instance-1' }],
+          rowCount: 1,
+          executionTimeMs: 18,
+          sql: 'select instance_uuid',
+          outputMode: 'file',
+          downloadUrl: '/api/query/export/job-9',
+          identifierSkippedCount: 1,
+        }}
+      />,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '1 identifier could not be exported because it was not a valid FOLIO UUID.',
+    );
+  });
 });

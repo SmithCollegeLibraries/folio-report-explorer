@@ -270,6 +270,7 @@ export interface ExecuteResponse {
   outputMode?: 'table' | 'file';
   downloadUrl?: string;
   truncated?: boolean;
+  identifierSkippedCount?: number;
 }
 
 /** NL→SQL response */
@@ -598,6 +599,7 @@ export interface JobStatusResponse {
   executionTimeMs?: number;
   error?: string;
   truncated?: boolean;
+  identifierSkippedCount?: number;
 }
 
 // ─── Report Template types ────────────────────────────────────────

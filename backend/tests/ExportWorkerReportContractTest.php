@@ -144,9 +144,16 @@ exportContractAssertSame(3, count(array_filter(explode("\n", trim($worklistConte
 $identifierContract = exportContract();
 $identifierContract['exportKind'] = 'identifier';
 $identifierContract['downloadFilename'] = 'marc-bibliographic-records-missing-tag-856-sc-main-folio-uuids.csv';
-$identifier = runExportContractJob('identifier-export', $rowsSql, $identifierContract);
+$identifierRowsSql = <<<'SQL'
+SELECT '11111111-1111-4111-8111-111111111111' AS "Instance UUID", 'hrid-1' AS "Instance HRID", 'Alpha' AS "Title", 'Main' AS "Selected Location", 'Effective item' AS "Location Basis", '856' AS "Missing MARC Tag"
+UNION ALL SELECT 'not-a-uuid', 'hrid-2', 'Beta', 'Main', 'Effective item', '856'
+UNION ALL SELECT '11111111-1111-4111-8111-111111111111', 'hrid-3', 'Gamma', 'Main', 'Effective item', '856'
+ORDER BY "Title" LIMIT 3
+SQL;
+$identifier = runExportContractJob('identifier-export', $identifierRowsSql, $identifierContract);
 exportContractAssertSame(1, $identifier->row_count, 'Identifier projection must deduplicate valid UUIDs after sentinel detection.');
 exportContractAssertTrue($identifier->toStatusArray(true)['truncated'], 'Sentinel detection must precede identifier deduplication.');
+exportContractAssertSame(1, $identifier->toStatusArray(true)['identifierSkippedCount'] ?? null, 'Identifier exports must surface non-conforming source identifiers that were skipped.');
 exportContractAssertSame(['UUID'], $identifier->getDecodedColumns(), 'Identifier previews must have UUID-only headers.');
 exportContractAssertSame([['UUID' => '11111111-1111-4111-8111-111111111111']], $identifier->getDecodedRows(), 'Identifier previews must contain only projected UUID rows.');
 $identifierContents = file_get_contents($identifier->export_file_path);

@@ -107,6 +107,15 @@ final class ReportExecutionContractService
         if (array_key_exists('truncated', $contract)) {
             $contract['truncated'] = (bool) $contract['truncated'];
         }
+        if (array_key_exists('identifierSkippedCount', $contract)) {
+            if (!is_int($contract['identifierSkippedCount']) || $contract['identifierSkippedCount'] < 0) {
+                throw new \InvalidArgumentException('Stored identifier skipped count is invalid.');
+            }
+            if ($contract['exportKind'] !== 'identifier') {
+                throw new \InvalidArgumentException('Stored identifier skipped count requires identifier export.');
+            }
+            $contract['identifierSkippedCount'] = (int) $contract['identifierSkippedCount'];
+        }
         return $contract;
     }
 

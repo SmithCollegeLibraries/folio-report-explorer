@@ -192,7 +192,7 @@ class QueryJob extends ActiveRecord
      * @param int $rowCount
      * @param int $executionTimeMs
      */
-    public function markExportCompleted($filePath, $rowCount, $executionTimeMs, array $previewColumns = [], array $previewRows = [], $truncated = false)
+    public function markExportCompleted($filePath, $rowCount, $executionTimeMs, array $previewColumns = [], array $previewRows = [], $truncated = false, $identifierSkippedCount = 0)
     {
         $this->status = 'completed';
         if ($this->hasAttribute('output_mode')) {
@@ -213,6 +213,7 @@ class QueryJob extends ActiveRecord
             $this->pg_backend_pid = null;
         }
         $this->updateReportExecutionTruncation((bool) $truncated);
+        $this->updateIdentifierSkippedCount((int) $identifierSkippedCount);
         $this->save(false);
     }
 
@@ -305,6 +306,10 @@ class QueryJob extends ActiveRecord
                 && array_key_exists('truncated', $metadata['reportExecution'])) {
                 $data['truncated'] = (bool) $metadata['reportExecution']['truncated'];
             }
+            if (isset($metadata['reportExecution']) && is_array($metadata['reportExecution'])
+                && array_key_exists('identifierSkippedCount', $metadata['reportExecution'])) {
+                $data['identifierSkippedCount'] = (int) $metadata['reportExecution']['identifierSkippedCount'];
+            }
         }
 
         return $data;
@@ -320,6 +325,20 @@ class QueryJob extends ActiveRecord
             return;
         }
         $metadata['reportExecution']['truncated'] = $truncated;
+        $this->metadata = json_encode($metadata);
+    }
+
+    private function updateIdentifierSkippedCount(int $count): void
+    {
+        if (!$this->hasAttribute('metadata')) {
+            return;
+        }
+        $metadata = $this->getDecodedMetadata();
+        if (!isset($metadata['reportExecution']) || !is_array($metadata['reportExecution'])
+            || ($metadata['reportExecution']['exportKind'] ?? null) !== 'identifier') {
+            return;
+        }
+        $metadata['reportExecution']['identifierSkippedCount'] = max(0, $count);
         $this->metadata = json_encode($metadata);
     }
 }

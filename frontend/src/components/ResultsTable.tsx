@@ -93,6 +93,14 @@ export default function ResultsTable({ data, drillThrough }: Props) {
           This report reached its 100,000-row cap. Narrow the location to retrieve the remaining records.
         </div>
       )}
+      {data.identifierSkippedCount && data.identifierSkippedCount > 0 && (
+        <div
+          role="alert"
+          className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          {data.identifierSkippedCount} identifier{data.identifierSkippedCount === 1 ? '' : 's'} could not be exported because {data.identifierSkippedCount === 1 ? 'it was' : 'they were'} not a valid FOLIO UUID.
+        </div>
+      )}
       {/* Summary bar */}
       <div data-testid="results-summary-bar" className="flex items-center justify-between px-2 py-1 bg-gray-50 border rounded-t-lg text-xs text-gray-600">
         <div className="flex gap-3">

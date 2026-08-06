@@ -3847,7 +3847,10 @@ class FolioQueryController extends Controller
                 }
             }
         }
-        if ($exportKind === 'identifier') {
+        // Governed reports stream to a file regardless of planner estimates.
+        // Their sentinel/cap contract is enforced by the export worker, so a
+        // table job must never materialize an unexpectedly large result set.
+        if ($reportExecution !== null || $exportKind === 'identifier') {
             $outputMode = 'file';
         }
         if ($reportExecution !== null) {

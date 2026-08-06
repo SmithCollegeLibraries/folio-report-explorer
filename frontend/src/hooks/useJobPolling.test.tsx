@@ -93,6 +93,7 @@ describe('useJobPolling cancellation', () => {
       executionTimeMs: 18,
       downloadUrl: '/api/query/export/job-1',
       truncated: true,
+      identifierSkippedCount: 1,
     });
 
     const { result } = renderHook(() => useJobPolling('job-1'));
@@ -102,6 +103,7 @@ describe('useJobPolling cancellation', () => {
       outputMode: 'file',
       downloadUrl: '/api/query/export/job-1',
       truncated: true,
+      identifierSkippedCount: 1,
     });
   });
 });

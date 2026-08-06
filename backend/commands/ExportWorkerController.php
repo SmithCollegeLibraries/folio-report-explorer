@@ -241,6 +241,7 @@ class ExportWorkerController extends Controller
 
             $rowCount = 0;
             $sourceRowCount = 0;
+            $identifierSkippedCount = 0;
             $truncated = false;
             $previewLimit = max(0, (int) (Yii::$app->params['exportPreviewRows'] ?? 200));
             $previewRows = [];
@@ -254,7 +255,11 @@ class ExportWorkerController extends Controller
 
                 if ($identifierExport) {
                     $identifier = FolioIdentifierCsvService::project($row, $contract['identifierExport']);
-                    if ($identifier === null || isset($seenIdentifiers[$identifier])) {
+                    if ($identifier === null) {
+                        $identifierSkippedCount++;
+                        continue;
+                    }
+                    if (isset($seenIdentifiers[$identifier])) {
                         continue;
                     }
                     $seenIdentifiers[$identifier] = true;
@@ -294,7 +299,7 @@ class ExportWorkerController extends Controller
             }
 
             $executionTime = (int) round((microtime(true) - $startTime) * 1000);
-            $job->markExportCompleted($filePath, $rowCount, $executionTime, $headers, $previewRows, $truncated);
+            $job->markExportCompleted($filePath, $rowCount, $executionTime, $headers, $previewRows, $truncated, $identifierSkippedCount);
             $this->stdout("Export job {$job->id} completed: {$rowCount} rows in {$executionTime}ms\n");
 
             $this->logQuery($job);
