@@ -517,4 +517,49 @@ foreach ([
     );
 }
 
+function marcFieldFinderSeedDefinition($migrationPath)
+{
+    $migration = (string) file_get_contents($migrationPath);
+    $matched = preg_match(
+        "/VALUES \(\n  'marc-field-indicator-content-finder',\n  '([^']+)',.*?\n  '(WITH target_instances AS MATERIALIZED \(.*?LIMIT 100001)',\n  '(\\[.*?\\])',\n  'folio',\n  '(\\{.*?\\})',\n  100000,\n  1,\n  'manual'\n\)/s",
+        $migration,
+        $matches
+    );
+    if ($matched !== 1) {
+        throw new RuntimeException('Could not load the MARC field finder migration seed fixture.');
+    }
+
+    return [
+        'slug' => 'marc-field-indicator-content-finder',
+        'name' => $matches[1],
+        'category' => 'cataloging',
+        'sql_template' => str_replace("''", "'", $matches[2]),
+        'parameters' => str_replace("''", "'", $matches[3]),
+        'data_source' => 'folio',
+        'execution_config' => str_replace("''", "'", $matches[4]),
+        'default_limit' => 100000,
+        'is_active' => 1,
+        'created_by' => 'manual',
+    ];
+}
+
+$marcFieldFinderSeed = marcFieldFinderSeedDefinition($migrationDir . '/043_cataloging_marc_field_finder.sql');
+assertMigrationTrue(
+    $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcFieldFinderSeed), '043_cataloging_marc_field_finder.sql'),
+    'Migration 043 must recognize the complete reviewed MARC field finder seed.'
+);
+foreach ([
+    'name' => 'MARC Field Finder',
+    'sql_template' => str_replace('LIMIT 100001', 'LIMIT 100000', $marcFieldFinderSeed['sql_template']),
+    'parameters' => '[]',
+    'execution_config' => '{}',
+] as $field => $replacement) {
+    $alteredFinderSeed = $marcFieldFinderSeed;
+    $alteredFinderSeed[$field] = $replacement;
+    assertMigrationTrue(
+        !$marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($alteredFinderSeed), '043_cataloging_marc_field_finder.sql'),
+        'Migration 043 must not baseline an altered MARC field finder ' . $field . '.'
+    );
+}
+
 fwrite(STDOUT, "MigrationService test passed\n");

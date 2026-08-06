@@ -3,6 +3,7 @@
 namespace app\services;
 
 require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
+require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
 
 class MigrationService
 {
@@ -356,6 +357,8 @@ class MigrationService
                 return self::marcMissingTagReportAppearsComplete($db, true);
             case '042_cataloging_marc_multi_location.sql':
                 return self::marcMissingTagReportAppearsComplete($db);
+            case '043_cataloging_marc_field_finder.sql':
+                return self::catalogingMarcFieldFinderAppearsComplete($db);
         }
 
         return false;
@@ -379,6 +382,23 @@ class MigrationService
                 CatalogingMarcMissingTagReportService::isCanonicalSeedDefinition($definition)
                 || ($allowLegacy && CatalogingMarcMissingTagReportService::isLegacySeedDefinition($definition))
             );
+    }
+
+    private static function catalogingMarcFieldFinderAppearsComplete($db): bool
+    {
+        if (!self::hasColumn($db, 'report_templates', 'execution_config')
+            || !self::columnTypeContains($db, 'report_templates', 'category', "'cataloging'")) {
+            return false;
+        }
+
+        $definition = $db->createCommand(
+            'SELECT slug, name, category, sql_template, parameters, data_source, execution_config, default_limit, is_active, created_by'
+                . ' FROM report_templates WHERE slug = :slug LIMIT 1',
+            [':slug' => CatalogingMarcFieldFinderService::REPORT_SLUG]
+        )->queryOne();
+
+        return is_array($definition)
+            && CatalogingMarcFieldFinderService::isCanonicalSeedDefinition($definition);
     }
 
     private static function budgetYearFundReportAppearsComplete($db): bool
