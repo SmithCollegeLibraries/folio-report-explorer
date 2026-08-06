@@ -609,7 +609,7 @@ export type ReportCategory = 'acquisitions' | 'circulation' | 'inventory' | 'fin
 /** Parameter definition for a report template */
 export interface ReportParam {
   name: string;
-  type: 'date' | 'text' | 'select' | 'number' | 'boolean' | 'list';
+  type: 'date' | 'text' | 'select' | 'multiselect' | 'number' | 'boolean' | 'list';
   label: string;
   required: boolean;
   default: string;
@@ -621,6 +621,7 @@ export interface ReportParam {
   input_mode?: 'numeric';
   pattern?: '[0-9]{3}';
   max_length?: 3;
+  max_selections?: number;
 }
 
 /** Report template summary (list view) */

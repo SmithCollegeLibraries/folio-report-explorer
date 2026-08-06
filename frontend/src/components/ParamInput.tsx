@@ -1,4 +1,5 @@
 import type { ReportParam } from '../types';
+import SearchableMultiSelect from './SearchableMultiSelect';
 
 export default function ParamInput({
   param,
@@ -20,7 +21,17 @@ export default function ParamInput({
         {param.required && <span className="ml-0.5 text-red-400">*</span>}
       </label>
 
-      {param.type === 'select' && options ? (
+      {param.type === 'multiselect' && options ? (
+        <SearchableMultiSelect
+          id={inputId}
+          label={param.label}
+          value={value}
+          options={options}
+          placeholder={param.placeholder}
+          maxSelections={param.max_selections}
+          onChange={onChange}
+        />
+      ) : param.type === 'select' && options ? (
         <select
           id={inputId}
           value={value}
