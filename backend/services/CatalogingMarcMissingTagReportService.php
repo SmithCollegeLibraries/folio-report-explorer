@@ -5,6 +5,7 @@ namespace app\services;
 use app\models\ReportTemplate;
 
 require_once __DIR__ . '/SqlSelectStructureService.php';
+require_once __DIR__ . '/CatalogingMarcLocationScopeService.php';
 
 /**
  * Resolves the two reviewed structural slots in the fixed MARC missing-tag
@@ -19,18 +20,11 @@ final class CatalogingMarcMissingTagReportService
     public const FETCH_ROW_LIMIT = 100001;
 
     private const EXPECTED_PARAMETER_NAMES = ['locationIds', 'locationBasis', 'marcTag'];
-    private const MAX_LOCATION_SELECTIONS = 100;
     private const CANONICAL_TEMPLATE_SHA256 = '71353449b0b03cbb95f7cf2ac17b054606f8d411670abe4fd8f85af72c44d4d8';
     private const CANONICAL_PARAMETERS_SHA256 = '1e08003f820b425e6616303310902e72e0d8026f53a5284ebcaa0290a977d03b';
     private const LEGACY_TEMPLATE_SHA256 = 'aa19ffbe4b6407dfbc163b82fad04e44c329d7e06bc851c50d41301fc7b5eea8';
     private const LEGACY_PARAMETERS_SHA256 = '35630e90865f1e98bfd67957d19611031ac60cbe7547ab5079d8dbb1ecd27457';
     private const CANONICAL_REPORT_NAME = 'MARC Bibliographic Records Missing a Tag';
-
-    private const LOCATION_FRAGMENTS = [
-        'effective_item' => "FROM inventory.item__t item\nJOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = item.effective_location_id",
-        'permanent_item' => "FROM inventory.item__t item\nJOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = item.permanent_location_id",
-        'permanent_holdings' => "FROM inventory.holdings_record__t holdings\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = holdings.permanent_location_id",
-    ];
 
     public static function supports(ReportTemplate $report): bool
     {
@@ -87,12 +81,14 @@ final class CatalogingMarcMissingTagReportService
         self::assertParameterDefinitions($report);
         self::assertTemplateContract((string) $report->sql_template);
 
-        $locationIds = self::validatedLocationIds($inputs['locationIds'] ?? null);
-
-        $locationBasis = $inputs['locationBasis'] ?? null;
-        if (!is_string($locationBasis) || !array_key_exists($locationBasis, self::LOCATION_FRAGMENTS)) {
-            throw new \InvalidArgumentException('A supported location basis is required.');
-        }
+        $scope = CatalogingMarcLocationScopeService::resolve(
+            $inputs,
+            $folioDb,
+            ['effective_item', 'permanent_item', 'permanent_holdings']
+        );
+        $locationIds = $scope['locationIds'];
+        $locationBasis = $scope['locationBasis'];
+        $locationFragment = $scope['locationFragment'];
 
         $marcTag = $inputs['marcTag'] ?? null;
         if (!is_string($marcTag) || preg_match('/^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/D', $marcTag) !== 1) {
@@ -103,7 +99,6 @@ final class CatalogingMarcMissingTagReportService
         self::assertSingleStructuralToken($template, self::LOCATION_TOKEN);
         self::assertSingleStructuralToken($template, self::MARC_TABLE_TOKEN);
 
-        $locationFragment = self::LOCATION_FRAGMENTS[$locationBasis];
         $marcTable = 'marctab.mt' . $marcTag;
         if (strpos($locationFragment, ':') !== false || strpos($marcTable, ':') !== false) {
             throw new \InvalidArgumentException('Structural SQL replacements cannot contain bind markers.');
@@ -113,33 +108,6 @@ final class CatalogingMarcMissingTagReportService
         $resolvedSql = str_replace(self::MARC_TABLE_TOKEN, $marcTable, $resolvedSql);
         if (preg_match('/\{\{[^{}]+\}\}/', $resolvedSql) === 1) {
             throw new \InvalidArgumentException('Report template contains an unresolved structural token.');
-        }
-
-        $locationLookupParams = [];
-        $locationPlaceholders = [];
-        foreach ($locationIds as $index => $locationId) {
-            $placeholder = ':location_lookup_' . $index;
-            $locationPlaceholders[] = $placeholder;
-            $locationLookupParams[$placeholder] = $locationId;
-        }
-        $locationRows = $folioDb->createCommand(
-            'SELECT id::text AS id, name, code FROM inventory.location__t'
-                . ' WHERE id IN (' . implode(', ', $locationPlaceholders) . ')'
-                . ' ORDER BY name, code, id',
-            $locationLookupParams
-        )->queryAll();
-        $locationsById = [];
-        foreach ($locationRows as $locationRow) {
-            if (is_array($locationRow) && isset($locationRow['id'])) {
-                $locationsById[strtolower((string) $locationRow['id'])] = $locationRow;
-            }
-        }
-        $locations = [];
-        foreach ($locationIds as $locationId) {
-            if (!isset($locationsById[$locationId])) {
-                throw new \InvalidArgumentException('A selected location no longer exists.');
-            }
-            $locations[] = $locationsById[$locationId];
         }
 
         $table = $folioDb->createCommand(
@@ -156,19 +124,8 @@ final class CatalogingMarcMissingTagReportService
         $bound = $report->bindParams($normalizedInputs, $resolvedSql);
         self::assertCompiledSql((string) ($bound['sql'] ?? ''));
 
-        if (count($locations) === 1) {
-            $location = [
-                'id' => $locationIds[0],
-                'name' => $locations[0]['name'] ?? null,
-                'code' => $locations[0]['code'] ?? null,
-            ];
-        } else {
-            $location = [
-                'id' => implode(',', $locationIds),
-                'name' => count($locations) . ' Locations',
-                'code' => 'MULTI',
-            ];
-        }
+        $location = $scope['location'];
+        $locations = $scope['locations'];
 
         return [
             'sql' => $bound['sql'],
@@ -179,32 +136,6 @@ final class CatalogingMarcMissingTagReportService
             'locationName' => $location['name'] ?? null,
             'locationCode' => $location['code'] ?? null,
         ];
-    }
-
-    private static function validatedLocationIds($value): array
-    {
-        if (!is_string($value) || trim($value) === '') {
-            throw new \InvalidArgumentException('At least one location is required.');
-        }
-
-        $rawLocationIds = array_map('trim', explode(',', $value));
-        if (count($rawLocationIds) > self::MAX_LOCATION_SELECTIONS) {
-            throw new \InvalidArgumentException('No more than 100 locations may be selected.');
-        }
-
-        $locationIds = [];
-        foreach ($rawLocationIds as $locationId) {
-            if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $locationId) !== 1) {
-                throw new \InvalidArgumentException('Every selected location must be a valid UUID.');
-            }
-            $locationIds[] = strtolower($locationId);
-        }
-
-        if (count(array_unique($locationIds)) !== count($locationIds)) {
-            throw new \InvalidArgumentException('Selected locations must be unique.');
-        }
-
-        return $locationIds;
     }
 
     private static function assertParameterDefinitions(ReportTemplate $report): void
