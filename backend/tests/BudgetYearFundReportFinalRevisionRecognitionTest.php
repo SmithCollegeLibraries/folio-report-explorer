@@ -269,7 +269,7 @@ function finalDatabaseAppearsCurrent(array $report): bool
 
 $complete = finalRevisionReport();
 assertFinalRecognitionSame(true, finalMigrationAppearsApplied($complete, '037_budget_year_fund_report_payment_distributions.sql'), 'Migration 037 must recognize the complete final report contract.');
-assertFinalRecognitionSame(true, finalDatabaseAppearsCurrent($complete), 'A ledger-less database may baseline only with the complete migration-037 report contract.');
+assertFinalRecognitionSame(false, finalDatabaseAppearsCurrent($complete), 'A migration-037-only fixture must not baseline without the later MARC missing-tag report contract.');
 
 $parameters = finalRevisionParameters();
 $negativeCases = [

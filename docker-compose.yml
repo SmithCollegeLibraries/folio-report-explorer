@@ -19,6 +19,7 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./backend:/var/www/html
+      - ./mysql:/var/www/mysql:ro
     environment:
       - FOLIO_PG_HOST=${FOLIO_PG_HOST}
       - FOLIO_PG_PORT=${FOLIO_PG_PORT:-25060}
