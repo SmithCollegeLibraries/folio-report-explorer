@@ -54,6 +54,14 @@ instances with another source must not be reported as missing every MARC tag.
 The initial report deliberately trusts the Inventory source designation rather
 than independently joining the much larger SRS records table.
 
+That assumption is supported by the deployment measured for this design:
+`inventory.instance__t.source` contains only `MARC` and `FOLIO`; `MARC`
+represents 99.983% of approximately 5.68 million instances and `FOLIO`
+represents 0.017%, or roughly 950 instances. Exact equality is intentionally
+deployment-specific. FOLIO ECS environments can also emit `CONSORTIUM-MARC`,
+but that value is not present locally and is out of scope unless this report is
+later deployed in such an environment.
+
 ## Report Category
 
 Add `cataloging` as a first-class report category in:
@@ -137,11 +145,15 @@ Construction order is fixed:
 6. Bind the three ordinary value placeholders using the existing parameter
    binder. `marcTag` remains a bound output value as well as the validated
    source of the table identifier.
-7. Add the internal result-limit sentinel.
+7. Verify that the static template still contains its single reviewed
+   top-level `ORDER BY` and `LIMIT 100001` sentinel clause.
 8. Pass the final SQL through the existing SQL safety validator.
 
 No list parameter is used by this report. A structural fragment can never add
-a value placeholder after binding.
+a value placeholder after binding. The sentinel is part of the static SQL
+template before binding. `ReportTemplate::bindParams()` therefore detects an
+existing numeric limit and does not append `default_limit`; execution must
+never assemble a second `LIMIT` clause.
 
 ## Query Contract
 
@@ -207,13 +219,40 @@ Return one row per Instance UUID with these ordered columns:
 Order results by title and then Instance HRID. The missing-tag column repeats
 the normalized three-digit input so exported worklists remain self-describing.
 
-The public report limit remains the platform maximum of 100,000 rows. The SQL
-fetches at most 100,001 ordered rows internally. The execution layer removes
-the sentinel row, returns or writes at most 100,000 rows, and records an exact
-`truncated` flag when the sentinel existed. This distinguishes an exact
-100,000-row population from a larger population. A truncated result tells the
-cataloger to narrow the location or handle the remaining population
-separately.
+This report introduces a deliberate per-report cap of 100,000 public rows. It
+is not an existing application-wide maximum: current seeded reports use a
+10,000 `default_limit`, and the application-wide `maxQueryRows` and
+`exportRowThreshold` are also 10,000. This cataloging worklist is the first
+fixed report designed for ten times that row volume, so its load and timeout
+evidence are release-blocking.
+
+The static SQL template fetches at most 100,001 ordered rows. Set the report's
+`default_limit` to 100,000 for report metadata and UI consistency, but do not
+use it to enforce the SQL cap; the existing numeric sentinel limit prevents
+the binder from appending it. The execution layer removes the sentinel row,
+returns or writes at most 100,000 rows, and records an exact `truncated` flag
+when the sentinel existed. This distinguishes an exact 100,000-row population
+from a larger population.
+
+The report-run path must carry server-owned execution metadata identifying the
+100,000-row public cap, 100,001-row fetch limit, and deterministic-order
+requirement into either worker. For this metadata only:
+
+- the table worker trims the sentinel before persisting result rows;
+- the export worker preserves the reviewed top-level `ORDER BY` and
+  `LIMIT 100001` instead of applying its generic order removal and
+  `exportRowLimit` replacement;
+- the export worker consumes the sentinel without writing it to either CSV;
+  and
+- both workers persist the same `truncated` state on the query job.
+
+Existing reports retain the generic worker behavior. The report run endpoint
+must also apply the existing 10,000-row/large-cost preflight thresholds and
+route a large worklist to file mode. Small worklists may remain table results;
+large worklists are background files with the existing preview. The report
+page must render the truncation warning for both table results and completed
+file jobs, beside the download actions. The warning is job metadata, not an
+extra CSV row, so both CSV schemas remain valid.
 
 ## Export Contracts
 
@@ -280,6 +319,8 @@ depends on record type, cataloging code, legacy practice, and local policy.
 - Invalid tags return a specific validation message before SQL construction.
 - Unknown location-basis values fail before SQL construction.
 - Unresolved or repeated SQL tokens fail closed.
+- A missing, duplicated, or non-static `LIMIT 100001` sentinel fails before a
+  job is created.
 - An expected `marctab.mtNNN` table that is unavailable produces a reporting-
   schema integrity error; the service never treats schema damage as evidence
   that every candidate record lacks the tag and never falls back to the
@@ -300,6 +341,9 @@ depends on record type, cataloging code, legacy practice, and local policy.
 - Use the existing background worker for both full CSV formats.
 - Preserve the UUID-to-UUID anti-join so the per-tag Instance UUID index remains
   usable.
+- Treat the report's 100,000-row public cap as a deliberate platform first and
+  verify worker memory, MySQL job-metadata size, CSV streaming, and timeout
+  behavior rather than inheriting assumptions from 10,000-row reports.
 - Run `EXPLAIN` for all three location bases with a common tag such as 245 and a
   sparse tag such as 856.
 - Exercise a location with a large item population and a location with a small
@@ -325,6 +369,8 @@ depends on record type, cataloging code, legacy practice, and local policy.
   text cannot introduce a colon or value placeholder.
 - Prove the three value-parameter names are unique and none is a prefix of
   another.
+- Prove the static template has one top-level `LIMIT 100001` before binding and
+  `bindParams()` does not append a second limit.
 
 ### Result behavior
 
@@ -351,6 +397,12 @@ depends on record type, cataloging code, legacy practice, and local policy.
 - Exactly 100,000 results do not show a truncation warning; 100,001 candidates
   return 100,000 rows and set the warning.
 - Identifier projection or deduplication never clears a truncation warning.
+- Large report runs cross the existing preflight threshold into file mode.
+- Report-owned file execution preserves `ORDER BY` and `LIMIT 100001`, while
+  ordinary exports still use the generic `exportRowLimit` and order-removal
+  behavior.
+- The report page displays truncation beside both inline results and completed
+  file downloads; neither CSV contains a warning row.
 
 ### Deployment and UI
 
