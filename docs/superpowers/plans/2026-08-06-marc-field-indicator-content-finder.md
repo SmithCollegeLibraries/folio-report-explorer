@@ -4,14 +4,14 @@
 
 **Goal:** Add a governed, location-scoped Cataloging report that finds present or absent MARC field rows using optional indicator, subfield, content, and capitalization criteria and exports either a 12-column worklist or deduplicated FOLIO Instance UUIDs.
 
-**Architecture:** Extract the already-shipped MARC location validation and resolution into a focused shared service, then add a separate fail-closed `CatalogingMarcFieldFinderService` for the new report. Seed one static SQL template whose only structural tokens are the location fragment and one validated `marctab.mtNNN` table; all search choices remain bound parameters. Add a report-specific React parameter panel and pure interpretation/validation utility while leaving ordinary reports on the generic renderer.
+**Architecture:** Extract the already-shipped MARC location validation and resolution into a focused shared service, then add a separate fail-closed `CatalogingMarcFieldFinderService` for the new report. Seed one static SQL template whose only structural tokens are the location fragment and two occurrences of the same validated `marctab.mtNNN` table identifier; all search choices remain bound parameters. Add a report-specific React parameter panel and pure interpretation/validation utility while leaving ordinary reports on the generic renderer.
 
 **Tech Stack:** PHP 7.2-compatible Yii2, PostgreSQL reporting database, MySQL/MariaDB migrations, React 18, TypeScript, TanStack Query, Axios, Vitest, Testing Library, Docker Compose.
 
 ## Global Constraints
 
 - The report name is **MARC Field, Indicator, and Content Finder** and its slug is `marc-field-indicator-content-finder`.
-- Query exactly one validated `marctab.mtNNN` table per execution; never use `folio_source_record.marctab` or `records__t.parsed_record__content`.
+- Query exactly one validated `marctab.mtNNN` table per execution, even when its identifier appears in both SQL branches; never use `folio_source_record.marctab` or `records__t.parsed_record__content`.
 - Materialize location-scoped `inventory.instance__t` rows before MARC access and require exact `instance.source = 'MARC'`.
 - Accept one to 100 unique existing location UUIDs and only `effective_item` or `permanent_item` location basis values; the option list displays active locations.
 - Use exactly these ten prefix-safe parameter names once each: `locationIds`, `locationBasis`, `marcTag`, `occurrenceCondition`, `firstIndicator`, `secondIndicator`, `subfieldCode`, `contentRule`, `searchValue`, `caseExact`.
@@ -255,7 +255,7 @@ Assert migration 043:
 
 ```php
 finderMigrationSame(1, substr_count($migration, '{{location_from}}'), 'Finder SQL needs one location token.');
-finderMigrationSame(1, substr_count($migration, '{{marc_table}}'), 'Finder SQL needs one MARC table token.');
+finderMigrationSame(2, substr_count($migration, '{{marc_table}}'), 'Finder SQL needs two occurrences of the same MARC table token.');
 finderMigrationContains("'marc-field-indicator-content-finder'", $migration, 'The approved slug must be seeded.');
 finderMigrationContains("instance.source = ''MARC''", $migration, 'Only MARC Inventory instances qualify.');
 finderMigrationContains('marc_row.instance_id = target_instances.instance_uuid', $migration, 'MARC access must join UUID to UUID.');
@@ -446,8 +446,40 @@ report_rows AS (
   FROM target_instances
   WHERE :occurrenceCondition = 'missing'
     AND NOT EXISTS (
-      SELECT 1 FROM matching_rows
-      WHERE matching_rows.instance_uuid = target_instances.instance_uuid
+      SELECT 1
+      FROM {{marc_table}} missing_row
+      WHERE missing_row.instance_id = target_instances.instance_uuid
+        AND (
+          :firstIndicator = 'any'
+          OR (:firstIndicator = 'blank' AND (TRIM(COALESCE(missing_row.ind1, '')) = '' OR missing_row.ind1 = CHR(92)))
+          OR (LEFT(:firstIndicator, 5) = 'char:' AND missing_row.ind1 = SUBSTRING(:firstIndicator FROM 6))
+        )
+        AND (
+          :secondIndicator = 'any'
+          OR (:secondIndicator = 'blank' AND (TRIM(COALESCE(missing_row.ind2, '')) = '' OR missing_row.ind2 = CHR(92)))
+          OR (LEFT(:secondIndicator, 5) = 'char:' AND missing_row.ind2 = SUBSTRING(:secondIndicator FROM 6))
+        )
+        AND (:subfieldCode = '' OR COALESCE(missing_row.sf, '') = :subfieldCode)
+        AND CASE :contentRule
+          WHEN 'any' THEN TRUE
+          WHEN 'contains' THEN STRPOS(
+            CASE WHEN :caseExact = 'true' THEN COALESCE(missing_row.content, '') ELSE LOWER(COALESCE(missing_row.content, '')) END,
+            CASE WHEN :caseExact = 'true' THEN :searchValue ELSE LOWER(:searchValue) END
+          ) > 0
+          WHEN 'not_contains' THEN STRPOS(
+            CASE WHEN :caseExact = 'true' THEN COALESCE(missing_row.content, '') ELSE LOWER(COALESCE(missing_row.content, '')) END,
+            CASE WHEN :caseExact = 'true' THEN :searchValue ELSE LOWER(:searchValue) END
+          ) = 0
+          WHEN 'equals' THEN CASE WHEN :caseExact = 'true' THEN COALESCE(missing_row.content, '') ELSE LOWER(COALESCE(missing_row.content, '')) END = CASE WHEN :caseExact = 'true' THEN :searchValue ELSE LOWER(:searchValue) END
+          WHEN 'not_equals' THEN CASE WHEN :caseExact = 'true' THEN COALESCE(missing_row.content, '') ELSE LOWER(COALESCE(missing_row.content, '')) END <> CASE WHEN :caseExact = 'true' THEN :searchValue ELSE LOWER(:searchValue) END
+          WHEN 'begins' THEN LEFT(CASE WHEN :caseExact = 'true' THEN COALESCE(missing_row.content, '') ELSE LOWER(COALESCE(missing_row.content, '')) END, CHAR_LENGTH(:searchValue)) = CASE WHEN :caseExact = 'true' THEN :searchValue ELSE LOWER(:searchValue) END
+          WHEN 'not_begins' THEN LEFT(CASE WHEN :caseExact = 'true' THEN COALESCE(missing_row.content, '') ELSE LOWER(COALESCE(missing_row.content, '')) END, CHAR_LENGTH(:searchValue)) <> CASE WHEN :caseExact = 'true' THEN :searchValue ELSE LOWER(:searchValue) END
+          WHEN 'blank' THEN TRIM(COALESCE(missing_row.content, '')) = ''
+          WHEN 'not_blank' THEN TRIM(COALESCE(missing_row.content, '')) <> ''
+          WHEN 'has_lowercase' THEN COALESCE(missing_row.content, '') ~ '[a-z]'
+          WHEN 'has_non_alphanumeric' THEN COALESCE(missing_row.content, '') ~ '[^A-Za-z0-9]'
+          ELSE FALSE
+        END
     )
 )
 SELECT * FROM report_rows
@@ -457,7 +489,12 @@ ORDER BY "Title" NULLS LAST, "Instance HRID" NULLS LAST,
 LIMIT 100001
 ```
 
-The `matching_rows` CTE is the single UUID-correlated probe of the selected per-tag table; every optional criterion belongs in that CTE so the missing branch means “no row matches all selected criteria.”
+The present branch and missing branch each reference the same structural
+`{{marc_table}}` token. The compiler must require exactly two token occurrences,
+replace both with the identical validated `marctab.mtNNN` identifier, and keep
+the missing branch's complete indicator, subfield, and content predicates inside
+the correlated `NOT EXISTS` probe. Both branches remain constrained by the
+materialized target instance set.
 
 - [ ] **Step 4: Add canonical seed recognition**
 
@@ -576,10 +613,11 @@ Throw `ReportParameterValidationException` with the exact parameter name for use
 
 - [ ] **Step 5: Bind values and enforce compiled SQL invariants**
 
-Resolve `{{location_from}}` first and `{{marc_table}}` second, reject colons in replacements, and reject remaining `{{...}}` tokens. Pass normalized values to `ReportTemplate::bindParams()` and assert:
+Resolve `{{location_from}}` first and the two `{{marc_table}}` occurrences second, reject colons in replacements, and reject remaining `{{...}}` tokens. Replace both MARC tokens with the same `marctab.mtNNN` value; never accept different identifiers. Pass normalized values to `ReportTemplate::bindParams()` and assert:
 
 - one top-level `ORDER BY`;
 - one top-level numeric `LIMIT 100001`;
+- exactly two resolved references to the same selected `marctab.mtNNN` relation;
 - no unresolved structural token;
 - no `folio_source_record.marctab` or `parsed_record__content` reference; and
 - the resolved SQL contains only the selected `marctab.mtNNN` physical table.

@@ -368,7 +368,9 @@ does not determine whether the data violates MARC, RDA, or local policy.
 - Recognize only the exact seeded governed-report contract.
 - Reject malformed, duplicate, or prefix-colliding parameters.
 - Require the exact ten prefix-safe parameter names once each.
-- Resolve exactly one location fragment and one `mtNNN` token.
+- Resolve exactly one location fragment and two occurrences of the same validated
+  `mtNNN` token. Both occurrences must resolve to the identical physical table;
+  no second user-selected table is permitted.
 - Reject unresolved tokens and unsafe structural replacements.
 - Bind all user values and treat SQL wildcard characters literally.
 - Cover every content comparison in case-insensitive and exact-capitalization
