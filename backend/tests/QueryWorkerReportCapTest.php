@@ -21,7 +21,7 @@ new Application([
     ],
 ]);
 
-Yii::$app->db->createCommand(<<<'SQL'
+$queryJobsTableSql = <<<'SQL'
 CREATE TABLE query_jobs (
     id VARCHAR(36) PRIMARY KEY,
     sql_text TEXT NOT NULL,
@@ -48,9 +48,10 @@ CREATE TABLE query_jobs (
     started_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL;
+Yii::$app->db->createCommand($queryJobsTableSql)->execute();
 
-Yii::$app->db->createCommand(<<<'SQL'
+$queryLogTableSql = <<<'SQL'
 CREATE TABLE query_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sql_text TEXT,
@@ -62,7 +63,8 @@ CREATE TABLE query_log (
     execution_time_ms INTEGER,
     error_message TEXT
 )
-SQL)->execute();
+SQL;
+Yii::$app->db->createCommand($queryLogTableSql)->execute();
 
 function queryWorkerReportCapAssertSame($expected, $actual, string $message): void
 {

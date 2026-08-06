@@ -3,7 +3,7 @@
 namespace yii\db {
     class ActiveRecord
     {
-        private array $attributes = [];
+        private $attributes = [];
         public function __get($name) { return $this->attributes[$name] ?? null; }
         public function __set($name, $value): void { $this->attributes[$name] = $value; }
         public function hasAttribute($name): bool { return true; }
@@ -27,7 +27,14 @@ namespace {
 
     final class MarcSemanticsLookupCommand
     {
-        public function __construct(private string $sql, private array $params) {}
+        private $sql;
+        private $params;
+
+        public function __construct($sql, array $params)
+        {
+            $this->sql = $sql;
+            $this->params = $params;
+        }
         public function queryOne()
         {
             if (strpos($this->sql, 'FROM inventory.location__t') !== false) {
@@ -64,7 +71,9 @@ namespace {
 
     function marcSemanticsUuids(array $rows, string $uuid): array
     {
-        return array_values(array_filter($rows, fn (array $row) => $row['Instance UUID'] === $uuid));
+        return array_values(array_filter($rows, function (array $row) use ($uuid) {
+            return $row['Instance UUID'] === $uuid;
+        }));
     }
 
     $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);

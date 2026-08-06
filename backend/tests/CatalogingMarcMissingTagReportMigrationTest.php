@@ -30,6 +30,7 @@ $init = file_get_contents(__DIR__ . '/../../mysql/init.sql');
 assertCatalogingMigrationContains("'cataloging'", $migration, 'Migration must add the Cataloging enum value.');
 assertCatalogingMigrationContains('execution_config JSON NULL', $migration, 'Migration must add reusable execution metadata.');
 assertCatalogingMigrationContains("'marc-bibliographic-records-missing-tag'", $migration, 'Migration must seed the fixed report.');
+assertCatalogingMigrationContains("'MARC Bibliographic Records Missing a Tag'", $migration, 'Migration must use the approved fixed report display name.');
 assertCatalogingMigrationSame(1, substr_count($migration, '{{location_from}}'), 'Seed SQL must contain one location token.');
 assertCatalogingMigrationSame(1, substr_count($migration, '{{marc_table}}'), 'Seed SQL must contain one MARC-table token.');
 assertCatalogingMigrationContains('marc_tag.instance_id = target_instances.instance_uuid', $migration, 'Presence must join UUID to UUID.');

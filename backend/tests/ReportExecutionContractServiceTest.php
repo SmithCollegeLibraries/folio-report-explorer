@@ -3,7 +3,7 @@
 namespace yii\db {
     class ActiveRecord
     {
-        private array $attributes = [];
+        private $attributes = [];
 
         public function __get($name) { return $this->attributes[$name] ?? null; }
         public function __set($name, $value): void { $this->attributes[$name] = $value; }
@@ -95,7 +95,9 @@ namespace {
         ['preserve_export_order' => false],
     ] as $invalidConfig) {
         executionAssertThrows(
-            fn () => ReportExecutionContractService::fromReport(executionReport($invalidConfig), $context),
+            function () use ($invalidConfig, $context) {
+                return ReportExecutionContractService::fromReport(executionReport($invalidConfig), $context);
+            },
             'Invalid execution metadata must be rejected.'
         );
     }
@@ -107,16 +109,22 @@ namespace {
         ['public_row_cap' => 100000, 'fetch_row_limit' => 100001, 'preserve_export_order' => true, 'identifier_export' => ['source_column' => 'Instance UUID']],
     ] as $invalidExactConfig) {
         executionAssertThrows(
-            fn () => ReportExecutionContractService::fromReport(executionReportWithExactConfig($invalidExactConfig), $context),
+            function () use ($invalidExactConfig, $context) {
+                return ReportExecutionContractService::fromReport(executionReportWithExactConfig($invalidExactConfig), $context);
+            },
             'Execution metadata must reject non-integer values and missing identifier fields.'
         );
     }
     executionAssertThrows(
-        fn () => ReportExecutionContractService::fromReport(executionReport(), array_replace($context, ['exportKind' => 'csv'])),
+        function () use ($context) {
+            return ReportExecutionContractService::fromReport(executionReport(), array_replace($context, ['exportKind' => 'csv']));
+        },
         'Unsupported export kinds must be rejected.'
     );
     executionAssertThrows(
-        fn () => ReportExecutionContractService::fromReport(executionReport(), array_replace($context, ['sourceColumn' => 'Title'])),
+        function () use ($context) {
+            return ReportExecutionContractService::fromReport(executionReport(), array_replace($context, ['sourceColumn' => 'Title']));
+        },
         'Clients must not select an identifier export source column.'
     );
     executionAssertSame(
@@ -141,7 +149,9 @@ namespace {
         'SELECT id FROM inventory.instance__t ORDER BY id LIMIT 100001 OFFSET 1',
     ] as $unsafeSql) {
         executionAssertThrows(
-            fn () => ReportExecutionContractService::assertStaticExportSql($unsafeSql, $contract),
+            function () use ($unsafeSql, $contract) {
+                return ReportExecutionContractService::assertStaticExportSql($unsafeSql, $contract);
+            },
             'Only one terminal numeric sentinel limit after one top-level ORDER BY is permitted.'
         );
     }
@@ -150,20 +160,20 @@ namespace {
     $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => $contract]);
     executionAssertSame($contract, ReportExecutionContractService::fromJob($job), 'A job must recover its stored execution contract.');
     $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, ['downloadFilename' => '../escape.csv'])]);
-    executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Unsafe persisted filenames must be rejected.');
+    executionAssertThrows(function () use ($job) { return ReportExecutionContractService::fromJob($job); }, 'Unsafe persisted filenames must be rejected.');
     $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, ['reportTemplateId' => 0])]);
-    executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Persisted contracts must require a positive report template ID.');
+    executionAssertThrows(function () use ($job) { return ReportExecutionContractService::fromJob($job); }, 'Persisted contracts must require a positive report template ID.');
     $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, ['publicRowCap' => true])]);
-    executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Persisted contracts must reject non-integer row caps.');
+    executionAssertThrows(function () use ($job) { return ReportExecutionContractService::fromJob($job); }, 'Persisted contracts must reject non-integer row caps.');
     $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, ['exportKind' => 'identifier'])]);
-    executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Identifier contracts must use the identifier filename suffix.');
+    executionAssertThrows(function () use ($job) { return ReportExecutionContractService::fromJob($job); }, 'Identifier contracts must use the identifier filename suffix.');
     foreach ([
         ['reportSlug' => ' marc-bibliographic-records-missing-tag'],
         ['identifierExport' => ['sourceColumn' => 'Instance UUID ', 'header' => 'UUID']],
         ['identifierExport' => ['sourceColumn' => 'Instance UUID', 'header' => ' UUID']],
     ] as $nonCanonicalPatch) {
         $job->metadata = json_encode([ReportExecutionContractService::METADATA_KEY => array_replace($contract, $nonCanonicalPatch)]);
-        executionAssertThrows(fn () => ReportExecutionContractService::fromJob($job), 'Persisted contract fields must already be canonical and unpadded.');
+        executionAssertThrows(function () use ($job) { return ReportExecutionContractService::fromJob($job); }, 'Persisted contract fields must already be canonical and unpadded.');
     }
 
     fwrite(STDOUT, "Report execution contract service tests passed\n");

@@ -20,6 +20,8 @@ final class CatalogingMarcMissingTagReportService
 
     private const EXPECTED_PARAMETER_NAMES = ['locationId', 'locationBasis', 'marcTag'];
     private const CANONICAL_TEMPLATE_SHA256 = 'aa19ffbe4b6407dfbc163b82fad04e44c329d7e06bc851c50d41301fc7b5eea8';
+    private const CANONICAL_PARAMETERS_SHA256 = '35630e90865f1e98bfd67957d19611031ac60cbe7547ab5079d8dbb1ecd27457';
+    private const CANONICAL_REPORT_NAME = 'MARC Bibliographic Records Missing a Tag';
 
     private const LOCATION_FRAGMENTS = [
         'effective_item' => "FROM inventory.item__t item\nJOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\nJOIN inventory.instance__t instance ON instance.id = holdings.instance_id\nJOIN inventory.location__t location ON location.id = item.effective_location_id",
@@ -30,6 +32,25 @@ final class CatalogingMarcMissingTagReportService
     public static function supports(ReportTemplate $report): bool
     {
         return $report->slug === self::REPORT_SLUG;
+    }
+
+    /**
+     * This is the authoritative deployment-current contract for the fixed
+     * report seed. Migration recognition and runtime compilation must reject
+     * any unreviewed template or metadata drift.
+     */
+    public static function isCanonicalSeedDefinition(array $definition): bool
+    {
+        return self::hasExactSeedValue($definition, 'slug', self::REPORT_SLUG)
+            && self::hasExactSeedValue($definition, 'name', self::CANONICAL_REPORT_NAME)
+            && self::hasExactSeedValue($definition, 'category', 'cataloging')
+            && self::hasExactSeedValue($definition, 'data_source', 'folio')
+            && self::hasExactSeedValue($definition, 'default_limit', '100000')
+            && self::hasExactSeedValue($definition, 'is_active', '1')
+            && self::hasExactSeedValue($definition, 'created_by', 'manual')
+            && self::hasCanonicalTemplate($definition['sql_template'] ?? null)
+            && self::hasCanonicalParameters($definition['parameters'] ?? null)
+            && self::hasCanonicalExecutionConfig($definition['execution_config'] ?? null);
     }
 
     /**
@@ -142,9 +163,92 @@ final class CatalogingMarcMissingTagReportService
 
     private static function assertTemplateContract(string $sql): void
     {
-        if (!hash_equals(self::CANONICAL_TEMPLATE_SHA256, hash('sha256', $sql))) {
+        if (!self::hasCanonicalTemplate($sql)) {
             throw new \InvalidArgumentException('MARC report SQL template does not match the reviewed cataloging report contract.');
         }
+    }
+
+    private static function hasCanonicalTemplate($sql): bool
+    {
+        return is_string($sql)
+            && hash_equals(self::CANONICAL_TEMPLATE_SHA256, hash('sha256', $sql));
+    }
+
+    private static function hasCanonicalParameters($parameters): bool
+    {
+        if (!is_string($parameters)) {
+            return false;
+        }
+
+        $decoded = json_decode($parameters, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return false;
+        }
+
+        $canonical = json_encode(
+            self::normalizeJsonForFingerprint($decoded),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        );
+
+        return is_string($canonical)
+            && hash_equals(self::CANONICAL_PARAMETERS_SHA256, hash('sha256', $canonical));
+    }
+
+    private static function hasCanonicalExecutionConfig($executionConfig): bool
+    {
+        if (!is_string($executionConfig)) {
+            return false;
+        }
+
+        $decoded = json_decode($executionConfig, true);
+        return json_last_error() === JSON_ERROR_NONE
+            && $decoded === [
+                'public_row_cap' => self::PUBLIC_ROW_CAP,
+                'fetch_row_limit' => self::FETCH_ROW_LIMIT,
+                'preserve_export_order' => true,
+                'identifier_export' => [
+                    'source_column' => 'Instance UUID',
+                    'header' => 'UUID',
+                ],
+            ];
+    }
+
+    private static function hasExactSeedValue(array $definition, string $field, string $expected): bool
+    {
+        if (!array_key_exists($field, $definition) || is_array($definition[$field]) || is_object($definition[$field])) {
+            return false;
+        }
+
+        return (string) $definition[$field] === $expected;
+    }
+
+    private static function normalizeJsonForFingerprint($value)
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        if (!self::isJsonList($value)) {
+            ksort($value, SORT_STRING);
+        }
+        foreach ($value as $key => $item) {
+            $value[$key] = self::normalizeJsonForFingerprint($item);
+        }
+
+        return $value;
+    }
+
+    private static function isJsonList(array $value): bool
+    {
+        $expectedIndex = 0;
+        foreach ($value as $key => $_) {
+            if ($key !== $expectedIndex) {
+                return false;
+            }
+            $expectedIndex++;
+        }
+
+        return true;
     }
 
     private static function assertCompiledSql(string $sql): void

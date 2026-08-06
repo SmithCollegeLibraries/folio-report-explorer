@@ -3,8 +3,8 @@
 namespace yii\db {
     class ActiveRecord
     {
-        private array $attributes = [];
-        public int $saveCount = 0;
+        private $attributes = [];
+        public $saveCount = 0;
 
         public function __get($name) { return $this->attributes[$name] ?? null; }
         public function __set($name, $value): void { $this->attributes[$name] = $value; }

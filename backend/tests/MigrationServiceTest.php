@@ -314,4 +314,131 @@ assertMigrationSame('035_budget_year_fund_report.sql', $retryDatabase->ledger[0]
 @unlink($tempDir . '/002_add_code.sql');
 @rmdir($tempDir);
 
+class MarcMigrationRecognitionSchema
+{
+    public function getTableSchema($table, $refresh = false)
+    {
+        if ($table !== 'report_templates') {
+            return null;
+        }
+
+        $schema = new stdClass();
+        $schema->columns = ['execution_config' => new stdClass()];
+        return $schema;
+    }
+}
+
+class MarcMigrationRecognitionDatabase
+{
+    public $schema;
+    public $report;
+
+    public function __construct(array $report)
+    {
+        $this->schema = new MarcMigrationRecognitionSchema();
+        $this->report = $report;
+    }
+
+    public function createCommand($sql = '', array $params = [])
+    {
+        return new MarcMigrationRecognitionCommand($this, $sql, $params);
+    }
+}
+
+class MarcMigrationRecognitionCommand
+{
+    private $database;
+    private $sql;
+
+    public function __construct(MarcMigrationRecognitionDatabase $database, $sql, array $params)
+    {
+        $this->database = $database;
+        $this->sql = $sql;
+    }
+
+    public function queryOne()
+    {
+        if (strpos($this->sql, 'information_schema.COLUMNS') !== false) {
+            return ['COLUMN_TYPE' => "enum('acquisitions','cataloging','other')"];
+        }
+        if (strpos($this->sql, 'FROM report_templates') !== false) {
+            return $this->database->report;
+        }
+
+        throw new RuntimeException('Unexpected MARC migration recognition query: ' . $this->sql);
+    }
+
+    public function queryScalar()
+    {
+        return 1;
+    }
+}
+
+function marcMigrationSeedDefinition($migrationPath)
+{
+    $migration = (string) file_get_contents($migrationPath);
+    $matched = preg_match(
+        "/VALUES \\(\n  'marc-bibliographic-records-missing-tag',\n  '([^']+)',.*?\n  'cataloging',\n  '(WITH target_instances AS MATERIALIZED \\(.*?LIMIT 100001)',\n  '(\\[.*?\\])',\n  'folio',\n  '(\\{.*?\\})',\n  100000,\n  1,\n  'manual'\n\\)/s",
+        $migration,
+        $matches
+    );
+    if ($matched !== 1) {
+        throw new RuntimeException('Could not load the MARC migration seed fixture.');
+    }
+
+    return [
+        'slug' => 'marc-bibliographic-records-missing-tag',
+        'name' => $matches[1],
+        'category' => 'cataloging',
+        'sql_template' => str_replace("''", "'", $matches[2]),
+        'parameters' => str_replace("''", "'", $matches[3]),
+        'data_source' => 'folio',
+        'execution_config' => str_replace("''", "'", $matches[4]),
+        'default_limit' => 100000,
+        'is_active' => 1,
+        'created_by' => 'manual',
+    ];
+}
+
+$marcMigrationAppearsApplied = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
+if (PHP_VERSION_ID < 80100) {
+    $marcMigrationAppearsApplied->setAccessible(true);
+}
+$marcSeed = marcMigrationSeedDefinition($migrationDir . '/040_cataloging_marc_missing_tag_report.sql');
+assertMigrationTrue(
+    $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcSeed), '040_cataloging_marc_missing_tag_report.sql'),
+    'Migration 040 must recognize the complete reviewed MARC report seed.'
+);
+$normalizedParameterSeed = $marcSeed;
+$normalizedParameters = json_decode($normalizedParameterSeed['parameters'], true);
+foreach ($normalizedParameters as &$parameter) {
+    ksort($parameter, SORT_STRING);
+}
+unset($parameter);
+$normalizedParameterSeed['parameters'] = json_encode($normalizedParameters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+assertMigrationTrue(
+    $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($normalizedParameterSeed), '040_cataloging_marc_missing_tag_report.sql'),
+    'Migration 040 must recognize MySQL-normalized JSON object key ordering without accepting parameter drift.'
+);
+
+foreach ([
+    'name' => 'MARC Bibliographic Records Missing Tag',
+    'sql_template' => str_replace("AND instance.source = 'MARC'", '', $marcSeed['sql_template']),
+    'uuid anti-join' => str_replace('marc_tag.instance_id = target_instances.instance_uuid', 'marc_tag.instance_id = target_instances.instance_hrid', $marcSeed['sql_template']),
+    'second limit' => $marcSeed['sql_template'] . "\nLIMIT 100000",
+    'parameters' => '[]',
+    'execution_config' => '{}',
+] as $field => $replacement) {
+    $alteredSeed = $marcSeed;
+    if ($field === 'uuid anti-join' || $field === 'second limit') {
+        $alteredSeed['sql_template'] = $replacement;
+    } else {
+        $alteredSeed[$field] = $replacement;
+    }
+    assertMigrationTrue(
+        !$marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($alteredSeed), '040_cataloging_marc_missing_tag_report.sql'),
+        'Migration 040 must not baseline an incomplete MARC report with altered ' . $field . '.'
+    );
+}
+
 fwrite(STDOUT, "MigrationService test passed\n");

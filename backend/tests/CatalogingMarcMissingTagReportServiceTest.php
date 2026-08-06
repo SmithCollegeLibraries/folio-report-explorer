@@ -3,7 +3,7 @@
 namespace yii\db {
     class ActiveRecord
     {
-        private array $attributes = [];
+        private $attributes = [];
 
         public function __get($name) { return $this->attributes[$name] ?? null; }
         public function __set($name, $value): void { $this->attributes[$name] = $value; }
@@ -55,7 +55,16 @@ namespace {
 
     final class MarcCompilerFakeCommand
     {
-        public function __construct(private string $sql, private array $params, private MarcCompilerFakeDb $db) {}
+        private $sql;
+        private $params;
+        private $db;
+
+        public function __construct($sql, array $params, MarcCompilerFakeDb $db)
+        {
+            $this->sql = $sql;
+            $this->params = $params;
+            $this->db = $db;
+        }
 
         public function queryOne()
         {
@@ -74,9 +83,9 @@ namespace {
 
     final class MarcCompilerFakeDb
     {
-        public string $expectedLocationId = '11111111-1111-4111-8111-111111111111';
-        public ?array $location = ['name' => 'Main Library', 'code' => 'MAIN'];
-        public array $tables = ['marctab.mt856' => 'marctab.mt856'];
+        public $expectedLocationId = '11111111-1111-4111-8111-111111111111';
+        public $location = ['name' => 'Main Library', 'code' => 'MAIN'];
+        public $tables = ['marctab.mt856' => 'marctab.mt856'];
 
         public function createCommand(string $sql, array $params = []): MarcCompilerFakeCommand
         {
@@ -151,21 +160,23 @@ namespace {
 
     foreach (['000', '1', '12', '1000', ' 856', '856 ', '+856', "٨٥٦", 'marctab.mt856', "856'", '856 --', '856;'] as $invalidTag) {
         marcCompilerAssertThrows(
-            fn () => CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['marcTag' => $invalidTag]), $db),
+            function () use ($report, $invalidTag, $db) {
+                return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['marcTag' => $invalidTag]), $db);
+            },
             "Invalid tag {$invalidTag} must be rejected."
         );
     }
 
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationId' => 'not-a-uuid']), $db), 'Invalid UUIDs must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationBasis' => 'all_items']), $db), 'Unknown location bases must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('{{location_from}}', '', $report->sql_template)]), marcCompilerInputs(), $db), 'Missing structural tokens must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('{{marc_table}}', '{{marc_table}} {{marc_table}}', $report->sql_template)]), marcCompilerInputs(), $db), 'Repeated structural tokens must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $report->sql_template . ' {{unknown_token}}']), marcCompilerInputs(), $db), 'Unknown structural tokens must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $report->sql_template . ' {{location_from:unsafe}}']), marcCompilerInputs(), $db), 'Colon-bearing structural tokens must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[]']), marcCompilerInputs(), $db), 'Missing parameter definitions must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"marcTag"}]']), marcCompilerInputs(), $db), 'Duplicated parameter definitions must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"extra"}]']), marcCompilerInputs(), $db), 'Extra parameter definitions must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTagExtra"}]']), marcCompilerInputs(), $db), 'Prefix-colliding parameter names must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationId' => 'not-a-uuid']), $db); }, 'Invalid UUIDs must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationBasis' => 'all_items']), $db); }, 'Unknown location bases must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('{{location_from}}', '', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Missing structural tokens must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('{{marc_table}}', '{{marc_table}} {{marc_table}}', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Repeated structural tokens must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $report->sql_template . ' {{unknown_token}}']), marcCompilerInputs(), $db); }, 'Unknown structural tokens must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $report->sql_template . ' {{location_from:unsafe}}']), marcCompilerInputs(), $db); }, 'Colon-bearing structural tokens must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[]']), marcCompilerInputs(), $db); }, 'Missing parameter definitions must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"marcTag"}]']), marcCompilerInputs(), $db); }, 'Duplicated parameter definitions must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"extra"}]']), marcCompilerInputs(), $db); }, 'Extra parameter definitions must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTagExtra"}]']), marcCompilerInputs(), $db); }, 'Prefix-colliding parameter names must be rejected.');
 
     $nestedOrderAndLimit = str_replace(
         ")\nSELECT\n",
@@ -177,7 +188,7 @@ namespace {
         '',
         $nestedOrderAndLimit
     );
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $nestedOrderAndLimit]), marcCompilerInputs(), $db), 'A tampered template with nested-only ORDER BY and LIMIT must fail the canonical contract.');
+    marcCompilerAssertThrows(function () use ($nestedOrderAndLimit, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $nestedOrderAndLimit]), marcCompilerInputs(), $db); }, 'A tampered template with nested-only ORDER BY and LIMIT must fail the canonical contract.');
     $nestedCompiledSql = str_replace(
         ")\nSELECT\n",
         "    ORDER BY instance.title\n    LIMIT 100001\n)\nSELECT\n",
@@ -189,17 +200,17 @@ namespace {
         $nestedCompiledSql
     );
     $compiledSqlValidator = new \ReflectionMethod(CatalogingMarcMissingTagReportService::class, 'assertCompiledSql');
-    marcCompilerAssertThrows(fn () => $compiledSqlValidator->invoke(null, $nestedCompiledSql), 'ORDER BY and LIMIT inside a CTE must not satisfy the top-level compiled SQL contract.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace("AND instance.source = 'MARC'", '', $report->sql_template)]), marcCompilerInputs(), $db), 'Removing the MARC source guard must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('marc_tag.instance_id = target_instances.instance_uuid', 'marc_tag.instance_id = target_instances.instance_hrid', $report->sql_template)]), marcCompilerInputs(), $db), 'Changing the UUID anti-join must be rejected.');
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('FROM {{marc_table}} AS marc_tag', 'FROM folio_source_record.marctab AS marc_tag /* {{marc_table}} */', $report->sql_template)]), marcCompilerInputs(), $db), 'Substituting another MARC source while retaining the token must be rejected.');
+    marcCompilerAssertThrows(function () use ($compiledSqlValidator, $nestedCompiledSql) { return $compiledSqlValidator->invoke(null, $nestedCompiledSql); }, 'ORDER BY and LIMIT inside a CTE must not satisfy the top-level compiled SQL contract.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace("AND instance.source = 'MARC'", '', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Removing the MARC source guard must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('marc_tag.instance_id = target_instances.instance_uuid', 'marc_tag.instance_id = target_instances.instance_hrid', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Changing the UUID anti-join must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('FROM {{marc_table}} AS marc_tag', 'FROM folio_source_record.marctab AS marc_tag /* {{marc_table}} */', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Substituting another MARC source while retaining the token must be rejected.');
 
     $missingTableDb = new MarcCompilerFakeDb();
     $missingTableDb->tables = [];
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(), $missingTableDb), 'A missing marctab table must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $missingTableDb) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(), $missingTableDb); }, 'A missing marctab table must be rejected.');
     $missingLocationDb = new MarcCompilerFakeDb();
     $missingLocationDb->location = null;
-    marcCompilerAssertThrows(fn () => CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(), $missingLocationDb), 'A missing location must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $missingLocationDb) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(), $missingLocationDb); }, 'A missing location must be rejected.');
 
     $limitReport = marcCompilerReport(['sql_template' => 'SELECT :marcTag']);
     $ordinary = $limitReport->bindParams(marcCompilerInputs());

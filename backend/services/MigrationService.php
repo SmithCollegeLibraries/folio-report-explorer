@@ -2,6 +2,8 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
+
 class MigrationService
 {
     const DEFAULT_MIGRATION_DIR = __DIR__ . '/../../mysql/migrations';
@@ -349,25 +351,19 @@ class MigrationService
 
     private static function marcMissingTagReportAppearsComplete($db): bool
     {
-        return self::hasColumn($db, 'report_templates', 'execution_config')
-            && self::columnTypeContains($db, 'report_templates', 'category', "'cataloging'")
-            && self::rowExists(
-                $db,
-                'report_templates',
-                'slug = :slug AND category = :category AND default_limit = :limit'
-                    . ' AND sql_template LIKE :location_token'
-                    . ' AND sql_template LIKE :marc_token'
-                    . ' AND sql_template LIKE :sentinel'
-                    . ' AND execution_config IS NOT NULL',
-                [
-                    ':slug' => 'marc-bibliographic-records-missing-tag',
-                    ':category' => 'cataloging',
-                    ':limit' => 100000,
-                    ':location_token' => '%{{location_from}}%',
-                    ':marc_token' => '%{{marc_table}}%',
-                    ':sentinel' => '%LIMIT 100001%',
-                ]
-            );
+        if (!self::hasColumn($db, 'report_templates', 'execution_config')
+            || !self::columnTypeContains($db, 'report_templates', 'category', "'cataloging'")) {
+            return false;
+        }
+
+        $definition = $db->createCommand(
+            'SELECT slug, name, category, sql_template, parameters, data_source, execution_config, default_limit, is_active, created_by'
+                . ' FROM report_templates WHERE slug = :slug LIMIT 1',
+            [':slug' => CatalogingMarcMissingTagReportService::REPORT_SLUG]
+        )->queryOne();
+
+        return is_array($definition)
+            && CatalogingMarcMissingTagReportService::isCanonicalSeedDefinition($definition);
     }
 
     private static function budgetYearFundReportAppearsComplete($db): bool

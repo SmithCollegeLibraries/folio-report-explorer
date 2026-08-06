@@ -42,7 +42,7 @@ INSERT INTO `report_templates`
    `data_source`, `execution_config`, `default_limit`, `is_active`, `created_by`)
 VALUES (
   'marc-bibliographic-records-missing-tag',
-  'MARC Bibliographic Records Missing Tag',
+  'MARC Bibliographic Records Missing a Tag',
   'Finds MARC-sourced bibliographic instances in a selected location that do not contain a selected three-digit MARC tag.',
   'This report finds MARC-sourced bibliographic instances associated with the selected location that do not contain the selected three-digit MARC tag. A missing tag is a factual finding, not automatically a MARC, RDA, or local-policy error; interpret the worklist in the context of record type, cataloging rules, legacy practice, and local policy.\n\nLocation basis controls the collection scope: Effective item uses item effective location; Permanent item uses item permanent location; Permanent holdings uses holdings permanent location and can include holdings without items.\n\nWorkflow: run the report, review the six-column worklist, and download it for assignment or annotations. Use Export FOLIO UUID list to create a one-column Instance UUID file, upload that file to the institution''s approved FOLIO Data Export job profile, export the underlying MARC records, review or edit them in MarcEdit, and reimport corrections only through the institution''s approved FOLIO Data Import profile.\n\nThe report publishes at most 100,000 records. If a truncation warning appears, narrow the location before treating the exported list as complete.',
   'cataloging',

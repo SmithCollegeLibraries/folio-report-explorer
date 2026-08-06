@@ -41,7 +41,7 @@ new Application([
     ],
 ]);
 
-Yii::$app->db->createCommand(<<<'SQL'
+$queryJobsTableSql = <<<'SQL'
 CREATE TABLE query_jobs (
     id VARCHAR(36) PRIMARY KEY,
     sql_text TEXT NOT NULL,
@@ -68,7 +68,8 @@ CREATE TABLE query_jobs (
     started_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL;
+Yii::$app->db->createCommand($queryJobsTableSql)->execute();
 Yii::$app->db->createCommand('CREATE TABLE query_log (id INTEGER PRIMARY KEY AUTOINCREMENT, sql_text TEXT, params TEXT, source VARCHAR(20), data_source VARCHAR(20), user_id INTEGER, row_count INTEGER, execution_time_ms INTEGER, error_message TEXT)')->execute();
 
 function exportContractAssertSame($expected, $actual, string $message): void
