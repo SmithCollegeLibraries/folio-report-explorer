@@ -106,9 +106,27 @@ filter supports:
 - `0` through `9`; or
 - another single typed character.
 
+A typed backslash is normalized to the Blank selection rather than treated as
+a distinct custom indicator.
+
 When both indicators are constrained, both predicates must match the same MARC
 field occurrence. Display a blank indicator as `#` in the form interpretation
-and result file. At query time, blank means null, empty, or whitespace-only.
+and result file.
+
+At query time, blank-indicator matching must use a trim-based predicate and
+must also recognize a literal backslash (`\`) as the MARC blank-indicator
+encoding. In the measured local `marctab.mt035` data, the ordinary blank is a
+single ASCII space; null and empty values were not observed, while 1,161 rows
+used a one-character backslash. The reviewed blank predicate must therefore be
+equivalent to:
+
+```sql
+TRIM(COALESCE(indicator_column, '')) = '' OR indicator_column = CHR(92)
+```
+
+An `IS NULL OR indicator_column = ''` predicate is not acceptable because it
+would omit both observed blank encodings. The result formatter normalizes both
+the whitespace and backslash forms to `#`.
 
 ### Subfield
 
@@ -138,7 +156,9 @@ Support these values:
 `Does not begin with` require non-empty search text. Other tests do not accept
 search text.
 
-Blank content means null, empty, or whitespace-only. “Contains
+Blank content means null, empty, or whitespace-only and must use a trim-based
+predicate such as `TRIM(COALESCE(content, '')) = ''`; it must not rely only on
+null or empty-string equality. “Contains
 non-alphanumeric characters” means a character outside ASCII `A-Z`, `a-z`, and
 `0-9`, including spaces and punctuation. It is a descriptive filter, not a
 claim that punctuation is invalid.
@@ -170,6 +190,26 @@ All location UUIDs, indicators, subfield values, search text, and comparison
 values are bound parameters. Reject unresolved structural tokens and reject a
 colon in either structural replacement.
 
+The seeded parameter names are exactly:
+
+- `locationIds`;
+- `locationBasis`;
+- `marcTag`;
+- `occurrenceCondition`;
+- `firstIndicator`;
+- `secondIndicator`;
+- `subfieldCode`;
+- `contentRule`;
+- `searchValue`; and
+- `caseExact`.
+
+No name in this set is a prefix of another. The governed compiler must require
+this exact set once each and retain the existing mandatory pairwise
+prefix-collision assertion. This is a correctness guard, not advisory
+validation: the current `ReportTemplate::bindParams` list branch expands the
+comma-serialized `locationIds` value by replacing the raw parameter token, so a
+prefix collision could corrupt a different marker before it is bound.
+
 Before execution, verify the resolved `marctab.mtNNN` relation exists. If it is
 absent, return the existing administrator-facing cataloging data-integrity
 message.
@@ -198,6 +238,12 @@ the same MARC row.
 Return one row for each matching MARC subfield row. Do not aggregate repeated
 fields or repeated subfields into a single value. If no subfield is selected,
 all subfield rows satisfying the remaining criteria may appear.
+
+`Field Occurrence` must come from the per-tag table's `ord` column. `ord`
+identifies the repeated MARC field occurrence and is shared by all subfield rows
+belonging to that occurrence. Do not use the `line` column: it is a
+per-subfield line counter, so one 245 occurrence containing `$a`, `$b`, and `$c`
+would otherwise appear to have three unrelated occurrence numbers.
 
 ### Missing-occurrence mode
 
@@ -239,6 +285,13 @@ smaller local or less common tag. The report must not be production-enabled
 without representative PostgreSQL plan and execution evidence under the
 configured reporting timeout.
 
+Per-tag tables are indexed for instance lookup but not for arbitrary `content`
+predicates. Content tests must remain filters over MARC rows reached through
+the already-materialized target Instance UUIDs. For the large-table case, the
+recorded plan must specifically demonstrate that the planner uses the
+`instance_id` access path into `mt245` and does not switch to a sequential scan
+of the complete per-tag table for a large multi-location selection.
+
 ## Result Contract
 
 Return these columns in this order:
@@ -251,7 +304,7 @@ Return these columns in this order:
 6. `MARC Tag`
 7. `First Indicator`
 8. `Second Indicator`
-9. `Field Occurrence`
+9. `Field Occurrence` (`marctab.mtNNN.ord`)
 10. `Subfield`
 11. `Content`
 12. `Finding`
@@ -273,6 +326,11 @@ The identifier file may contain fewer rows than the worklist because one
 instance can have multiple matching field rows. Continue reporting invalid
 identifier omissions and truncation through the existing export metadata and
 download UI. Warning information belongs in metadata, not in CSV data rows.
+
+The 100,000-row public cap counts worklist subfield rows, not distinct
+instances. Repeated fields and subfields can therefore cause the worklist to
+truncate even when the deduplicated UUID export is comparatively small. The
+download UI and help text must explain this apparent count difference.
 
 ## User Interface
 
@@ -309,16 +367,20 @@ does not determine whether the data violates MARC, RDA, or local policy.
 
 - Recognize only the exact seeded governed-report contract.
 - Reject malformed, duplicate, or prefix-colliding parameters.
+- Require the exact ten prefix-safe parameter names once each.
 - Resolve exactly one location fragment and one `mtNNN` token.
 - Reject unresolved tokens and unsafe structural replacements.
 - Bind all user values and treat SQL wildcard characters literally.
 - Cover every content comparison in case-insensitive and exact-capitalization
   modes where applicable.
-- Cover blank, numeric, alphabetic, and punctuation indicator values.
+- Cover whitespace and backslash blank-indicator encodings plus numeric,
+  alphabetic, and punctuation indicator values.
+- Verify blank indicator and blank content predicates are trim-based.
 - Cover alphabetic and numeric subfield codes.
 - Confirm all criteria apply to the same MARC row.
 - Verify matching and missing occurrence semantics.
 - Preserve repeated MARC fields and repeated subfields.
+- Map `Field Occurrence` to `ord`, never `line`.
 - Deduplicate instances introduced through multiple selected locations.
 - Exclude non-MARC Inventory instances.
 - Enforce file-only routing and the result cap.
@@ -328,7 +390,7 @@ does not determine whether the data violates MARC, RDA, or local policy.
 
 - Render conditional controls and accessible labels.
 - Validate each parameter without submitting a job.
-- Render blank indicators as `#`.
+- Render both whitespace and backslash blank indicators as `#`.
 - Update the interpretation for every input class.
 - Clearly describe double-negative combinations rather than silently changing
   them.
@@ -340,6 +402,8 @@ does not determine whether the data violates MARC, RDA, or local policy.
 - Compile and explain both occurrence modes for all location bases.
 - Exercise a large common tag and a smaller tag.
 - Confirm the plan accesses only the selected per-tag MARC table.
+- For a large multi-location `mt245` content search, confirm instance-index
+  probes and reject a plan that sequentially scans the complete table.
 - Confirm the target instance set is materialized before MARC access.
 - Verify UUID joins and `NOT EXISTS` correctness with null HRIDs.
 - Measure execution against representative large and small locations under the
