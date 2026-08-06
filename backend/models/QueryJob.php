@@ -29,6 +29,7 @@ use yii\db\ActiveRecord;
  * @property string $created_at
  * @property string $started_at
  * @property string $completed_at
+ * @property string|null $metadata
  */
 class QueryJob extends ActiveRecord
 {
@@ -134,6 +135,23 @@ class QueryJob extends ActiveRecord
     }
 
     /**
+     * Get optional execution and provenance metadata.
+     * @return array
+     */
+    public function getDecodedMetadata(): array
+    {
+        if (!$this->hasAttribute('metadata')) {
+            return [];
+        }
+        $raw = $this->metadata;
+        if ($raw === null || $raw === '') {
+            return [];
+        }
+        $metadata = is_array($raw) ? $raw : json_decode((string) $raw, true);
+        return is_array($metadata) ? $metadata : [];
+    }
+
+    /**
      * Transition to running state.
      */
     public function markRunning()
@@ -151,7 +169,7 @@ class QueryJob extends ActiveRecord
      * @param array $rows
      * @param int $executionTimeMs
      */
-    public function markCompleted($columns, $rows, $executionTimeMs)
+    public function markCompleted($columns, $rows, $executionTimeMs, $truncated = false)
     {
         $this->status = 'completed';
         $this->result_columns = json_encode($columns);
@@ -163,6 +181,7 @@ class QueryJob extends ActiveRecord
         if ($this->hasAttribute('pg_backend_pid')) {
             $this->pg_backend_pid = null;
         }
+        $this->updateReportExecutionTruncation((bool) $truncated);
         $this->save(false);
     }
 
@@ -173,7 +192,7 @@ class QueryJob extends ActiveRecord
      * @param int $rowCount
      * @param int $executionTimeMs
      */
-    public function markExportCompleted($filePath, $rowCount, $executionTimeMs, array $previewColumns = [], array $previewRows = [])
+    public function markExportCompleted($filePath, $rowCount, $executionTimeMs, array $previewColumns = [], array $previewRows = [], $truncated = false)
     {
         $this->status = 'completed';
         if ($this->hasAttribute('output_mode')) {
@@ -193,6 +212,7 @@ class QueryJob extends ActiveRecord
         if ($this->hasAttribute('pg_backend_pid')) {
             $this->pg_backend_pid = null;
         }
+        $this->updateReportExecutionTruncation((bool) $truncated);
         $this->save(false);
     }
 
@@ -280,8 +300,26 @@ class QueryJob extends ActiveRecord
         if ($this->status === 'completed') {
             $data['rowCount'] = (int)$this->row_count;
             $data['executionTimeMs'] = (int)$this->execution_time_ms;
+            $metadata = $this->getDecodedMetadata();
+            if (isset($metadata['reportExecution']) && is_array($metadata['reportExecution'])
+                && array_key_exists('truncated', $metadata['reportExecution'])) {
+                $data['truncated'] = (bool) $metadata['reportExecution']['truncated'];
+            }
         }
 
         return $data;
+    }
+
+    private function updateReportExecutionTruncation(bool $truncated): void
+    {
+        if (!$this->hasAttribute('metadata')) {
+            return;
+        }
+        $metadata = $this->getDecodedMetadata();
+        if (!isset($metadata['reportExecution']) || !is_array($metadata['reportExecution'])) {
+            return;
+        }
+        $metadata['reportExecution']['truncated'] = $truncated;
+        $this->metadata = json_encode($metadata);
     }
 }

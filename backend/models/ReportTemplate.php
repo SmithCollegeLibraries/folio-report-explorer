@@ -273,6 +273,37 @@ class ReportTemplate extends ActiveRecord
     }
 
     /**
+     * Decode optional server-governed execution metadata.
+     * @return array|null
+     */
+    public function getExecutionConfig(): ?array
+    {
+        if (!$this->hasAttribute('execution_config')) {
+            return null;
+        }
+        $raw = $this->execution_config;
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+        $config = is_array($raw) ? $raw : json_decode($raw, true);
+        return is_array($config) ? $config : null;
+    }
+
+    /**
+     * Whether this report is configured for the server-controlled identifier export.
+     */
+    public function hasIdentifierExport(): bool
+    {
+        $config = $this->getExecutionConfig();
+        $identifierExport = is_array($config) ? ($config['identifier_export'] ?? null) : null;
+        return is_array($identifierExport)
+            && is_string($identifierExport['source_column'] ?? null)
+            && trim($identifierExport['source_column']) !== ''
+            && is_string($identifierExport['header'] ?? null)
+            && trim($identifierExport['header']) !== '';
+    }
+
+    /**
      * Serialize for API response.
      */
     public function toDetailArray()
@@ -292,6 +323,7 @@ class ReportTemplate extends ActiveRecord
             'createdBy' => $this->created_by,
             'createdAt' => $this->created_at,
             'updatedAt' => $this->updated_at,
+            'identifierExportAvailable' => $this->hasIdentifierExport(),
         ];
     }
 
