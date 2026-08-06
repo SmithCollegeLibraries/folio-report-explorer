@@ -68,4 +68,23 @@ describe('ResultsTable truncation feedback', () => {
       '1 identifier could not be exported because it was not a valid FOLIO UUID.',
     );
   });
+
+  it('does not render a stray zero for a clean identifier export', () => {
+    render(
+      <ResultsTable
+        data={{
+          columns: ['UUID'],
+          rows: [{ UUID: 'instance-1' }],
+          rowCount: 1,
+          executionTimeMs: 18,
+          sql: 'select instance_uuid',
+          outputMode: 'file',
+          downloadUrl: '/api/query/export/job-10',
+          identifierSkippedCount: 0,
+        }}
+      />,
+    );
+
+    expect(screen.queryByText(/^0$/)).not.toBeInTheDocument();
+  });
 });

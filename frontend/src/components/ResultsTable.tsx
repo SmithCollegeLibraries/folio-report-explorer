@@ -93,7 +93,7 @@ export default function ResultsTable({ data, drillThrough }: Props) {
           This report reached its 100,000-row cap. Narrow the location to retrieve the remaining records.
         </div>
       )}
-      {data.identifierSkippedCount && data.identifierSkippedCount > 0 && (
+      {(data.identifierSkippedCount ?? 0) > 0 && (
         <div
           role="alert"
           className="mb-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
