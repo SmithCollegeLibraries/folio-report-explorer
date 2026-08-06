@@ -207,6 +207,12 @@ namespace {
     catalogingAssertSame(1, count(\app\services\SqlBuilderService::$policyCalls), 'Compiled fixed SQL must receive table-policy validation.');
     catalogingAssertSame(10, catalogingLastJob()->estimated_rows, 'Fixed report estimates must be saved on the job.');
     catalogingAssertSame(100.0, catalogingLastJob()->estimated_cost, 'Fixed report cost estimates must be saved on the job.');
+    catalogingAssertSame([
+        'exportKind' => 'worklist',
+        'marcTag' => '856',
+        'locationName' => 'Main',
+        'locationCode' => 'SC',
+    ], \app\services\ReportExecutionContractService::$contexts[0] ?? null, 'Governed metadata must receive compiler-derived export context.');
 
     $large = runCatalogingReportWithEstimate(10001, 1000.0, ['params' => validCatalogingParams(), 'outputMode' => 'table']);
     catalogingAssertSame('file', $large['outputMode'] ?? null, 'Large fixed reports must route to file output.');
