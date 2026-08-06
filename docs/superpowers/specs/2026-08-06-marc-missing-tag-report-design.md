@@ -49,9 +49,10 @@ that the selected MARC tag belongs to an item or holdings record. The tag is
 tested on the bibliographic source record associated with the Inventory
 instance.
 
-Only current, non-deleted `MARC_BIB` source records qualify. Inventory-native
-instances without an underlying MARC bibliographic source record must not be
-reported as missing every MARC tag.
+Only Inventory instances whose source is `MARC` qualify. Inventory-native
+instances with another source must not be reported as missing every MARC tag.
+The initial report deliberately trusts the Inventory source designation rather
+than independently joining the much larger SRS records table.
 
 ## Report Category
 
@@ -117,10 +118,30 @@ facility for users or report authors to interpolate arbitrary identifiers.
 After transformation, the resulting SQL passes through the existing SQL
 safety validator and ordinary parameter binder.
 
-The report template owns explicit, recognizable tokens for the MARC table and
-location-scope fragment. Execution fails if a token remains unresolved, occurs
-more than the expected number of times, or maps to anything outside the fixed
-allowlists.
+The report template owns exactly one `{{location_from}}` token and exactly one
+`{{marc_table}}` token. The location token covers only the reviewed `FROM` and
+`JOIN` fragment; the bound `:locationId` predicate remains in the static SQL
+template. No substituted fragment or identifier may contain a colon.
+
+Construction order is fixed:
+
+1. Verify that the report declares exactly `locationId`, `locationBasis`, and
+   `marcTag`, that their names are unique, and that no name is a prefix of
+   another.
+2. Validate all three user values.
+3. Replace `{{location_from}}` exactly once from the location-basis allowlist.
+4. Replace `{{marc_table}}` exactly once with the validated `marctab.mtNNN`
+   identifier.
+5. Reject substituted text containing `:` and reject any unresolved or
+   repeated structural token.
+6. Bind the three ordinary value placeholders using the existing parameter
+   binder. `marcTag` remains a bound output value as well as the validated
+   source of the table identifier.
+7. Add the internal result-limit sentinel.
+8. Pass the final SQL through the existing SQL safety validator.
+
+No list parameter is used by this report. A structural fragment can never add
+a value placeholder after binding.
 
 ## Query Contract
 
@@ -133,15 +154,17 @@ location-basis branch:
 
 - uses the repository's type-safe Inventory join conventions;
 - filters by the bound location UUID;
-- joins or selects the current non-deleted `MARC_BIB` source record;
-- returns the Instance UUID, Instance HRID, title, selected location name, and
-  current SRS record UUID; and
+- requires `inventory.instance__t.source = 'MARC'`;
+- returns the Instance UUID as a UUID value, Instance HRID, title, and selected
+  location name; and
 - deduplicates by Instance UUID.
 
-If more than one eligible SRS row exists, current-record selection is
-deterministic: prefer the highest source-record order/version available in the
-local `folio_source_record.records__t` shape, then the stable record UUID as a
-tie-breaker. Deleted records never qualify.
+The target CTE does not join `folio_source_record.records__t`. The SRS record
+UUID is not used by the cataloger's FOLIO Data Export workflow, and the live
+worst-location plan measured approximately 23% lower total cost when Inventory
+source was used instead of the SRS join. The semantic tradeoff is explicit:
+eligibility means that Inventory designates the instance as MARC-sourced, not
+that the report independently proves a current SRS row exists.
 
 A shared bibliographic record qualifies when the selected location has at
 least one qualifying item or holdings record, even if other campuses also hold
@@ -155,7 +178,7 @@ Apply one anti-join:
 WHERE NOT EXISTS (
     SELECT 1
     FROM marctab.mtNNN AS marc_tag
-    WHERE marc_tag.instance_hrid = target_instances.instance_hrid
+    WHERE marc_tag.instance_id = target_instances.instance_uuid
 )
 ```
 
@@ -163,6 +186,12 @@ The physical table already represents one tag, so the query does not add a
 redundant `field = :tag` predicate. The query never uses
 `folio_source_record.marctab` and never searches
 `records__t.parsed_record__content` for tag presence.
+
+The anti-join uses the indexed, non-text Instance UUID rather than the nullable
+Instance HRID. This prevents a null or blank target HRID from being reported as
+missing a tag that is present. The live reporting schema exposes UUID on both
+`inventory.instance__t.id` and `marctab.mtNNN.instance_id`, so the comparison
+must remain UUID-to-UUID and indexable.
 
 ## Result Contract
 
@@ -174,15 +203,17 @@ Return one row per Instance UUID with these ordered columns:
 4. `Selected Location`
 5. `Location Basis`
 6. `Missing MARC Tag`
-7. `SRS Record UUID`
 
 Order results by title and then Instance HRID. The missing-tag column repeats
 the normalized three-digit input so exported worklists remain self-describing.
 
-The report uses the platform's maximum supported report limit of 100,000 rows.
-If a table result or export reaches that cap, the UI must explicitly state that
-the worklist may be truncated and recommend narrowing the location or handling
-the remaining population separately.
+The public report limit remains the platform maximum of 100,000 rows. The SQL
+fetches at most 100,001 ordered rows internally. The execution layer removes
+the sentinel row, returns or writes at most 100,000 rows, and records an exact
+`truncated` flag when the sentinel existed. This distinguishes an exact
+100,000-row population from a larger population. A truncated result tells the
+cataloger to narrow the location or handle the remaining population
+separately.
 
 ## Export Contracts
 
@@ -215,6 +246,13 @@ The identifier-export request is accepted only for a report with server-owned
 identifier-export metadata. The client cannot nominate a SQL expression or
 arbitrary column. Existing reports retain their current export behavior.
 
+Identifier projection and defensive deduplication operate on the retained
+100,000-row worklist after sentinel detection. A generic identifier export may
+therefore contain fewer identifiers than its capped worklist if invalid or
+duplicate identifiers are removed, while the original `truncated` warning
+still applies. This report's one-row-per-Instance contract should make the two
+counts equal unless data violates the result contract.
+
 FOLIO Data Export accepts a CSV list of Instance UUIDs and produces MARC when
 underlying SRS data exists. The generated UUID file must be smoke-tested against
 the deployed FOLIO Data Export release before production enablement.
@@ -242,8 +280,10 @@ depends on record type, cataloging code, legacy practice, and local policy.
 - Invalid tags return a specific validation message before SQL construction.
 - Unknown location-basis values fail before SQL construction.
 - Unresolved or repeated SQL tokens fail closed.
-- A disallowed or unavailable MARC table produces a safe report error; the
-  service never falls back to the combined MARC view.
+- An expected `marctab.mtNNN` table that is unavailable produces a reporting-
+  schema integrity error; the service never treats schema damage as evidence
+  that every candidate record lacks the tag and never falls back to the
+  combined MARC view.
 - No qualifying MARC records at the selected location returns a successful
   empty result.
 - Qualifying MARC records with no missing tags also return a successful empty
@@ -258,6 +298,8 @@ depends on record type, cataloging code, legacy practice, and local policy.
 - Keep the three location bases as separate reviewed query shapes; do not use a
   broad `OR` predicate across location columns.
 - Use the existing background worker for both full CSV formats.
+- Preserve the UUID-to-UUID anti-join so the per-tag Instance UUID index remains
+  usable.
 - Run `EXPLAIN` for all three location bases with a common tag such as 245 and a
   sparse tag such as 856.
 - Exercise a location with a large item population and a location with a small
@@ -279,13 +321,18 @@ depends on record type, cataloging code, legacy practice, and local policy.
 - Prove generated SQL never contains `folio_source_record.marctab`.
 - Prove only the three location-basis query shapes are reachable.
 - Prove unresolved or duplicated template tokens fail closed.
+- Prove structural resolution occurs before value binding and that substituted
+  text cannot introduce a colon or value placeholder.
+- Prove the three value-parameter names are unique and none is a prefix of
+  another.
 
 ### Result behavior
 
 - A MARC record containing the selected tag is absent from results.
 - A qualifying MARC record missing the selected tag is returned.
-- Inventory-native, deleted-SRS, and non-bibliographic source records are
-  excluded.
+- Inventory instances whose source is not `MARC` are excluded.
+- Null or blank target HRIDs do not affect tag-presence results because the
+  anti-join uses Instance UUID.
 - Multiple qualifying items produce one row.
 - A shared instance is included when the selected location qualifies.
 - Itemless holdings are included only for permanent-holdings scope.
@@ -293,7 +340,7 @@ depends on record type, cataloging code, legacy practice, and local policy.
 
 ### Export behavior
 
-- Worklist CSV retains all seven columns.
+- Worklist CSV retains all six columns.
 - Identifier export contains only a `UUID` column.
 - Identifier export rejects client-selected columns.
 - Blank and duplicate UUIDs are removed.
@@ -301,6 +348,9 @@ depends on record type, cataloging code, legacy practice, and local policy.
   preview.
 - Existing reports without identifier-export metadata are unchanged.
 - The produced file is accepted by the deployed FOLIO Data Export application.
+- Exactly 100,000 results do not show a truncation warning; 100,001 candidates
+  return 100,000 rows and set the warning.
+- Identifier projection or deduplication never clears a truncation warning.
 
 ### Deployment and UI
 
