@@ -420,6 +420,17 @@ assertMigrationTrue(
     $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($normalizedParameterSeed), '040_cataloging_marc_missing_tag_report.sql'),
     'Migration 040 must recognize MySQL-normalized JSON object key ordering without accepting parameter drift.'
 );
+$normalizedExecutionConfigSeed = $marcSeed;
+$normalizedExecutionConfig = json_decode($normalizedExecutionConfigSeed['execution_config'], true);
+$normalizedIdentifierExport = $normalizedExecutionConfig['identifier_export'];
+ksort($normalizedIdentifierExport, SORT_STRING);
+$normalizedExecutionConfig['identifier_export'] = $normalizedIdentifierExport;
+ksort($normalizedExecutionConfig, SORT_STRING);
+$normalizedExecutionConfigSeed['execution_config'] = json_encode($normalizedExecutionConfig, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+assertMigrationTrue(
+    $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($normalizedExecutionConfigSeed), '040_cataloging_marc_missing_tag_report.sql'),
+    'Migration 040 must recognize reordered execution config object keys without accepting execution-config drift.'
+);
 
 foreach ([
     'name' => 'MARC Bibliographic Records Missing Tag',

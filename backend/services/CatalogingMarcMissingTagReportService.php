@@ -202,7 +202,7 @@ final class CatalogingMarcMissingTagReportService
 
         $decoded = json_decode($executionConfig, true);
         return json_last_error() === JSON_ERROR_NONE
-            && $decoded === [
+            && self::normalizeJsonForFingerprint($decoded) === self::normalizeJsonForFingerprint([
                 'public_row_cap' => self::PUBLIC_ROW_CAP,
                 'fetch_row_limit' => self::FETCH_ROW_LIMIT,
                 'preserve_export_order' => true,
@@ -210,7 +210,7 @@ final class CatalogingMarcMissingTagReportService
                     'source_column' => 'Instance UUID',
                     'header' => 'UUID',
                 ],
-            ];
+            ]);
     }
 
     private static function hasExactSeedValue(array $definition, string $field, string $expected): bool
