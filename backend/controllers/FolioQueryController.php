@@ -1729,8 +1729,18 @@ class FolioQueryController extends Controller
             return ['error' => 'Export file not found'];
         }
 
+        $downloadFilename = basename($path);
+        try {
+            $reportExecution = ReportExecutionContractService::fromJob($job);
+            if ($reportExecution !== null) {
+                $downloadFilename = $reportExecution['downloadFilename'];
+            }
+        } catch (\InvalidArgumentException $exception) {
+            Yii::warning("Invalid report export metadata for query job {$job->id}: {$exception->getMessage()}", 'query.export');
+        }
+
         Yii::$app->response->format = Response::FORMAT_RAW;
-        return Yii::$app->response->sendFile($path, basename($path), [
+        return Yii::$app->response->sendFile($path, $downloadFilename, [
             'mimeType' => 'text/csv',
             'inline' => false,
         ]);

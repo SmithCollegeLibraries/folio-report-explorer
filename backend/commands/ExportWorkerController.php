@@ -6,7 +6,9 @@ use Yii;
 use yii\console\Controller;
 use app\models\QueryJob;
 use app\services\DatabaseRetryService;
+use app\services\FolioIdentifierCsvService;
 use app\services\QueryJobCancellationService;
+use app\services\ReportExecutionContractService;
 
 /**
  * ExportWorkerController — background worker for large file exports.
@@ -182,7 +184,9 @@ class ExportWorkerController extends Controller
                 throw new \RuntimeException('Failed to open export file for writing.');
             }
 
-            $sql = $this->applyExportLimit($job->sql_text, (int) (Yii::$app->params['exportRowLimit'] ?? 500000));
+            $genericMaxRows = (int) (Yii::$app->params['exportRowLimit'] ?? 500000);
+            $contract = ReportExecutionContractService::fromJob($job);
+            $sql = $this->prepareExportSql($job, $genericMaxRows);
 
             $prepareAndExecute = function () use ($db, $dataSource, $job, $sql, $params) {
                 if ($dataSource === 'folio') {
@@ -227,20 +231,46 @@ class ExportWorkerController extends Controller
                 $meta = $stmt->getColumnMeta($i);
                 $headers[] = $meta['name'] ?? ('column_' . ($i + 1));
             }
-            fputcsv($fileHandle, $headers);
+            $identifierExport = $contract !== null && $contract['exportKind'] === 'identifier';
+            if ($identifierExport) {
+                $headers = [$contract['identifierExport']['header']];
+                fwrite($fileHandle, FolioIdentifierCsvService::encodeRow($headers));
+            } else {
+                fputcsv($fileHandle, $headers);
+            }
 
             $rowCount = 0;
+            $sourceRowCount = 0;
+            $truncated = false;
             $previewLimit = max(0, (int) (Yii::$app->params['exportPreviewRows'] ?? 200));
             $previewRows = [];
+            $seenIdentifiers = [];
             while (($row = $stmt->fetch(\PDO::FETCH_ASSOC)) !== false) {
-                fputcsv($fileHandle, $row);
+                $sourceRowCount++;
+                if ($contract !== null && $sourceRowCount > $contract['publicRowCap']) {
+                    $truncated = true;
+                    break;
+                }
+
+                if ($identifierExport) {
+                    $identifier = FolioIdentifierCsvService::project($row, $contract['identifierExport']);
+                    if ($identifier === null || isset($seenIdentifiers[$identifier])) {
+                        continue;
+                    }
+                    $seenIdentifiers[$identifier] = true;
+                    fwrite($fileHandle, FolioIdentifierCsvService::encodeRow([$identifier]));
+                    $previewRow = [$headers[0] => $identifier];
+                } else {
+                    fputcsv($fileHandle, $row);
+                    $previewRow = $row;
+                }
                 $rowCount++;
 
                 if ($previewLimit > 0 && count($previewRows) < $previewLimit) {
-                    $previewRows[] = $row;
+                    $previewRows[] = $previewRow;
                 }
 
-                if ($rowCount % 1000 === 0 && $this->isCancellationRequested($job)) {
+                if ($sourceRowCount % 1000 === 0 && $this->isCancellationRequested($job)) {
                     $this->finishCancellation($job, $fileHandle, $filePath, 'during export');
                     return;
                 }
@@ -264,7 +294,7 @@ class ExportWorkerController extends Controller
             }
 
             $executionTime = (int) round((microtime(true) - $startTime) * 1000);
-            $job->markExportCompleted($filePath, $rowCount, $executionTime, $headers, $previewRows);
+            $job->markExportCompleted($filePath, $rowCount, $executionTime, $headers, $previewRows, $truncated);
             $this->stdout("Export job {$job->id} completed: {$rowCount} rows in {$executionTime}ms\n");
 
             $this->logQuery($job);
@@ -319,6 +349,24 @@ class ExportWorkerController extends Controller
             $job->markCancelled();
         }
         $this->stdout("Job {$job->id} cancelled {$phase}.\n");
+    }
+
+    /**
+     * Retain the static ordering and sentinel for reports with a server-owned
+     * execution contract. Ordinary exports keep the legacy generic policy.
+     *
+     * @param QueryJob $job
+     * @param int $genericMaxRows
+     * @return string
+     */
+    private function prepareExportSql(QueryJob $job, int $genericMaxRows): string
+    {
+        $contract = ReportExecutionContractService::fromJob($job);
+        if ($contract !== null) {
+            return ReportExecutionContractService::assertStaticExportSql($job->sql_text, $contract);
+        }
+
+        return $this->applyExportLimit($job->sql_text, $genericMaxRows);
     }
 
     /**
