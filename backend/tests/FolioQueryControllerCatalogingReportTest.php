@@ -144,12 +144,12 @@ namespace {
     }
     function catalogingAssertTrue($actual, string $message): void { catalogingAssertSame(true, (bool)$actual, $message); }
     function catalogingLastJob() { return \app\models\QueryJob::$created[count(\app\models\QueryJob::$created) - 1] ?? null; }
-    function validCatalogingParams(): array { return ['locationId' => '11111111-1111-4111-8111-111111111111', 'locationBasis' => 'effective_item', 'marcTag' => '856']; }
+    function validCatalogingParams(): array { return ['locationIds' => '11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222', 'locationBasis' => 'effective_item', 'marcTag' => '856']; }
     function catalogingReport(bool $identifier = true): \app\models\ReportTemplate {
         $report = new \app\models\ReportTemplate();
         $report->hasIdentifierCapability = $identifier;
         $report->parameters = [
-            ['name' => 'locationId', 'required' => true],
+            ['name' => 'locationIds', 'required' => true],
             ['name' => 'locationBasis', 'required' => true],
             ['name' => 'marcTag', 'required' => true],
         ];
@@ -167,9 +167,9 @@ namespace {
         \app\services\CatalogingMarcMissingTagReportService::$buildException = null;
         \app\services\CatalogingMarcMissingTagReportService::$buildResult = [
             'sql' => 'SELECT * FROM marctab.mt856 AS marc_tag ORDER BY instance_uuid LIMIT 100001',
-            'params' => [':locationId' => '11111111-1111-4111-8111-111111111111', ':marcTag' => '856'],
+            'params' => [':locationIds' => '11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222', ':marcTag' => '856'],
             'marcTag' => '856',
-            'location' => ['name' => 'Main', 'code' => 'SC'],
+            'location' => ['name' => '2 Locations', 'code' => 'MULTI'],
         ];
         \app\services\ReportExecutionContractService::$contexts = [];
     }
@@ -210,8 +210,8 @@ namespace {
     catalogingAssertSame([
         'exportKind' => 'worklist',
         'marcTag' => '856',
-        'locationName' => 'Main',
-        'locationCode' => 'SC',
+        'locationName' => '2 Locations',
+        'locationCode' => 'MULTI',
     ], \app\services\ReportExecutionContractService::$contexts[0] ?? null, 'Governed metadata must receive compiler-derived export context.');
 
     $large = runCatalogingReportWithEstimate(10001, 1000.0, ['params' => validCatalogingParams(), 'outputMode' => 'table']);
@@ -232,7 +232,7 @@ namespace {
     foreach ([
         'MARC tag must be exactly three ASCII digits from 001 through 999.',
         'A supported location basis is required.',
-        'A valid location UUID is required.',
+        'Every selected location must be a valid UUID.',
     ] as $inputError) {
         resetCatalogingState();
         \app\models\ReportTemplate::$report = catalogingReport();
@@ -252,6 +252,15 @@ namespace {
     $missingTable = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
     catalogingAssertSame(422, Yii::$app->response->statusCode, 'Missing MARC tag tables must return a safe integrity status.');
     catalogingAssertSame('The selected MARC tag data is unavailable. Please contact an administrator.', $missingTable['error'] ?? null, 'Missing MARC tag tables must not expose internal schema detail.');
+
+    resetCatalogingState();
+    \app\models\ReportTemplate::$report = catalogingReport();
+    \app\services\CatalogingMarcMissingTagReportService::$buildException = new \InvalidArgumentException('A selected location no longer exists.');
+    Yii::$app->request->body = ['params' => validCatalogingParams()];
+    Yii::$app->response->statusCode = 200;
+    $missingLocation = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    catalogingAssertSame(422, Yii::$app->response->statusCode, 'Missing selected locations must return a safe integrity status.');
+    catalogingAssertSame('A selected location is unavailable. Please update the selection.', $missingLocation['error'] ?? null, 'Missing selected locations must not expose internal lookup details.');
 
     resetCatalogingState();
     \app\models\ReportTemplate::$report = catalogingReport();

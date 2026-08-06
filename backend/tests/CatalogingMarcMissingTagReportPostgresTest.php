@@ -85,9 +85,9 @@ namespace {
 
     function marcPostgresReport()
     {
-        $migration = file_get_contents(__DIR__ . '/../../mysql/migrations/040_cataloging_marc_missing_tag_report.sql');
-        if ($migration === false || preg_match("/\\n  '(WITH target_instances AS MATERIALIZED \\(.*?LIMIT 100001)',\\n  '(\\[.*?\\])',\\n  'folio'/s", $migration, $matches) !== 1) {
-            marcPostgresFail('Could not load the reviewed MARC report template from migration 040.');
+        $migration = file_get_contents(__DIR__ . '/../../mysql/migrations/042_cataloging_marc_multi_location.sql');
+        if ($migration === false || preg_match("/SET\\n.*?  `sql_template` = '(WITH target_instances AS MATERIALIZED \\(.*?LIMIT 100001)',\\n  `parameters` = '(\\[.*?\\])',\\n/s", $migration, $matches) !== 1) {
+            marcPostgresFail('Could not load the reviewed multi-location MARC report template from migration 042.');
         }
 
         $report = new ReportTemplate();
@@ -297,7 +297,7 @@ SQL;
             foreach (['effective_item', 'permanent_item', 'permanent_holdings'] as $basis) {
                 foreach (['245', '856'] as $tag) {
                     $compiled = CatalogingMarcMissingTagReportService::build($report, [
-                        'locationId' => $locationId,
+                        'locationIds' => $locationId,
                         'locationBasis' => $basis,
                         'marcTag' => $tag,
                     ], $folioDb);

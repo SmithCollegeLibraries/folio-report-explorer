@@ -66,14 +66,19 @@ namespace {
             $this->db = $db;
         }
 
-        public function queryOne()
+        public function queryAll(): array
         {
             if (strpos($this->sql, 'FROM inventory.location__t') !== false) {
-                if (($this->params[':location_id'] ?? null) !== $this->db->expectedLocationId) {
-                    throw new \RuntimeException('Location lookup must use the validated location UUID parameter.');
+                if (array_values($this->params) !== $this->db->expectedLocationIds) {
+                    throw new \RuntimeException('Location lookup must use every validated location UUID parameter.');
                 }
-                return $this->db->location;
+                return $this->db->locations;
             }
+            throw new \RuntimeException('Unexpected compiler queryAll lookup: ' . $this->sql);
+        }
+
+        public function queryOne()
+        {
             if (strpos($this->sql, 'to_regclass') !== false) {
                 return ['to_regclass' => $this->db->tables[$this->params[':table_name']] ?? null];
             }
@@ -83,8 +88,8 @@ namespace {
 
     final class MarcCompilerFakeDb
     {
-        public $expectedLocationId = '11111111-1111-4111-8111-111111111111';
-        public $location = ['name' => 'Main Library', 'code' => 'MAIN'];
+        public $expectedLocationIds = ['11111111-1111-4111-8111-111111111111'];
+        public $locations = [['id' => '11111111-1111-4111-8111-111111111111', 'name' => 'Main Library', 'code' => 'MAIN']];
         public $tables = ['marctab.mt856' => 'marctab.mt856'];
 
         public function createCommand(string $sql, array $params = []): MarcCompilerFakeCommand
@@ -95,9 +100,9 @@ namespace {
 
     function marcCompilerReport(array $overrides = []): ReportTemplate
     {
-        $migration = (string) file_get_contents(__DIR__ . '/../../mysql/migrations/040_cataloging_marc_missing_tag_report.sql');
-        if (preg_match("/\\n  '(WITH target_instances AS MATERIALIZED \\(.*?LIMIT 100001)',\\n  '(\\[.*?\\])',\\n  'folio'/s", $migration, $matches) !== 1) {
-            throw new \RuntimeException('Could not load the Task 1 report template fixture.');
+        $migration = (string) file_get_contents(__DIR__ . '/../../mysql/migrations/042_cataloging_marc_multi_location.sql');
+        if (preg_match("/SET\\n.*?  `sql_template` = '(WITH target_instances AS MATERIALIZED \\(.*?LIMIT 100001)',\\n  `parameters` = '(\\[.*?\\])',\\n/s", $migration, $matches) !== 1) {
+            throw new \RuntimeException('Could not load the multi-location report template fixture.');
         }
 
         $report = new ReportTemplate();
@@ -114,7 +119,7 @@ namespace {
     function marcCompilerInputs(array $overrides = []): array
     {
         return array_merge([
-            'locationId' => '11111111-1111-4111-8111-111111111111',
+            'locationIds' => '11111111-1111-4111-8111-111111111111',
             'locationBasis' => 'effective_item',
             'marcTag' => '856',
         ], $overrides);
@@ -132,15 +137,16 @@ namespace {
     marcCompilerAssertSame(1, preg_match_all('/\\bLIMIT\\s+100001\\b/i', $effective['sql']), 'The query must retain exactly one sentinel limit.');
     marcCompilerAssertNotContains('{{', $effective['sql'], 'The compiled SQL must not retain structural tokens.');
     marcCompilerAssertSame('856', $effective['params'][':marcTag'], 'The selected tag must remain a bound parameter.');
+    marcCompilerAssertSame('11111111-1111-4111-8111-111111111111', $effective['params'][':locationIds'], 'The selected location list must remain one bound parameter.');
     marcCompilerAssertSame(['id' => '11111111-1111-4111-8111-111111111111', 'name' => 'Main Library', 'code' => 'MAIN'], $effective['location'], 'Location metadata must come from the FOLIO lookup.');
     marcCompilerAssertSame('856', $effective['marcTag'], 'The returned tag must be normalized.');
 
     $distinctLocationId = '22222222-2222-4222-8222-222222222222';
-    $db->expectedLocationId = $distinctLocationId;
-    $db->location = ['name' => 'Science Library', 'code' => 'SCI'];
+    $db->expectedLocationIds = [$distinctLocationId];
+    $db->locations = [['id' => $distinctLocationId, 'name' => 'Science Library', 'code' => 'SCI']];
     $distinctLocation = CatalogingMarcMissingTagReportService::build(
         $report,
-        marcCompilerInputs(['locationId' => $distinctLocationId]),
+        marcCompilerInputs(['locationIds' => $distinctLocationId]),
         $db
     );
     marcCompilerAssertSame(
@@ -148,8 +154,8 @@ namespace {
         $distinctLocation['location'],
         'The location lookup must bind the distinct valid location UUID supplied by the caller.'
     );
-    $db->expectedLocationId = '11111111-1111-4111-8111-111111111111';
-    $db->location = ['name' => 'Main Library', 'code' => 'MAIN'];
+    $db->expectedLocationIds = ['11111111-1111-4111-8111-111111111111'];
+    $db->locations = [['id' => '11111111-1111-4111-8111-111111111111', 'name' => 'Main Library', 'code' => 'MAIN']];
 
     $permanentItem = CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationBasis' => 'permanent_item']), $db);
     marcCompilerAssertContains('location.id = item.permanent_location_id', $permanentItem['sql'], 'Permanent-item scope must use permanent item location.');
@@ -167,16 +173,16 @@ namespace {
         );
     }
 
-    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationId' => 'not-a-uuid']), $db); }, 'Invalid UUIDs must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationIds' => 'not-a-uuid']), $db); }, 'Invalid UUIDs must be rejected.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationBasis' => 'all_items']), $db); }, 'Unknown location bases must be rejected.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('{{location_from}}', '', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Missing structural tokens must be rejected.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('{{marc_table}}', '{{marc_table}} {{marc_table}}', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Repeated structural tokens must be rejected.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $report->sql_template . ' {{unknown_token}}']), marcCompilerInputs(), $db); }, 'Unknown structural tokens must be rejected.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => $report->sql_template . ' {{location_from:unsafe}}']), marcCompilerInputs(), $db); }, 'Colon-bearing structural tokens must be rejected.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[]']), marcCompilerInputs(), $db); }, 'Missing parameter definitions must be rejected.');
-    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"marcTag"}]']), marcCompilerInputs(), $db); }, 'Duplicated parameter definitions must be rejected.');
-    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"extra"}]']), marcCompilerInputs(), $db); }, 'Extra parameter definitions must be rejected.');
-    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationId"},{"name":"locationBasis"},{"name":"marcTagExtra"}]']), marcCompilerInputs(), $db); }, 'Prefix-colliding parameter names must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationIds"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"marcTag"}]']), marcCompilerInputs(), $db); }, 'Duplicated parameter definitions must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationIds"},{"name":"locationBasis"},{"name":"marcTag"},{"name":"extra"}]']), marcCompilerInputs(), $db); }, 'Extra parameter definitions must be rejected.');
+    marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['parameters' => '[{"name":"locationIds"},{"name":"locationBasis"},{"name":"marcTagExtra"}]']), marcCompilerInputs(), $db); }, 'Prefix-colliding parameter names must be rejected.');
 
     $nestedOrderAndLimit = str_replace(
         ")\nSELECT\n",
@@ -209,7 +215,7 @@ namespace {
     $missingTableDb->tables = [];
     marcCompilerAssertThrows(function () use ($report, $missingTableDb) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(), $missingTableDb); }, 'A missing marctab table must be rejected.');
     $missingLocationDb = new MarcCompilerFakeDb();
-    $missingLocationDb->location = null;
+    $missingLocationDb->locations = [];
     marcCompilerAssertThrows(function () use ($report, $missingLocationDb) { return CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(), $missingLocationDb); }, 'A missing location must be rejected.');
 
     $limitReport = marcCompilerReport(['sql_template' => 'SELECT :marcTag']);

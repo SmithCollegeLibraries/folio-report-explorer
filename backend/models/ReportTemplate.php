@@ -229,7 +229,7 @@ class ReportTemplate extends ActiveRecord
         $useLocalDb = $this->hasAttribute('data_source') && in_array($this->data_source, ['local', 'composite']);
 
         foreach ($params as $def) {
-            if (($def['type'] ?? '') === 'select' && !empty($def['options_sql'])) {
+            if (in_array(($def['type'] ?? ''), ['select', 'multiselect'], true) && !empty($def['options_sql'])) {
                 try {
                     // options_db on the parameter definition takes explicit precedence.
                     // Without it, composite/local reports default to MySQL and folio reports to Postgres.

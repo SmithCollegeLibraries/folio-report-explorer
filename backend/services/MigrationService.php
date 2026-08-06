@@ -353,13 +353,15 @@ class MigrationService
                 return self::hasTable($db, 'ai_report_generations') && self::hasTable($db, 'ai_report_reviews');
             case '040_cataloging_marc_missing_tag_report.sql':
             case '041_restore_cataloging_structural_tokens.sql':
+                return self::marcMissingTagReportAppearsComplete($db, true);
+            case '042_cataloging_marc_multi_location.sql':
                 return self::marcMissingTagReportAppearsComplete($db);
         }
 
         return false;
     }
 
-    private static function marcMissingTagReportAppearsComplete($db): bool
+    private static function marcMissingTagReportAppearsComplete($db, bool $allowLegacy = false): bool
     {
         if (!self::hasColumn($db, 'report_templates', 'execution_config')
             || !self::columnTypeContains($db, 'report_templates', 'category', "'cataloging'")) {
@@ -373,7 +375,10 @@ class MigrationService
         )->queryOne();
 
         return is_array($definition)
-            && CatalogingMarcMissingTagReportService::isCanonicalSeedDefinition($definition);
+            && (
+                CatalogingMarcMissingTagReportService::isCanonicalSeedDefinition($definition)
+                || ($allowLegacy && CatalogingMarcMissingTagReportService::isLegacySeedDefinition($definition))
+            );
     }
 
     private static function budgetYearFundReportAppearsComplete($db): bool

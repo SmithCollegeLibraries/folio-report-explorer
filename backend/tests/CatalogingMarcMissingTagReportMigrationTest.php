@@ -26,6 +26,7 @@ function assertCatalogingMigrationSame($expected, $actual, string $message): voi
 
 $migration = file_get_contents(__DIR__ . '/../../mysql/migrations/040_cataloging_marc_missing_tag_report.sql');
 $repairMigration = file_get_contents(__DIR__ . '/../../mysql/migrations/041_restore_cataloging_structural_tokens.sql');
+$multiLocationMigration = file_get_contents(__DIR__ . '/../../mysql/migrations/042_cataloging_marc_multi_location.sql');
 $init = file_get_contents(__DIR__ . '/../../mysql/init.sql');
 
 assertCatalogingMigrationContains("'cataloging'", $migration, 'Migration must add the Cataloging enum value.');
@@ -46,5 +47,15 @@ assertCatalogingMigrationContains("'`location_from`'", $repairMigration, 'Repair
 assertCatalogingMigrationContains("'{{location_from}}'", $repairMigration, 'Repair migration must restore the reviewed location token.');
 assertCatalogingMigrationContains("'`marc_table`'", $repairMigration, 'Repair migration must recognize Yii-rewritten MARC-table tokens.');
 assertCatalogingMigrationContains("'{{marc_table}}'", $repairMigration, 'Repair migration must restore the reviewed MARC-table token.');
+assertCatalogingMigrationSame(1, substr_count($multiLocationMigration, '{{location_from}}'), 'Multi-location SQL must retain one location token.');
+assertCatalogingMigrationSame(1, substr_count($multiLocationMigration, '{{marc_table}}'), 'Multi-location SQL must retain one MARC-table token.');
+assertCatalogingMigrationContains('"name":"locationIds","type":"multiselect"', $multiLocationMigration, 'Location selection must use the searchable multi-select parameter type.');
+assertCatalogingMigrationContains('"max_selections":100', $multiLocationMigration, 'Location selection must publish its server-enforced cap.');
+assertCatalogingMigrationContains("location.id = ANY(string_to_array(:locationIds, '','')::uuid[])", $multiLocationMigration, 'Selected UUIDs must remain one bound PostgreSQL array value.');
+assertCatalogingMigrationContains('STRING_AGG(', $multiLocationMigration, 'Matching location labels must be aggregated before the anti-join.');
+assertCatalogingMigrationContains('LEFT JOIN inventory.loccampus__t campus ON campus.id = lib.campus_id', $multiLocationMigration, 'Campus labels must follow the location-library-campus hierarchy.');
+assertCatalogingMigrationContains('WHERE COALESCE(loc.is_active, true)', $multiLocationMigration, 'Location options must include active locations such as SC Internet.');
+assertCatalogingMigrationContains('AS "Selected Locations"', $multiLocationMigration, 'The worklist must describe the aggregated location column accurately.');
+assertCatalogingMigrationContains('LIMIT 100001', $multiLocationMigration, 'Multi-location SQL must retain the reviewed sentinel.');
 
 fwrite(STDOUT, "Cataloging MARC missing-tag migration contract test passed\n");

@@ -427,11 +427,33 @@ function marcMigrationSeedDefinition($migrationPath)
     ];
 }
 
+function marcMultiLocationDefinition($migrationPath, array $legacyDefinition)
+{
+    $migration = (string) file_get_contents($migrationPath);
+    $matched = preg_match(
+        "/SET\n.*?  `sql_template` = '(WITH target_instances AS MATERIALIZED \\(.*?LIMIT 100001)',\n  `parameters` = '(\\[.*?\\])',\n/s",
+        $migration,
+        $matches
+    );
+    if ($matched !== 1) {
+        throw new RuntimeException('Could not load the MARC multi-location migration fixture.');
+    }
+
+    $current = $legacyDefinition;
+    $current['sql_template'] = str_replace("''", "'", $matches[1]);
+    $current['parameters'] = str_replace("''", "'", $matches[2]);
+    return $current;
+}
+
 $marcMigrationAppearsApplied = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
 if (PHP_VERSION_ID < 80100) {
     $marcMigrationAppearsApplied->setAccessible(true);
 }
 $marcSeed = marcMigrationSeedDefinition($migrationDir . '/040_cataloging_marc_missing_tag_report.sql');
+$marcMultiLocationSeed = marcMultiLocationDefinition(
+    $migrationDir . '/042_cataloging_marc_multi_location.sql',
+    $marcSeed
+);
 assertMigrationTrue(
     $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcSeed), '040_cataloging_marc_missing_tag_report.sql'),
     'Migration 040 must recognize the complete reviewed MARC report seed.'
@@ -439,6 +461,18 @@ assertMigrationTrue(
 assertMigrationTrue(
     $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcSeed), '041_restore_cataloging_structural_tokens.sql'),
     'Migration 041 must recognize a report whose structural tokens already match the reviewed contract.'
+);
+assertMigrationTrue(
+    !$marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcSeed), '042_cataloging_marc_multi_location.sql'),
+    'Migration 042 must not baseline a legacy singular-location report.'
+);
+assertMigrationTrue(
+    $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcMultiLocationSeed), '042_cataloging_marc_multi_location.sql'),
+    'Migration 042 must recognize the complete reviewed multi-location report.'
+);
+assertMigrationTrue(
+    $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcMultiLocationSeed), '040_cataloging_marc_missing_tag_report.sql'),
+    'Migration 040 must remain recognizable after the forward multi-location update.'
 );
 $normalizedParameterSeed = $marcSeed;
 $normalizedParameters = json_decode($normalizedParameterSeed['parameters'], true);

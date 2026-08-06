@@ -3900,7 +3900,7 @@ class FolioQueryController extends Controller
     {
         $message = $exception->getMessage();
         return strpos($message, 'Reporting schema is missing the expected MARC tag table') === 0
-            || $message === 'The selected location no longer exists.';
+            || $message === 'A selected location no longer exists.';
     }
 
     private function catalogingReportIntegrityMessage(\InvalidArgumentException $exception): string
@@ -3908,7 +3908,7 @@ class FolioQueryController extends Controller
         if (strpos($exception->getMessage(), 'Reporting schema is missing the expected MARC tag table') === 0) {
             return 'The selected MARC tag data is unavailable. Please contact an administrator.';
         }
-        return 'The selected location is unavailable. Please choose another location.';
+        return 'A selected location is unavailable. Please update the selection.';
     }
 
     /**
