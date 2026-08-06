@@ -26,7 +26,7 @@ use app\services\AskConfidenceClassificationService;
 use app\services\AskGenerationEvidenceService;
 use app\services\AskResponseContractService;
 use app\services\AskUserExplanationService;
-use app\services\CatalogingMarcMissingTagReportService;
+use app\services\CatalogingReportCompilerService;
 use app\services\ReportExecutionContractService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
@@ -39,6 +39,7 @@ use app\models\DummyIdentity;
 use Firebase\JWT\JWT;
 
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
+require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/../services/AdministratorReviewService.php';
 require_once __DIR__ . '/../services/AskConfidenceClassificationService.php';
 require_once __DIR__ . '/../services/AskGenerationEvidenceService.php';
@@ -3748,13 +3749,19 @@ class FolioQueryController extends Controller
         }
 
         $compiled = null;
-        if (CatalogingMarcMissingTagReportService::supports($report)) {
+        if (CatalogingReportCompilerService::supports($report)) {
             try {
-                $compiled = CatalogingMarcMissingTagReportService::build(
+                $compiled = CatalogingReportCompilerService::build(
                     $report,
                     $userParams,
                     Yii::$app->folioDb
                 );
+            } catch (\app\exceptions\ReportParameterValidationException $e) {
+                Yii::$app->response->statusCode = 400;
+                return [
+                    'error' => 'Report parameters are invalid.',
+                    'fieldErrors' => $e->getFieldErrors(),
+                ];
             } catch (\InvalidArgumentException $e) {
                 if ($this->isCatalogingReportIntegrityError($e)) {
                     Yii::$app->response->statusCode = 422;

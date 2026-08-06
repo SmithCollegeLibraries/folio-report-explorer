@@ -119,6 +119,31 @@ namespace app\services {
             return self::$buildResult;
         }
     }
+    class CatalogingMarcFieldFinderService
+    {
+        public static $buildResult;
+        public static $buildException;
+        public static $buildCalls = [];
+        public static function supports($report) { return $report->slug === 'marc-field-indicator-content-finder'; }
+        public static function build($report, array $inputs, $folioDb) {
+            self::$buildCalls[] = $inputs;
+            if (self::$buildException) { throw self::$buildException; }
+            return self::$buildResult;
+        }
+    }
+    class CatalogingReportCompilerService
+    {
+        public static function supports($report) {
+            return CatalogingMarcMissingTagReportService::supports($report)
+                || CatalogingMarcFieldFinderService::supports($report);
+        }
+        public static function build($report, array $inputs, $folioDb) {
+            if (CatalogingMarcMissingTagReportService::supports($report)) {
+                return CatalogingMarcMissingTagReportService::build($report, $inputs, $folioDb);
+            }
+            return CatalogingMarcFieldFinderService::build($report, $inputs, $folioDb);
+        }
+    }
     class ReportExecutionContractService
     {
         public const METADATA_KEY = 'reportExecution';
@@ -145,6 +170,20 @@ namespace {
     function catalogingAssertTrue($actual, string $message): void { catalogingAssertSame(true, (bool)$actual, $message); }
     function catalogingLastJob() { return \app\models\QueryJob::$created[count(\app\models\QueryJob::$created) - 1] ?? null; }
     function validCatalogingParams(): array { return ['locationIds' => '11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222', 'locationBasis' => 'effective_item', 'marcTag' => '856']; }
+    function validFinderParams(): array {
+        return [
+            'locationIds' => '11111111-1111-4111-8111-111111111111',
+            'locationBasis' => 'effective_item',
+            'marcTag' => '245',
+            'occurrenceCondition' => 'has',
+            'firstIndicator' => 'any',
+            'secondIndicator' => 'any',
+            'subfieldCode' => '',
+            'contentRule' => 'any',
+            'searchValue' => '',
+            'caseExact' => 'false',
+        ];
+    }
     function catalogingReport(bool $identifier = true): \app\models\ReportTemplate {
         $report = new \app\models\ReportTemplate();
         $report->hasIdentifierCapability = $identifier;
@@ -152,6 +191,25 @@ namespace {
             ['name' => 'locationIds', 'required' => true],
             ['name' => 'locationBasis', 'required' => true],
             ['name' => 'marcTag', 'required' => true],
+        ];
+        return $report;
+    }
+    function finderReport(bool $identifier = true): \app\models\ReportTemplate {
+        $report = new \app\models\ReportTemplate();
+        $report->slug = 'marc-field-indicator-content-finder';
+        $report->name = 'MARC Field, Indicator, and Content Finder';
+        $report->hasIdentifierCapability = $identifier;
+        $report->parameters = [
+            ['name' => 'locationIds', 'required' => true],
+            ['name' => 'locationBasis', 'required' => true],
+            ['name' => 'marcTag', 'required' => true],
+            ['name' => 'occurrenceCondition', 'required' => true],
+            ['name' => 'firstIndicator', 'required' => false],
+            ['name' => 'secondIndicator', 'required' => false],
+            ['name' => 'subfieldCode', 'required' => false],
+            ['name' => 'contentRule', 'required' => false],
+            ['name' => 'searchValue', 'required' => false],
+            ['name' => 'caseExact', 'required' => false],
         ];
         return $report;
     }
@@ -171,6 +229,14 @@ namespace {
             'marcTag' => '856',
             'location' => ['name' => '2 Locations', 'code' => 'MULTI'],
         ];
+        \app\services\CatalogingMarcFieldFinderService::$buildCalls = [];
+        \app\services\CatalogingMarcFieldFinderService::$buildException = null;
+        \app\services\CatalogingMarcFieldFinderService::$buildResult = [
+            'sql' => 'SELECT * FROM marctab.mt245 AS marc_match JOIN marctab.mt245 AS marc_missing ON 1=1 ORDER BY instance_uuid LIMIT 100001',
+            'params' => [':locationIds' => '11111111-1111-4111-8111-111111111111', ':locationBasis' => 'effective_item', ':marcTag' => '245', ':occurrenceCondition' => 'has', ':firstIndicator' => 'any', ':secondIndicator' => 'any', ':subfieldCode' => '', ':contentRule' => 'any', ':searchValue' => '', ':caseExact' => 'false'],
+            'marcTag' => '245',
+            'location' => ['name' => 'Main', 'code' => 'MAIN'],
+        ];
         \app\services\ReportExecutionContractService::$contexts = [];
     }
     function runCatalogingReport(array $body, ?\app\models\ReportTemplate $report = null): array {
@@ -184,6 +250,13 @@ namespace {
         resetCatalogingState();
         \app\models\ReportTemplate::$report = catalogingReport();
         \app\services\SqlPreflightService::$nextResult = ['rows' => $rows, 'cost' => $cost];
+        Yii::$app->request->body = $body;
+        Yii::$app->response->statusCode = 200;
+        return (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    }
+    function runFinderReport(array $body, ?\app\models\ReportTemplate $report = null): array {
+        resetCatalogingState();
+        \app\models\ReportTemplate::$report = $report ?: finderReport();
         Yii::$app->request->body = $body;
         Yii::$app->response->statusCode = 200;
         return (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
@@ -220,6 +293,25 @@ namespace {
     $identifier = runCatalogingReport(['params' => validCatalogingParams(), 'outputMode' => 'table', 'exportKind' => 'identifier']);
     catalogingAssertSame('file', $identifier['outputMode'] ?? null, 'Identifier exports must always route to file output.');
     catalogingAssertSame('identifier', catalogingLastJob()->metadata['reportExecution']['exportKind'] ?? null, 'Identifier exports must be persisted in governed job metadata.');
+
+    // The newer governed finder must use the same dispatcher and bypass the
+    // generic ReportTemplate binder just like the legacy fixed report.
+    $finder = runFinderReport(['params' => validFinderParams(), 'outputMode' => 'table']);
+    catalogingAssertSame('file', $finder['outputMode'] ?? null, 'The governed MARC finder must always route to file output.');
+    catalogingAssertSame(0, \app\models\ReportTemplate::$report->bindCalls, 'Governed finder reports must bypass the generic binder.');
+    catalogingAssertSame(1, count(\app\services\CatalogingMarcFieldFinderService::$buildCalls), 'The dispatcher must invoke the finder compiler.');
+    catalogingAssertSame(1, count(\app\services\SqlBuilderService::$safetyCalls), 'Finder SQL must receive safety validation.');
+    catalogingAssertSame(1, count(\app\services\SqlBuilderService::$policyCalls), 'Finder SQL must receive table-policy validation.');
+
+    resetCatalogingState();
+    \app\models\ReportTemplate::$report = finderReport();
+    \app\services\CatalogingMarcFieldFinderService::$buildException = new \app\exceptions\ReportParameterValidationException('marcTag', 'MARC tag must be exactly three ASCII digits from 001 through 999.');
+    Yii::$app->request->body = ['params' => validFinderParams()];
+    Yii::$app->response->statusCode = 200;
+    $fieldError = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    catalogingAssertSame(400, Yii::$app->response->statusCode, 'Finder parameter errors use HTTP 400.');
+    catalogingAssertSame(['marcTag' => 'MARC tag must be exactly three ASCII digits from 001 through 999.'], $fieldError['fieldErrors'] ?? null, 'Finder parameter errors identify the invalid field.');
+    catalogingAssertSame(0, count(\app\models\QueryJob::$created), 'Invalid finder parameters must not create jobs.');
 
     $invalidKind = runCatalogingReport(['params' => validCatalogingParams(), 'exportKind' => 'other']);
     catalogingAssertSame(400, Yii::$app->response->statusCode, 'Unknown export kinds must be rejected.');
