@@ -25,6 +25,7 @@ function assertCatalogingMigrationSame($expected, $actual, string $message): voi
 }
 
 $migration = file_get_contents(__DIR__ . '/../../mysql/migrations/040_cataloging_marc_missing_tag_report.sql');
+$repairMigration = file_get_contents(__DIR__ . '/../../mysql/migrations/041_restore_cataloging_structural_tokens.sql');
 $init = file_get_contents(__DIR__ . '/../../mysql/init.sql');
 
 assertCatalogingMigrationContains("'cataloging'", $migration, 'Migration must add the Cataloging enum value.');
@@ -41,5 +42,9 @@ assertCatalogingMigrationContains('A missing tag is a factual finding', $migrati
 assertCatalogingMigrationContains('Export FOLIO UUID list', $migration, 'Help must document the batch-export workflow.');
 assertCatalogingMigrationContains("ENUM('acquisitions', 'circulation', 'inventory', 'finance', 'users', 'cataloging', 'other')", $init, 'Fresh installs must accept Cataloging.');
 assertCatalogingMigrationContains('execution_config JSON NULL', $init, 'Fresh installs must include execution metadata.');
+assertCatalogingMigrationContains("'`location_from`'", $repairMigration, 'Repair migration must recognize Yii-rewritten location tokens.');
+assertCatalogingMigrationContains("'{{location_from}}'", $repairMigration, 'Repair migration must restore the reviewed location token.');
+assertCatalogingMigrationContains("'`marc_table`'", $repairMigration, 'Repair migration must recognize Yii-rewritten MARC-table tokens.');
+assertCatalogingMigrationContains("'{{marc_table}}'", $repairMigration, 'Repair migration must restore the reviewed MARC-table token.');
 
 fwrite(STDOUT, "Cataloging MARC missing-tag migration contract test passed\n");

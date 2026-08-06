@@ -217,11 +217,11 @@ class MigrationService
         $explicitTransactionActive = false;
         foreach (self::splitSqlStatements($sql) as $statement) {
             try {
-                $db->createCommand($statement)->execute();
+                self::executeRawStatement($db, $statement);
             } catch (\Throwable $exception) {
                 if ($explicitTransactionActive) {
                     try {
-                        $db->createCommand('ROLLBACK')->execute();
+                        self::executeRawStatement($db, 'ROLLBACK');
                     } catch (\Throwable $rollbackException) {
                         // Preserve the original migration failure.
                     }
@@ -235,6 +235,15 @@ class MigrationService
                 $explicitTransactionActive = false;
             }
         }
+    }
+
+    private static function executeRawStatement($db, string $statement): void
+    {
+        $command = $db->createCommand();
+        if (!method_exists($command, 'setRawSql')) {
+            throw new \RuntimeException('Migration database commands must support raw SQL execution.');
+        }
+        $command->setRawSql($statement)->execute();
     }
 
     private static function recordApplied($db, array $file, int $executionMs): void
@@ -343,6 +352,7 @@ class MigrationService
             case '039_ask_ai_report_review.sql':
                 return self::hasTable($db, 'ai_report_generations') && self::hasTable($db, 'ai_report_reviews');
             case '040_cataloging_marc_missing_tag_report.sql':
+            case '041_restore_cataloging_structural_tokens.sql':
                 return self::marcMissingTagReportAppearsComplete($db);
         }
 

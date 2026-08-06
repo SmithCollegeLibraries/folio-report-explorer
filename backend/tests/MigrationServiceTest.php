@@ -67,8 +67,11 @@ class MigrationServiceTransactionTestDatabase
 {
     public $executed = [];
 
-    public function createCommand(string $sql): MigrationServiceTransactionTestCommand
+    public function createCommand($sql = null): MigrationServiceTransactionTestCommand
     {
+        if (is_string($sql)) {
+            $sql = preg_replace('/\{\{([^{}]+)\}\}/', '`$1`', $sql);
+        }
         return new MigrationServiceTransactionTestCommand($this, $sql);
     }
 }
@@ -78,10 +81,16 @@ class MigrationServiceTransactionTestCommand
     private $database;
     private $sql;
 
-    public function __construct(MigrationServiceTransactionTestDatabase $database, string $sql)
+    public function __construct(MigrationServiceTransactionTestDatabase $database, $sql)
     {
         $this->database = $database;
         $this->sql = $sql;
+    }
+
+    public function setRawSql(string $sql): self
+    {
+        $this->sql = $sql;
+        return $this;
     }
 
     public function execute(): void
@@ -120,6 +129,17 @@ assertMigrationSame(
 );
 
 @unlink($transactionMigration);
+
+$structuralTokenMigration = $tempDir . '/004_structural_token.sql';
+file_put_contents($structuralTokenMigration, "INSERT INTO sample (template) VALUES ('{{location_from}} {{marc_table}}');\n");
+$structuralTokenDatabase = new MigrationServiceTransactionTestDatabase();
+$executeSqlFile->invoke(null, $structuralTokenDatabase, $structuralTokenMigration);
+assertMigrationSame(
+    ["INSERT INTO sample (template) VALUES ('{{location_from}} {{marc_table}}')"],
+    $structuralTokenDatabase->executed,
+    'Migration SQL must execute raw so reviewed structural tokens are not rewritten as Yii table placeholders.'
+);
+@unlink($structuralTokenMigration);
 
 class MigrationServiceRetryTestTableSchema
 {
@@ -202,6 +222,13 @@ class MigrationServiceRetryTestCommand
         $this->database = $database;
         $this->sql = $sql;
         $this->params = $params;
+    }
+
+    public function setRawSql(string $sql): self
+    {
+        $this->sql = $sql;
+        $this->params = [];
+        return $this;
     }
 
     public function insert(string $table, array $row): self
@@ -408,6 +435,10 @@ $marcSeed = marcMigrationSeedDefinition($migrationDir . '/040_cataloging_marc_mi
 assertMigrationTrue(
     $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcSeed), '040_cataloging_marc_missing_tag_report.sql'),
     'Migration 040 must recognize the complete reviewed MARC report seed.'
+);
+assertMigrationTrue(
+    $marcMigrationAppearsApplied->invoke(null, new MarcMigrationRecognitionDatabase($marcSeed), '041_restore_cataloging_structural_tokens.sql'),
+    'Migration 041 must recognize a report whose structural tokens already match the reviewed contract.'
 );
 $normalizedParameterSeed = $marcSeed;
 $normalizedParameters = json_decode($normalizedParameterSeed['parameters'], true);
