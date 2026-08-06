@@ -126,6 +126,22 @@ namespace {
     marcCompilerAssertSame(['id' => '11111111-1111-4111-8111-111111111111', 'name' => 'Main Library', 'code' => 'MAIN'], $effective['location'], 'Location metadata must come from the FOLIO lookup.');
     marcCompilerAssertSame('856', $effective['marcTag'], 'The returned tag must be normalized.');
 
+    $distinctLocationId = '22222222-2222-4222-8222-222222222222';
+    $db->expectedLocationId = $distinctLocationId;
+    $db->location = ['name' => 'Science Library', 'code' => 'SCI'];
+    $distinctLocation = CatalogingMarcMissingTagReportService::build(
+        $report,
+        marcCompilerInputs(['locationId' => $distinctLocationId]),
+        $db
+    );
+    marcCompilerAssertSame(
+        ['id' => $distinctLocationId, 'name' => 'Science Library', 'code' => 'SCI'],
+        $distinctLocation['location'],
+        'The location lookup must bind the distinct valid location UUID supplied by the caller.'
+    );
+    $db->expectedLocationId = '11111111-1111-4111-8111-111111111111';
+    $db->location = ['name' => 'Main Library', 'code' => 'MAIN'];
+
     $permanentItem = CatalogingMarcMissingTagReportService::build($report, marcCompilerInputs(['locationBasis' => 'permanent_item']), $db);
     marcCompilerAssertContains('location.id = item.permanent_location_id', $permanentItem['sql'], 'Permanent-item scope must use permanent item location.');
 
