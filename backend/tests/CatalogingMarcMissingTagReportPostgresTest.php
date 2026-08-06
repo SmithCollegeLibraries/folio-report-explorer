@@ -137,6 +137,19 @@ namespace {
         return array_values(array_unique($tables));
     }
 
+    function marcPostgresPlanTouchesForbiddenSource(array $plan)
+    {
+        $nodes = [];
+        marcPostgresPlanNodes($plan, $nodes);
+        foreach ($nodes as $node) {
+            if (($node['Schema'] ?? null) === 'folio_source_record'
+                && ($node['Relation Name'] ?? null) === 'marctab') {
+                return true;
+            }
+        }
+        return false;
+    }
+
     function marcPostgresActiveLocations(\PDO $pdo)
     {
         $requested = trim((string)getenv('FOLIO_DB_TEST_LOCATION_IDS'));
@@ -144,6 +157,31 @@ namespace {
             $ids = array_values(array_unique(array_filter(array_map('trim', explode(',', $requested)))));
             if (count($ids) === 0) {
                 marcPostgresFail('FOLIO_DB_TEST_LOCATION_IDS did not contain a UUID.');
+            }
+
+            $placeholders = [];
+            $params = [];
+            foreach ($ids as $index => $id) {
+                if (preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iD', $id) !== 1) {
+                    marcPostgresFail("FOLIO_DB_TEST_LOCATION_IDS contains an invalid UUID: {$id}");
+                }
+                $placeholder = ':requested_location_' . $index;
+                $placeholders[] = $placeholder;
+                $params[$placeholder] = $id;
+            }
+            $statement = $pdo->prepare(
+                'SELECT id::text FROM inventory.location__t'
+                . ' WHERE COALESCE(is_active, true)'
+                . ' AND id IN (' . implode(', ', $placeholders) . ')'
+            );
+            $statement->execute($params);
+            $activeIds = $statement->fetchAll(\PDO::FETCH_COLUMN);
+            $missingOrInactive = array_values(array_diff($ids, $activeIds));
+            if ($missingOrInactive !== []) {
+                marcPostgresFail(
+                    'FOLIO_DB_TEST_LOCATION_IDS contains a missing or inactive location: '
+                    . implode(', ', $missingOrInactive)
+                );
             }
             return $ids;
         }
@@ -189,6 +227,20 @@ SQL;
         );
         $statement->execute([':table_name' => $tableName]);
         return $statement->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
+    if (getenv('CATALOGING_MARC_PG_TEST_SELF_CHECK') === '1') {
+        $forbiddenPlan = [
+            'Plans' => [[
+                'Schema' => 'folio_source_record',
+                'Relation Name' => 'marctab',
+            ]],
+        ];
+        if (!marcPostgresPlanTouchesForbiddenSource($forbiddenPlan)) {
+            marcPostgresFail('Plan guard must reject a folio_source_record.marctab node represented by PostgreSQL JSON fields.');
+        }
+        fwrite(STDOUT, "Cataloging MARC missing-tag PostgreSQL plan guard self-check passed.\n");
+        exit(0);
     }
 
     $host = marcPostgresSetting('pg_host', 'FOLIO_PG_HOST', '');
@@ -243,7 +295,10 @@ SQL;
                     if ($touchedTables !== [$expectedTable]) {
                         marcPostgresFail("{$basis}/{$tag} touched unexpected MARC tables: " . json_encode($touchedTables));
                     }
-                    if (strpos(json_encode($planDocument), 'folio_source_record.marctab') !== false) {
+                    if (stripos($compiled['sql'], 'folio_source_record.marctab') !== false) {
+                        marcPostgresFail("{$basis}/{$tag} compiled SQL referenced the forbidden combined MARC view.");
+                    }
+                    if (marcPostgresPlanTouchesForbiddenSource($plan)) {
                         marcPostgresFail("{$basis}/{$tag} plan touched the forbidden combined MARC view.");
                     }
                     if ($actualRows < 0 || $actualRows > CatalogingMarcMissingTagReportService::FETCH_ROW_LIMIT) {

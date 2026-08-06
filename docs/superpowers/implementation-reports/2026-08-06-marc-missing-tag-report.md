@@ -27,7 +27,7 @@
 | Docker first `migration/run` | Not run — audit reported changed applied checksums; applying migrations with checksum drift is unsafe. |
 | Docker second `migration/run` | Not run — the first run was intentionally not attempted after the failed audit. |
 | Live MySQL migration 040 / seed state | Not run — the Docker audit checksum-drift gate blocks migration execution. |
-| Required static-contract scan | The plan-specified scan found the UUID anti-join at line `74` and `LIMIT 100001` at line `79`. Its `instance.source = .MARC.` arm does not match the MySQL string-literal source because the stored PostgreSQL SQL correctly escapes it as `instance.source = ''MARC''`; the escaped-literal scan below confirms that predicate. |
+| Required static-contract scan | The plan-specified scan found the UUID anti-join at line `74` and `LIMIT 100001` at line `79`. Its `instance.source = .MARC.` arm does not match the MySQL string-literal source because the stored PostgreSQL SQL escapes it as `instance.source = ''MARC''`; the passing offline migration-contract test covers that exact stored predicate. |
 
 ## Query Plans by Location Basis and Tag
 
