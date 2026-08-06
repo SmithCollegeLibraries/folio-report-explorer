@@ -281,6 +281,8 @@ namespace {
         'different MARC relation' => preg_replace('/marctab\.mt035/', 'marctab.mt245', $compiled['sql'], 1),
         'forbidden union view' => $compiled['sql'] . ' /* folio_source_record.marctab */',
         'wrong sentinel limit' => str_replace('LIMIT 100001', 'LIMIT 100000', $compiled['sql']),
+        'extra nonnumeric limit' => $compiled['sql'] . "\nLIMIT :extra",
+        'comment-decoy MARC relation' => preg_replace('/marctab\.mt035/', 'inventory.instance__t', $compiled['sql'], 1) . ' /* marctab.mt035 */',
     ] as $label => $invalidSql) {
         finderCompilerInvalid(
             function () use ($compiledValidator, $invalidSql) {

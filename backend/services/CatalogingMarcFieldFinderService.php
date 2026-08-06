@@ -335,24 +335,16 @@ final class CatalogingMarcFieldFinderService
             }
         }
 
-        preg_match_all('/\bmarctab\.[a-z_][a-z0-9_$-]*\b/i', $sql, $matches);
-        $physicalTables = array_map('strtolower', $matches[0] ?? []);
+        $tokens = SqlSelectStructureService::tokenizeForAnalysis($sql);
+        $physicalTables = self::resolvedMarcTableReferences($tokens);
         if (count($physicalTables) !== 2
             || count(array_unique($physicalTables)) !== 1
             || $physicalTables[0] !== strtolower($marcTable)) {
             throw new \InvalidArgumentException('Compiled SQL must reference exactly two copies of the selected MARC table.');
         }
 
-        $references = SqlSelectStructureService::extractTableReferences($sql);
-        foreach ($references as $reference) {
-            if (strpos($reference, 'marctab.') === 0 && $reference !== strtolower($marcTable)) {
-                throw new \InvalidArgumentException('Compiled SQL contains an unselected MARC physical table.');
-            }
-        }
-
-        $tokens = SqlSelectStructureService::tokenizeForAnalysis($sql);
         $topLevelOrderByCount = 0;
-        $topLevelNumericLimits = [];
+        $topLevelLimits = [];
         foreach ($tokens as $index => $token) {
             if (($token['depth'] ?? -1) !== 0) {
                 continue;
@@ -363,19 +355,43 @@ final class CatalogingMarcFieldFinderService
                 && self::isKeyword($tokens[$index + 1], 'BY')) {
                 $topLevelOrderByCount++;
             }
-            if (self::isKeyword($token, 'LIMIT')
-                && isset($tokens[$index + 1])
-                && ($tokens[$index + 1]['depth'] ?? -1) === 0
-                && ($tokens[$index + 1]['kind'] ?? '') === 'number') {
-                $topLevelNumericLimits[] = (string) $tokens[$index + 1]['value'];
+            if (self::isKeyword($token, 'LIMIT')) {
+                $topLevelLimits[] = $index;
             }
         }
         if ($topLevelOrderByCount !== 1) {
             throw new \InvalidArgumentException('Compiled SQL must contain exactly one top-level ORDER BY clause.');
         }
-        if ($topLevelNumericLimits !== [(string) self::FETCH_ROW_LIMIT]) {
+        if (count($topLevelLimits) !== 1) {
             throw new \InvalidArgumentException('Compiled SQL must contain exactly one top-level LIMIT 100001 clause.');
         }
+        $limitToken = $tokens[$topLevelLimits[0] + 1] ?? null;
+        if (($limitToken['depth'] ?? -1) !== 0
+            || ($limitToken['kind'] ?? '') !== 'number'
+            || (string) ($limitToken['value'] ?? '') !== (string) self::FETCH_ROW_LIMIT) {
+            throw new \InvalidArgumentException('Compiled SQL must contain exactly one top-level LIMIT 100001 clause.');
+        }
+    }
+
+    private static function resolvedMarcTableReferences(array $tokens): array
+    {
+        $references = [];
+        foreach ($tokens as $index => $token) {
+            if (!self::isKeyword($token, 'FROM') && !self::isKeyword($token, 'JOIN')) {
+                continue;
+            }
+            $schema = $tokens[$index + 1] ?? null;
+            $separator = $tokens[$index + 2] ?? null;
+            $table = $tokens[$index + 3] ?? null;
+            if (($schema['kind'] ?? '') !== 'identifier'
+                || strtolower((string) ($schema['value'] ?? '')) !== 'marctab'
+                || ($separator['value'] ?? '') !== '.'
+                || ($table['kind'] ?? '') !== 'identifier') {
+                continue;
+            }
+            $references[] = 'marctab.' . strtolower((string) $table['value']);
+        }
+        return $references;
     }
 
     private static function isKeyword(array $token, string $keyword): bool
