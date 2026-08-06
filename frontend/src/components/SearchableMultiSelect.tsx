@@ -6,6 +6,21 @@ interface SelectOption {
   label: string;
 }
 
+interface SearchableMultiSelectProps {
+  id: string;
+  label: string;
+  value: string;
+  options: SelectOption[];
+  placeholder?: string;
+  maxSelections?: number;
+  onChange: (value: string) => void;
+}
+
+function selectionCountLabel(count: number, singularLabel: string): string {
+  if (count === 0) return `No ${singularLabel}s selected`;
+  return `${count} ${singularLabel}${count === 1 ? '' : 's'} selected`;
+}
+
 export default function SearchableMultiSelect({
   id,
   label,
@@ -14,15 +29,7 @@ export default function SearchableMultiSelect({
   placeholder = 'Search options',
   maxSelections = 100,
   onChange,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  options: SelectOption[];
-  placeholder?: string;
-  maxSelections?: number;
-  onChange: (value: string) => void;
-}) {
+}: SearchableMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const selectedValues = useMemo(
@@ -41,6 +48,7 @@ export default function SearchableMultiSelect({
   }, [options, search]);
   const atLimit = selectedValues.length >= maxSelections;
   const listboxId = `${id}-options`;
+  const singularLabel = label.replace(/s$/i, '').toLocaleLowerCase();
 
   const emit = (next: string[]) => onChange(next.join(','));
   const toggleOption = (optionValue: string) => {
@@ -51,9 +59,7 @@ export default function SearchableMultiSelect({
     if (!atLimit) emit([...selectedValues, optionValue]);
   };
 
-  const countLabel = selectedValues.length === 0
-    ? 'No locations selected'
-    : `${selectedValues.length} ${selectedValues.length === 1 ? 'location' : 'locations'} selected`;
+  const countLabel = selectionCountLabel(selectedValues.length, singularLabel);
 
   return (
     <div className="relative" onKeyDown={(event) => {
@@ -162,7 +168,7 @@ export default function SearchableMultiSelect({
 
           {atLimit && (
             <p className="mt-2 text-xs font-medium text-amber-700">
-              Maximum of {maxSelections} {maxSelections === 1 ? 'location' : 'locations'} selected.
+              Maximum of {maxSelections} {singularLabel}{maxSelections === 1 ? '' : 's'} selected.
             </p>
           )}
         </div>
