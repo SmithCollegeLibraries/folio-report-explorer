@@ -26,6 +26,8 @@ use app\services\AskConfidenceClassificationService;
 use app\services\AskGenerationEvidenceService;
 use app\services\AskResponseContractService;
 use app\services\AskUserExplanationService;
+use app\services\CatalogingMarcMissingTagReportService;
+use app\services\ReportExecutionContractService;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -3707,6 +3709,16 @@ class FolioQueryController extends Controller
         $body = Yii::$app->request->getBodyParams();
         $userParams = $body['params'] ?? [];
         $outputMode = strtolower((string)($body['outputMode'] ?? 'table')) === 'file' ? 'file' : 'table';
+        $exportKind = $body['exportKind'] ?? 'worklist';
+
+        if (!is_string($exportKind) || !in_array($exportKind, ['worklist', 'identifier'], true)) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'Unsupported report export kind.'];
+        }
+        if ($exportKind === 'identifier' && !$report->hasIdentifierExport()) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'This report does not support identifier export.'];
+        }
 
         // Validate required params
         $paramDefs = $report->getDecodedParameters();
@@ -3725,16 +3737,38 @@ class FolioQueryController extends Controller
             return ['error' => 'Missing required parameters: ' . implode(', ', $missing)];
         }
 
-        // Bind params and get SQL
-        $bound = $report->bindParams($userParams);
-        $bound['sql'] = $this->normalizeLegacyReportSql($report, $bound['sql']);
+        $compiled = null;
+        if (CatalogingMarcMissingTagReportService::supports($report)) {
+            try {
+                $compiled = CatalogingMarcMissingTagReportService::build(
+                    $report,
+                    $userParams,
+                    Yii::$app->folioDb
+                );
+            } catch (\InvalidArgumentException $e) {
+                if ($this->isCatalogingReportIntegrityError($e)) {
+                    Yii::$app->response->statusCode = 422;
+                    return ['error' => $this->catalogingReportIntegrityMessage($e)];
+                }
+                Yii::$app->response->statusCode = 400;
+                return ['error' => $e->getMessage()];
+            } catch (\Throwable $e) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'The report could not be validated. Please try again or contact an administrator.'];
+            }
+            $bound = ['sql' => $compiled['sql'], 'params' => $compiled['params']];
+        } else {
+            $bound = $report->bindParams($userParams);
+            $bound['sql'] = $this->normalizeLegacyReportSql($report, $bound['sql']);
+        }
 
         // Safety validation
         try {
             SqlBuilderService::validateSafety($bound['sql']);
+            SqlBuilderService::validateTablePolicy($bound['sql']);
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
-            return ['error' => $e->getMessage()];
+            return ['error' => 'This query is blocked by reporting data policy.'];
         }
 
         // Determine data source from report template
@@ -3743,7 +3777,7 @@ class FolioQueryController extends Controller
             ? $rawDataSource
             : 'folio';
 
-        // For composite reports, attach the composite_config as job metadata
+        // For composite reports, attach the composite_config as job metadata.
         $metadata = null;
         if ($dataSource === 'composite') {
             $compositeConfig = $report->getCompositeConfig();
@@ -3758,6 +3792,59 @@ class FolioQueryController extends Controller
             ];
         }
 
+        $estimate = null;
+        $reportExecution = null;
+        if ($compiled !== null && $dataSource === 'folio' && $report->getExecutionConfig() !== null) {
+            try {
+                $reportExecution = ReportExecutionContractService::fromReport($report, [
+                    'exportKind' => $exportKind,
+                    'marcTag' => $compiled['marcTag'],
+                    'locationName' => $compiled['location']['name'],
+                    'locationCode' => $compiled['location']['code'],
+                ]);
+            } catch (\InvalidArgumentException $e) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'The report execution configuration is invalid. Please contact an administrator.'];
+            }
+
+            try {
+                $estimate = $this->estimateQueryComplexity($bound['sql'], 'folio', $bound['params']);
+            } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
+                return $this->buildDatabaseCancelledResponse();
+            } catch (\Throwable $exception) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Query validation failed before execution.'];
+            }
+            if (isset($estimate['error'])) {
+                $this->logPreflightValidationFailure(
+                    'api.report_run',
+                    (string) $estimate['error'],
+                    $dataSource,
+                    'report',
+                    $bound['sql']
+                );
+                Yii::$app->response->statusCode = 422;
+                return ['error' => 'Query validation failed before execution.'];
+            }
+            if ($estimate !== null) {
+                $thresholdRows = (int) (Yii::$app->params['exportRowThreshold'] ?? Yii::$app->params['maxQueryRows']);
+                $thresholdCost = (float) (Yii::$app->params['exportCostThreshold'] ?? 500000);
+                $estimatedRows = $estimate['rows'] ?? null;
+                $estimatedCost = $estimate['cost'] ?? null;
+                if (($estimatedRows !== null && $estimatedRows > $thresholdRows)
+                    || ($estimatedCost !== null && $estimatedCost > $thresholdCost)) {
+                    $outputMode = 'file';
+                }
+            }
+        }
+        if ($exportKind === 'identifier') {
+            $outputMode = 'file';
+        }
+        if ($reportExecution !== null) {
+            $metadata = is_array($metadata) ? $metadata : [];
+            $metadata[ReportExecutionContractService::METADATA_KEY] = $reportExecution;
+        }
+
         // Create async job
         $job = QueryJob::createJob($bound['sql'], $bound['params'], 'report', $dataSource, $metadata);
         $job->user_id = $this->getCurrentUserId();
@@ -3767,6 +3854,15 @@ class FolioQueryController extends Controller
         if ($outputMode === 'file') {
             $job->status = 'pending_export';
             $job->progress_message = 'Queued for CSV export';
+        }
+        if ($estimate !== null) {
+            if ($job->hasAttribute('estimated_rows')) {
+                $job->estimated_rows = $estimate['rows'] ?? null;
+            }
+            if ($job->hasAttribute('estimated_cost')) {
+                $cost = $estimate['cost'] ?? null;
+                $job->estimated_cost = $cost !== null ? min((float) $cost, 1.0e15) : null;
+            }
         }
         if (!$job->save()) {
             Yii::$app->response->statusCode = 500;
@@ -3785,6 +3881,21 @@ class FolioQueryController extends Controller
             'startedAt' => $job->started_at,
             'completedAt' => $job->completed_at,
         ];
+    }
+
+    private function isCatalogingReportIntegrityError(\InvalidArgumentException $exception): bool
+    {
+        $message = $exception->getMessage();
+        return strpos($message, 'Reporting schema is missing the expected MARC tag table') === 0
+            || $message === 'The selected location no longer exists.';
+    }
+
+    private function catalogingReportIntegrityMessage(\InvalidArgumentException $exception): string
+    {
+        if (strpos($exception->getMessage(), 'Reporting schema is missing the expected MARC tag table') === 0) {
+            return 'The selected MARC tag data is unavailable. Please contact an administrator.';
+        }
+        return 'The selected location is unavailable. Please choose another location.';
     }
 
     /**
