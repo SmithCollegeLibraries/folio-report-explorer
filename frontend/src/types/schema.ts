@@ -620,9 +620,15 @@ export interface ReportParam {
   options_sql?: string;
   input_mode?: 'numeric';
   pattern?: '[0-9]{3}';
-  max_length?: 3;
+  max_length?: number;
   max_selections?: number;
 }
+
+/** String values submitted by governed report parameter panels. */
+export type ReportParameterValues = Record<string, string>;
+
+/** Field-specific validation messages returned by governed report endpoints. */
+export type ReportFieldErrors = Record<string, string>;
 
 /** Report template summary (list view) */
 export interface ReportSummary {
