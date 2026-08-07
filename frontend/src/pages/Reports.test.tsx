@@ -504,7 +504,6 @@ describe('Reports', () => {
     vi.mocked(getReport).mockResolvedValue(buildFinderDetail());
     vi.mocked(runReport).mockReset();
     vi.mocked(runReport).mockResolvedValue({ jobId: 'job-export', status: 'pending', reportName: 'MARC Field, Indicator, and Content Finder', outputMode: 'file' });
-    // The full finder detail is supplied by the preceding finder workflow test and remains the same API contract.
     const entry = `/reports/9?rp.9.locationIds=${locationId}&rp.9.locationBasis=effective_item&rp.9.marcTag=035&rp.9.occurrenceCondition=has&rp.9.firstIndicator=any&rp.9.secondIndicator=any&rp.9.contentRule=contains&rp.9.searchValue=x&rp.9.caseExact=false`;
 
     render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[entry]}><Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes></MemoryRouter></QueryClientProvider>);
