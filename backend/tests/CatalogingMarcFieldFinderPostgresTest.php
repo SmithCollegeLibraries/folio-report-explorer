@@ -30,14 +30,6 @@ namespace {
         exit(0);
     }
 
-    if (getenv('RUN_FOLIO_DB_TESTS') !== '1') {
-        marcFinderPostgresSkip('Set RUN_FOLIO_DB_TESTS=1 to run live FOLIO PostgreSQL contract checks.');
-    }
-
-    if (!extension_loaded('pdo_pgsql')) {
-        marcFinderPostgresFail('RUN_FOLIO_DB_TESTS=1 requires the PDO PostgreSQL driver.');
-    }
-
     require_once __DIR__ . '/../services/SettingsService.php';
     require_once __DIR__ . '/../models/ReportTemplate.php';
     require_once __DIR__ . '/../services/SqlSelectStructureService.php';
@@ -175,6 +167,44 @@ namespace {
         return false;
     }
 
+    function marcFinderPostgresHasInstanceIdAccess(array $plan, $tableName)
+    {
+        $tableName = strtolower((string) $tableName);
+        foreach (marcFinderPostgresNodes($plan) as $node) {
+            if (strtolower((string) ($node['Schema'] ?? '')) !== 'marctab'
+                || strtolower((string) ($node['Relation Name'] ?? '')) !== $tableName) {
+                continue;
+            }
+            $indexName = strtolower((string) ($node['Index Name'] ?? ''));
+            $indexCond = strtolower((string) ($node['Index Cond'] ?? ''));
+            $recheckCond = strtolower((string) ($node['Recheck Cond'] ?? ''));
+            if (strpos($indexName, 'instance_id') !== false
+                || strpos($indexCond, 'instance_id') !== false
+                || strpos($recheckCond, 'instance_id') !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function marcFinderPostgresMarcPlanEvidence(array $plan)
+    {
+        $evidence = [];
+        foreach (marcFinderPostgresNodes($plan) as $node) {
+            if (($node['Schema'] ?? null) !== 'marctab') {
+                continue;
+            }
+            $evidence[] = [
+                'node_type' => $node['Node Type'] ?? null,
+                'relation_name' => $node['Relation Name'] ?? null,
+                'index_name' => $node['Index Name'] ?? null,
+                'index_cond' => $node['Index Cond'] ?? null,
+                'recheck_cond' => $node['Recheck Cond'] ?? null,
+            ];
+        }
+        return $evidence;
+    }
+
     function marcFinderPostgresHasMaterializedTargetScope(array $plan)
     {
         foreach (marcFinderPostgresNodes($plan) as $node) {
@@ -249,7 +279,7 @@ SQL;
 
     function marcFinderPostgresFetchPlan(\PDO $pdo, $sql, array $params)
     {
-        $statement = $pdo->prepare('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' . $sql);
+        $statement = $pdo->prepare('EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) ' . $sql);
         $statement->execute($params);
         $document = json_decode((string) $statement->fetchColumn(), true);
         if (!is_array($document) || !isset($document[0]['Plan']) || !is_array($document[0]['Plan'])) {
@@ -297,6 +327,70 @@ SQL;
             }
         }
         return $counts;
+    }
+
+    function marcFinderPostgresBlankEncodingExists(\PDO $pdo, array $locationIds, $basis, $encoding)
+    {
+        $locationColumn = $basis === 'permanent_item' ? 'item.permanent_location_id' : 'item.effective_location_id';
+        $indicatorPredicate = $encoding === 'backslash' ? "marc_row.ind1 = CHR(92)" : "marc_row.ind1 = ' '";
+        $sql = "WITH target_instances AS MATERIALIZED (\n"
+            . "SELECT instance.id AS instance_uuid\n"
+            . "FROM inventory.item__t item\n"
+            . "JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id\n"
+            . "JOIN inventory.instance__t instance ON instance.id = holdings.instance_id\n"
+            . "JOIN inventory.location__t location ON location.id = {$locationColumn}\n"
+            . "WHERE location.id = ANY(CAST(:location_ids AS uuid[])) AND instance.source = 'MARC'\n"
+            . "GROUP BY instance.id)\n"
+            . "SELECT 1 FROM target_instances\n"
+            . "JOIN marctab.mt035 marc_row ON marc_row.instance_id = target_instances.instance_uuid\n"
+            . "WHERE marc_row.ind2 = '9' AND marc_row.sf = 'a' AND {$indicatorPredicate}\nLIMIT 1";
+        $statement = $pdo->prepare($sql);
+        $statement->execute([':location_ids' => implode(',', $locationIds)]);
+        return $statement->fetchColumn() !== false;
+    }
+
+    if (getenv('RUN_FOLIO_DB_TESTS') !== '1') {
+        if (getenv('CATALOGING_MARC_FINDER_PG_TEST_SELF_CHECK') === '1') {
+            $validPlan = [
+                'Node Type' => 'Index Scan',
+                'Schema' => 'marctab',
+                'Relation Name' => 'mt245',
+                'Index Name' => 'mt245_instance_id_idx',
+                'Index Cond' => '(instance_id = target_instances.instance_uuid)',
+                'Plans' => [[
+                    'Node Type' => 'CTE Scan',
+                    'CTE Name' => 'target_instances',
+                ]],
+            ];
+            if (marcFinderPostgresTableNames($validPlan) !== ['marctab.mt245']) {
+                marcFinderPostgresFail('Plan guard self-check rejected the selected MARC relation.');
+            }
+            if (!marcFinderPostgresHasForbiddenSource([
+                'Node Type' => 'Seq Scan',
+                'Schema' => 'folio_source_record',
+                'Relation Name' => 'marctab',
+            ])) {
+                marcFinderPostgresFail('Plan guard self-check failed to reject folio_source_record.marctab.');
+            }
+            if (!marcFinderPostgresHasMaterializedTargetScope($validPlan)
+                || !marcFinderPostgresHasInstanceIdAccess($validPlan, 'mt245')) {
+                marcFinderPostgresFail('Plan guard self-check failed target materialization or instance_id access.');
+            }
+            if (!marcFinderPostgresHasMt245SeqScan([
+                'Node Type' => 'Seq Scan',
+                'Schema' => 'marctab',
+                'Relation Name' => 'mt245',
+            ])) {
+                marcFinderPostgresFail('Plan guard self-check failed to detect a sequential mt245 scan.');
+            }
+            fwrite(STDOUT, "Cataloging MARC finder PostgreSQL plan guard self-check passed.\n");
+            exit(0);
+        }
+        marcFinderPostgresSkip('Set RUN_FOLIO_DB_TESTS=1 to run live FOLIO PostgreSQL contract checks.');
+    }
+
+    if (!extension_loaded('pdo_pgsql')) {
+        marcFinderPostgresFail('RUN_FOLIO_DB_TESTS=1 requires the PDO PostgreSQL driver.');
     }
 
     $host = marcFinderPostgresSetting('pg_host', 'FOLIO_PG_HOST', '');
@@ -369,6 +463,13 @@ SQL;
                     if ($case['marcTag'] === '245' && marcFinderPostgresHasMt245SeqScan($plan)) {
                         marcFinderPostgresFail($case['name'] . '/' . $basis . ' used a sequential scan on marctab.mt245.');
                     }
+                    $instanceIdAccess = null;
+                    if ($case['marcTag'] === '245') {
+                        $instanceIdAccess = marcFinderPostgresHasInstanceIdAccess($plan, 'mt245');
+                        if (!$instanceIdAccess) {
+                            marcFinderPostgresFail($case['name'] . '/' . $basis . ' did not show an instance_id index or probe for marctab.mt245.');
+                        }
+                    }
                     $actualRows = (int) ($plan['Actual Rows'] ?? -1);
                     if ($actualRows < 0 || $actualRows > CatalogingMarcFieldFinderService::FETCH_ROW_LIMIT) {
                         marcFinderPostgresFail($case['name'] . '/' . $basis . " returned {$actualRows} rows, outside the 100001-row cap.");
@@ -378,11 +479,21 @@ SQL;
                         marcFinderPostgresFail($case['name'] . '/' . $basis . ' returned more than 100001 rows.');
                     }
                     $blankCounts = null;
+                    $blankEncodingProbes = null;
                     if ($case['name'] === 'mt035_blank_indicator') {
                         $blankCounts = marcFinderPostgresBlankCounts($pdo, $locationIds, $basis);
-                        if ($blankCounts['space'] > 0 && $blankCounts['backslash'] > 0
-                            && $returnedRows < $blankCounts['space'] + $blankCounts['backslash']) {
-                            marcFinderPostgresFail($case['name'] . '/' . $basis . ' omitted whitespace or backslash blank-indicator rows.');
+                        $blankEncodingProbes = [
+                            'space' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'space'),
+                            'backslash' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'backslash'),
+                        ];
+                        if ($blankCounts['space'] > 0 && $blankCounts['backslash'] > 0) {
+                            if ($returnedRows === 0 || !$blankEncodingProbes['space'] || !$blankEncodingProbes['backslash']) {
+                                marcFinderPostgresFail($case['name'] . '/' . $basis . ' did not independently verify whitespace and backslash blank-indicator matches.');
+                            }
+                            if ($blankCounts['space'] + $blankCounts['backslash'] <= CatalogingMarcFieldFinderService::FETCH_ROW_LIMIT
+                                && $returnedRows !== $blankCounts['space'] + $blankCounts['backslash']) {
+                                marcFinderPostgresFail($case['name'] . '/' . $basis . ' returned a capped row count different from the uncapped blank-indicator fixture.');
+                            }
                         }
                     }
                     $evidence = [
@@ -398,7 +509,10 @@ SQL;
                         'touched_tables' => $tables,
                         'target_instances_materialized' => true,
                         'mt245_seq_scan' => false,
+                        'marc_plan_nodes' => marcFinderPostgresMarcPlanEvidence($plan),
+                        'instance_id_access' => $instanceIdAccess,
                         'blank_indicator_counts' => $blankCounts,
+                        'blank_encoding_probes' => $blankEncodingProbes,
                     ];
                     fwrite(STDOUT, 'MARC_FINDER_PG_PLAN ' . json_encode($evidence, JSON_UNESCAPED_SLASHES) . "\n");
                     $checked++;

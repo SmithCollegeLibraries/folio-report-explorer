@@ -11,6 +11,7 @@ measured result.
 | --- | --- |
 | Repository baseline | `82c83b0` |
 | Offline PostgreSQL gate | PASS — `php backend/tests/CatalogingMarcFieldFinderPostgresTest.php` printed exactly `SKIP: Set RUN_FOLIO_DB_TESTS=1 to run live FOLIO PostgreSQL contract checks.` and exited 0. |
+| Offline plan-guard self-check | PASS — `CATALOGING_MARC_FINDER_PG_TEST_SELF_CHECK=1 php backend/tests/CatalogingMarcFieldFinderPostgresTest.php` exercised selected-table, forbidden-source, materialized-scope, `instance_id` access, and sequential-scan guards without a database. |
 | PHP syntax check | PASS — `php -l backend/tests/CatalogingMarcFieldFinderPostgresTest.php`. |
 | Opt-in live gate | Not run to PostgreSQL — `RUN_FOLIO_DB_TESTS=1` stopped before connection because local FOLIO PostgreSQL host, database, and user settings are unavailable. |
 | Docker migration audit/run | Not run in this task; no Docker migration evidence is available. |
@@ -21,7 +22,9 @@ measured result.
 
 When `RUN_FOLIO_DB_TESTS=1` is enabled, the test reads the configured FOLIO
 PostgreSQL connection, starts a read-only transaction, and applies the
-configured statement timeout (default `1,800,000 ms`). It selects the smallest
+configured statement timeout (default `1,800,000 ms`). Plans use
+`EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON)` so relation and index
+metadata are available for the fail-closed guards. It selects the smallest
 and largest active effective-item locations, unless
 `FOLIO_DB_TEST_LOCATION_IDS` supplies an explicit comma-separated active UUID
 set. For each selected set it exercises both `effective_item` and
@@ -37,12 +40,19 @@ The five live cases are:
 4. `mt100`, `has_lowercase` content rule; and
 5. `mt245`, literal `%`, `_`, quote, and backslash search text.
 
-Each plan fails closed if it touches a relation other than the selected
-`marctab.mtNNN`, references `folio_source_record.marctab` or
+Each plan fails closed if its MARC relations include anything other than the
+selected `marctab.mtNNN`; inventory scope relations (`inventory.item__t`,
+`inventory.holdings_record__t`, `inventory.instance__t`, and
+`inventory.location__t`) are expected and allowed. Plans also fail closed if
+they reference `folio_source_record.marctab` or
 `parsed_record__content`, does not expose the materialized `target_instances`
 scope, exceeds the `100001` fetch sentinel, or uses a sequential scan on
-`marctab.mt245`. The blank-indicator case also compares its returned rows with
-the scoped whitespace/backslash fixture when both encodings are present.
+`marctab.mt245`. Large `mt245` plans must expose an `instance_id` index
+condition or equivalent MARC access path; the emitted evidence includes the
+relevant MARC plan nodes and index conditions. The blank-indicator case probes
+whitespace and backslash encodings independently and only compares the total
+with the fixture when it is below the fetch sentinel, avoiding a false failure
+when the public cap truncates a larger fixture.
 
 ## Release decision
 
