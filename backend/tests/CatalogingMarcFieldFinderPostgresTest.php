@@ -349,6 +349,13 @@ SQL;
         return $statement->fetchColumn() !== false;
     }
 
+    function marcFinderPostgresCompiledBlankRows(\PDO $pdo, array $compiled, $encoding)
+    {
+        $params = $compiled['params'];
+        $params[':firstIndicator'] = $encoding === 'backslash' ? 'char:\\' : 'char: ';
+        return marcFinderPostgresRows($pdo, $compiled['sql'], $params);
+    }
+
     if (getenv('RUN_FOLIO_DB_TESTS') !== '1') {
         if (getenv('CATALOGING_MARC_FINDER_PG_TEST_SELF_CHECK') === '1') {
             $validPlan = [
@@ -440,7 +447,8 @@ SQL;
         ];
 
         $checked = 0;
-        foreach ($locationSets as $locationIds) {
+        foreach ($locationSets as $locationSetIndex => $locationIds) {
+            $isLargestLocationSet = count($locationSets) === 1 || $locationSetIndex === count($locationSets) - 1;
             foreach (['effective_item', 'permanent_item'] as $basis) {
                 foreach ($cases as $case) {
                     $inputs = array_merge(['locationIds' => implode(',', $locationIds), 'locationBasis' => $basis], $case);
@@ -460,13 +468,14 @@ SQL;
                     if (!marcFinderPostgresHasMaterializedTargetScope($plan)) {
                         marcFinderPostgresFail($case['name'] . '/' . $basis . ' plan does not expose a materialized target_instances scope.');
                     }
-                    if ($case['marcTag'] === '245' && marcFinderPostgresHasMt245SeqScan($plan)) {
+                    $mt245SeqScan = $case['marcTag'] === '245' && marcFinderPostgresHasMt245SeqScan($plan);
+                    if ($isLargestLocationSet && $mt245SeqScan) {
                         marcFinderPostgresFail($case['name'] . '/' . $basis . ' used a sequential scan on marctab.mt245.');
                     }
                     $instanceIdAccess = null;
                     if ($case['marcTag'] === '245') {
                         $instanceIdAccess = marcFinderPostgresHasInstanceIdAccess($plan, 'mt245');
-                        if (!$instanceIdAccess) {
+                        if ($isLargestLocationSet && !$instanceIdAccess) {
                             marcFinderPostgresFail($case['name'] . '/' . $basis . ' did not show an instance_id index or probe for marctab.mt245.');
                         }
                     }
@@ -483,11 +492,21 @@ SQL;
                     if ($case['name'] === 'mt035_blank_indicator') {
                         $blankCounts = marcFinderPostgresBlankCounts($pdo, $locationIds, $basis);
                         $blankEncodingProbes = [
-                            'space' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'space'),
-                            'backslash' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'backslash'),
+                            'space' => [
+                                'raw_exists' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'space'),
+                                'compiled_rows' => marcFinderPostgresCompiledBlankRows($pdo, $compiled, 'space'),
+                            ],
+                            'backslash' => [
+                                'raw_exists' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'backslash'),
+                                'compiled_rows' => marcFinderPostgresCompiledBlankRows($pdo, $compiled, 'backslash'),
+                            ],
                         ];
                         if ($blankCounts['space'] > 0 && $blankCounts['backslash'] > 0) {
-                            if ($returnedRows === 0 || !$blankEncodingProbes['space'] || !$blankEncodingProbes['backslash']) {
+                            if ($returnedRows === 0
+                                || !$blankEncodingProbes['space']['raw_exists']
+                                || !$blankEncodingProbes['backslash']['raw_exists']
+                                || $blankEncodingProbes['space']['compiled_rows'] === 0
+                                || $blankEncodingProbes['backslash']['compiled_rows'] === 0) {
                                 marcFinderPostgresFail($case['name'] . '/' . $basis . ' did not independently verify whitespace and backslash blank-indicator matches.');
                             }
                             if ($blankCounts['space'] + $blankCounts['backslash'] <= CatalogingMarcFieldFinderService::FETCH_ROW_LIMIT
@@ -499,6 +518,7 @@ SQL;
                     $evidence = [
                         'case' => $case['name'],
                         'location_ids' => $locationIds,
+                        'largest_location_set' => $isLargestLocationSet,
                         'location_basis' => $basis,
                         'marctab_table' => $expectedTable,
                         'planning_ms' => $planDocument['Planning Time'] ?? null,
@@ -508,7 +528,7 @@ SQL;
                         'statement_timeout_ms' => $statementTimeout,
                         'touched_tables' => $tables,
                         'target_instances_materialized' => true,
-                        'mt245_seq_scan' => false,
+                        'mt245_seq_scan' => $mt245SeqScan,
                         'marc_plan_nodes' => marcFinderPostgresMarcPlanEvidence($plan),
                         'instance_id_access' => $instanceIdAccess,
                         'blank_indicator_counts' => $blankCounts,

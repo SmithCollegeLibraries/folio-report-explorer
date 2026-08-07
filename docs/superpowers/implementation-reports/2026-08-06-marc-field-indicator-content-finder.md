@@ -50,9 +50,10 @@ scope, exceeds the `100001` fetch sentinel, or uses a sequential scan on
 `marctab.mt245`. Large `mt245` plans must expose an `instance_id` index
 condition or equivalent MARC access path; the emitted evidence includes the
 relevant MARC plan nodes and index conditions. The blank-indicator case probes
-whitespace and backslash encodings independently and only compares the total
-with the fixture when it is below the fetch sentinel, avoiding a false failure
-when the public cap truncates a larger fixture.
+whitespace and backslash encodings independently using both raw fixture probes
+and the compiled query with per-encoding indicator bindings. It only compares
+the total with the fixture when it is below the fetch sentinel, avoiding a
+false failure when the public cap truncates a larger fixture.
 
 ## Release decision
 
