@@ -171,16 +171,16 @@ namespace {
     {
         $tableName = strtolower((string) $tableName);
         foreach (marcFinderPostgresNodes($plan) as $node) {
-            if (strtolower((string) ($node['Schema'] ?? '')) !== 'marctab'
-                || strtolower((string) ($node['Relation Name'] ?? '')) !== $tableName) {
-                continue;
-            }
             $indexName = strtolower((string) ($node['Index Name'] ?? ''));
             $indexCond = strtolower((string) ($node['Index Cond'] ?? ''));
             $recheckCond = strtolower((string) ($node['Recheck Cond'] ?? ''));
-            if (strpos($indexName, 'instance_id') !== false
-                || strpos($indexCond, 'instance_id') !== false
-                || strpos($recheckCond, 'instance_id') !== false) {
+            $relationMatches = strtolower((string) ($node['Schema'] ?? '')) === 'marctab'
+                && strtolower((string) ($node['Relation Name'] ?? '')) === $tableName;
+            $indexNamesSelectedTable = strpos($indexName, $tableName) !== false;
+            if (($relationMatches || $indexNamesSelectedTable)
+                && (strpos($indexName, 'instance_id') !== false
+                    || strpos($indexCond, 'instance_id') !== false
+                    || strpos($recheckCond, 'instance_id') !== false)) {
                 return true;
             }
         }
