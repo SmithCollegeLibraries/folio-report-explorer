@@ -124,11 +124,10 @@ final class CatalogingMarcFieldFinderService
             throw new \InvalidArgumentException("Reporting schema is missing the expected MARC tag table {$marcTable}.");
         }
 
-        try {
-            $resolvedScope = CatalogingMarcLocationScopeService::resolveLocations($scope, $folioDb);
-        } catch (\InvalidArgumentException $exception) {
-            throw new ReportParameterValidationException('locationIds', $exception->getMessage());
-        }
+        // A syntactically valid but deleted location is an integrity failure,
+        // not a user-editable parameter error. Let the controller preserve its
+        // existing safe 422 response for this case.
+        $resolvedScope = CatalogingMarcLocationScopeService::resolveLocations($scope, $folioDb);
 
         $normalizedInputs = [
             'locationIds' => implode(',', $scope['locationIds']),

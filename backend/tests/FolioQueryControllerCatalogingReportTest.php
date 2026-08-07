@@ -302,6 +302,8 @@ namespace {
     catalogingAssertSame(1, count(\app\services\CatalogingMarcFieldFinderService::$buildCalls), 'The dispatcher must invoke the finder compiler.');
     catalogingAssertSame(1, count(\app\services\SqlBuilderService::$safetyCalls), 'Finder SQL must receive safety validation.');
     catalogingAssertSame(1, count(\app\services\SqlBuilderService::$policyCalls), 'Finder SQL must receive table-policy validation.');
+    catalogingAssertSame(1, count(\app\services\SqlPreflightService::$calls), 'Finder SQL must receive preflight validation.');
+    catalogingAssertSame('marc-field-indicator-content-finder', catalogingLastJob()->metadata['reportExecution']['reportSlug'] ?? null, 'Finder execution metadata must be persisted.');
 
     resetCatalogingState();
     \app\models\ReportTemplate::$report = finderReport();
@@ -310,8 +312,19 @@ namespace {
     Yii::$app->response->statusCode = 200;
     $fieldError = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
     catalogingAssertSame(400, Yii::$app->response->statusCode, 'Finder parameter errors use HTTP 400.');
+    catalogingAssertSame('Report parameters are invalid.', $fieldError['error'] ?? null, 'Finder parameter errors use the stable top-level error.');
     catalogingAssertSame(['marcTag' => 'MARC tag must be exactly three ASCII digits from 001 through 999.'], $fieldError['fieldErrors'] ?? null, 'Finder parameter errors identify the invalid field.');
     catalogingAssertSame(0, count(\app\models\QueryJob::$created), 'Invalid finder parameters must not create jobs.');
+
+    resetCatalogingState();
+    \app\models\ReportTemplate::$report = finderReport();
+    \app\services\CatalogingMarcFieldFinderService::$buildException = new \InvalidArgumentException('A selected location no longer exists.');
+    Yii::$app->request->body = ['params' => validFinderParams()];
+    Yii::$app->response->statusCode = 200;
+    $missingFinderLocation = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    catalogingAssertSame(422, Yii::$app->response->statusCode, 'Finder missing locations must retain the safe integrity status.');
+    catalogingAssertSame('A selected location is unavailable. Please update the selection.', $missingFinderLocation['error'] ?? null, 'Finder missing locations must not become field validation errors.');
+    catalogingAssertSame(0, count(\app\models\QueryJob::$created), 'Finder integrity failures must not create jobs.');
 
     $invalidKind = runCatalogingReport(['params' => validCatalogingParams(), 'exportKind' => 'other']);
     catalogingAssertSame(400, Yii::$app->response->statusCode, 'Unknown export kinds must be rejected.');
