@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { getReport, runReport } from '../api/client';
+import { extractReportFieldErrors, getReport, runReport } from '../api/client';
 import ResultsTable from '../components/ResultsTable';
 import SqlPreview from '../components/SqlPreview';
 import ParamInput from '../components/ParamInput';
+import MarcFieldFinderParameters from '../components/MarcFieldFinderParameters';
 import ReportHelp from '../components/ReportHelp';
 import { useJobPolling } from '../hooks/useJobPolling';
 import {
@@ -26,6 +27,7 @@ import {
   writeReportParamsToSearch,
 } from '../utils/reports';
 import type { ReportExportKind } from '../types';
+import { MARC_FIELD_FINDER_SLUG, evaluateMarcFieldFinder } from '../utils/marcFieldFinder';
 
 export default function ReportDetail() {
   const navigate = useNavigate();
@@ -39,6 +41,7 @@ export default function ReportDetail() {
   const [areParamsCollapsed, setAreParamsCollapsed] = useState(false);
   const [paramsReady, setParamsReady] = useState(false);
   const [lastRunParams, setLastRunParams] = useState<Record<string, string> | null>(null);
+  const [serverFieldErrors, setServerFieldErrors] = useState<Record<string, string>>({});
   const hydratedFromUrlRef = useRef(false);
   const autoRunTriggeredRef = useRef(false);
 
@@ -69,6 +72,7 @@ export default function ReportDetail() {
     setAreParamsCollapsed(false);
     setParamsReady(false);
     setLastRunParams(null);
+    setServerFieldErrors({});
     setActiveJobId(null);
     resetJob();
   }, [reportId, resetJob]);
@@ -108,8 +112,15 @@ export default function ReportDetail() {
     });
   }, [paramValues, report]);
 
+  const isMarcFieldFinder = report?.slug === MARC_FIELD_FINDER_SLUG;
+  const finderEvaluation = useMemo(
+    () => (isMarcFieldFinder ? evaluateMarcFieldFinder(paramValues) : null),
+    [isMarcFieldFinder, paramValues],
+  );
+
   const updateParamValue = useCallback(
     (name: string, value: string) => {
+      setServerFieldErrors({});
       setParamValues((previous) => {
         const next = { ...previous, [name]: value };
         setSearchParams(writeReportParamsToSearch(reportId, next, searchParams), { replace: true });
@@ -130,10 +141,16 @@ export default function ReportDetail() {
       exportKind?: ReportExportKind;
     }) => runReport(reportId, params, { outputMode, exportKind }),
     onSuccess: (data, variables) => {
+      setServerFieldErrors({});
       setActiveJobId(data.jobId);
       setLastRunParams({ ...variables.params });
     },
   });
+
+  useEffect(() => {
+    if (!runMut.isError) return;
+    setServerFieldErrors(extractReportFieldErrors(runMut.error));
+  }, [runMut.error, runMut.isError]);
 
   const handleRun = useCallback(
     (outputMode: 'table' | 'file', exportKind?: ReportExportKind) => {
@@ -144,19 +161,23 @@ export default function ReportDetail() {
     [paramValues, resetJob, runMut],
   );
 
+  const canSubmit = paramsReady
+    && hasRequiredParams
+    && (!isMarcFieldFinder || finderEvaluation?.valid === true);
+
   useEffect(() => {
     if (searchParams.get('autorun') !== String(reportId) || autoRunTriggeredRef.current) {
       return;
     }
 
-    if (!paramsReady || !hasRequiredParams) {
+    if (!paramsReady || !canSubmit) {
       return;
     }
 
     autoRunTriggeredRef.current = true;
     clearAutorunMarker();
     handleRun('table');
-  }, [clearAutorunMarker, handleRun, hasRequiredParams, paramsReady, reportId, searchParams]);
+  }, [canSubmit, clearAutorunMarker, handleRun, paramsReady, reportId, searchParams]);
 
   const handleMaterialTypeDrilldown = useCallback(
     (materialType: string) => {
@@ -289,15 +310,25 @@ export default function ReportDetail() {
                       id="report-parameters-panel"
                       className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
                     >
-                      {report.parameters.map((parameter) => (
-                        <ParamInput
-                          key={parameter.name}
-                          param={parameter}
-                          value={paramValues[parameter.name] || ''}
-                          options={report.selectOptions?.[parameter.name]}
-                          onChange={(value) => updateParamValue(parameter.name, value)}
+                      {isMarcFieldFinder ? (
+                        <MarcFieldFinderParameters
+                          values={paramValues}
+                          parameters={report.parameters}
+                          selectOptions={report.selectOptions}
+                          serverFieldErrors={serverFieldErrors}
+                          onChange={updateParamValue}
                         />
-                      ))}
+                      ) : (
+                        report.parameters.map((parameter) => (
+                          <ParamInput
+                            key={parameter.name}
+                            param={parameter}
+                            value={paramValues[parameter.name] || ''}
+                            options={report.selectOptions?.[parameter.name]}
+                            onChange={(value) => updateParamValue(parameter.name, value)}
+                          />
+                        ))
+                      )}
                     </div>
                   )}
                 </section>
@@ -308,7 +339,7 @@ export default function ReportDetail() {
                   <>
                     <button
                       onClick={() => handleRun('table')}
-                      disabled={runMut.isPending || !paramsReady || !hasRequiredParams}
+                      disabled={runMut.isPending || !canSubmit}
                       className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-700 disabled:opacity-50"
                     >
                       {runMut.isPending ? (
@@ -320,7 +351,7 @@ export default function ReportDetail() {
                     </button>
                     <button
                       onClick={() => handleRun('file', 'worklist')}
-                      disabled={runMut.isPending || !paramsReady || !hasRequiredParams}
+                      disabled={runMut.isPending || !canSubmit}
                       className="flex items-center gap-2 rounded-xl border border-green-300 px-4 py-2.5 text-sm font-medium text-green-700 transition-colors hover:bg-green-50 disabled:opacity-50"
                     >
                       {runMut.isPending ? (
@@ -333,7 +364,7 @@ export default function ReportDetail() {
                     {report.identifierExportAvailable && (
                       <button
                         onClick={() => handleRun('file', 'identifier')}
-                        disabled={runMut.isPending || !paramsReady || !hasRequiredParams}
+                        disabled={runMut.isPending || !canSubmit}
                         className="flex items-center gap-2 rounded-xl border border-green-300 px-4 py-2.5 text-sm font-medium text-green-700 transition-colors hover:bg-green-50 disabled:opacity-50"
                       >
                         {runMut.isPending ? (
@@ -395,7 +426,12 @@ export default function ReportDetail() {
 
               {runMut.isError && (
                 <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                  Submit error: {String(runMut.error)}
+                  Submit error: {(() => {
+                    const error = runMut.error as { response?: { data?: { error?: unknown } } } | null;
+                    return typeof error?.response?.data?.error === 'string'
+                      ? error.response.data.error
+                      : 'The report could not be submitted. Please review the parameters and try again.';
+                  })()}
                 </div>
               )}
               {jobError && (

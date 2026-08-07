@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import ReportDetail from './ReportDetail';
 import Reports from './Reports';
 
@@ -49,6 +50,17 @@ vi.mock('../api/client', async () => {
           createdBy: 'manual',
           createdAt: '2026-08-06T00:00:00Z',
         },
+        {
+          id: 9,
+          slug: 'marc-field-indicator-content-finder',
+          name: 'MARC Field, Indicator, and Content Finder',
+          description: 'Finds present or missing MARC field rows by location and content.',
+          category: 'cataloging',
+          parameterCount: 10,
+          defaultLimit: 100000,
+          createdBy: 'manual',
+          createdAt: '2026-08-06T00:00:00Z',
+        },
       ],
     }),
     deleteReport: vi.fn(),
@@ -85,6 +97,7 @@ describe('Reports', () => {
     expect(await screen.findByRole('heading', { name: 'Acquisitions' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Cataloging' })).toBeInTheDocument();
+    expect(screen.getByText('MARC Field, Indicator, and Content Finder')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^All$/i })).not.toBeInTheDocument();
   });
 
@@ -323,5 +336,124 @@ describe('Reports', () => {
 
     expect(await screen.findByRole('button', { name: 'Run Report' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Export FOLIO UUID list' })).not.toBeInTheDocument();
+  });
+
+  it('uses the specialized MARC finder panel, validates before submit, and preserves string params', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getReport, runReport } = await import('../api/client');
+    const locationId = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(getReport).mockResolvedValue({
+      id: 9,
+      slug: 'marc-field-indicator-content-finder',
+      name: 'MARC Field, Indicator, and Content Finder',
+      description: 'Finds present or missing MARC field rows.',
+      category: 'cataloging',
+      sqlTemplate: 'select 1',
+      parameters: [
+        { name: 'locationIds', type: 'multiselect', label: 'Locations', required: true, default: '', resolvedDefault: '', max_selections: 100 },
+        { name: 'locationBasis', type: 'select', label: 'Location basis', required: true, default: 'effective_item', resolvedDefault: 'effective_item' },
+        { name: 'marcTag', type: 'text', label: 'MARC tag', required: true, default: '', resolvedDefault: '' },
+        { name: 'occurrenceCondition', type: 'select', label: 'Occurrence condition', required: true, default: 'has', resolvedDefault: 'has' },
+        { name: 'firstIndicator', type: 'select', label: 'First indicator', required: true, default: 'any', resolvedDefault: 'any' },
+        { name: 'secondIndicator', type: 'select', label: 'Second indicator', required: true, default: 'any', resolvedDefault: 'any' },
+        { name: 'subfieldCode', type: 'text', label: 'Subfield code', required: false, default: '', resolvedDefault: '' },
+        { name: 'contentRule', type: 'select', label: 'Content rule', required: true, default: 'any', resolvedDefault: 'any' },
+        { name: 'searchValue', type: 'text', label: 'Search text', required: false, default: '', resolvedDefault: '' },
+        { name: 'caseExact', type: 'select', label: 'Case matching', required: true, default: 'false', resolvedDefault: 'false' },
+      ],
+      defaultLimit: 100000,
+      isActive: true,
+      createdBy: 'manual',
+      createdAt: '2026-08-06T00:00:00Z',
+      updatedAt: '2026-08-06T00:00:00Z',
+      selectOptions: {
+        locationIds: [{ value: locationId, label: 'Smith — SC Internet [SCINT]' }],
+        locationBasis: [{ value: 'effective_item', label: 'Effective item' }, { value: 'permanent_item', label: 'Permanent item' }],
+        occurrenceCondition: [{ value: 'has', label: 'Has matching occurrence' }, { value: 'missing', label: 'Missing matching occurrence' }],
+        contentRule: [{ value: 'any', label: 'Any' }, { value: 'contains', label: 'Contains' }],
+        caseExact: [{ value: 'false', label: 'Case-insensitive' }, { value: 'true', label: 'Case-exact' }],
+      },
+      identifierExportAvailable: true,
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/reports/9']}>
+          <Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    const run = await screen.findByRole('button', { name: 'Run Report' });
+    expect(run).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Export FOLIO UUID list' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select locations' }));
+    fireEvent.click(screen.getByRole('option', { name: /Smith — SC Internet/ }));
+    fireEvent.change(screen.getByLabelText(/MARC tag/), { target: { value: '035' } });
+    expect(screen.getByLabelText('MARC finder interpretation')).toHaveTextContent('tag 035');
+    fireEvent.change(screen.getByLabelText(/Content rule/), { target: { value: 'contains' } });
+    fireEvent.change(screen.getByLabelText('Search text'), { target: { value: '(SCTFEBA)' } });
+    fireEvent.change(screen.getByLabelText(/Case matching/), { target: { value: 'true' } });
+    expect(run).not.toBeDisabled();
+
+    vi.mocked(runReport).mockResolvedValueOnce({ jobId: 'job-9', status: 'pending', reportName: 'MARC Field, Indicator, and Content Finder', outputMode: 'file' });
+    fireEvent.click(run);
+    await waitFor(() => expect(runReport).toHaveBeenCalledWith(9, {
+      locationIds: locationId,
+      locationBasis: 'effective_item',
+      marcTag: '035',
+      occurrenceCondition: 'has',
+      firstIndicator: 'any',
+      secondIndicator: 'any',
+      subfieldCode: '',
+      contentRule: 'contains',
+      searchValue: '(SCTFEBA)',
+      caseExact: 'true',
+    }, { outputMode: 'table' }));
+  });
+
+  it('places API field errors beside finder controls and clears them on edit', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { getReport, runReport } = await import('../api/client');
+    const locationId = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(getReport).mockResolvedValue({
+      id: 9, slug: 'marc-field-indicator-content-finder', name: 'MARC Field, Indicator, and Content Finder',
+      description: 'Finds MARC rows.', category: 'cataloging', sqlTemplate: 'select 1', parameters: [
+        { name: 'locationIds', type: 'multiselect', label: 'Locations', required: true, default: '', resolvedDefault: '', max_selections: 100 },
+        { name: 'locationBasis', type: 'select', label: 'Location basis', required: true, default: 'effective_item', resolvedDefault: 'effective_item' },
+        { name: 'marcTag', type: 'text', label: 'MARC tag', required: true, default: '', resolvedDefault: '' },
+        { name: 'occurrenceCondition', type: 'select', label: 'Occurrence condition', required: true, default: 'has', resolvedDefault: 'has' },
+        { name: 'firstIndicator', type: 'select', label: 'First indicator', required: true, default: 'any', resolvedDefault: 'any' },
+        { name: 'secondIndicator', type: 'select', label: 'Second indicator', required: true, default: 'any', resolvedDefault: 'any' },
+        { name: 'subfieldCode', type: 'text', label: 'Subfield code', required: false, default: '', resolvedDefault: '' },
+        { name: 'contentRule', type: 'select', label: 'Content rule', required: true, default: 'any', resolvedDefault: 'any' },
+        { name: 'searchValue', type: 'text', label: 'Search text', required: false, default: '', resolvedDefault: '' },
+        { name: 'caseExact', type: 'select', label: 'Case matching', required: true, default: 'false', resolvedDefault: 'false' },
+      ],
+      defaultLimit: 100000, isActive: true, createdBy: 'manual', createdAt: '2026-08-06T00:00:00Z', updatedAt: '2026-08-06T00:00:00Z',
+      selectOptions: {
+        locationIds: [{ value: locationId, label: 'Smith — SC Internet [SCINT]' }],
+        locationBasis: [{ value: 'effective_item', label: 'Effective item' }],
+        occurrenceCondition: [{ value: 'has', label: 'Has matching occurrence' }],
+        contentRule: [{ value: 'contains', label: 'Contains' }],
+        caseExact: [{ value: 'false', label: 'Case-insensitive' }],
+      }, identifierExportAvailable: true,
+    });
+    const error = new axios.AxiosError('Request failed', 'ERR_BAD_REQUEST', undefined, undefined, {
+      status: 400,
+      statusText: 'Bad Request',
+      headers: {},
+      config: { headers: new axios.AxiosHeaders() },
+      data: { error: 'Report parameters are invalid.', fieldErrors: { searchValue: 'Search text is required.' } },
+    });
+    vi.mocked(runReport).mockRejectedValueOnce(error);
+
+    render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[`/reports/9?rp.9.locationIds=${locationId}&rp.9.locationBasis=effective_item&rp.9.marcTag=035&rp.9.occurrenceCondition=has&rp.9.firstIndicator=any&rp.9.secondIndicator=any&rp.9.contentRule=contains&rp.9.searchValue=x&rp.9.caseExact=false`]}><Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Report' }));
+    expect(await screen.findByText('Search text is required.')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Search text'), { target: { value: 'updated' } });
+    await waitFor(() => expect(screen.queryByText('Search text is required.')).not.toBeInTheDocument());
   });
 });

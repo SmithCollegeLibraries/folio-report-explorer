@@ -63,6 +63,19 @@ const api = axios.create({
   timeout: 300000,
 });
 
+/** Return only trusted string field messages from a governed report error. */
+export function extractReportFieldErrors(error: unknown): Record<string, string> {
+  if (!axios.isAxiosError(error)) return {};
+  const value = error.response?.data?.fieldErrors;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[0] === 'string' && typeof entry[1] === 'string',
+    ),
+  );
+}
+
 // ── Auth interceptors ─────────────────────────────────────────────
 
 // Request interceptor: attach JWT Bearer token
