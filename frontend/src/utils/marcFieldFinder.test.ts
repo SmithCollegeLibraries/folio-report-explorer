@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateMarcFieldFinder } from './marcFieldFinder';
+import { evaluateMarcFieldFinder, normalizeIndicator } from './marcFieldFinder';
 
 const validValues = {
   locationIds: '11111111-1111-4111-8111-111111111111',
@@ -87,5 +87,20 @@ describe('evaluateMarcFieldFinder', () => {
     expect(result.valid).toBe(true);
     expect(result.interpretation).toContain('first indicator #');
   });
-});
 
+  it('only treats the explicit MARC backslash and ASCII space as blank', () => {
+    expect(normalizeIndicator('char:\\')).toBe('blank');
+    expect(normalizeIndicator('char: ')).toBe('blank');
+    expect(normalizeIndicator('char:\u00a0')).toBe('char:\u00a0');
+    expect(normalizeIndicator('char:\n')).toBe('char:\n');
+  });
+
+  it('rejects empty comma-separated location segments', () => {
+    const result = evaluateMarcFieldFinder({
+      ...validValues,
+      locationIds: `${validValues.locationIds},`,
+    });
+    expect(result.valid).toBe(false);
+    expect(result.fieldErrors.locationIds).toContain('valid UUID');
+  });
+});

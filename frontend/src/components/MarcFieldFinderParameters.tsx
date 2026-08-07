@@ -72,6 +72,7 @@ export default function MarcFieldFinderParameters({
   const evaluation = useMemo(() => evaluateMarcFieldFinder(values), [values]);
   const contentRule = values.contentRule || '';
   const showTextFields = consumesSearchText(contentRule);
+  const validMarcTag = /^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/.test(values.marcTag || '');
 
   useEffect(() => {
     if (showTextFields) return;
@@ -83,8 +84,12 @@ export default function MarcFieldFinderParameters({
     selectOptions?.[name] || FALLBACK_OPTIONS[name] || []
   );
 
-  const clientFieldError = (name: string): string | undefined => evaluation.fieldErrors[name];
-  const serverFieldError = (name: string): string | undefined => serverFieldErrors[name];
+  const fieldErrors = (name: string): string[] => [...new Set([
+    evaluation.fieldErrors[name],
+    serverFieldErrors[name],
+  ].filter((message): message is string => Boolean(message)))];
+  const fieldErrorText = (name: string): string | undefined => fieldErrors(name).join(' ') || undefined;
+  const fieldErrorId = (name: string): string => `marc-finder-${name}-error`;
 
   const renderParam = (name: string) => {
     const parameter = getParam(parameters, name);
@@ -94,11 +99,12 @@ export default function MarcFieldFinderParameters({
           param={parameter}
           value={values[name] || ''}
           options={optionsFor(name)}
+          error={fieldErrorText(name)}
+          errorId={fieldErrorId(name)}
           onChange={(value) => onChange(name, value)}
         />
-        {clientFieldError(name) && <p role="alert" className="mt-1 text-xs text-red-600">{clientFieldError(name)}</p>}
-        {serverFieldError(name) && serverFieldError(name) !== clientFieldError(name) && (
-          <p role="alert" className="mt-1 text-xs text-red-600">{serverFieldError(name)}</p>
+        {fieldErrorText(name) && parameter.type !== 'multiselect' && (
+          <p id={fieldErrorId(name)} role="alert" className="mt-1 text-xs text-red-600">{fieldErrorText(name)}</p>
         )}
       </div>
     );
@@ -110,7 +116,8 @@ export default function MarcFieldFinderParameters({
       name={name}
       label={label}
       value={values[name] || 'any'}
-      error={clientFieldError(name)}
+      error={fieldErrorText(name)}
+      errorId={fieldErrorId(name)}
       onChange={(value) => onChange(name, value)}
     />
   );
@@ -122,19 +129,9 @@ export default function MarcFieldFinderParameters({
         {renderParam('locationBasis')}
         {renderParam('marcTag')}
         {renderParam('occurrenceCondition')}
-        <div>
-          {indicator('firstIndicator', 'First indicator')}
-          {serverFieldError('firstIndicator') && serverFieldError('firstIndicator') !== clientFieldError('firstIndicator') && (
-            <p role="alert" className="mt-1 text-xs text-red-600">{serverFieldError('firstIndicator')}</p>
-          )}
-        </div>
-        <div>
-          {indicator('secondIndicator', 'Second indicator')}
-          {serverFieldError('secondIndicator') && serverFieldError('secondIndicator') !== clientFieldError('secondIndicator') && (
-            <p role="alert" className="mt-1 text-xs text-red-600">{serverFieldError('secondIndicator')}</p>
-          )}
-        </div>
-        {renderParam('subfieldCode')}
+        {validMarcTag && <div>{indicator('firstIndicator', 'First indicator')}</div>}
+        {validMarcTag && <div>{indicator('secondIndicator', 'Second indicator')}</div>}
+        {validMarcTag && renderParam('subfieldCode')}
         {renderParam('contentRule')}
         {showTextFields && renderParam('searchValue')}
         {showTextFields && renderParam('caseExact')}

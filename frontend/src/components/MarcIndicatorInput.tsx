@@ -8,6 +8,7 @@ export interface MarcIndicatorInputProps {
   value: string;
   onChange: (value: string) => void;
   error?: string;
+  errorId?: string;
 }
 
 function customCharacter(value: string): string {
@@ -16,7 +17,7 @@ function customCharacter(value: string): string {
 
 function normalizeCustom(value: string): string {
   const character = [...value][0] || '';
-  if (character === '\\' || character.trim() === '') return 'blank';
+  if (character === '\\' || character === ' ') return 'blank';
   return character ? `char:${character}` : 'char:X';
 }
 
@@ -26,6 +27,7 @@ export default function MarcIndicatorInput({
   value,
   onChange,
   error,
+  errorId,
 }: MarcIndicatorInputProps) {
   const [customValue, setCustomValue] = useState(() => customCharacter(value));
   const propIsCustom = value.startsWith('char:') && !/^char:[0-9]$/.test(value);
@@ -80,6 +82,7 @@ export default function MarcIndicatorInput({
         value={selectedValue}
         onChange={(event) => handleSelect(event.target.value)}
         aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
         className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
       >
         {options.map((option) => (
@@ -102,7 +105,7 @@ export default function MarcIndicatorInput({
           />
         </div>
       )}
-      {error && <p role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
+      {error && <p id={errorId} role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

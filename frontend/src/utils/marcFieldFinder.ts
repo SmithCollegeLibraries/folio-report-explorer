@@ -46,7 +46,7 @@ export function normalizeIndicator(value: string | undefined): string {
   if (value === 'any' || value === 'blank') return value;
   if (value.startsWith('char:')) {
     const character = value.slice(5);
-    if (character === '\\' || character.trim() === '') return 'blank';
+    if (character === '\\' || character === ' ') return 'blank';
   }
   return value;
 }
@@ -98,7 +98,10 @@ function contentDescription(rule: MarcContentRule, searchValue: string, caseExac
 export function evaluateMarcFieldFinder(valuesInput: MarcFieldFinderValues): MarcFieldFinderEvaluation {
   const input = valuesInput || {};
   const fieldErrors: ReportFieldErrors = {};
-  const locationIds = values(input.locationIds).split(',').map((id) => id.trim()).filter(Boolean);
+  const rawLocationIds = values(input.locationIds);
+  const locationIds = rawLocationIds.trim() === ''
+    ? []
+    : rawLocationIds.split(',').map((id) => id.trim());
   if (locationIds.length === 0) error(fieldErrors, 'locationIds', 'Select at least one location.');
   if (locationIds.length > 100) error(fieldErrors, 'locationIds', 'Select no more than 100 locations.');
   if (locationIds.some((id) => !UUID_PATTERN.test(id))) {
@@ -169,4 +172,3 @@ export function evaluateMarcFieldFinder(valuesInput: MarcFieldFinderValues): Mar
 
   return { fieldErrors, interpretation, textRule, valid: Object.keys(fieldErrors).length === 0 };
 }
-

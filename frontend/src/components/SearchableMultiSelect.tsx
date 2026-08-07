@@ -14,6 +14,8 @@ interface SearchableMultiSelectProps {
   placeholder?: string;
   maxSelections?: number;
   onChange: (value: string) => void;
+  error?: string;
+  errorId?: string;
 }
 
 function selectionCountLabel(count: number, singularLabel: string): string {
@@ -29,6 +31,8 @@ export default function SearchableMultiSelect({
   placeholder = 'Search options',
   maxSelections = 100,
   onChange,
+  error,
+  errorId,
 }: SearchableMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -72,6 +76,8 @@ export default function SearchableMultiSelect({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : undefined}
         onClick={() => setIsOpen((current) => !current)}
         className="flex w-full items-center justify-between rounded-lg border border-stone-300 bg-white px-3 py-2 text-left text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
       >
@@ -173,6 +179,7 @@ export default function SearchableMultiSelect({
           )}
         </div>
       )}
+      {error && <p id={errorId} role="alert" className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   );
 }

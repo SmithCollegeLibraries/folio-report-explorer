@@ -87,7 +87,39 @@ describe('MarcFieldFinderParameters', () => {
       />,
     );
 
-    expect(screen.getByText('MARC tag must be exactly three digits from 001 through 999.')).toBeInTheDocument();
-    expect(screen.getByText('Server rejected this MARC tag.')).toBeInTheDocument();
+    expect(screen.getByText(/MARC tag must be exactly three digits from 001 through 999/)).toBeInTheDocument();
+    expect(screen.getByText(/Server rejected this MARC tag/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('First indicator')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Subfield code')).not.toBeInTheDocument();
+  });
+
+  it('reveals indicator and subfield controls after a valid MARC tag is entered', () => {
+    const values = { ...baseValues, marcTag: '000' };
+    const { rerender } = render(
+      <MarcFieldFinderParameters values={values} parameters={params} selectOptions={options} onChange={() => {}} />,
+    );
+    expect(screen.queryByLabelText('First indicator')).not.toBeInTheDocument();
+
+    rerender(
+      <MarcFieldFinderParameters values={{ ...values, marcTag: '245' }} parameters={params} selectOptions={options} onChange={() => {}} />,
+    );
+    expect(screen.getByLabelText('First indicator')).toBeInTheDocument();
+    expect(screen.getByLabelText('Subfield code')).toBeInTheDocument();
+  });
+
+  it('associates generic inline errors with their controls', () => {
+    render(
+      <MarcFieldFinderParameters
+        values={{ ...baseValues, marcTag: '000' }}
+        parameters={params}
+        selectOptions={options}
+        serverFieldErrors={{ marcTag: 'Server rejected this MARC tag.' }}
+        onChange={() => {}}
+      />,
+    );
+
+    const tag = screen.getByLabelText(/MARC tag/);
+    expect(tag).toHaveAttribute('aria-invalid', 'true');
+    expect(tag).toHaveAttribute('aria-describedby', 'marc-finder-marcTag-error');
   });
 });

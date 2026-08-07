@@ -6,11 +6,15 @@ export default function ParamInput({
   value,
   options,
   onChange,
+  error,
+  errorId,
 }: {
   param: ReportParam;
   value: string;
   options?: { value: string; label: string }[];
   onChange: (value: string) => void;
+  error?: string;
+  errorId?: string;
 }) {
   const inputId = `report-param-${param.name}`;
 
@@ -29,12 +33,16 @@ export default function ParamInput({
           options={options}
           placeholder={param.placeholder}
           maxSelections={param.max_selections}
+          error={error}
+          errorId={errorId}
           onChange={onChange}
         />
       ) : param.type === 'select' && options ? (
         <select
           id={inputId}
           value={value}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
           onChange={(event) => onChange(event.target.value)}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
         >
@@ -49,6 +57,8 @@ export default function ParamInput({
         <select
           id={inputId}
           value={value}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
           onChange={(event) => onChange(event.target.value)}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
         >
@@ -60,6 +70,8 @@ export default function ParamInput({
         <textarea
           id={inputId}
           value={value}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
           onChange={(event) => onChange(event.target.value)}
           placeholder={param.placeholder || 'One value per line'}
           className="h-24 w-full resize-none rounded-lg border border-stone-300 px-3 py-2 font-mono text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
@@ -68,6 +80,8 @@ export default function ParamInput({
         <input
           id={inputId}
           type={param.type === 'date' ? 'date' : param.type === 'number' ? 'number' : 'text'}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={param.placeholder}
