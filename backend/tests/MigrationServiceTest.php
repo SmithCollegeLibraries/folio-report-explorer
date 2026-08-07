@@ -562,8 +562,6 @@ foreach ([
     );
 }
 
-fwrite(STDOUT, "MigrationService test passed\n");
-
 // Regression: an empty migration ledger on a database current through 042
 // must execute 043 rather than silently baselining it.  The current-state
 // probe must require the field-finder seed before treating the database as
@@ -685,3 +683,5 @@ assertMigrationSame([], $currentThrough042Result['baselined'], 'Migration 043 mu
 assertMigrationSame('043_cataloging_marc_field_finder.sql', $currentThrough042->ledger[0]['filename'] ?? null, 'Executed migration 043 must be recorded in the empty ledger.');
 @unlink($finderMigrationPath);
 @rmdir($currentThrough042Dir);
+
+fwrite(STDOUT, "MigrationService test passed\n");

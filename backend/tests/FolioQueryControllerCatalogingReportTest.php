@@ -431,6 +431,17 @@ namespace {
     catalogingAssertSame(null, catalogingLastJob()->metadata, 'Ordinary reports without execution config must not gain governed metadata.');
 
     resetCatalogingState();
+    $ordinaryRequired = catalogingReport();
+    $ordinaryRequired->slug = 'ordinary-required-report';
+    $ordinaryRequired->parameters = [['name' => 'requiredValue', 'label' => 'Required value', 'required' => true]];
+    \app\models\ReportTemplate::$report = $ordinaryRequired;
+    Yii::$app->request->body = ['params' => []];
+    $ordinaryMissing = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    catalogingAssertSame(400, Yii::$app->response->statusCode, 'Ordinary reports must retain generic required-parameter validation.');
+    catalogingAssertSame('Missing required parameters: Required value', $ordinaryMissing['error'] ?? null, 'Ordinary reports must retain their existing missing-parameter message.');
+    catalogingAssertSame(0, count(\app\models\QueryJob::$created), 'Ordinary missing parameters must not create jobs.');
+
+    resetCatalogingState();
     $composite = catalogingReport();
     $composite->slug = 'ordinary-composite-report';
     $composite->data_source = 'composite';
