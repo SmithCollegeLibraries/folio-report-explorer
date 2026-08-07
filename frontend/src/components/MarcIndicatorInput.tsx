@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const DIGITS = Array.from({ length: 10 }, (_, index) => String(index));
+const PHP_TRIM_BLANK = /^[\t\n\r\0\x0B ]$/;
 
 export interface MarcIndicatorInputProps {
   name: string;
@@ -17,7 +18,7 @@ function customCharacter(value: string): string {
 
 function normalizeCustom(value: string): string {
   const character = [...value][0] || '';
-  if (character === '\\' || character === ' ') return 'blank';
+  if (character === '\\' || PHP_TRIM_BLANK.test(character)) return 'blank';
   return character ? `char:${character}` : 'char:X';
 }
 

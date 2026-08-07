@@ -92,7 +92,8 @@ describe('evaluateMarcFieldFinder', () => {
     expect(normalizeIndicator('char:\\')).toBe('blank');
     expect(normalizeIndicator('char: ')).toBe('blank');
     expect(normalizeIndicator('char:\u00a0')).toBe('char:\u00a0');
-    expect(normalizeIndicator('char:\n')).toBe('char:\n');
+    expect(normalizeIndicator('char:\n')).toBe('blank');
+    expect(normalizeIndicator('char:\t')).toBe('blank');
   });
 
   it('rejects empty comma-separated location segments', () => {

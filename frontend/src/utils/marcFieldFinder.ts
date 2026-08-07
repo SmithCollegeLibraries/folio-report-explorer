@@ -29,6 +29,7 @@ const TEXT_RULES = new Set<MarcContentRule>([
 ]);
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const PHP_TRIM_BLANK = /^[\t\n\r\0\x0B ]$/;
 
 export interface MarcFieldFinderEvaluation {
   fieldErrors: ReportFieldErrors;
@@ -46,7 +47,7 @@ export function normalizeIndicator(value: string | undefined): string {
   if (value === 'any' || value === 'blank') return value;
   if (value.startsWith('char:')) {
     const character = value.slice(5);
-    if (character === '\\' || character === ' ') return 'blank';
+    if (character === '\\' || PHP_TRIM_BLANK.test(character)) return 'blank';
   }
   return value;
 }
