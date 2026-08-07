@@ -265,7 +265,8 @@ class MigrationService
         }
 
         return self::budgetYearFundReportPaymentDistributionsAppearComplete($db)
-            && self::marcMissingTagReportAppearsComplete($db);
+            && self::marcMissingTagReportAppearsComplete($db)
+            && self::catalogingMarcFieldFinderAppearsComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool

@@ -24,10 +24,11 @@ When `RUN_FOLIO_DB_TESTS=1` is enabled, the test reads the configured FOLIO
 PostgreSQL connection, starts a read-only transaction, and applies the
 configured statement timeout (default `1,800,000 ms`). Plans use
 `EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON)` so relation and index
-metadata are available for the fail-closed guards. It selects the smallest
-and largest active effective-item locations, unless
-`FOLIO_DB_TEST_LOCATION_IDS` supplies an explicit comma-separated active UUID
-set. For each selected set it exercises both `effective_item` and
+metadata are available for the fail-closed guards. It selects a single
+representative multi-location set containing the smallest and largest active
+effective-item locations, unless `FOLIO_DB_TEST_LOCATION_IDS` supplies an
+explicit comma-separated active UUID set of at least two active locations.
+For each selected set it exercises both `effective_item` and
 `permanent_item` bases and emits one JSON evidence line per case with the
 prefix `MARC_FINDER_PG_PLAN`.
 

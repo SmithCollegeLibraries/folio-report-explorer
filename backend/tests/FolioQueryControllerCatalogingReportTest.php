@@ -326,6 +326,37 @@ namespace {
     catalogingAssertSame('A selected location is unavailable. Please update the selection.', $missingFinderLocation['error'] ?? null, 'Finder missing locations must not become field validation errors.');
     catalogingAssertSame(0, count(\app\models\QueryJob::$created), 'Finder integrity failures must not create jobs.');
 
+    resetCatalogingState();
+    \app\models\ReportTemplate::$report = finderReport();
+    \app\services\CatalogingMarcFieldFinderService::$buildException = new \app\exceptions\ReportParameterValidationException('locationIds', 'At least one location is required.');
+    Yii::$app->request->body = ['params' => array_diff_key(validFinderParams(), ['locationIds' => true])];
+    Yii::$app->response->statusCode = 200;
+    $missingFinderLocationParam = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    catalogingAssertSame(400, Yii::$app->response->statusCode, 'Omitted governed locations must use HTTP 400 field validation.');
+    catalogingAssertSame('Report parameters are invalid.', $missingFinderLocationParam['error'] ?? null, 'Omitted governed locations must use the stable validation error.');
+    catalogingAssertSame(['locationIds' => 'At least one location is required.'], $missingFinderLocationParam['fieldErrors'] ?? null, 'Omitted governed locations must identify locationIds.');
+
+    resetCatalogingState();
+    \app\models\ReportTemplate::$report = finderReport();
+    \app\services\CatalogingMarcFieldFinderService::$buildException = new \app\exceptions\ReportParameterValidationException('marcTag', 'MARC tag must be exactly three ASCII digits from 001 through 999.');
+    $missingFinderTagParams = validFinderParams();
+    unset($missingFinderTagParams['marcTag']);
+    Yii::$app->request->body = ['params' => $missingFinderTagParams];
+    Yii::$app->response->statusCode = 200;
+    $missingFinderTag = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    catalogingAssertSame(400, Yii::$app->response->statusCode, 'Omitted governed MARC tags must use HTTP 400 field validation.');
+    catalogingAssertSame(['marcTag' => 'MARC tag must be exactly three ASCII digits from 001 through 999.'], $missingFinderTag['fieldErrors'] ?? null, 'Omitted governed MARC tags must identify marcTag.');
+
+    resetCatalogingState();
+    \app\models\ReportTemplate::$report = finderReport();
+    \app\services\CatalogingMarcFieldFinderService::$buildException = new \InvalidArgumentException('MARC finder report definition does not match the reviewed seed contract.');
+    Yii::$app->request->body = ['params' => validFinderParams()];
+    Yii::$app->response->statusCode = 200;
+    $invalidFinderDefinition = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
+    catalogingAssertSame(422, Yii::$app->response->statusCode, 'Governed definition failures must be safe integrity responses.');
+    catalogingAssertSame('The report definition could not be validated. Please contact an administrator.', $invalidFinderDefinition['error'] ?? null, 'Governed definition failures must not expose raw compiler details.');
+    catalogingAssertTrue(strpos((string) ($invalidFinderDefinition['error'] ?? ''), 'reviewed seed contract') === false, 'Governed definition failures must not expose the raw definition detail.');
+
     $invalidKind = runCatalogingReport(['params' => validCatalogingParams(), 'exportKind' => 'other']);
     catalogingAssertSame(400, Yii::$app->response->statusCode, 'Unknown export kinds must be rejected.');
     catalogingAssertSame(0, count(\app\models\QueryJob::$created), 'Unknown export kinds must not create jobs.');
@@ -341,7 +372,10 @@ namespace {
     ] as $inputError) {
         resetCatalogingState();
         \app\models\ReportTemplate::$report = catalogingReport();
-        \app\services\CatalogingMarcMissingTagReportService::$buildException = new \InvalidArgumentException($inputError);
+        $field = $inputError === 'MARC tag must be exactly three ASCII digits from 001 through 999.'
+            ? 'marcTag'
+            : ($inputError === 'A supported location basis is required.' ? 'locationBasis' : 'locationIds');
+        \app\services\CatalogingMarcMissingTagReportService::$buildException = new \app\exceptions\ReportParameterValidationException($field, $inputError);
         Yii::$app->request->body = ['params' => validCatalogingParams()];
         Yii::$app->response->statusCode = 200;
         (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);

@@ -3733,6 +3733,7 @@ class FolioQueryController extends Controller
 
         // Validate required params
         $paramDefs = $report->getDecodedParameters();
+        $isGovernedReport = CatalogingReportCompilerService::supports($report);
         $missing = [];
         foreach ($paramDefs as $def) {
             if (!empty($def['required']) && empty($userParams[$def['name']])) {
@@ -3743,7 +3744,7 @@ class FolioQueryController extends Controller
                 }
             }
         }
-        if (!empty($missing)) {
+        if (!empty($missing) && !$isGovernedReport) {
             Yii::$app->response->statusCode = 400;
             return ['error' => 'Missing required parameters: ' . implode(', ', $missing)];
         }
@@ -3766,6 +3767,10 @@ class FolioQueryController extends Controller
                 if ($this->isCatalogingReportIntegrityError($e)) {
                     Yii::$app->response->statusCode = 422;
                     return ['error' => $this->catalogingReportIntegrityMessage($e)];
+                }
+                if ($isGovernedReport) {
+                    Yii::$app->response->statusCode = 422;
+                    return ['error' => 'The report definition could not be validated. Please contact an administrator.'];
                 }
                 Yii::$app->response->statusCode = 400;
                 return ['error' => $e->getMessage()];

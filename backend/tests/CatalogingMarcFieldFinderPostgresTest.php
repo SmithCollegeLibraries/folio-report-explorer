@@ -264,6 +264,9 @@ namespace {
             if ($missing !== []) {
                 marcFinderPostgresFail('FOLIO_DB_TEST_LOCATION_IDS contains a missing or inactive location: ' . implode(', ', $missing));
             }
+            if (count($ids) < 2) {
+                marcFinderPostgresFail('FOLIO_DB_TEST_LOCATION_IDS must contain at least two active locations for the representative multi-location gate.');
+            }
             return [$ids];
         }
 
@@ -278,14 +281,16 @@ LIMIT 1
 SQL;
         $small = $pdo->query(sprintf($sql, 'ASC'))->fetchColumn();
         $large = $pdo->query(sprintf($sql, 'DESC'))->fetchColumn();
-        $sets = [];
-        foreach (array_values(array_unique(array_filter([$small, $large]))) as $id) {
-            $sets[] = [strtolower($id)];
+        $ids = array_values(array_unique(array_filter(array_map('strtolower', [$small, $large]))));
+        if (count($ids) < 2) {
+            $fallbackSql = str_replace('LIMIT 1', 'LIMIT 2', sprintf($sql, 'ASC'));
+            $fallback = $pdo->query($fallbackSql)->fetchAll(\PDO::FETCH_COLUMN);
+            $ids = array_values(array_unique(array_filter(array_map('strtolower', $fallback))));
         }
-        if ($sets === []) {
-            marcFinderPostgresFail('No active FOLIO location is available for live MARC finder verification.');
+        if (count($ids) < 2) {
+            marcFinderPostgresFail('At least two active FOLIO locations are required for the representative multi-location MARC finder gate.');
         }
-        return $sets;
+        return [$ids];
     }
 
     function marcFinderPostgresFetchPlan(\PDO $pdo, $sql, array $params)

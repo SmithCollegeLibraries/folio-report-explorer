@@ -37,4 +37,3 @@ describe('MarcIndicatorInput', () => {
     expect(onChange).toHaveBeenLastCalledWith('any');
   });
 });
-

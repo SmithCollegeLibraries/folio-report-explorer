@@ -563,3 +563,125 @@ foreach ([
 }
 
 fwrite(STDOUT, "MigrationService test passed\n");
+
+// Regression: an empty migration ledger on a database current through 042
+// must execute 043 rather than silently baselining it.  The current-state
+// probe must require the field-finder seed before treating the database as
+// fully current.
+class MigrationServiceCurrentThrough042Schema
+{
+    public function getTableSchema($table, $refresh = false)
+    {
+        $tables = [
+            'schema_migrations', 'users', 'query_jobs', 'report_templates',
+            'ai_clarification_events', 'ai_query_feedback', 'folio_reference_tables',
+            'ai_report_generations', 'ai_report_reviews', 'saved_queries',
+            'query_log', 'ai_training_hints', 'dashboard_widget_templates',
+        ];
+        if (!in_array($table, $tables, true)) {
+            return null;
+        }
+        $columns = ['execution_config' => new stdClass(), 'category' => new stdClass(), 'help_text' => new stdClass()];
+        return (object) ['columns' => $columns];
+    }
+}
+
+class MigrationServiceCurrentThrough042Database
+{
+    public $schema;
+    public $missingTagDefinition;
+    public $ledger = [];
+    public $executed = [];
+
+    public function __construct(array $missingTagDefinition)
+    {
+        $this->schema = new MigrationServiceCurrentThrough042Schema();
+        $this->missingTagDefinition = $missingTagDefinition;
+    }
+
+    public function createCommand($sql = '', array $params = [])
+    {
+        return new MigrationServiceCurrentThrough042Command($this, $sql, $params);
+    }
+}
+
+class MigrationServiceCurrentThrough042Command
+{
+    private $database;
+    private $sql;
+    private $params;
+    private $insertTable;
+    private $insertRow;
+
+    public function __construct($database, $sql, array $params)
+    {
+        $this->database = $database;
+        $this->sql = $sql;
+        $this->params = $params;
+    }
+
+    public function insert($table, array $row)
+    {
+        $this->insertTable = $table;
+        $this->insertRow = $row;
+        return $this;
+    }
+
+    public function queryAll()
+    {
+        if (strpos($this->sql, 'FROM schema_migrations') !== false) {
+            return $this->database->ledger;
+        }
+        return [];
+    }
+
+    public function queryOne()
+    {
+        if (strpos($this->sql, 'information_schema.COLUMNS') !== false) {
+            return ['COLUMN_TYPE' => "enum('acquisitions','cataloging','other')"];
+        }
+        if (strpos($this->sql, 'FROM report_templates') !== false) {
+            return ($this->params[':slug'] ?? null) === 'marc-bibliographic-records-missing-tag'
+                ? $this->database->missingTagDefinition
+                : null;
+        }
+        return null;
+    }
+
+    public function queryScalar()
+    {
+        return 1;
+    }
+
+    public function setRawSql($sql)
+    {
+        $this->sql = $sql;
+        $this->params = [];
+        return $this;
+    }
+
+    public function execute()
+    {
+        if ($this->insertTable === 'schema_migrations') {
+            $this->database->ledger[] = $this->insertRow;
+            return;
+        }
+        $this->database->executed[] = $this->sql;
+    }
+}
+
+$currentThrough042Dir = sys_get_temp_dir() . '/migration-current-through-042-' . uniqid('', true);
+mkdir($currentThrough042Dir, 0775, true);
+$finderMigrationPath = $currentThrough042Dir . '/043_cataloging_marc_field_finder.sql';
+file_put_contents($finderMigrationPath, 'SELECT 1;');
+$currentThrough042 = new MigrationServiceCurrentThrough042Database($marcMultiLocationSeed);
+$currentThrough042Result = MigrationService::run($currentThrough042, $currentThrough042Dir);
+assertMigrationSame(
+    ['043_cataloging_marc_field_finder.sql'],
+    $currentThrough042Result['applied'],
+    'An empty ledger on a database current through 042 must execute migration 043 when its finder seed is absent.'
+);
+assertMigrationSame([], $currentThrough042Result['baselined'], 'Migration 043 must not be silently baselined when the finder seed is absent.');
+assertMigrationSame('043_cataloging_marc_field_finder.sql', $currentThrough042->ledger[0]['filename'] ?? null, 'Executed migration 043 must be recorded in the empty ledger.');
+@unlink($finderMigrationPath);
+@rmdir($currentThrough042Dir);

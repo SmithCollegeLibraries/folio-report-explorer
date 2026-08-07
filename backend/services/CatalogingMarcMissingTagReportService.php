@@ -2,8 +2,10 @@
 
 namespace app\services;
 
+use app\exceptions\ReportParameterValidationException;
 use app\models\ReportTemplate;
 
+require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/SqlSelectStructureService.php';
 require_once __DIR__ . '/CatalogingMarcLocationScopeService.php';
 
@@ -81,17 +83,24 @@ final class CatalogingMarcMissingTagReportService
         self::assertParameterDefinitions($report);
         self::assertTemplateContract((string) $report->sql_template);
 
-        $scope = CatalogingMarcLocationScopeService::validate(
-            $inputs,
-            ['effective_item', 'permanent_item', 'permanent_holdings']
-        );
+        try {
+            $scope = CatalogingMarcLocationScopeService::validate(
+                $inputs,
+                ['effective_item', 'permanent_item', 'permanent_holdings']
+            );
+        } catch (\InvalidArgumentException $exception) {
+            $field = $exception->getMessage() === 'A supported location basis is required.'
+                ? 'locationBasis'
+                : 'locationIds';
+            throw new ReportParameterValidationException($field, $exception->getMessage());
+        }
         $locationIds = $scope['locationIds'];
         $locationBasis = $scope['locationBasis'];
         $locationFragment = $scope['locationFragment'];
 
         $marcTag = $inputs['marcTag'] ?? null;
         if (!is_string($marcTag) || preg_match('/^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/D', $marcTag) !== 1) {
-            throw new \InvalidArgumentException('MARC tag must be exactly three ASCII digits from 001 through 999.');
+            throw new ReportParameterValidationException('marcTag', 'MARC tag must be exactly three ASCII digits from 001 through 999.');
         }
 
         $template = (string) $report->sql_template;
