@@ -187,14 +187,25 @@ namespace {
         return false;
     }
 
-    function marcFinderPostgresMarcPlanEvidence(array $plan)
+    function marcFinderPostgresMarcPlanEvidence(array $plan, $tableName)
     {
+        $tableName = strtolower((string) $tableName);
         $evidence = [];
         foreach (marcFinderPostgresNodes($plan) as $node) {
-            if (($node['Schema'] ?? null) !== 'marctab') {
+            $relationMatches = strtolower((string) ($node['Schema'] ?? '')) === 'marctab'
+                && strtolower((string) ($node['Relation Name'] ?? '')) === $tableName;
+            $indexName = strtolower((string) ($node['Index Name'] ?? ''));
+            $indexCond = strtolower((string) ($node['Index Cond'] ?? ''));
+            $recheckCond = strtolower((string) ($node['Recheck Cond'] ?? ''));
+            $indexProbeMatches = strpos($indexName, $tableName) !== false
+                && (strpos($indexName, 'instance_id') !== false
+                    || strpos($indexCond, 'instance_id') !== false
+                    || strpos($recheckCond, 'instance_id') !== false);
+            if (!$relationMatches && !$indexProbeMatches) {
                 continue;
             }
             $evidence[] = [
+                'schema' => $node['Schema'] ?? null,
                 'node_type' => $node['Node Type'] ?? null,
                 'relation_name' => $node['Relation Name'] ?? null,
                 'index_name' => $node['Index Name'] ?? null,
@@ -349,13 +360,6 @@ SQL;
         return $statement->fetchColumn() !== false;
     }
 
-    function marcFinderPostgresCompiledBlankRows(\PDO $pdo, array $compiled, $encoding)
-    {
-        $params = $compiled['params'];
-        $params[':firstIndicator'] = $encoding === 'backslash' ? 'char:\\' : 'char: ';
-        return marcFinderPostgresRows($pdo, $compiled['sql'], $params);
-    }
-
     if (getenv('RUN_FOLIO_DB_TESTS') !== '1') {
         if (getenv('CATALOGING_MARC_FINDER_PG_TEST_SELF_CHECK') === '1') {
             $validPlan = [
@@ -389,6 +393,15 @@ SQL;
                 'Relation Name' => 'mt245',
             ])) {
                 marcFinderPostgresFail('Plan guard self-check failed to detect a sequential mt245 scan.');
+            }
+            $bitmapEvidence = marcFinderPostgresMarcPlanEvidence([
+                'Node Type' => 'Bitmap Index Scan',
+                'Index Name' => 'mt245_instance_id_idx',
+                'Index Cond' => '(instance_id = target_instances.instance_uuid)',
+            ], 'mt245');
+            if (count($bitmapEvidence) !== 1
+                || $bitmapEvidence[0]['index_name'] !== 'mt245_instance_id_idx') {
+                marcFinderPostgresFail('Plan evidence self-check failed to retain a schema-less bitmap instance_id probe.');
             }
             fwrite(STDOUT, "Cataloging MARC finder PostgreSQL plan guard self-check passed.\n");
             exit(0);
@@ -492,26 +505,16 @@ SQL;
                     if ($case['name'] === 'mt035_blank_indicator') {
                         $blankCounts = marcFinderPostgresBlankCounts($pdo, $locationIds, $basis);
                         $blankEncodingProbes = [
-                            'space' => [
-                                'raw_exists' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'space'),
-                                'compiled_rows' => marcFinderPostgresCompiledBlankRows($pdo, $compiled, 'space'),
-                            ],
-                            'backslash' => [
-                                'raw_exists' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'backslash'),
-                                'compiled_rows' => marcFinderPostgresCompiledBlankRows($pdo, $compiled, 'backslash'),
-                            ],
+                            'space' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'space'),
+                            'backslash' => marcFinderPostgresBlankEncodingExists($pdo, $locationIds, $basis, 'backslash'),
                         ];
                         if ($blankCounts['space'] > 0 && $blankCounts['backslash'] > 0) {
-                            if ($returnedRows === 0
-                                || !$blankEncodingProbes['space']['raw_exists']
-                                || !$blankEncodingProbes['backslash']['raw_exists']
-                                || $blankEncodingProbes['space']['compiled_rows'] === 0
-                                || $blankEncodingProbes['backslash']['compiled_rows'] === 0) {
-                                marcFinderPostgresFail($case['name'] . '/' . $basis . ' did not independently verify whitespace and backslash blank-indicator matches.');
+                            if ($blankCounts['space'] + $blankCounts['backslash'] > CatalogingMarcFieldFinderService::FETCH_ROW_LIMIT) {
+                                marcFinderPostgresFail($case['name'] . '/' . $basis . ' blank-indicator fixture exceeds the fetch sentinel; rerun with a smaller explicit location selection.');
                             }
-                            if ($blankCounts['space'] + $blankCounts['backslash'] <= CatalogingMarcFieldFinderService::FETCH_ROW_LIMIT
-                                && $returnedRows !== $blankCounts['space'] + $blankCounts['backslash']) {
-                                marcFinderPostgresFail($case['name'] . '/' . $basis . ' returned a capped row count different from the uncapped blank-indicator fixture.');
+                            if (!$blankEncodingProbes['space'] || !$blankEncodingProbes['backslash']
+                                || $returnedRows !== $blankCounts['space'] + $blankCounts['backslash']) {
+                                marcFinderPostgresFail($case['name'] . '/' . $basis . ' blank-indicator result did not preserve both observed encodings.');
                             }
                         }
                     }
@@ -529,7 +532,7 @@ SQL;
                         'touched_tables' => $tables,
                         'target_instances_materialized' => true,
                         'mt245_seq_scan' => $mt245SeqScan,
-                        'marc_plan_nodes' => marcFinderPostgresMarcPlanEvidence($plan),
+                        'marc_plan_nodes' => marcFinderPostgresMarcPlanEvidence($plan, 'mt' . $case['marcTag']),
                         'instance_id_access' => $instanceIdAccess,
                         'blank_indicator_counts' => $blankCounts,
                         'blank_encoding_probes' => $blankEncodingProbes,

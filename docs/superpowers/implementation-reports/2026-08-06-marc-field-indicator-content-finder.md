@@ -11,7 +11,7 @@ measured result.
 | --- | --- |
 | Repository baseline | `82c83b0` |
 | Offline PostgreSQL gate | PASS — `php backend/tests/CatalogingMarcFieldFinderPostgresTest.php` printed exactly `SKIP: Set RUN_FOLIO_DB_TESTS=1 to run live FOLIO PostgreSQL contract checks.` and exited 0. |
-| Offline plan-guard self-check | PASS — `CATALOGING_MARC_FINDER_PG_TEST_SELF_CHECK=1 php backend/tests/CatalogingMarcFieldFinderPostgresTest.php` exercised selected-table, forbidden-source, materialized-scope, `instance_id` access, and sequential-scan guards without a database. |
+| Offline plan-guard self-check | PASS — `CATALOGING_MARC_FINDER_PG_TEST_SELF_CHECK=1 php backend/tests/CatalogingMarcFieldFinderPostgresTest.php` exercised selected-table, forbidden-source, materialized-scope, `instance_id` access, sequential-scan, and schema-less bitmap evidence guards without a database. |
 | PHP syntax check | PASS — `php -l backend/tests/CatalogingMarcFieldFinderPostgresTest.php`. |
 | Opt-in live gate | Not run to PostgreSQL — `RUN_FOLIO_DB_TESTS=1` stopped before connection because local FOLIO PostgreSQL host, database, and user settings are unavailable. |
 | Docker migration audit/run | Not run in this task; no Docker migration evidence is available. |
@@ -50,10 +50,11 @@ scope, exceeds the `100001` fetch sentinel, or uses a sequential scan on
 `marctab.mt245`. Large `mt245` plans must expose an `instance_id` index
 condition or equivalent MARC access path; the emitted evidence includes the
 relevant MARC plan nodes and index conditions. The blank-indicator case probes
-whitespace and backslash encodings independently using both raw fixture probes
-and the compiled query with per-encoding indicator bindings. It only compares
-the total with the fixture when it is below the fetch sentinel, avoiding a
-false failure when the public cap truncates a larger fixture.
+whitespace and backslash encodings independently, then compares the original
+compiled blank-indicator query with the fixture when it is below the fetch
+sentinel. If both encodings occur in a fixture larger than the sentinel, the
+gate fails closed and asks for a smaller explicit location selection rather
+than making a capped-versus-uncapped claim.
 
 ## Release decision
 
