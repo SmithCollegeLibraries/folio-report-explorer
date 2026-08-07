@@ -60,7 +60,10 @@ export default function SearchableMultiSelect({
       emit(selectedValues.filter((selectedValue) => selectedValue !== optionValue));
       return;
     }
-    if (!atLimit) emit([...selectedValues, optionValue]);
+    if (!atLimit) {
+      emit([...selectedValues, optionValue]);
+      setIsOpen(false);
+    }
   };
 
   const countLabel = selectionCountLabel(selectedValues.length, singularLabel);
