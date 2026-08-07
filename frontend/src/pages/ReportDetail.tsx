@@ -118,18 +118,6 @@ export default function ReportDetail() {
     [isMarcFieldFinder, paramValues],
   );
 
-  const updateParamValue = useCallback(
-    (name: string, value: string) => {
-      setServerFieldErrors({});
-      setParamValues((previous) => {
-        const next = { ...previous, [name]: value };
-        setSearchParams(writeReportParamsToSearch(reportId, next, searchParams), { replace: true });
-        return next;
-      });
-    },
-    [reportId, searchParams, setSearchParams],
-  );
-
   const runMut = useMutation({
     mutationFn: ({
       params,
@@ -152,13 +140,36 @@ export default function ReportDetail() {
     setServerFieldErrors(extractReportFieldErrors(runMut.error));
   }, [runMut.error, runMut.isError]);
 
+  useEffect(() => {
+    runMut.reset();
+    setServerFieldErrors({});
+  }, [reportId, runMut.reset]);
+
+  const updateParamValue = useCallback(
+    (name: string, value: string) => {
+      runMut.reset();
+      setServerFieldErrors({});
+      setParamValues((previous) => {
+        const next = { ...previous, [name]: value };
+        setSearchParams(writeReportParamsToSearch(reportId, next, searchParams), { replace: true });
+        return next;
+      });
+    },
+    [reportId, runMut.reset, searchParams, setSearchParams],
+  );
+
   const handleRun = useCallback(
     (outputMode: 'table' | 'file', exportKind?: ReportExportKind) => {
-      const nextParams = { ...paramValues };
+      const nextParams = isMarcFieldFinder && report
+        ? Object.fromEntries(report.parameters.map((parameter) => [
+            parameter.name,
+            paramValues[parameter.name] ?? '',
+          ]))
+        : { ...paramValues };
       resetJob();
       runMut.mutate({ params: nextParams, outputMode, exportKind });
     },
-    [paramValues, resetJob, runMut],
+    [isMarcFieldFinder, paramValues, report, resetJob, runMut],
   );
 
   const canSubmit = paramsReady
@@ -308,7 +319,7 @@ export default function ReportDetail() {
                   ) : (
                     <div
                       id="report-parameters-panel"
-                      className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+                      className={isMarcFieldFinder ? '' : 'grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3'}
                     >
                       {isMarcFieldFinder ? (
                         <MarcFieldFinderParameters

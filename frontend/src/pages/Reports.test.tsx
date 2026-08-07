@@ -378,7 +378,7 @@ describe('Reports', () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/reports/9']}>
+        <MemoryRouter initialEntries={['/reports/9?rp.9.unexpected=do-not-submit']}>
           <Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes>
         </MemoryRouter>
       </QueryClientProvider>,
@@ -412,6 +412,7 @@ describe('Reports', () => {
       searchValue: '(SCTFEBA)',
       caseExact: 'true',
     }, { outputMode: 'table' }));
+    expect(vi.mocked(runReport).mock.calls[vi.mocked(runReport).mock.calls.length - 1]?.[1]).not.toHaveProperty('unexpected');
   });
 
   it('places API field errors beside finder controls and clears them on edit', async () => {
@@ -455,5 +456,44 @@ describe('Reports', () => {
     expect(await screen.findByText('Search text is required.')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Search text'), { target: { value: 'updated' } });
     await waitFor(() => expect(screen.queryByText('Search text is required.')).not.toBeInTheDocument());
+    expect(screen.queryByText('Submit error: Report parameters are invalid.')).not.toBeInTheDocument();
+  });
+
+  it('keeps both governed export actions available and sends file requests', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { runReport } = await import('../api/client');
+    const locationId = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(runReport).mockReset();
+    vi.mocked(runReport).mockResolvedValue({ jobId: 'job-export', status: 'pending', reportName: 'MARC Field, Indicator, and Content Finder', outputMode: 'file' });
+    // The full finder detail is supplied by the preceding finder workflow test and remains the same API contract.
+    const entry = `/reports/9?rp.9.locationIds=${locationId}&rp.9.locationBasis=effective_item&rp.9.marcTag=035&rp.9.occurrenceCondition=has&rp.9.firstIndicator=any&rp.9.secondIndicator=any&rp.9.contentRule=contains&rp.9.searchValue=x&rp.9.caseExact=false`;
+
+    render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[entry]}><Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Export CSV' }));
+    await waitFor(() => expect(runReport).toHaveBeenCalledWith(9, expect.objectContaining({ locationIds: locationId }), { outputMode: 'file', exportKind: 'worklist' }));
+
+    cleanup();
+    vi.mocked(runReport).mockClear();
+    render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[entry]}><Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes></MemoryRouter></QueryClientProvider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Export FOLIO UUID list' }));
+    await waitFor(() => expect(runReport).toHaveBeenCalledWith(9, expect.objectContaining({ locationIds: locationId }), { outputMode: 'file', exportKind: 'identifier' }));
+  });
+
+  it('does not autorun invalid finder URLs but does autorun a valid finder URL', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { runReport } = await import('../api/client');
+    const locationId = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(runReport).mockReset();
+    vi.mocked(runReport).mockResolvedValue({ jobId: 'job-autorun', status: 'pending', reportName: 'MARC Field, Indicator, and Content Finder', outputMode: 'file' });
+    const base = `rp.9.locationIds=${locationId}&rp.9.locationBasis=effective_item&rp.9.marcTag=035&rp.9.occurrenceCondition=has&rp.9.firstIndicator=any&rp.9.secondIndicator=any&rp.9.contentRule=contains&rp.9.searchValue=x&rp.9.caseExact=false`;
+
+    render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[`/reports/9?autorun=9&${base.replace('rp.9.searchValue=x', 'rp.9.searchValue=')}`]}><Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes></MemoryRouter></QueryClientProvider>);
+    expect(await screen.findByRole('button', { name: 'Run Report' })).toBeDisabled();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(runReport).not.toHaveBeenCalled();
+
+    cleanup();
+    render(<QueryClientProvider client={queryClient}><MemoryRouter initialEntries={[`/reports/9?autorun=9&${base}`]}><Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes></MemoryRouter></QueryClientProvider>);
+    await waitFor(() => expect(runReport).toHaveBeenCalledWith(9, expect.objectContaining({ marcTag: '035' }), { outputMode: 'table' }));
   });
 });
