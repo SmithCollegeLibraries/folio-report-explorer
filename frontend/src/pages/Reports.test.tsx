@@ -5,6 +5,44 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import ReportDetail from './ReportDetail';
 import Reports from './Reports';
+import type { ReportTemplate } from '../types';
+
+const buildFinderDetail = (id = 9): ReportTemplate => {
+  const locationId = '11111111-1111-4111-8111-111111111111';
+  return {
+    id,
+    slug: 'marc-field-indicator-content-finder',
+    name: 'MARC Field, Indicator, and Content Finder',
+    description: 'Finds present or missing MARC field rows.',
+    category: 'cataloging',
+    sqlTemplate: 'select 1',
+    parameters: [
+      { name: 'locationIds', type: 'multiselect', label: 'Locations', required: true, default: '', resolvedDefault: '', max_selections: 100 },
+      { name: 'locationBasis', type: 'select', label: 'Location basis', required: true, default: 'effective_item', resolvedDefault: 'effective_item' },
+      { name: 'marcTag', type: 'text', label: 'MARC tag', required: true, default: '', resolvedDefault: '' },
+      { name: 'occurrenceCondition', type: 'select', label: 'Occurrence condition', required: true, default: 'has', resolvedDefault: 'has' },
+      { name: 'firstIndicator', type: 'select', label: 'First indicator', required: true, default: 'any', resolvedDefault: 'any' },
+      { name: 'secondIndicator', type: 'select', label: 'Second indicator', required: true, default: 'any', resolvedDefault: 'any' },
+      { name: 'subfieldCode', type: 'text', label: 'Subfield code', required: false, default: '', resolvedDefault: '' },
+      { name: 'contentRule', type: 'select', label: 'Content rule', required: true, default: 'any', resolvedDefault: 'any' },
+      { name: 'searchValue', type: 'text', label: 'Search text', required: false, default: '', resolvedDefault: '' },
+      { name: 'caseExact', type: 'select', label: 'Case matching', required: true, default: 'false', resolvedDefault: 'false' },
+    ],
+    defaultLimit: 100000,
+    isActive: true,
+    createdBy: 'manual',
+    createdAt: '2026-08-06T00:00:00Z',
+    updatedAt: '2026-08-06T00:00:00Z',
+    selectOptions: {
+      locationIds: [{ value: locationId, label: 'Smith — SC Internet [SCINT]' }],
+      locationBasis: [{ value: 'effective_item', label: 'Effective item' }],
+      occurrenceCondition: [{ value: 'has', label: 'Has matching occurrence' }],
+      contentRule: [{ value: 'contains', label: 'Contains' }],
+      caseExact: [{ value: 'false', label: 'Case-insensitive' }],
+    },
+    identifierExportAvailable: true,
+  };
+};
 
 vi.mock('../api/client', async () => {
   const actual = await vi.importActual<typeof import('../api/client')>('../api/client');
@@ -461,8 +499,9 @@ describe('Reports', () => {
 
   it('keeps both governed export actions available and sends file requests', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { runReport } = await import('../api/client');
+    const { getReport, runReport } = await import('../api/client');
     const locationId = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(getReport).mockResolvedValue(buildFinderDetail());
     vi.mocked(runReport).mockReset();
     vi.mocked(runReport).mockResolvedValue({ jobId: 'job-export', status: 'pending', reportName: 'MARC Field, Indicator, and Content Finder', outputMode: 'file' });
     // The full finder detail is supplied by the preceding finder workflow test and remains the same API contract.
@@ -481,8 +520,9 @@ describe('Reports', () => {
 
   it('does not autorun invalid finder URLs but does autorun a valid finder URL', async () => {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const { runReport } = await import('../api/client');
+    const { getReport, runReport } = await import('../api/client');
     const locationId = '11111111-1111-4111-8111-111111111111';
+    vi.mocked(getReport).mockResolvedValue(buildFinderDetail());
     vi.mocked(runReport).mockReset();
     vi.mocked(runReport).mockResolvedValue({ jobId: 'job-autorun', status: 'pending', reportName: 'MARC Field, Indicator, and Content Finder', outputMode: 'file' });
     const base = `rp.9.locationIds=${locationId}&rp.9.locationBasis=effective_item&rp.9.marcTag=035&rp.9.occurrenceCondition=has&rp.9.firstIndicator=any&rp.9.secondIndicator=any&rp.9.contentRule=contains&rp.9.searchValue=x&rp.9.caseExact=false`;
