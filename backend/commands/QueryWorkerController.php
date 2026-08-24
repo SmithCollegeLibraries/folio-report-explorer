@@ -127,10 +127,17 @@ class QueryWorkerController extends Controller
     private function claimNextJob()
     {
         // Find oldest pending job
-        $job = QueryJob::find()
-            ->where(['status' => 'pending'])
-            ->orderBy(['created_at' => SORT_ASC])
-            ->one();
+        $db = Yii::$app->db;
+        $job = DatabaseRetryService::runWithReconnectRetry(
+            $db,
+            function () {
+                return QueryJob::find()
+                    ->where(['status' => 'pending'])
+                    ->orderBy(['created_at' => SORT_ASC])
+                    ->one();
+            },
+            'query-worker.poll.mysql'
+        );
 
         if (!$job) {
             return null;

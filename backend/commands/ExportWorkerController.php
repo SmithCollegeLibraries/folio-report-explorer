@@ -111,10 +111,17 @@ class ExportWorkerController extends Controller
      */
     private function claimNextExportJob()
     {
-        $job = QueryJob::find()
-            ->where(['status' => 'pending_export'])
-            ->orderBy(['created_at' => SORT_ASC])
-            ->one();
+        $db = Yii::$app->db;
+        $job = DatabaseRetryService::runWithReconnectRetry(
+            $db,
+            function () {
+                return QueryJob::find()
+                    ->where(['status' => 'pending_export'])
+                    ->orderBy(['created_at' => SORT_ASC])
+                    ->one();
+            },
+            'export-worker.poll.mysql'
+        );
 
         if (!$job) {
             return null;

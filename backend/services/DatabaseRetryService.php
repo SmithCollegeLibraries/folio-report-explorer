@@ -57,8 +57,25 @@ class DatabaseRetryService
      */
     public static function isTransientConnectionError(\Throwable $e)
     {
+        $current = $e;
+        while ($current !== null) {
+            if ($current instanceof \yii\db\Exception || $current instanceof \PDOException) {
+                $errorInfo = $current->errorInfo;
+                $driverCode = is_array($errorInfo) && isset($errorInfo[1])
+                    ? (int)$errorInfo[1]
+                    : null;
+                if (in_array($driverCode, [2006, 2013], true)) {
+                    return true;
+                }
+            }
+
+            $current = $current->getPrevious();
+        }
+
         $message = strtolower((string)$e->getMessage());
         $markers = [
+            'mysql server has gone away',
+            'lost connection to mysql server',
             'ssl syscall error: eof detected',
             'server closed the connection unexpectedly',
             'connection reset by peer',
