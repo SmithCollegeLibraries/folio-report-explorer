@@ -316,15 +316,19 @@ namespace {
         $controller,
         [
             'sql' => 'SELECT missing_column FROM inventory.instance__t',
-            'mode' => 'exploratory',
-            'repairAttempts' => 2,
+            'mode' => 'canonical',
+            'route' => 'builder_intent',
+            'generationProvenance' => 'verified_pattern',
+            'provenanceLabel' => 'Verified pattern',
+            'repairAttempts' => 0,
             'assumptions' => [['key' => 'purchase_date_basis', 'value' => 'payment_date']],
             'attemptedPlan' => 'Aggregate investment before joining circulation.',
             'suggestions' => ['Use a shorter reporting window.'],
+            'referenceResolver' => ['trace' => 'internal resolver trace'],
             '_askEvidence' => [
                 'initialSql' => 'SELECT original_column FROM inventory.instance__t',
                 'finalSql' => 'SELECT missing_column FROM inventory.instance__t',
-                'repairAttempts' => 2,
+                'repairAttempts' => 0,
                 'referenceBundleMetadata' => ['version' => 'bundle-v1', 'hash' => 'bundle-hash'],
             ],
         ],
@@ -333,30 +337,54 @@ namespace {
         function (): array { return ['error' => 'column "missing_column" does not exist']; },
         function () use (&$exhaustedRepairCalls): array {
             $exhaustedRepairCalls++;
-            return [];
+            if ($exhaustedRepairCalls === 1) {
+                return [
+                    'sql' => 'SELECT missing_column FROM inventory.instance__t',
+                    'repairAttempts' => 1,
+                    'generationProvenance' => 'ai_built',
+                    'provenanceLabel' => 'AI-built',
+                ];
+            }
+            return [
+                'repairAttempts' => 2,
+                'attemptedPlan' => 'Rejected internal plan.',
+                'suggestions' => ['Change the SQL filter.'],
+                'correctionExample' => 'Use a private predicate.',
+            ];
         }
     );
 
-    repairAssertSame(0, $exhaustedRepairCalls, 'An exhausted result must not make another repair call.');
-    repairAssertSame(false, array_key_exists('sql', $exhausted), 'Exhausted recovery must never include SQL.');
-    repairAssertSame('sql_repair_exhausted', $exhausted['errorType'] ?? null, 'Exhaustion should expose a stable error type.');
+    repairAssertSame(2, $exhaustedRepairCalls, 'Canonical database failures must consume the shared two-repair budget before exhaustion.');
+    repairAssertSame(false, array_key_exists('sql', $exhausted), 'Exhaustion must never include SQL.');
+    repairAssertSame('sql_generation_failed', $exhausted['errorType'] ?? null, 'Exhaustion should expose the concise SQL-generation failure type.');
+    repairAssertSame('generation_failed', $exhausted['route'] ?? null, 'Exhaustion must not route through exploratory recovery.');
+    repairAssertSame('sql_repair_exhausted', $exhausted['routeReason'] ?? null, 'Exhaustion should retain a stable machine-readable reason.');
     repairAssertSame('exhausted', $exhausted['validationSummary']['status'] ?? null, 'Exhaustion should expose its validation status.');
-    repairAssertSame('missing_column', $exhausted['validationSummary']['failureCategory'] ?? null, 'Ordinary database exhaustion should retain its existing safe database category.');
     repairAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion should report the actual repair count.');
     repairAssertSame('SELECT original_column FROM inventory.instance__t', $exhausted['_askEvidence']['initialSql'] ?? null, 'Controller exhaustion must retain trusted initial candidate evidence until finalization.');
     repairAssertSame('bundle-hash', $exhausted['_askEvidence']['referenceBundleMetadata']['hash'] ?? null, 'Controller exhaustion must retain trusted provenance until finalization.');
     repairAssertSame(
-        'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
+        'Report Explorer could not safely run this report. Please retry.',
         $exhausted['message'] ?? null,
-        'Ordinary database exhaustion should use novice-facing recovery copy.'
+        'Exhaustion should use concise Retry-oriented copy.'
     );
-    repairAssertSame(false, isset($exhausted['unmetRequirements']), 'Ordinary database exhaustion should not acquire semantic requirement fields.');
-    repairAssertSame('Compare investment and circulation ROI', $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should preserve the original question.');
-    repairAssertSame('Smith College', $exhausted['recoveryContext']['campus'] ?? null, 'Recovery should preserve campus scope.');
-    repairAssertSame([['key' => 'purchase_date_basis', 'value' => 'payment_date']], $exhausted['assumptions'] ?? null, 'Recovery should preserve assumptions.');
-    repairAssertSame('Aggregate investment before joining circulation.', $exhausted['attemptedPlan'] ?? null, 'Recovery should preserve the attempted plan.');
-    repairAssertSame(['Use a shorter reporting window.'], $exhausted['suggestions'] ?? null, 'Recovery should preserve suggestions.');
-    repairAssertNotContains('verified report pattern', json_encode($exhausted), 'Exhausted recovery must not use verified-pattern roadblock copy.');
+    foreach ([
+        'recoveryContext',
+        'recoveryItems',
+        'attemptedPlan',
+        'suggestions',
+        'semanticValidation',
+        'referenceResolver',
+        'correctionExample',
+        'generationProvenance',
+        'provenanceLabel',
+    ] as $forbiddenField) {
+        repairAssertSame(false, array_key_exists($forbiddenField, $exhausted), 'Exhaustion must omit recovery, correction, resolver, and provenance fields.');
+    }
+    $exhaustedJson = json_encode($exhausted);
+    repairAssertNotContains('request is preserved', strtolower($exhaustedJson), 'Exhaustion must not promise request preservation.');
+    repairAssertNotContains('missing_column', $exhaustedJson, 'Exhaustion must not expose rejected SQL.');
+    repairAssertNotContains('internal resolver trace', $exhaustedJson, 'Exhaustion must not expose resolver traces.');
 
     $semanticRepairCalls = 0;
     $semanticExhausted = $validateAndRepair->invoke(
@@ -403,25 +431,18 @@ namespace {
 
     repairAssertSame(1, $semanticRepairCalls, 'Semantic exhaustion after one prior repair should make exactly one remaining repair call.');
     repairAssertSame(2, $semanticExhausted['validationSummary']['repairAttempts'] ?? null, 'Semantic exhaustion should preserve the exact shared repair count.');
-    repairAssertSame('semantic_conformance', $semanticExhausted['validationSummary']['validatorStage'] ?? null, 'Controller recovery should preserve the semantic validator stage.');
-    repairAssertSame('assumption_mismatch', $semanticExhausted['validationSummary']['failureCategory'] ?? null, 'Controller recovery should preserve the safe semantic category.');
+    repairAssertSame('sql_generation_failed', $semanticExhausted['errorType'] ?? null, 'Semantic repair exhaustion should use the same concise SQL-generation failure type.');
+    repairAssertSame('generation_failed', $semanticExhausted['route'] ?? null, 'Semantic repair exhaustion must not use exploratory recovery.');
     repairAssertSame(
-        'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
+        'Report Explorer could not safely run this report. Please retry.',
         $semanticExhausted['message'] ?? null,
-        'Controller recovery should use novice-facing recovery copy.'
+        'Semantic repair exhaustion should use concise Retry-oriented copy.'
     );
-    repairAssertSame(
-        [['key' => 'purchase_date_basis', 'label' => 'Use the resolved purchase date basis.']],
-        $semanticExhausted['unmetRequirements'] ?? null,
-        'Controller recovery should expose stable unmet requirement keys and labels only.'
-    );
-    repairAssertSame([['key' => 'purchase_date_basis', 'value' => 'payment_date']], $semanticExhausted['assumptions'] ?? null, 'Semantic recovery should preserve assumptions.');
-    repairAssertSame('Aggregate paid spend before joining item-level circulation.', $semanticExhausted['attemptedPlan'] ?? null, 'Semantic recovery should preserve the attempted plan.');
-    repairAssertSame(['Adjust the purchase-date assumption and retry.'], $semanticExhausted['suggestions'] ?? null, 'Semantic recovery should preserve safe suggestions.');
-    repairAssertSame('Compare purchases and circulation ROI by call number', $semanticExhausted['recoveryContext']['originalQuestion'] ?? null, 'Semantic recovery should preserve the original question.');
-    repairAssertSame('Smith College', $semanticExhausted['recoveryContext']['campus'] ?? null, 'Semantic recovery should preserve campus scope.');
     repairAssertSame(false, array_key_exists('sql', $semanticExhausted), 'Semantic controller recovery must not expose rejected SQL.');
     repairAssertSame(false, array_key_exists('semanticValidation', $semanticExhausted), 'Semantic controller recovery must not expose stale candidate validation.');
+    foreach (['unmetRequirements', 'assumptions', 'attemptedPlan', 'suggestions', 'recoveryContext'] as $forbiddenField) {
+        repairAssertSame(false, array_key_exists($forbiddenField, $semanticExhausted), 'Semantic exhaustion must omit recovery and correction fields.');
+    }
     $semanticRecoveryJson = json_encode($semanticExhausted);
     foreach ([
         'stale_candidate',
@@ -459,19 +480,60 @@ namespace {
             'mode' => 'canonical',
             'route' => 'builder_intent',
             'routeReason' => 'family_contract_supported:inventory_listing',
+            'generationProvenance' => 'verified_pattern',
+            'provenanceLabel' => 'Verified pattern',
         ],
         'Show titles',
         'Smith College',
-        function (): array { return ['error' => 'column "broken_column" does not exist']; },
+        function (string $sql): array {
+            return strpos($sql, 'broken_column') !== false
+                ? ['error' => 'column "broken_column" does not exist']
+                : [];
+        },
         function () use (&$canonicalRepairCalls): array {
             $canonicalRepairCalls++;
-            return ['sql' => 'SELECT title FROM inventory.instance__t'];
+            return [
+                'sql' => 'SELECT title FROM inventory.instance__t',
+                'mode' => 'exploratory',
+                'route' => 'exploratory',
+            ];
         }
     );
-    repairAssertSame(0, $canonicalRepairCalls, 'Verified-family preflight failures must retain legacy recovery without Gemini repair.');
-    repairAssertSame('exploratory_recovery', $canonicalFailure['route'] ?? null, 'Verified-family preflight failures should retain the legacy continuation route.');
-    repairAssertSame('rejected', $canonicalFailure['validationSummary']['status'] ?? null, 'Verified-family preflight failures must use the safe no-SQL recovery status.');
-    repairAssertSame(null, $canonicalFailure['errorType'] ?? null, 'Verified-family preflight failures must remain distinct from exploratory repair exhaustion.');
+    repairAssertSame(1, $canonicalRepairCalls, 'Canonical preflight failure must enter seeded AI repair.');
+    repairAssertSame('ai_built', $canonicalFailure['generationProvenance'] ?? null, 'Repaired canonical SQL is AI-built.');
+    repairAssertSame('SELECT title FROM inventory.instance__t', $canonicalFailure['sql'] ?? null, 'Repaired SQL must pass a second preflight.');
+
+    foreach ([
+        'SQLSTATE[53200]: Out of memory',
+        'SQLSTATE[53400]: Configuration limit exceeded',
+        'SQLSTATE[54001]: Statement too complex',
+        'Query is too complex for the configured preflight limit',
+        'Estimated query cost exceeds configured limit',
+    ] as $resourceFailure) {
+        $resourceRepairCalls = 0;
+        $resourceResponse = $validateAndRepair->invoke(
+            $controller,
+            [
+                'sql' => 'SELECT title FROM inventory.instance__t',
+                'mode' => 'canonical',
+                'route' => 'builder_intent',
+                'generationProvenance' => 'verified_pattern',
+            ],
+            'Show titles',
+            'Smith College',
+            function () use ($resourceFailure): array {
+                return ['error' => $resourceFailure];
+            },
+            function () use (&$resourceRepairCalls): array {
+                $resourceRepairCalls++;
+                return ['sql' => 'SELECT should_not_run'];
+            }
+        );
+        repairAssertSame(0, $resourceRepairCalls, 'Database resource-limit failures must never invoke AI repair.');
+        repairAssertSame('database_resource_limit', $resourceResponse['errorType'] ?? null, 'Database resource-limit failures must retain a distinct hard-stop type.');
+        repairAssertSame('database_resource_limit', $resourceResponse['route'] ?? null, 'Database resource-limit failures must not use a recovery route.');
+        repairAssertSame(false, isset($resourceResponse['sql']), 'Database resource-limit hard stops must not expose rejected SQL.');
+    }
 
     $cancelRepairCalls = 0;
     try {
@@ -587,6 +649,78 @@ namespace {
     );
 
     $roiQuestion = 'Rank purchase activity by purchase count';
+    $advisoryPreflightCalls = 0;
+    $advisoryRepairCalls = 0;
+    $advisoryResult = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT purchase_count FROM purchase_data ORDER BY purchase_count DESC',
+            'mode' => 'exploratory',
+            'route' => 'exploratory',
+            'generationProvenance' => 'ai_built',
+            'semanticContractApplicable' => true,
+            'semanticValidation' => [
+                'status' => 'advisory',
+                'contractVersion' => 1,
+                'checkedRequirements' => [],
+            ],
+            'reviewRequired' => true,
+            'repairAttempts' => 2,
+        ],
+        $roiQuestion,
+        'Smith College',
+        function () use (&$advisoryPreflightCalls): array {
+            $advisoryPreflightCalls++;
+            return ['rows' => 1];
+        },
+        function () use (&$advisoryRepairCalls): array {
+            $advisoryRepairCalls++;
+            return [];
+        }
+    );
+    repairAssertSame(1, $advisoryPreflightCalls, 'An AI-reviewed semantic advisory must proceed to database preflight.');
+    repairAssertSame(0, $advisoryRepairCalls, 'A semantic advisory that passes preflight must not be repaired again.');
+    repairAssertSame('SELECT purchase_count FROM purchase_data ORDER BY purchase_count DESC', $advisoryResult['sql'] ?? null, 'A preflighted semantic advisory remains executable.');
+
+    $rejectedSemanticPreflightCalls = 0;
+    $rejectedSemanticRepairCalls = 0;
+    $repairedSemantic = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT unreviewed_count FROM purchase_data',
+            'mode' => 'canonical',
+            'route' => 'builder_intent',
+            'generationProvenance' => 'verified_pattern',
+            'semanticContractApplicable' => true,
+            'semanticValidation' => [
+                'status' => 'rejected',
+                'violations' => [['key' => 'purchase_count', 'guidance' => 'private validator guidance']],
+            ],
+            'repairAttempts' => 0,
+        ],
+        $roiQuestion,
+        'Smith College',
+        function (string $sql) use (&$rejectedSemanticPreflightCalls): array {
+            $rejectedSemanticPreflightCalls++;
+            repairAssertSame('SELECT purchase_count FROM purchase_data', $sql, 'Raw semantic rejection must not reach database preflight before AI review.');
+            return ['rows' => 1];
+        },
+        function ($question, $campus, array $candidate, string $diagnostic) use (&$rejectedSemanticRepairCalls): array {
+            $rejectedSemanticRepairCalls++;
+            repairAssertSame('Semantic validation requires AI review.', $diagnostic, 'Raw semantic rejection should enter the repair seam with a safe diagnostic.');
+            return [
+                'sql' => 'SELECT purchase_count FROM purchase_data',
+                'semanticContractApplicable' => true,
+                'semanticValidation' => ['status' => 'advisory', 'checkedRequirements' => []],
+                'reviewRequired' => true,
+                'repairAttempts' => 1,
+            ];
+        }
+    );
+    repairAssertSame(1, $rejectedSemanticRepairCalls, 'Raw canonical semantic rejection must enter seeded AI repair.');
+    repairAssertSame(1, $rejectedSemanticPreflightCalls, 'The AI-reviewed semantic candidate must be preflighted once.');
+    repairAssertSame('ai_built', $repairedSemantic['generationProvenance'] ?? null, 'A semantic repair must be relabeled AI-built.');
+
     $semanticPreflightCalls = 0;
     $missingSemantic = $validateAndRepair->invoke(
         $controller,
@@ -606,6 +740,7 @@ namespace {
     );
     repairAssertSame(0, $semanticPreflightCalls, 'Applicable exploratory SQL without semantic validation must never reach preflight.');
     repairAssertSame(false, isset($missingSemantic['sql']), 'Unverified SQL must not be returned.');
+    repairAssertSame('sql_generation_failed', $missingSemantic['errorType'] ?? null, 'Unreviewed semantic exhaustion should use concise terminal failure.');
 
     $validatedPreflightCalls = 0;
     $validatedResult = $validateAndRepair->invoke(
@@ -794,22 +929,22 @@ namespace {
     repairAssertSame('schema-v1', $ordinaryRecoveryRecorder->received['provenance']['schemaMetadata']['version'] ?? null, 'Ordinary database recovery persistence must retain schema provenance.');
     repairAssertSame('bundle-hash', $ordinaryRecoveryRecorder->received['provenance']['referenceBundleMetadata']['hash'] ?? null, 'Ordinary database recovery persistence must retain reference provenance.');
     repairAssertSame('family_compiler_v1', $ordinaryRecoveryRecorder->received['provenance']['compilerVersion'] ?? null, 'Ordinary database recovery persistence must retain compiler provenance.');
-    repairAssertSame('rejected', $ordinaryRecoveryRecorder->received['validationStatus'] ?? null, 'Ordinary database recovery persistence must record the failed candidate as rejected.');
+    repairAssertSame('exhausted', $ordinaryRecoveryRecorder->received['validationStatus'] ?? null, 'Ordinary database repair exhaustion persistence must record the exhausted budget.');
     repairAssertSame(true, $ordinaryRecoveryRecorder->received['reviewRequired'] ?? null, 'Ordinary database recovery must require administrator review.');
     repairAssertSame(true, in_array('unable_to_validate', $ordinaryRecoveryRecorder->received['reviewReasons'] ?? [], true), 'Ordinary database recovery must include the unable-to-validate review reason.');
     repairAssertSame(null, $ordinaryRecoveryRecorder->received['generatedSql'] ?? null, 'Ordinary database recovery must not persist rejected SQL as executable.');
     repairAssertSame(null, $ordinaryRecoveryRecorder->received['sqlHash'] ?? null, 'Ordinary database recovery must not persist a rejected SQL hash.');
     repairAssertSame(true, is_array($ordinaryRecoveryRecorder->received['initialStructure'] ?? null), 'Ordinary database recovery persistence must retain initial candidate structure.');
-    repairAssertSame(true, is_array($ordinaryRecoveryRecorder->received['finalStructure'] ?? null), 'Ordinary database recovery persistence must retain final candidate structure.');
+    repairAssertSame(null, $ordinaryRecoveryRecorder->received['finalStructure'] ?? null, 'Ordinary database repair exhaustion must not persist rejected SQL as the final structure.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['_askEvidence']), 'Ordinary database recovery must strip the internal envelope after persistence.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['sql']), 'Ordinary database recovery must not expose generated SQL.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['validationStatus']), 'Ordinary database recovery must not expose validator status.');
-    repairAssertSame('rejected', $finalizedOrdinaryRecovery['validationSummary']['status'] ?? null, 'Ordinary database recovery must expose only the safe no-SQL recovery status.');
-    repairAssertSame('Show available items', $finalizedOrdinaryRecovery['recoveryContext']['originalQuestion'] ?? null, 'Ordinary database recovery must preserve the original question for safe Retry controls.');
+    repairAssertSame('exhausted', $finalizedOrdinaryRecovery['validationSummary']['status'] ?? null, 'Ordinary database exhaustion must expose only the safe no-SQL terminal status.');
+    repairAssertSame(false, isset($finalizedOrdinaryRecovery['recoveryContext']), 'Ordinary database exhaustion must not preserve request text in a recovery context.');
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['failureCategory']), 'Ordinary database recovery must not expose validator category.');
     repairAssertSame(true, $finalizedOrdinaryRecovery['reviewRequired'] ?? null, 'Ordinary database recovery may expose only the designed review signal.');
     repairAssertSame(200, Yii::$app->response->statusCode, 'Ordinary database recovery must preserve its HTTP 200 status.');
-    repairAssertSame('I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.', $finalizedOrdinaryRecovery['message'] ?? null, 'Ordinary database recovery must preserve its continuation copy.');
+    repairAssertSame('Report Explorer could not safely run this report. Please retry.', $finalizedOrdinaryRecovery['message'] ?? null, 'Ordinary database exhaustion must use concise Retry-oriented copy.');
 
     foreach (['connectivity', 'policy'] as $postGenerationOutcome) {
         Yii::$app->response->statusCode = 200;
@@ -972,11 +1107,8 @@ namespace {
             ];
         }
     );
-    repairAssertSame(
-        'database_validation',
-        $unsafeCategory['validationSummary']['failureCategory'] ?? null,
-        'Untrusted repair failure categories should map to a fixed browser-safe category.'
-    );
+    repairAssertSame(false, isset($unsafeCategory['validationSummary']['failureCategory']), 'Terminal exhaustion must omit validator failure categories.');
+    repairAssertNotContains('password=secret', json_encode($unsafeCategory), 'Terminal exhaustion must not expose untrusted database details.');
 
     $negativeRepairCalls = 0;
     $negativeAttempts = $validateAndRepair->invoke(
@@ -1126,6 +1258,9 @@ namespace {
 
     repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'Routed action exhaustion should enter the default repair seam once.');
     repairAssertSame(2, $actionExhaustionResponse['validationSummary']['repairAttempts'] ?? null, 'Final routed action recovery must preserve the shared two-attempt cap.');
+    repairAssertSame('sql_generation_failed', $actionExhaustionResponse['errorType'] ?? null, 'Final action exhaustion must expose concise SQL-generation failure.');
+    repairAssertSame('generation_failed', $actionExhaustionResponse['route'] ?? null, 'Final action exhaustion must not use exploratory recovery.');
+    repairAssertSame(false, isset($actionExhaustionResponse['recoveryContext']), 'Final action exhaustion must not preserve request text.');
     repairAssertSame(false, isset($actionExhaustionResponse['attemptedPlan']), 'Final routed action recovery must omit an attempted plan without trusted provenance.');
     repairAssertNotContains(
         $untrustedActionExplanation,

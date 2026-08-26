@@ -664,7 +664,7 @@ class GeminiService
             );
             $schemaContext = FolioSchemaService::buildSchemaContext($generationPrompt);
             return self::withAskEvidence(
-                self::buildExploratoryRecoveryResponse($context, $outcome, $reason),
+                self::buildAiSqlGenerationFailedResponse($context, $outcome),
                 [
                     'modelName' => self::getAiModel(),
                     'promptVersion' => self::LEGACY_PROMPT_VERSION,
@@ -768,49 +768,33 @@ class GeminiService
         return array_values($merged);
     }
 
-    private static function buildExploratoryRecoveryResponse(
-        array $context,
-        array $outcome,
-        string $reason
-    ): array {
-        $response = [
-            'mode' => 'exploratory',
-            'exploratory' => true,
-            'route' => 'exploratory_recovery',
-            'routeReason' => $reason,
-            'needsClarification' => false,
-            'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
-            'assumptions' => $context['assumptions'] ?? [],
-            'suggestions' => $outcome['suggestions'] ?? [],
-            'unmetRequirements' => is_array($outcome['unmetRequirements'] ?? null)
-                ? $outcome['unmetRequirements']
-                : [],
+    private static function buildAiSqlGenerationFailedResponse(array $context, array $outcome): array
+    {
+        $repairAttempts = max(
+            0,
+            min(ExploratorySqlRepairService::MAX_REPAIR_ATTEMPTS, (int)($outcome['repairAttempts'] ?? 0))
+        );
+        $contextEvidence = is_array($context['_askEvidence'] ?? null)
+            ? $context['_askEvidence']
+            : [];
+        $outcomeEvidence = is_array($outcome['_askEvidence'] ?? null)
+            ? $outcome['_askEvidence']
+            : [];
+        return [
+            'errorType' => 'sql_generation_failed',
+            'message' => 'Report Explorer could not safely run this report. Please retry.',
+            'route' => 'generation_failed',
+            'routeReason' => 'sql_repair_exhausted',
             'validationSummary' => [
                 'status' => 'exhausted',
-                'repairAttempts' => (int)($outcome['repairAttempts'] ?? 0),
-                'validatorStage' => $outcome['validatorStage'] ?? 'response_validation',
-                'failureCategory' => $outcome['failureCategory'] ?? 'validation_failure',
-                'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
+                'repairAttempts' => $repairAttempts,
             ],
-            'recoveryContext' => [
-                'originalQuestion' => (string)($context['originalQuestion'] ?? ''),
-            ],
-            'repeatabilityWarning' => self::getExploratoryRepeatabilityWarning(),
-            'exploratoryNotice' => self::buildExploratoryNotice($reason),
-            '_askEvidence' => is_array($outcome['_askEvidence'] ?? null)
-                ? $outcome['_askEvidence']
-                : [],
+            '_askEvidence' => array_merge($contextEvidence, $outcomeEvidence, [
+                'finalSql' => null,
+                'repairAttempts' => $repairAttempts,
+                'validationStatus' => 'exhausted',
+            ]),
         ];
-
-        $attemptedPlan = trim((string)($context['attemptedPlan'] ?? ''));
-        if ($attemptedPlan !== ''
-            && ($context['attemptedPlanProvenance'] ?? null) === 'server_defaults'
-        ) {
-            $response['attemptedPlan'] = $attemptedPlan;
-            $response['_attemptedPlanProvenance'] = 'server_defaults';
-        }
-
-        return $response;
     }
 
     private static function decorateExploratoryResponse(array $primary, string $reason): array
@@ -2650,6 +2634,7 @@ GUIDANCE;
             'exhausted',
             'policy_blocked',
             'connectivity_failure',
+            'resource_limited',
             'provider_failure',
             'cancelled',
         ];
@@ -2691,6 +2676,7 @@ GUIDANCE;
             'policy_blocked',
             'provider_failure',
             'query_too_complex',
+            'resource_limit',
             'syntax_error',
             'unknown_column',
             'unknown_table',
@@ -6335,6 +6321,10 @@ PROMPT;
             self::logExploratoryTerminalOutcome($terminalContext, 'policy_blocked', 'policy_blocked');
             throw new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.');
         }
+        if (self::isPreflightResourceFailure($preflightError)) {
+            self::logExploratoryTerminalOutcome($terminalContext, 'resource_limited', 'resource_limit');
+            throw new \RuntimeException('Database validation exceeded available resources or configured limits.');
+        }
 
         $candidateSql = (string)($currentResult['sql'] ?? '');
         $repairAttemptsUsed = (int)($currentResult['repairAttempts'] ?? 0);
@@ -6415,7 +6405,7 @@ PROMPT;
                 (string)($outcome['failureCategory'] ?? 'validation_failure'),
                 (int)($outcome['repairAttempts'] ?? 0)
             );
-            return self::buildExploratoryRecoveryResponse($context, $outcome, $reason);
+            return self::buildAiSqlGenerationFailedResponse($context, $outcome);
         }
 
         $result = self::decorateExploratoryResponse($outcome['result'], $reason);
@@ -6935,6 +6925,17 @@ PROMPT;
     {
         return preg_match(
             '/SQLSTATE\[42501\]|permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
+            $error
+        ) === 1;
+    }
+
+    private static function isPreflightResourceFailure(string $error): bool
+    {
+        return preg_match(
+            '/SQLSTATE\[(?:53|54)[0-9A-Z]{3}\]|resource exhausted|out of memory|disk full|too many connections|'
+                . 'configuration limit exceeded|query.{0,40}too complex|'
+                . '(?:estimated\s+)?query\s+(?:cost|rows?).{0,40}(?:exceeds?|above).{0,20}(?:configured\s+)?limit|'
+                . '(?:configured|complexity|resource|row|cost)\s+limit\s+(?:exceeded|reached)/i',
             $error
         ) === 1;
     }

@@ -772,7 +772,9 @@ repairAssertSame(['title', 'barcode', 'publication_date'], $explicitValuesResult
 
 Yii::$logs = [];
 $logValidationFailure = new ReflectionMethod(GeminiService::class, 'logValidationFailure');
-$logValidationFailure->setAccessible(true);
+if (PHP_VERSION_ID < 80100) {
+    $logValidationFailure->setAccessible(true);
+}
 $logValidationFailure->invoke(null, 'legacy_sql_parse', [
     'route' => 'legacy_freeform',
     'routeReason' => 'forced_legacy_mode',
@@ -932,11 +934,16 @@ TestTransport::$responses = [
 Yii::$logs = [];
 $exhaustedPrompt = 'Compare identifiers across unsupported inventory relations.';
 $exhausted = GeminiService::generateSqlWithShadow($exhaustedPrompt, 'Smith College', null, true);
-repairAssertSame(false, isset($exhausted['sql']), 'Exhausted recovery must not return unvalidated SQL.');
-repairAssertSame('exploratory_recovery', $exhausted['route'] ?? null, 'Exhausted recovery should use the safe recovery route.');
-repairAssertSame(2, $exhausted['repairAttempts'] ?? null, 'Exhaustion should consume exactly two repair attempts.');
-repairAssertSame($exhaustedPrompt, $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Recovery should retain the original question for an explicit retry.');
-repairAssertSame('unknown_table', $exhausted['validationSummary']['failureCategory'] ?? null, 'Recovery should expose only the safe failure category.');
+repairAssertSame(false, isset($exhausted['sql']), 'Exhaustion must not return unvalidated SQL.');
+repairAssertSame('sql_generation_failed', $exhausted['errorType'] ?? null, 'Exhaustion must expose a concise SQL-generation failure type.');
+repairAssertSame('generation_failed', $exhausted['route'] ?? null, 'Exhaustion must not use the exploratory recovery route.');
+repairAssertSame('sql_repair_exhausted', $exhausted['routeReason'] ?? null, 'Exhaustion should expose a stable repair-budget reason.');
+repairAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion should consume exactly two repair attempts.');
+repairAssertSame('Report Explorer could not safely run this report. Please retry.', $exhausted['message'] ?? null, 'Exhaustion should use concise Retry-oriented copy.');
+foreach (['recoveryContext', 'recoveryItems', 'attemptedPlan', 'suggestions', 'unmetRequirements', 'generationProvenance', 'provenanceLabel'] as $forbiddenField) {
+    repairAssertSame(false, array_key_exists($forbiddenField, $exhausted), 'Exhaustion must omit recovery, correction, and provenance fields.');
+}
+repairAssertSame(false, strpos(strtolower(json_encode($exhausted)), 'request is preserved') !== false, 'Exhaustion must not promise request preservation.');
 repairAssertSame('exhausted', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Repair exhaustion should emit a terminal exhausted outcome.');
 
 $explicitRecoveryPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
@@ -969,7 +976,9 @@ TestTransport::$responses = [
 TestTransport::$requests = [];
 Yii::$logs = [];
 $routedRepair = new ReflectionMethod(GeminiService::class, 'repairRoutedCandidateMissingExplicitValues');
-$routedRepair->setAccessible(true);
+if (PHP_VERSION_ID < 80100) {
+    $routedRepair->setAccessible(true);
+}
 $routedExhausted = $routedRepair->invoke(
     null,
     [
@@ -1019,6 +1028,36 @@ try {
     repairAssertSame('policy_blocked', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Policy hard stops should emit a terminal policy-blocked outcome.');
 }
 SqlBuilderService::$blockPolicy = false;
+
+foreach ([
+    'SQLSTATE[53200]: Out of memory',
+    'SQLSTATE[53400]: Configuration limit exceeded',
+    'SQLSTATE[54001]: Statement too complex',
+    'Query is too complex for the configured preflight limit',
+    'Estimated query cost exceeds configured limit',
+] as $resourceError) {
+    TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+    TestTransport::$requests = [];
+    Yii::$logs = [];
+    try {
+        GeminiService::repairExploratorySqlAfterPreflight(
+            'Show items',
+            null,
+            [
+                'sql' => 'SELECT id FROM inventory.item__t',
+                'repairAttempts' => 0,
+                'generationProvenance' => 'verified_pattern',
+            ],
+            $resourceError
+        );
+        fwrite(STDERR, "Database resource limits must be hard stops.\n");
+        exit(1);
+    } catch (\RuntimeException $exception) {
+        repairAssertSame(0, count(TestTransport::$requests), 'Database resource limits must not make an AI repair request.');
+        repairAssertSame('resource_limited', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Database resource limits should emit a distinct terminal outcome.');
+        repairAssertSame('resource_limit', terminalTelemetryOutcomes()[0]['category'] ?? null, 'Database resource limits should expose only a safe resource category.');
+    }
+}
 
 foreach ([
     'SQLSTATE[57014]: Query canceled: canceling statement due to user request',
@@ -1077,6 +1116,33 @@ $preflightPayload = json_encode(TestTransport::$requests[count(TestTransport::$r
 repairAssertContains('unknown_column', $preflightPayload, 'Preflight errors should be reduced to a safe category.');
 repairAssertSame(false, strpos($preflightPayload, 'at character 15') !== false, 'Raw PostgreSQL error detail must not enter repair prompts.');
 repairAssertSame(0, count(terminalTelemetryOutcomes()), 'A repaired candidate must not emit terminal validated until controller re-preflight succeeds.');
+
+TestTransport::$responses = [
+    geminiText('SELECT missing_a.id FROM inventory.missing_a__t missing_a'),
+    geminiText('SELECT missing_b.id FROM inventory.missing_b__t missing_b'),
+];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$preflightExhaustion = GeminiService::repairExploratorySqlAfterPreflight(
+    'Show item identifiers.',
+    'Smith College',
+    [
+        'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
+        'repairAttempts' => 0,
+        'generationProvenance' => 'verified_pattern',
+        'provenanceLabel' => 'Verified pattern',
+    ],
+    'ERROR: column ii.missing_column does not exist'
+);
+repairAssertSame(2, count(TestTransport::$requests), 'Database-preflight exhaustion must consume the shared two-repair budget.');
+repairAssertSame(false, isset($preflightExhaustion['sql']), 'Database-preflight exhaustion must not return rejected SQL.');
+repairAssertSame('sql_generation_failed', $preflightExhaustion['errorType'] ?? null, 'Database-preflight exhaustion must use concise SQL-generation failure.');
+repairAssertSame('generation_failed', $preflightExhaustion['route'] ?? null, 'Database-preflight exhaustion must not use exploratory recovery.');
+repairAssertSame(2, $preflightExhaustion['validationSummary']['repairAttempts'] ?? null, 'Database-preflight exhaustion must retain the actual shared repair count.');
+repairAssertSame(null, $preflightExhaustion['_askEvidence']['finalSql'] ?? null, 'Database-preflight exhaustion must not retain rejected SQL as executable final evidence.');
+foreach (['recoveryContext', 'attemptedPlan', 'suggestions', 'unmetRequirements', 'generationProvenance', 'provenanceLabel'] as $forbiddenField) {
+    repairAssertSame(false, array_key_exists($forbiddenField, $preflightExhaustion), 'Database-preflight exhaustion must omit recovery, correction, and provenance fields.');
+}
 
 $legacyContract = \app\services\ExploratorySemanticContractService::build(
     roiPrompt(),

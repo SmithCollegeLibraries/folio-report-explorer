@@ -445,26 +445,22 @@ class FolioQueryController extends Controller
         while (isset($result['sql'])) {
             $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
             if (!$this->isSafeSelectNlSql((string)$result['sql'])) {
-                return $this->buildUnsafeGeneratedSqlResponse($result, $rawQuestion, $campus);
+                return $this->buildUnsafeGeneratedSqlResponse($result);
             }
 
-            if (!empty($result['semanticContractApplicable'])
-                && (($result['semanticValidation']['status'] ?? null) !== 'validated')
-            ) {
-                return $this->buildExploratoryRepairExhaustedResponse(
-                    $result,
-                    $rawQuestion,
-                    $campus,
-                    'semantic_coverage_gap'
-                );
-            }
-
+            $semanticStatus = (string)($result['semanticValidation']['status'] ?? '');
+            $semanticRepairRequired = !empty($result['semanticContractApplicable'])
+                && !in_array($semanticStatus, ['validated', 'advisory'], true);
             $dataSource = (string)($result['dataSource'] ?? 'folio');
-            try {
-                $estimate = $preflight((string)$result['sql'], $dataSource);
-            } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
-                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
-                throw $exception;
+            if ($semanticRepairRequired) {
+                $estimate = ['error' => 'Semantic validation requires AI review.'];
+            } else {
+                try {
+                    $estimate = $preflight((string)$result['sql'], $dataSource);
+                } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
+                    $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
+                    throw $exception;
+                }
             }
             if (!isset($estimate['error'])) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'validated', 'validated');
@@ -472,21 +468,23 @@ class FolioQueryController extends Controller
             }
 
             $error = (string)$estimate['error'];
-            $this->logPreflightValidationFailure(
-                'api.nl',
-                $error,
-                $dataSource,
-                'nl',
-                (string)$result['sql'],
-                [
-                    'route' => $result['route'] ?? null,
-                    'routeReason' => $result['routeReason'] ?? null,
-                    'promptFingerprint' => $this->fingerprintPrompt($rawQuestion),
-                    'repairAttempts' => (int)($result['repairAttempts'] ?? 0),
-                ]
-            );
+            if (!$semanticRepairRequired) {
+                $this->logPreflightValidationFailure(
+                    'api.nl',
+                    $error,
+                    $dataSource,
+                    'nl',
+                    (string)$result['sql'],
+                    [
+                        'route' => $result['route'] ?? null,
+                        'routeReason' => $result['routeReason'] ?? null,
+                        'promptFingerprint' => $this->fingerprintPrompt($rawQuestion),
+                        'repairAttempts' => (int)($result['repairAttempts'] ?? 0),
+                    ]
+                );
+            }
 
-            if ($this->isAskPostgresConnectivityFailure($error)) {
+            if (!$semanticRepairRequired && $this->isAskPostgresConnectivityFailure($error)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'connectivity_failure', 'database_connectivity');
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskPostgresConnectivityRecovery(
@@ -497,11 +495,11 @@ class FolioQueryController extends Controller
                     $result
                 );
             }
-            if ($this->isAskPreflightCancellationFailure($error)) {
+            if (!$semanticRepairRequired && $this->isAskPreflightCancellationFailure($error)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
                 throw new \app\exceptions\DatabaseQueryCancelledException();
             }
-            if ($this->isAskPreflightPolicyFailure($error)) {
+            if (!$semanticRepairRequired && $this->isAskPreflightPolicyFailure($error)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'policy_blocked', 'policy_blocked');
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskContinuationFromFailure(
@@ -513,8 +511,12 @@ class FolioQueryController extends Controller
                     $result
                 );
             }
+            if (!$semanticRepairRequired && $this->isAskPreflightResourceFailure($error)) {
+                $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'resource_limited', 'resource_limit');
+                return $this->buildDatabaseResourceLimitResponse($result);
+            }
 
-            if (!$this->isExploratoryRepairEligible($result)) {
+            if (!$this->isAiRepairEligible($result)) {
                 $result['_askEvidence'] = array_merge(
                     is_array($result['_askEvidence'] ?? null) ? $result['_askEvidence'] : [],
                     ['validationStatus' => 'rejected']
@@ -530,20 +532,18 @@ class FolioQueryController extends Controller
                 );
             }
 
+            $failureCategory = $semanticRepairRequired
+                ? 'semantic_coverage_gap'
+                : $this->classifyPreflightErrorFamily($error);
             $repairAttempts = (int)($result['repairAttempts'] ?? 0);
             if ($repairAttempts >= 2) {
                 $this->logExploratoryTerminalOutcome(
                     $result,
                     $rawQuestion,
                     'exhausted',
-                    $this->classifyPreflightErrorFamily($error)
+                    $failureCategory
                 );
-                return $this->buildExploratoryRepairExhaustedResponse(
-                    $result,
-                    $rawQuestion,
-                    $campus,
-                    $this->classifyPreflightErrorFamily($error)
-                );
+                return $this->buildAiSqlGenerationFailedResponse($result);
             }
 
             $previousResult = $result;
@@ -569,8 +569,14 @@ class FolioQueryController extends Controller
                     $this->clampExploratoryRepairAttempts($repairResult['repairAttempts'] ?? 0)
                 )
             );
-            $result['mode'] = 'exploratory';
-            $result['route'] = 'exploratory';
+            if (isset($result['sql'])) {
+                $result['mode'] = 'exploratory';
+                $result['route'] = 'exploratory';
+                $result = AskResponseContractService::withGenerationProvenance(
+                    $result,
+                    AskResponseContractService::PROVENANCE_AI_BUILT
+                );
+            }
             if ($previousEvidence !== [] || $repairEvidence !== []) {
                 $result['_askEvidence'] = array_merge($previousEvidence, $repairEvidence, [
                     'initialSql' => $previousEvidence['initialSql']
@@ -582,14 +588,7 @@ class FolioQueryController extends Controller
             }
 
             if (!isset($result['sql'])) {
-                $failureCategory = (string)($result['validationSummary']['failureCategory']
-                    ?? $this->classifyPreflightErrorFamily($error));
-                return $this->buildExploratoryRepairExhaustedResponse(
-                    $result,
-                    $rawQuestion,
-                    $campus,
-                    $failureCategory
-                );
+                return $this->buildAiSqlGenerationFailedResponse($result);
             }
         }
 
@@ -627,16 +626,30 @@ class FolioQueryController extends Controller
         ) === 1;
     }
 
-    private function isExploratoryRepairEligible(array $result): bool
+    private function isAskPreflightResourceFailure(string $message): bool
     {
-        $mode = strtolower(trim((string)($result['mode'] ?? '')));
-        $route = strtolower(trim((string)($result['route'] ?? '')));
-        $routeReason = strtolower(trim((string)($result['routeReason'] ?? '')));
+        return preg_match(
+            '/SQLSTATE\[(?:53|54)[0-9A-Z]{3}\]|resource exhausted|out of memory|disk full|too many connections|'
+                . 'configuration limit exceeded|query.{0,40}too complex|'
+                . '(?:estimated\s+)?query\s+(?:cost|rows?).{0,40}(?:exceeds?|above).{0,20}(?:configured\s+)?limit|'
+                . '(?:configured|complexity|resource|row|cost)\s+limit\s+(?:exceeded|reached)/i',
+            $message
+        ) === 1;
+    }
 
-        return $mode === 'exploratory'
-            || !empty($result['exploratory'])
-            || strpos($route, 'exploratory') !== false
-            || strpos($routeReason, 'unsupported_query_family') !== false;
+    private function isAiRepairEligible(array $result): bool
+    {
+        if (!isset($result['sql'])) {
+            return false;
+        }
+        return in_array(
+            (string)($result['generationProvenance'] ?? ''),
+            [
+                AskResponseContractService::PROVENANCE_VERIFIED_PATTERN,
+                AskResponseContractService::PROVENANCE_AI_BUILT,
+            ],
+            true
+        ) || in_array((string)($result['mode'] ?? ''), ['canonical', 'exploratory'], true);
     }
 
     private function logExploratoryTerminalOutcome(
@@ -645,10 +658,10 @@ class FolioQueryController extends Controller
         string $outcome,
         string $category
     ): void {
-        if (!$this->isExploratoryRepairEligible($result)) {
+        if (!$this->isAiRepairEligible($result)) {
             return;
         }
-        $allowedOutcomes = ['exhausted', 'policy_blocked', 'connectivity_failure', 'provider_failure', 'cancelled', 'validated'];
+        $allowedOutcomes = ['exhausted', 'policy_blocked', 'connectivity_failure', 'resource_limited', 'provider_failure', 'cancelled', 'validated'];
         $safeOutcome = in_array($outcome, $allowedOutcomes, true) ? $outcome : 'provider_failure';
         $payload = [
             'event' => 'nl2sql.exploratory_terminal_outcome',
@@ -674,85 +687,51 @@ class FolioQueryController extends Controller
             : $fallback;
     }
 
-    private function buildExploratoryRepairExhaustedResponse(
-        array $result,
-        string $prompt,
-        $campus,
-        string $safeCategory
-    ): array {
+    private function buildAiSqlGenerationFailedResponse(array $result): array
+    {
         $repairAttempts = $this->clampExploratoryRepairAttempts($result['repairAttempts'] ?? 0);
-        $validatorStage = (string)($result['validationSummary']['validatorStage'] ?? '');
-        $semanticExhaustion = $validatorStage === 'semantic_conformance';
-        $response = [
-            'needsClarification' => false,
-            'mode' => 'exploratory',
-            'errorType' => 'sql_repair_exhausted',
-            'message' => 'I could not build a report I could safely run. Your request is preserved, and you can retry it or adjust one part of the question.',
-            'route' => 'exploratory_recovery',
-            'routeReason' => 'sql_repair_exhausted',
-            'validationSummary' => [
-                'status' => 'exhausted',
-                'failureCategory' => $this->sanitizeExploratoryFailureCategory($safeCategory),
-                'repairAttempts' => $repairAttempts,
-            ],
-            'recoveryContext' => [
-                'originalQuestion' => $prompt,
-                'campus' => $campus,
-            ],
-        ];
-
-        foreach (['assumptions', 'attemptedPlan', 'suggestions'] as $field) {
-            if (array_key_exists($field, $result)) {
-                $response[$field] = $result[$field];
-            }
-        }
-        if (($result['_attemptedPlanProvenance'] ?? null) === 'server_defaults'
-            && isset($response['attemptedPlan'])
-        ) {
-            $response['_attemptedPlanProvenance'] = 'server_defaults';
-        }
-
         $resultEvidence = is_array($result['_askEvidence'] ?? null)
             ? $result['_askEvidence']
             : [];
-        $response['_askEvidence'] = array_merge($resultEvidence, [
-            'finalSql' => isset($result['sql'])
-                ? (string)$result['sql']
-                : ($resultEvidence['finalSql'] ?? null),
-            'repairAttempts' => $repairAttempts,
-            'validationStatus' => 'exhausted',
-        ]);
-
-        if ($semanticExhaustion) {
-            $response['validationSummary']['validatorStage'] = 'semantic_conformance';
-            $response['unmetRequirements'] = $this->sanitizeExploratoryUnmetRequirements(
-                $result['unmetRequirements'] ?? []
-            );
-        }
-
-        return $response;
+        return [
+            'errorType' => 'sql_generation_failed',
+            'message' => 'Report Explorer could not safely run this report. Please retry.',
+            'route' => 'generation_failed',
+            'routeReason' => 'sql_repair_exhausted',
+            'validationSummary' => [
+                'status' => 'exhausted',
+                'repairAttempts' => $repairAttempts,
+            ],
+            '_askEvidence' => array_merge($resultEvidence, [
+                'finalSql' => null,
+                'repairAttempts' => $repairAttempts,
+                'validationStatus' => 'exhausted',
+            ]),
+        ];
     }
 
-    private function sanitizeExploratoryUnmetRequirements($requirements): array
+    private function buildDatabaseResourceLimitResponse(array $result): array
     {
-        if (!is_array($requirements)) {
-            return [];
-        }
-
-        $safe = [];
-        foreach ($requirements as $requirement) {
-            if (!is_array($requirement)) {
-                continue;
-            }
-            $key = trim((string)($requirement['key'] ?? ''));
-            $label = trim((string)($requirement['label'] ?? ''));
-            if (preg_match('/^[a-z0-9_]{1,80}$/', $key) !== 1 || $label === '') {
-                continue;
-            }
-            $safe[$key] = ['key' => $key, 'label' => $label];
-        }
-
-        return array_values($safe);
+        Yii::$app->response->statusCode = 503;
+        $resultEvidence = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
+        $repairAttempts = $this->clampExploratoryRepairAttempts($result['repairAttempts'] ?? 0);
+        return [
+            'errorType' => 'database_resource_limit',
+            'error' => 'Database validation stopped because this report exceeded available resources or configured limits. Please retry with a narrower scope.',
+            'route' => 'database_resource_limit',
+            'routeReason' => 'database_resource_limit',
+            'validationSummary' => [
+                'status' => 'rejected',
+                'repairAttempts' => $repairAttempts,
+            ],
+            '_askEvidence' => array_merge($resultEvidence, [
+                'finalSql' => null,
+                'repairAttempts' => $repairAttempts,
+                'validationStatus' => 'rejected',
+            ]),
+        ];
     }
 
     private function sanitizeExploratoryFailureCategory(string $category): string
@@ -778,6 +757,7 @@ class FolioQueryController extends Controller
             'policy_blocked',
             'provider_failure',
             'query_too_complex',
+            'resource_limit',
             'semantic_coverage_gap',
             'syntax_error',
             'unknown_column',
@@ -793,16 +773,14 @@ class FolioQueryController extends Controller
             : 'database_validation';
     }
 
-    private function buildUnsafeGeneratedSqlResponse(array $result, string $prompt, $campus): array
+    private function buildUnsafeGeneratedSqlResponse(array $result): array
     {
-        $response = $this->buildExploratoryRepairExhaustedResponse(
-            array_replace($result, ['repairAttempts' => 0]),
-            $prompt,
-            $campus,
-            'non_select'
+        $response = $this->buildAiSqlGenerationFailedResponse(
+            array_replace($result, ['repairAttempts' => 0])
         );
         $response['errorType'] = 'unsafe_generated_sql';
         $response['message'] = "I couldn't safely turn this request into a report. Nothing ran or changed. Retry the request or refine one part of it.";
+        $response['route'] = 'unsafe_generated_sql';
         $response['routeReason'] = 'unsafe_generated_sql';
         $response['validationSummary']['status'] = 'rejected';
         $response['_askEvidence']['validationStatus'] = 'rejected';
