@@ -30,6 +30,7 @@ No test contacted production FOLIO or an external AI provider. Routing tests use
 - `d5b375b` — `fix: route ask hard limits as terminal failures`
 - `1b8b8b7` — `fix: harden final two-lane boundaries`
 - `4ff4587` — `fix: preserve identifiers and rollback semantics`
+- `3e946df` — `fix: close advisory validation gaps`
 
 ## Required routing matrix
 
