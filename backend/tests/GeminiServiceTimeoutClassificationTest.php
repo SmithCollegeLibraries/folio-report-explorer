@@ -75,6 +75,19 @@ assertSameValue(
     'Business-language mentions of a provider failure rate must not be mistaken for an AI transport failure.'
 );
 
+foreach ([
+    'The report must include billing details.',
+    'Show quota usage by department.',
+    'Include the rate limit column.',
+    'Include HTTP 403 response counts.',
+] as $businessProviderVocabulary) {
+    assertSameValue(
+        false,
+        GeminiService::isAiProviderFailureMessage($businessProviderVocabulary),
+        'Business report vocabulary must not be mistaken for an AI provider failure.'
+    );
+}
+
 $hardCanonicalFailure = new ReflectionMethod(GeminiService::class, 'isHardCanonicalFailure');
 if (PHP_VERSION_ID < 80100) {
     $hardCanonicalFailure->setAccessible(true);

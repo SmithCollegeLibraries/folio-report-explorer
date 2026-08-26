@@ -158,11 +158,11 @@ Result: the first command found the 11 intentionally retained rollback-only matc
 
 An independent follow-up review identified objective explicit-identifier and rollback regressions that the original plan tests had permitted. The corrected behavior is:
 
-- a final AI candidate that omits a requested identifier or adds an unrequested identifier cannot execute after repair exhaustion;
+- a final AI candidate that omits a requested identifier or adds an unrequested identifier cannot execute after repair exhaustion, even when semantic conformance also fails and would otherwise become advisory;
 - forced-legacy/freeform SQL passes through the same explicit-identifier validation and bounded repair path;
 - the false rollout switch prevents AI rewriting of canonical SQL after database-preflight failure while preserving the strict rollback response;
 - successful rollback canonical compilation retains `verified_pattern` from the trusted generation source, without weakening response-contract normalization for missing or forged provenance;
-- ordinary business text such as “provider failure rate” is not classified as an AI transport failure; and
+- ordinary business text such as “provider failure rate,” “billing details,” “quota usage,” “rate limit column,” or “HTTP 403 response counts” is not classified as an AI transport failure; and
 - Retry resubmits the terminal report currently selected from history, not whichever report was generated most recently.
 
 The duplicated controller/service preflight classifier and repeated frontend provenance-label literals remain maintainability cleanups rather than current correctness failures.

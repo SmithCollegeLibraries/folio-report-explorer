@@ -3424,8 +3424,7 @@ GUIDANCE;
     {
         return preg_match(
             '/API key not configured|AI (?:API error|request failed)|API request failed|'
-                . 'OpenAI fallback (?:request )?failed|RESOURCE_EXHAUSTED|MAX_TOKENS|AI (?:intent )?response was truncated|'
-                . 'quota|billing|rate limit|HTTP\s*(?:401|403|429)/i',
+                . 'OpenAI fallback (?:request )?failed|RESOURCE_EXHAUSTED|MAX_TOKENS|AI (?:intent )?response was truncated/i',
             $message
         ) === 1;
     }
@@ -6594,26 +6593,8 @@ PROMPT;
             return;
         }
 
-        $violations = [];
-        $position = 0;
-        foreach (($validation['missingIdentifiers'] ?? []) as $unusedValue) {
-            $position++;
-            $violations[] = [
-                'key' => 'explicit_identifier_' . $position,
-                'category' => 'explicit_values',
-                'label' => 'Explicit report identifier',
-                'guidance' => 'Keep every requested identifier exactly as supplied.',
-            ];
-        }
-        foreach (($validation['unexpectedIdentifiers'] ?? []) as $unusedValue) {
-            $position++;
-            $violations[] = [
-                'key' => 'explicit_identifier_' . $position,
-                'category' => 'explicit_values',
-                'label' => 'Explicit report identifier',
-                'guidance' => 'Use only the identifiers that were explicitly requested.',
-            ];
-        }
+        $violations = self::explicitIdentifierViolations($validation);
+        $position = count($violations);
         foreach (($validation['missingFields'] ?? []) as $unusedField) {
             $position++;
             $violations[] = [
@@ -6641,6 +6622,55 @@ PROMPT;
             null,
             $violations
         );
+    }
+
+    private static function validateExplicitReportIdentifiers(string $sql, string $prompt): void
+    {
+        $validation = self::explicitReportValueValidation($sql, $prompt);
+        if ($validation === null) {
+            return;
+        }
+
+        $violations = self::explicitIdentifierViolations($validation);
+        if ($violations === []) {
+            return;
+        }
+
+        throw new ExploratorySqlValidationException(
+            'explicit_values',
+            'explicit_values_missing',
+            $sql,
+            true,
+            'The SQL candidate did not preserve all explicit report identifiers.',
+            null,
+            $violations
+        );
+    }
+
+    private static function explicitIdentifierViolations(array $validation): array
+    {
+        $violations = [];
+        $position = 0;
+        foreach (($validation['missingIdentifiers'] ?? []) as $unusedValue) {
+            $position++;
+            $violations[] = [
+                'key' => 'explicit_identifier_' . $position,
+                'category' => 'explicit_values',
+                'label' => 'Explicit report identifier',
+                'guidance' => 'Keep every requested identifier exactly as supplied.',
+            ];
+        }
+        foreach (($validation['unexpectedIdentifiers'] ?? []) as $unusedValue) {
+            $position++;
+            $violations[] = [
+                'key' => 'explicit_identifier_' . $position,
+                'category' => 'explicit_values',
+                'label' => 'Explicit report identifier',
+                'guidance' => 'Use only the identifiers that were explicitly requested.',
+            ];
+        }
+
+        return $violations;
     }
 
     private static function validateResolvedReferenceResult(
@@ -6784,6 +6814,10 @@ PROMPT;
 
         try {
             $result = $attempt();
+            self::validateExplicitReportIdentifiers(
+                (string)($result['sql'] ?? ''),
+                (string)($context['originalQuestion'] ?? '')
+            );
             $contract = is_array($context['semanticContract'] ?? null)
                 ? $context['semanticContract']
                 : [];

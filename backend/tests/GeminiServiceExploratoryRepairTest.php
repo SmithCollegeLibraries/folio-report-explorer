@@ -1439,6 +1439,37 @@ $semanticTelemetry = implode("\n", array_map(function ($record) { return (string
 repairAssertSame(false, strpos($semanticTelemetry, semanticallyFlawedRoiSql()) !== false, 'Semantic telemetry must not expose rejected SQL.');
 repairAssertSame(false, strpos($semanticTelemetry, roiPrompt()) !== false, 'Semantic telemetry must not expose the original prompt.');
 
+$semanticIdentifierPrompt = 'For instance number in0001, show ROI for purchases and circulation by call number, including checkouts and investment.';
+TestTransport::$responses = [geminiText(semanticallyFlawedRoiSql())];
+TestTransport::$requests = [];
+$semanticIdentifierExhaustion = GeminiService::repairExploratorySqlAfterPreflight(
+    $semanticIdentifierPrompt,
+    'Smith College',
+    [
+        'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
+        'repairAttempts' => 1,
+        'routeReason' => 'unsupported_query_family',
+        'explanation' => 'Join purchase and circulation facts for the requested instance.',
+    ],
+    'ERROR: column ii.missing_column does not exist at character 15'
+);
+repairAssertSame(1, count(TestTransport::$requests), 'Combined semantic and identifier validation must use only the remaining repair call.');
+repairAssertSame(false, isset($semanticIdentifierExhaustion['sql']), 'Semantic advisory handling must not bypass a missing explicit identifier.');
+repairAssertSame('sql_generation_failed', $semanticIdentifierExhaustion['errorType'] ?? null, 'A combined semantic and explicit-identifier mismatch must remain terminal.');
+
+$outputOnlyPrompt = 'For instance numbers in0001 and in0002, show title and publication date. Limit 20.';
+$outputOnlySql = "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002') LIMIT 20";
+TestTransport::$responses = [
+    geminiText($outputOnlySql),
+    geminiText($outputOnlySql),
+    geminiText($outputOnlySql),
+];
+TestTransport::$requests = [];
+$outputOnlyAdvisory = GeminiService::generateSqlWithShadow($outputOnlyPrompt, null, null, true);
+repairAssertSame(true, isset($outputOnlyAdvisory['sql']), 'An output-only parser mismatch may remain advisory after bounded review.');
+repairAssertSame('advisory', $outputOnlyAdvisory['semanticValidation']['status'] ?? null, 'Output-only exhaustion must retain advisory semantics.');
+repairAssertSame(3, count(TestTransport::$requests), 'Output-only advisory handling must use the initial generation and two bounded repairs.');
+
 $terseFollowUp = 'Use invoice date instead.';
 $followUpGenerationPrompt = implode("\n\n", [
     'This is a follow-up request to a previously generated library report.',
