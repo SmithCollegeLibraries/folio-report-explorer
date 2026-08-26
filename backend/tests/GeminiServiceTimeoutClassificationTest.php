@@ -48,4 +48,23 @@ assertSameValue(
     'GeminiService should not classify unrelated provider failures as AI timeouts.'
 );
 
+foreach ([
+    'AI API key not configured. Set GEMINI_API_KEY or OPENAI_API_KEY in .env.',
+    'AI API error: quota exceeded',
+    'AI request failed: provider unavailable',
+    'OpenAI fallback request failed: connection reset',
+] as $providerFailure) {
+    assertSameValue(
+        true,
+        GeminiService::isAiProviderFailureMessage($providerFailure),
+        'GeminiService should classify its provider exception messages for hard controller handling.'
+    );
+}
+
+assertSameValue(
+    false,
+    GeminiService::isAiProviderFailureMessage('connection does not exist'),
+    'Database connectivity messages must not be mislabeled as AI provider failures.'
+);
+
 fwrite(STDOUT, "GeminiService timeout classification test passed\n");

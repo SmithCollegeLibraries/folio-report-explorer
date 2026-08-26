@@ -1033,6 +1033,8 @@ foreach ([
     'SQLSTATE[53200]: Out of memory',
     'SQLSTATE[53400]: Configuration limit exceeded',
     'SQLSTATE[54001]: Statement too complex',
+    'stack depth limit exceeded',
+    'program limit exceeded',
     'Query is too complex for the configured preflight limit',
     'Estimated query cost exceeds configured limit',
 ] as $resourceError) {
@@ -1056,6 +1058,50 @@ foreach ([
         repairAssertSame(0, count(TestTransport::$requests), 'Database resource limits must not make an AI repair request.');
         repairAssertSame('resource_limited', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Database resource limits should emit a distinct terminal outcome.');
         repairAssertSame('resource_limit', terminalTelemetryOutcomes()[0]['category'] ?? null, 'Database resource limits should expose only a safe resource category.');
+    }
+}
+
+foreach ([
+    'SQLSTATE[08003]: connection does not exist',
+    'connection does not exist',
+] as $connectivityError) {
+    TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+    TestTransport::$requests = [];
+    Yii::$logs = [];
+    try {
+        GeminiService::repairExploratorySqlAfterPreflight(
+            'Show items',
+            null,
+            ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+            $connectivityError
+        );
+        fwrite(STDERR, "Normalized PostgreSQL connectivity failures must not be repaired.\n");
+        exit(1);
+    } catch (\RuntimeException $exception) {
+        repairAssertSame(0, count(TestTransport::$requests), 'Normalized connectivity failures must not make an AI repair request.');
+        repairAssertSame('connectivity_failure', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Normalized connectivity failures should emit their distinct terminal outcome.');
+    }
+}
+
+foreach ([
+    'SQLSTATE[28P01]: password authentication failed',
+    'password authentication failed for user report_reader',
+] as $authorizationError) {
+    TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+    TestTransport::$requests = [];
+    Yii::$logs = [];
+    try {
+        GeminiService::repairExploratorySqlAfterPreflight(
+            'Show items',
+            null,
+            ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+            $authorizationError
+        );
+        fwrite(STDERR, "Normalized PostgreSQL authentication failures must not be repaired.\n");
+        exit(1);
+    } catch (PolicyViolationException $exception) {
+        repairAssertSame(0, count(TestTransport::$requests), 'Normalized authentication failures must not make an AI repair request.');
+        repairAssertSame('policy_blocked', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Normalized authentication failures should emit their distinct terminal outcome.');
     }
 }
 

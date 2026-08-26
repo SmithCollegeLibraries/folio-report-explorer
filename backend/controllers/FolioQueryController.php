@@ -613,7 +613,8 @@ class FolioQueryController extends Controller
     private function isAskPreflightPolicyFailure(string $message): bool
     {
         return preg_match(
-            '/SQLSTATE\[42501\]|permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
+            '/SQLSTATE\[(?:28[0-9A-Z]{3}|42501)\]|password authentication failed|invalid authorization specification|'
+                . 'permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
             $message
         ) === 1;
     }
@@ -630,7 +631,8 @@ class FolioQueryController extends Controller
     {
         return preg_match(
             '/SQLSTATE\[(?:53|54)[0-9A-Z]{3}\]|resource exhausted|out of memory|disk full|too many connections|'
-                . 'configuration limit exceeded|query.{0,40}too complex|'
+                . 'insufficient resources|configuration limit exceeded|program limit exceeded|stack depth limit exceeded|'
+                . 'statement too complex|too many (?:columns|arguments)|query.{0,40}too complex|'
                 . '(?:estimated\s+)?query\s+(?:cost|rows?).{0,40}(?:exceeds?|above).{0,20}(?:configured\s+)?limit|'
                 . '(?:configured|complexity|resource|row|cost)\s+limit\s+(?:exceeded|reached)/i',
             $message
@@ -722,6 +724,30 @@ class FolioQueryController extends Controller
             'error' => 'Database validation stopped because this report exceeded available resources or configured limits. Please retry with a narrower scope.',
             'route' => 'database_resource_limit',
             'routeReason' => 'database_resource_limit',
+            'validationSummary' => [
+                'status' => 'rejected',
+                'repairAttempts' => $repairAttempts,
+            ],
+            '_askEvidence' => array_merge($resultEvidence, [
+                'finalSql' => null,
+                'repairAttempts' => $repairAttempts,
+                'validationStatus' => 'rejected',
+            ]),
+        ];
+    }
+
+    private function buildAiProviderFailureResponse(array $result): array
+    {
+        Yii::$app->response->statusCode = 503;
+        $resultEvidence = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
+        $repairAttempts = $this->clampExploratoryRepairAttempts($result['repairAttempts'] ?? 0);
+        return [
+            'errorType' => 'ai_provider_failure',
+            'error' => 'The AI provider could not complete this report. Please retry.',
+            'route' => 'ai_provider_failure',
+            'routeReason' => 'ai_provider_failure',
             'validationSummary' => [
                 'status' => 'rejected',
                 'repairAttempts' => $repairAttempts,
@@ -1953,6 +1979,25 @@ class FolioQueryController extends Controller
                     'initialSql' => $initialSql ?? null,
                 ]);
             }
+            if (GeminiService::isAiProviderFailureMessage($e->getMessage())) {
+                Yii::warning(
+                    'NL2SQL AI provider failure: ' . $e->getMessage(),
+                    'nl2sql.provider'
+                );
+                return $this->finalizeAskResponse(
+                    $this->buildAiProviderFailureResponse(
+                        isset($result) && is_array($result) ? $result : []
+                    ),
+                    $prompt,
+                    $userId,
+                    [
+                        'campus' => $campus ?? null,
+                        'followUpContext' => $followUpContext,
+                        'parentGenerationId' => $parentGenerationId,
+                        'initialSql' => $initialSql ?? null,
+                    ]
+                );
+            }
             return $this->finalizeAskResponse(
                 $this->attachTrustedAskEvidence(
                     $this->buildAskContinuationFromFailure($e, $prompt, $campus ?? null),
@@ -2420,7 +2465,8 @@ class FolioQueryController extends Controller
     private function isAskPostgresConnectivityFailure(string $message): bool
     {
         return preg_match(
-            '/\bSQLSTATE\[(?:08006|08001|08004|HY000)\].*(?:timeout expired|could not connect|connection refused|no connection|SSL SYSCALL|server closed the connection)|\b(?:timeout expired|could not connect to server|connection refused|no route to host)\b/i',
+            '/\bSQLSTATE\[08[0-9A-Z]{3}\]|\bSQLSTATE\[HY000\].*(?:timeout expired|could not connect|connection refused|no connection|SSL SYSCALL|server closed the connection)|'
+                . '\b(?:timeout expired|could not connect to server|connection refused|connection does not exist|connection is closed|no connection to the server|no route to host|server closed the connection)\b/i',
             $message
         ) === 1;
     }

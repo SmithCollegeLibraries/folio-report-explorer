@@ -47,8 +47,14 @@ namespace app\services {
         public static $generationResult = [];
         public static $generationTransport = [];
         public static $preflightRepairResult;
+        public static $preflightRepairFailure;
 
         public static function isAiTimeoutMessage($message): bool { return false; }
+
+        public static function isAiProviderFailureMessage($message): bool
+        {
+            return preg_match('/AI API error:|AI request failed:|OpenAI fallback (?:request )?failed:/i', (string)$message) === 1;
+        }
 
         public static function generateSqlWithShadow(
             $rawQuestion,
@@ -83,6 +89,10 @@ namespace app\services {
                 'preflightError' => $preflightError,
                 'generationPrompt' => $generationPrompt,
             ];
+
+            if (self::$preflightRepairFailure instanceof \Throwable) {
+                throw self::$preflightRepairFailure;
+            }
 
             return self::$preflightRepairResult ?? [
                 'sql' => 'SELECT title FROM inventory.instance__t',
@@ -455,24 +465,31 @@ namespace {
         repairAssertNotContains($privateFragment, $semanticRecoveryJson, 'Semantic controller recovery must not expose internal SQL, guidance, evidence, or error detail.');
     }
 
-    $connectivityRepairCalls = 0;
-    $connectivity = $validateAndRepair->invoke(
-        $controller,
-        ['sql' => 'SELECT title FROM inventory.instance__t', 'mode' => 'exploratory', 'repairAttempts' => 0],
-        'Show titles',
-        'Smith College',
-        function (): array { return ['error' => 'SQLSTATE[08006] [7] timeout expired']; },
-        function () use (&$connectivityRepairCalls): array {
-            $connectivityRepairCalls++;
-            return [];
-        }
-    );
+    foreach ([
+        'SQLSTATE[08006] [7] timeout expired',
+        'SQLSTATE[08003]: connection does not exist',
+        'connection does not exist',
+    ] as $connectivityFailure) {
+        $connectivityRepairCalls = 0;
+        $connectivity = $validateAndRepair->invoke(
+            $controller,
+            ['sql' => 'SELECT title FROM inventory.instance__t', 'mode' => 'exploratory', 'repairAttempts' => 0],
+            'Show titles',
+            'Smith College',
+            function () use ($connectivityFailure): array { return ['error' => $connectivityFailure]; },
+            function () use (&$connectivityRepairCalls): array {
+                $connectivityRepairCalls++;
+                return [];
+            }
+        );
 
-    repairAssertSame(0, $connectivityRepairCalls, 'Connectivity failures must not trigger SQL repair.');
-    repairAssertSame('postgres_connectivity', $connectivity['errorType'] ?? null, 'Connectivity failures should remain distinct.');
-    repairAssertSame(true, strpos($connectivity['message'] ?? '', 'VPN') !== false, 'Connectivity recovery should continue to mention VPN.');
+        repairAssertSame(0, $connectivityRepairCalls, 'Connectivity failures must not trigger SQL repair.');
+        repairAssertSame('postgres_connectivity', $connectivity['errorType'] ?? null, 'Connectivity failures should remain distinct.');
+        repairAssertSame(true, strpos($connectivity['message'] ?? '', 'VPN') !== false, 'Connectivity recovery should continue to mention VPN.');
+    }
 
     $canonicalRepairCalls = 0;
+    $canonicalPreflightSql = [];
     $canonicalFailure = $validateAndRepair->invoke(
         $controller,
         [
@@ -485,7 +502,8 @@ namespace {
         ],
         'Show titles',
         'Smith College',
-        function (string $sql): array {
+        function (string $sql) use (&$canonicalPreflightSql): array {
+            $canonicalPreflightSql[] = $sql;
             return strpos($sql, 'broken_column') !== false
                 ? ['error' => 'column "broken_column" does not exist']
                 : [];
@@ -500,6 +518,11 @@ namespace {
         }
     );
     repairAssertSame(1, $canonicalRepairCalls, 'Canonical preflight failure must enter seeded AI repair.');
+    repairAssertSame(
+        ['SELECT broken_column FROM inventory.instance__t', 'SELECT title FROM inventory.instance__t'],
+        $canonicalPreflightSql,
+        'Canonical repair must preflight exactly the initial and repaired SQL candidates.'
+    );
     repairAssertSame('ai_built', $canonicalFailure['generationProvenance'] ?? null, 'Repaired canonical SQL is AI-built.');
     repairAssertSame('SELECT title FROM inventory.instance__t', $canonicalFailure['sql'] ?? null, 'Repaired SQL must pass a second preflight.');
 
@@ -507,6 +530,8 @@ namespace {
         'SQLSTATE[53200]: Out of memory',
         'SQLSTATE[53400]: Configuration limit exceeded',
         'SQLSTATE[54001]: Statement too complex',
+        'stack depth limit exceeded',
+        'program limit exceeded',
         'Query is too complex for the configured preflight limit',
         'Estimated query cost exceeds configured limit',
     ] as $resourceFailure) {
@@ -532,7 +557,31 @@ namespace {
         repairAssertSame(0, $resourceRepairCalls, 'Database resource-limit failures must never invoke AI repair.');
         repairAssertSame('database_resource_limit', $resourceResponse['errorType'] ?? null, 'Database resource-limit failures must retain a distinct hard-stop type.');
         repairAssertSame('database_resource_limit', $resourceResponse['route'] ?? null, 'Database resource-limit failures must not use a recovery route.');
+        repairAssertSame(503, Yii::$app->response->statusCode, 'Database resource-limit failures must retain service-unavailable status.');
         repairAssertSame(false, isset($resourceResponse['sql']), 'Database resource-limit hard stops must not expose rejected SQL.');
+    }
+
+    foreach ([
+        'SQLSTATE[28P01]: password authentication failed',
+        'password authentication failed for user report_reader',
+    ] as $authorizationFailure) {
+        Yii::$app->response->statusCode = 200;
+        $authorizationRepairCalls = 0;
+        $authorizationResponse = $validateAndRepair->invoke(
+            $controller,
+            ['sql' => 'SELECT title FROM inventory.instance__t', 'mode' => 'canonical', 'repairAttempts' => 0],
+            'Show titles',
+            'Smith College',
+            function () use ($authorizationFailure): array { return ['error' => $authorizationFailure]; },
+            function () use (&$authorizationRepairCalls): array {
+                $authorizationRepairCalls++;
+                return ['sql' => 'SELECT should_not_run'];
+            }
+        );
+        repairAssertSame(0, $authorizationRepairCalls, 'Database authentication failures must not trigger SQL repair.');
+        repairAssertSame('blocked', $authorizationResponse['route'] ?? null, 'Database authentication failures must retain policy handling.');
+        repairAssertSame(403, Yii::$app->response->statusCode, 'Database authentication failures must retain forbidden status.');
+        repairAssertSame(false, isset($authorizationResponse['sql']), 'Database authentication failures must not expose SQL.');
     }
 
     $cancelRepairCalls = 0;
@@ -1272,6 +1321,34 @@ namespace {
         json_encode($actionExhaustionResponse),
         'The actual finalized routed-exhaustion response must not expose the distinctive resolver predicate.'
     );
+
+    \app\services\GeminiService::$preflightRepairFailure = new \RuntimeException('AI request failed: provider unavailable');
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    \app\services\GeminiService::$generationResult = [
+        'sql' => 'SELECT broken_column FROM inventory.instance__t',
+        'mode' => 'canonical',
+        'route' => 'builder_intent',
+        'generationProvenance' => 'verified_pattern',
+        'repairAttempts' => 0,
+    ];
+    \app\services\SqlPreflightService::$results = [
+        ['error' => 'column "broken_column" does not exist'],
+    ];
+    Yii::$app->response->statusCode = 200;
+    $providerFailureReview = new CapturingAdministratorReviewService();
+    $providerFailureController = new TestableFolioQueryController('folio-query', null);
+    $providerFailureController->reviewService = $providerFailureReview;
+    $providerFailureResponse = $providerFailureController->actionNl();
+
+    repairAssertSame(1, count(\app\services\GeminiService::$preflightRepairCalls), 'Provider failure regression must reach the seeded repair seam exactly once.');
+    repairAssertSame('ai_provider_failure', $providerFailureResponse['errorType'] ?? null, 'Provider repair failures must retain a distinct hard-failure type.');
+    repairAssertSame('ai_provider_failure', $providerFailureResponse['route'] ?? null, 'Provider repair failures must not use exploratory recovery.');
+    repairAssertSame(503, Yii::$app->response->statusCode, 'Provider repair failures must retain service-unavailable status.');
+    foreach (['sql', 'correctionInstruction', 'recoveryContext', 'recoveryItems', 'attemptedPlan', 'suggestions'] as $forbiddenField) {
+        repairAssertSame(false, array_key_exists($forbiddenField, $providerFailureResponse), 'Provider repair failures must omit SQL, correction, and recovery fields.');
+    }
+    repairAssertNotContains('request is preserved', strtolower(json_encode($providerFailureResponse)), 'Provider hard failures must not emit legacy recovery copy.');
+    \app\services\GeminiService::$preflightRepairFailure = null;
     \app\services\GeminiService::$preflightRepairResult = null;
 
     $controllerSource = file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');

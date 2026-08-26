@@ -206,3 +206,115 @@ Unrelated pre-existing dirty reports, cache JSON files, design/plan files, and t
 
 - No functional blocker found.
 - The broad suite still emits pre-existing PHP 8.5 deprecation warnings in unrelated tests that call `ReflectionMethod::setAccessible()` unconditionally. They do not affect pass/fail status and were left outside Task 4 scope.
+
+## Independent review fix round 1
+
+### Findings and implementation
+
+- Confirmed that `SqlPreflightService` can return only PostgreSQL `ERROR:` detail, so hard-stop routing cannot depend on the SQLSTATE surviving normalization.
+- Expanded both controller and Gemini preflight classifiers for the full PostgreSQL connection-exception class (`08xxx`) and authorization class (`28xxx`) plus normalized `connection does not exist` and `password authentication failed` messages.
+- Expanded both resource/program-limit classifiers with normalized `insufficient resources`, `program limit exceeded`, `stack depth limit exceeded`, `statement too complex`, and too-many-columns/arguments signals. These complement the existing `53xxx`/`54xxx`, memory, disk, connection, complexity, cost, row, and configured-limit signals.
+- Preserved the existing hard behavior: connectivity remains `postgres_connectivity`, authorization remains an HTTP 403 policy block, and resource limits remain `database_resource_limit` with HTTP 503. Controller repair callbacks and Gemini transports are asserted to receive zero calls for every hard-stop case.
+- Added `GeminiService::isAiProviderFailureMessage()` for the service's concrete provider exception formats and routed matching controller exceptions to a dedicated HTTP 503 `ai_provider_failure` response. The response omits SQL, correction instructions, recovery context/items, attempted plans, suggestions, and request-preserving legacy copy.
+- Added an exact canonical regression assertion that the preflight receives precisely two candidates in order: the initial canonical SQL followed by the repaired SQL.
+
+### RED evidence: normalized PostgreSQL hard stops
+
+Commands:
+
+```bash
+php -l backend/tests/FolioQueryControllerExploratoryRepairTest.php && php -l backend/tests/GeminiServiceExploratoryRepairTest.php && php backend/tests/FolioQueryControllerExploratoryRepairTest.php
+php backend/tests/GeminiServiceExploratoryRepairTest.php
+```
+
+Output:
+
+```text
+No syntax errors detected in backend/tests/FolioQueryControllerExploratoryRepairTest.php
+No syntax errors detected in backend/tests/GeminiServiceExploratoryRepairTest.php
+Connectivity failures must not trigger SQL repair.
+Expected: 0
+Actual: 1
+
+Database resource limits must be hard stops.
+```
+
+The controller repaired normalized `connection does not exist`, while Gemini reached the repair transport for normalized `stack depth limit exceeded`.
+
+### Intermediate GREEN and RED evidence: provider contract
+
+After implementing only the PostgreSQL classifiers, commands:
+
+```bash
+php backend/tests/GeminiServiceExploratoryRepairTest.php
+php backend/tests/FolioQueryControllerExploratoryRepairTest.php
+```
+
+Output:
+
+```text
+GeminiService exploratory repair test passed
+Provider repair failures must retain a distinct hard-failure type.
+Expected: 'ai_provider_failure'
+Actual: NULL
+```
+
+This isolated the second review finding: the public controller path still finalized the generic exploratory recovery response.
+
+### GREEN evidence
+
+Commands:
+
+```bash
+php -l backend/controllers/FolioQueryController.php && php backend/tests/FolioQueryControllerExploratoryRepairTest.php
+php -l backend/services/GeminiService.php && php backend/tests/GeminiServiceExploratoryRepairTest.php
+php backend/tests/FolioQueryControllerExploratoryRepairTest.php && php backend/tests/SqlBuilderServicePolicyViolationTest.php && php backend/tests/SqlPreflightServiceTest.php
+php backend/tests/GeminiServiceExploratoryRepairTest.php && php backend/tests/GeminiServiceTimeoutClassificationTest.php
+```
+
+Output:
+
+```text
+No syntax errors detected in backend/controllers/FolioQueryController.php
+FolioQueryController exploratory repair test passed
+No syntax errors detected in backend/services/GeminiService.php
+GeminiService exploratory repair test passed
+FolioQueryController exploratory repair test passed
+SqlBuilderService policy violation test passed
+SqlPreflightService test passed
+GeminiService exploratory repair test passed
+GeminiService timeout classification test passed
+```
+
+### Broad verification
+
+Command:
+
+```bash
+for test_file in backend/tests/FolioQueryController*Test.php backend/tests/GeminiService*Test.php; do php "$test_file" || exit 1; done
+```
+
+Output summary:
+
+```text
+40/40 controller and Gemini behavior scripts passed.
+No failures or fatal errors.
+```
+
+The output continues to include only the pre-existing PHP 8.5 `ReflectionMethod::setAccessible()` deprecations described above.
+
+### Fix-round files changed
+
+- `backend/controllers/FolioQueryController.php`
+- `backend/services/GeminiService.php`
+- `backend/tests/FolioQueryControllerExploratoryRepairTest.php`
+- `backend/tests/GeminiServiceExploratoryRepairTest.php`
+- `backend/tests/GeminiServiceTimeoutClassificationTest.php`
+- `.superpowers/sdd/2026-08-26-two-lane-report-generation-phase-1/task-4-report.md`
+
+### Fix-round self-review and concerns
+
+- The hard-stop checks remain before creation of the repair failure/callback in `GeminiService::repairExploratorySqlAfterPreflight()` and before the controller invokes its repair callback.
+- The provider classifier covers the service's missing-key, Gemini request/API, OpenAI fallback, quota/billing/rate-limit, resource-exhaustion, and provider HTTP authorization/throttling formats; a negative assertion prevents a normalized database connectivity message from being mislabeled as an AI provider failure.
+- The dedicated provider response does not reuse `buildAskContinuationFromFailure()`, so legacy exploratory recovery fields cannot leak into this path.
+- No functional blocker found. Unrelated dirty reports, cache JSON files, design/plan files, and the SQL dump remain untouched and unstaged.

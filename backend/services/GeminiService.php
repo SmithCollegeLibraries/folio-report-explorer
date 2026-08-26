@@ -3386,6 +3386,15 @@ GUIDANCE;
         return preg_match('/timeout|timed out|deadline exceeded|operation timed out/i', $message) === 1;
     }
 
+    public static function isAiProviderFailureMessage(string $message): bool
+    {
+        return preg_match(
+            '/API key not configured|provider failure|AI (?:API error|request failed)|API request failed|'
+                . 'OpenAI fallback (?:request )?failed|RESOURCE_EXHAUSTED|quota|billing|rate limit|HTTP\s*(?:401|403|429)/i',
+            $message
+        ) === 1;
+    }
+
     /**
      * Retry only transient transport/availability exceptions.
      */
@@ -6908,7 +6917,7 @@ PROMPT;
     private static function isPreflightConnectivityFailure(string $error): bool
     {
         return preg_match(
-            '/SQLSTATE\[08[0-9A-Z]{3}\]|server closed the connection|connection (?:refused|reset|failed)|could not connect|no connection to the server/i',
+            '/SQLSTATE\[08[0-9A-Z]{3}\]|server closed the connection|connection (?:refused|reset|failed|does not exist|is closed)|could not connect|no connection to the server/i',
             $error
         ) === 1;
     }
@@ -6924,7 +6933,8 @@ PROMPT;
     private static function isPreflightPolicyFailure(string $error): bool
     {
         return preg_match(
-            '/SQLSTATE\[42501\]|permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
+            '/SQLSTATE\[(?:28[0-9A-Z]{3}|42501)\]|password authentication failed|invalid authorization specification|'
+                . 'permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
             $error
         ) === 1;
     }
@@ -6933,7 +6943,8 @@ PROMPT;
     {
         return preg_match(
             '/SQLSTATE\[(?:53|54)[0-9A-Z]{3}\]|resource exhausted|out of memory|disk full|too many connections|'
-                . 'configuration limit exceeded|query.{0,40}too complex|'
+                . 'insufficient resources|configuration limit exceeded|program limit exceeded|stack depth limit exceeded|'
+                . 'statement too complex|too many (?:columns|arguments)|query.{0,40}too complex|'
                 . '(?:estimated\s+)?query\s+(?:cost|rows?).{0,40}(?:exceeds?|above).{0,20}(?:configured\s+)?limit|'
                 . '(?:configured|complexity|resource|row|cost)\s+limit\s+(?:exceeded|reached)/i',
             $error
