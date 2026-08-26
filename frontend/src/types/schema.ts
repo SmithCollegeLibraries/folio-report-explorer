@@ -340,8 +340,10 @@ export interface SemanticRequirementLabel {
   label: string;
 }
 
+export type GenerationProvenance = 'verified_pattern' | 'ai_built';
+
 export interface SemanticValidation {
-  status: 'validated';
+  status: 'validated' | 'advisory';
   contractVersion: number;
   checkedRequirements: SemanticRequirementLabel[];
 }
@@ -353,6 +355,8 @@ export interface NlResponse {
   reviewRequired?: boolean;
   reviewNotice?: { title: string; message: string };
   sql?: string;
+  generationProvenance?: GenerationProvenance;
+  provenanceLabel?: 'Verified pattern' | 'AI-built';
   explanation?: string;
   reportDisclosures?: string[];
   dataSource?: 'folio' | 'local';

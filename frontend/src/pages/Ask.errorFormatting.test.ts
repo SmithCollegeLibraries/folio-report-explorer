@@ -2,6 +2,39 @@ import { describe, expect, it } from 'vitest';
 import * as AskPage from './Ask';
 
 describe('Ask error formatting', () => {
+  it('keeps a successful AI-built response on the normal results path', () => {
+    const result = {
+      sql: 'SELECT title FROM inventory.instance__t',
+      generationProvenance: 'ai_built' as const,
+      needsClarification: true,
+      validationSummary: { status: 'exhausted' as const, repairAttempts: 2 },
+    };
+
+    expect(AskPage.hasGeneratedSql?.(result)).toBe(true);
+    expect(AskPage.shouldShowBlockingClarification?.(result)).toBe(false);
+    expect(AskPage.shouldShowLegacyRecovery?.(result)).toBe(false);
+    expect(AskPage.getAskResponseView?.(result)).toBe('success');
+  });
+
+  it('formats a terminal no-SQL generation failure as one compact retry message', () => {
+    const message = AskPage.getAskTerminalFailureMessage?.({
+      errorType: 'sql_generation_failed',
+      message: 'Do not expose this repair diagnostic.',
+      recoveryItems: ['Do not ask for a correction.'],
+    });
+
+    expect(message).toBe('Report Explorer could not safely run this report. Please retry.');
+    expect(message).not.toMatch(/correction|clarification|refine|resolved/i);
+    expect(AskPage.getAskResponseView?.({ errorType: 'sql_generation_failed' })).toBe('terminal_failure');
+  });
+
+  it('keeps clarification and recovery screens exclusively for no-SQL rollback responses', () => {
+    expect(AskPage.getAskResponseView?.({ needsClarification: true })).toBe('legacy_clarification');
+    expect(AskPage.getAskResponseView?.({
+      validationSummary: { status: 'exhausted', repairAttempts: 2 },
+    })).toBe('legacy_recovery');
+  });
+
   it('routes both exhausted and rejected validation summaries through the no-SQL hard stop', () => {
     expect(typeof AskPage.isExploratoryValidationHardStop).toBe('function');
     expect(AskPage.isExploratoryValidationHardStop?.({ status: 'exhausted', repairAttempts: 2 })).toBe(true);
@@ -171,24 +204,13 @@ describe('Ask error formatting', () => {
     expect(lines?.join(' ')).not.toContain('inventory.contributor__t.name');
   });
 
-  it('uses user-facing loading copy for resolver checks before SQL generation', () => {
-    expect(typeof AskPage.ASK_RESOLVER_LOADING_STEPS).toBe('object');
-    expect(AskPage.ASK_RESOLVER_LOADING_STEPS).toContain('Checking known FOLIO report filters and lookup values');
-    expect(AskPage.ASK_RESOLVER_LOADING_STEPS).toContain('Looking for named terms in contributors/authors, titles, identifiers, and notes');
-    expect(AskPage.ASK_RESOLVER_LOADING_STEPS).toContain('Preparing a follow-up question if anything is ambiguous');
-  });
+  it('uses neutral generation and automatic-repair progress copy', () => {
+    const progress = AskPage.getAskProgressCopy?.('generating');
 
-  it('uses different progress copy after a clarification is selected', () => {
-    const initial = AskPage.getAskProgressCopy?.('checking_request');
-    const clarified = AskPage.getAskProgressCopy?.('building_sql_after_clarification');
-
-    expect(initial?.title).toBe('Generating and validating your query');
-    expect(initial?.steps).toContain('Checking known FOLIO report filters and lookup values');
-    expect(initial?.steps).toContain('Automatically repairing SQL that does not pass validation');
-    expect(clarified?.title).toBe('Generating and validating your query');
-    expect(clarified?.steps.join(' ')).not.toContain('Checking known FOLIO report filters');
-    expect(clarified?.steps.join(' ')).toContain('Starting AI SQL generation');
-    expect(clarified?.steps).toContain('Automatically repairing SQL that does not pass validation');
+    expect(progress?.title).toBe('Generating and validating your query');
+    expect(progress?.steps).toContain('Preparing report context');
+    expect(progress?.steps).toContain('Automatically repairing SQL that does not pass validation');
+    expect(progress?.steps.join(' ')).not.toMatch(/clarification|follow-up question|resolver/i);
   });
 
   it('clamps the resizable Ask workspace split to usable pane widths', () => {
@@ -274,7 +296,7 @@ describe('Ask error formatting', () => {
   });
 
   it('keeps SQL inspection optional in progress copy', () => {
-    const copy = AskPage.getAskProgressCopy?.('building_sql_after_clarification');
+    const copy = AskPage.getAskProgressCopy?.('generating');
 
     expect(copy?.steps.join(' ')).not.toMatch(/review (the )?sql/i);
   });

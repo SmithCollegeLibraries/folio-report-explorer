@@ -49,35 +49,21 @@ const EXAMPLE_PROMPTS = [
   'Which call number ranges have the highest circulation counts?',
 ];
 
-export const ASK_RESOLVER_LOADING_STEPS = [
-  'Checking known FOLIO report filters and lookup values',
-  'Looking for named terms in contributors/authors, titles, identifiers, and notes',
-  'Preparing a follow-up question if anything is ambiguous',
-  'Automatically repairing SQL that does not pass validation',
-];
-
-export const ASK_SQL_GENERATION_LOADING_STEPS = [
-  'Applying your selected clarification to the request',
-  'Checking whether the request now has enough context for SQL generation',
-  'Starting AI SQL generation and preparing the result',
+export const ASK_GENERATION_LOADING_STEPS = [
+  'Preparing report context',
+  'Generating a safe report query',
+  'Checking the query before it runs',
   'Automatically repairing SQL that does not pass validation',
 ];
 
 export const ASK_REUSE_CANDIDATE_MESSAGE = 'A similar question has been answered successfully before. You can use the previous query, edit it, or generate a new one.';
 
-export type AskProgressPhase = 'checking_request' | 'building_sql_after_clarification';
+export type AskProgressPhase = 'generating';
 
-export function getAskProgressCopy(phase: AskProgressPhase): { title: string; steps: string[] } {
-  if (phase === 'building_sql_after_clarification') {
-    return {
-      title: 'Generating and validating your query',
-      steps: ASK_SQL_GENERATION_LOADING_STEPS,
-    };
-  }
-
+export function getAskProgressCopy(_phase: AskProgressPhase): { title: string; steps: string[] } {
   return {
     title: 'Generating and validating your query',
-    steps: ASK_RESOLVER_LOADING_STEPS,
+    steps: ASK_GENERATION_LOADING_STEPS,
   };
 }
 
@@ -234,13 +220,39 @@ export function getExploratoryNoticeCopy(
 }
 
 export function shouldShowBlockingClarification(result: NlResponse | null | undefined): boolean {
-  return result?.needsClarification === true;
+  return !hasGeneratedSql(result) && result?.needsClarification === true;
 }
 
 export function isExploratoryValidationHardStop(
   summary: NlResponse['validationSummary'] | null | undefined,
 ): boolean {
   return summary?.status === 'exhausted' || summary?.status === 'rejected';
+}
+
+export function hasGeneratedSql(result: Pick<NlResponse, 'sql'> | null | undefined): boolean {
+  return Boolean(result?.sql?.trim());
+}
+
+export function shouldShowLegacyRecovery(result: NlResponse | null | undefined): boolean {
+  return !hasGeneratedSql(result) && isExploratoryValidationHardStop(result?.validationSummary);
+}
+
+export function getAskTerminalFailureMessage(result: NlResponse | null | undefined): string | null {
+  if (!hasGeneratedSql(result) && result?.errorType === 'sql_generation_failed') {
+    return 'Report Explorer could not safely run this report. Please retry.';
+  }
+
+  return null;
+}
+
+export type AskResponseView = 'success' | 'terminal_failure' | 'legacy_clarification' | 'legacy_recovery' | 'none';
+
+export function getAskResponseView(result: NlResponse | null | undefined): AskResponseView {
+  if (hasGeneratedSql(result)) return 'success';
+  if (getAskTerminalFailureMessage(result)) return 'terminal_failure';
+  if (shouldShowBlockingClarification(result)) return 'legacy_clarification';
+  if (shouldShowLegacyRecovery(result)) return 'legacy_recovery';
+  return 'none';
 }
 
 export function formatResolverTrace(trace: ResolverTraceEntry[] | undefined): string[] {
@@ -554,7 +566,7 @@ export default function Ask() {
   const [followUpContext, setFollowUpContext] = useState<FollowUpContext | null>(null);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
-  const [askProgressPhase, setAskProgressPhase] = useState<AskProgressPhase>('checking_request');
+  const [askProgressPhase, setAskProgressPhase] = useState<AskProgressPhase>('generating');
   const [history, setHistory] = useState<
     { prompt: string; result: NlResponse }[]
   >([]);
@@ -871,7 +883,7 @@ export default function Ask() {
     setReuseCandidate(null);
     setReusePrompt('');
     setReuseSql('');
-    setAskProgressPhase('checking_request');
+    setAskProgressPhase('generating');
     askMut.mutate({
       question,
       includeSuggestions: true,
@@ -891,7 +903,7 @@ export default function Ask() {
     setReuseCandidate(null);
     setReusePrompt('');
     setReuseSql('');
-    setAskProgressPhase('checking_request');
+    setAskProgressPhase('generating');
 
     if (!followUpContext) {
       setReuseCheckPending(true);
@@ -992,7 +1004,7 @@ export default function Ask() {
       results?.columns || [],
     );
     setPrompt(suggestedPrompt);
-    setAskProgressPhase('checking_request');
+    setAskProgressPhase('generating');
     askMut.mutate({
       question: suggestedPrompt,
       includeSuggestions: true,
@@ -1029,7 +1041,7 @@ export default function Ask() {
     }
 
     setPrompt(example);
-    setAskProgressPhase('building_sql_after_clarification');
+    setAskProgressPhase('generating');
     askMut.mutate({
       question: example,
       includeSuggestions: true,
@@ -1044,7 +1056,7 @@ export default function Ask() {
     const preservedQuestion = question.trim();
     if (!preservedQuestion) return;
     setPrompt(preservedQuestion);
-    setAskProgressPhase('checking_request');
+    setAskProgressPhase('generating');
     askMut.mutate({
       question: preservedQuestion,
       includeSuggestions: true,
@@ -1061,7 +1073,7 @@ export default function Ask() {
     if (!originalQuestion || !correction) return;
     const refinedQuestion = `${originalQuestion}\n\nCorrection: ${correction}`;
     setPrompt(refinedQuestion);
-    setAskProgressPhase('checking_request');
+    setAskProgressPhase('generating');
     askMut.mutate({
       question: refinedQuestion,
       includeSuggestions: true,
@@ -1091,7 +1103,7 @@ export default function Ask() {
     });
 
     if (allowExploratory) {
-      setAskProgressPhase('building_sql_after_clarification');
+      setAskProgressPhase('generating');
       askMut.mutate({
         question: originalQuestion,
         includeSuggestions: true,
@@ -1107,7 +1119,7 @@ export default function Ask() {
       : `${originalQuestion}\n\nClarification: ${freeText}`;
 
     setPrompt(clarifiedPrompt);
-    setAskProgressPhase('building_sql_after_clarification');
+    setAskProgressPhase('generating');
     askMut.mutate({
       question: clarifiedPrompt,
       includeSuggestions: true,
@@ -1166,7 +1178,7 @@ export default function Ask() {
 
     const clarifiedPrompt = buildBatchClarifiedPrompt(originalQuestion, choices);
     setPrompt(clarifiedPrompt);
-    setAskProgressPhase('building_sql_after_clarification');
+    setAskProgressPhase('generating');
     askMut.mutate({
       question: clarifiedPrompt,
       includeSuggestions: true,
@@ -1187,11 +1199,12 @@ export default function Ask() {
   const isExecuting = execMut.isPending || isRunning;
   const isLoading = isGenerating || isExecuting;
   const hasFilePreview = !!(results?.outputMode === 'file' && results.columns.length > 0 && results.rows.length > 0);
+  const askResponseView = getAskResponseView(nlResult);
   const showMiddlePanel = isGenerating
     || askMut.isError
     || !!followUpError
     || !!reuseCandidate
-    || !!(nlResult && !isLoading && nlResult.needsClarification);
+    || (!isLoading && askResponseView === 'legacy_clarification');
   const showRightPaneClarifications: boolean = false;
   const showRightPaneAskErrors: boolean = false;
   const askProgressCopy = getAskProgressCopy(askProgressPhase);
@@ -1505,7 +1518,7 @@ export default function Ask() {
         </div>
       )}
 
-      {nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && nlResult.clarificationItems && nlResult.clarificationItems.length > 0 && (
+      {nlResult && !isLoading && askResponseView === 'legacy_clarification' && nlResult.clarificationItems && nlResult.clarificationItems.length > 0 && (
         <div className="mx-auto max-w-3xl p-4 xl:px-6">
           <div className="border border-amber-200 bg-amber-50 rounded-lg p-4">
             <div className="text-sm font-semibold mb-1 text-amber-900">
@@ -1598,7 +1611,7 @@ export default function Ask() {
         </div>
       )}
 
-      {nlResult && !isLoading && shouldShowBlockingClarification(nlResult) && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
+      {nlResult && !isLoading && askResponseView === 'legacy_clarification' && (!nlResult.clarificationItems || nlResult.clarificationItems.length === 0) && (
         <div className="mx-auto max-w-3xl p-4 xl:px-6">
           <div className="border rounded-lg p-4 border-amber-200 bg-amber-50">
             <div className="text-sm font-semibold mb-1 text-amber-900">
@@ -2100,7 +2113,22 @@ export default function Ask() {
           </div>
         )}
 
-        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && isExploratoryValidationHardStop(nlResult.validationSummary) && (
+        {nlResult && !isLoading && askResponseView === 'terminal_failure' && (
+          <div className="mx-auto w-full max-w-4xl p-3">
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+              <p>{getAskTerminalFailureMessage(nlResult)}</p>
+              <button
+                type="button"
+                onClick={() => handleRetryExploratory(history[0]?.prompt || prompt)}
+                className="mt-3 rounded bg-folio-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-folio-800"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
+
+        {nlResult && !isLoading && askResponseView === 'legacy_recovery' && (
           <div className="mx-auto w-full max-w-4xl p-3">
             <ExploratoryRecoveryPanel
               response={nlResult}
@@ -2110,15 +2138,16 @@ export default function Ask() {
           </div>
         )}
 
-        {nlResult && !isLoading && !shouldShowBlockingClarification(nlResult) && !isExploratoryValidationHardStop(nlResult.validationSummary) && (
+        {nlResult && !isLoading && askResponseView === 'success' && (
           <div className="mx-auto w-full max-w-6xl p-3 space-y-3">
             <AskTrustNotice
-              mode={nlResult.mode}
+              generationProvenance={nlResult.generationProvenance}
+              provenanceLabel={nlResult.provenanceLabel}
               reviewRequired={nlResult.reviewRequired}
               reviewNotice={nlResult.reviewNotice}
               assumptions={nlResult.assumptions}
             />
-            {nlResult.mode === 'exploratory'
+            {nlResult.generationProvenance === 'ai_built'
               && ((nlResult.assumptions?.length ?? 0) > 0 || (nlResult.reportDisclosures?.length ?? 0) > 0)
               && (
               <ExploratoryAssumptionsPanel
@@ -2128,7 +2157,7 @@ export default function Ask() {
                 reportDisclosures={nlResult.reportDisclosures}
               />
             )}
-            {nlResult.mode === 'exploratory' && nlResult.semanticValidation && (
+            {nlResult.generationProvenance === 'ai_built' && nlResult.semanticValidation && (
               <ExploratorySemanticValidationPanel validation={nlResult.semanticValidation} />
             )}
 
@@ -2170,9 +2199,6 @@ export default function Ask() {
                         {results.rowCount.toLocaleString()} row{results.rowCount !== 1 ? 's' : ''}
                         {results.executionTimeMs != null && (
                           <> &middot; {(results.executionTimeMs / 1000).toFixed(2)}s</>
-                        )}
-                        {nlResult.mode === 'exploratory' && (
-                          <> &middot; exploratory SQL</>
                         )}
                       </div>
                       <div className="flex items-center gap-3">
@@ -2315,12 +2341,6 @@ export default function Ask() {
                 {nlResult.explanation && (
                   <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 text-sm text-blue-800">
                     <strong>AI Explanation:</strong> {nlResult.explanation}
-                  </div>
-                )}
-
-                {nlResult.mode === 'exploratory' && (
-                  <div className="bg-sky-50 border border-sky-100 rounded-lg p-4 text-sm text-sky-800">
-                    <strong>Exploratory SQL:</strong> {nlResult.repeatabilityWarning || 'This AI-assisted query may vary between runs until this request type is reviewed and promoted to a verified report pattern.'}
                   </div>
                 )}
 
