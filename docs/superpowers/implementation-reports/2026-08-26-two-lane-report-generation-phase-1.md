@@ -39,10 +39,10 @@ No test contacted production FOLIO or an external AI provider. Routing tests use
 | Prompt | Observed provenance | Public outcome |
 |---|---|---|
 | `Show me a list of VHS and DVDs at Hillyer Library.` | `verified_pattern` / **Verified pattern** | One structured-intent request; real canonical compiler emits safe SQL with `SC Hillyer Art Library`, `Videocassette`, and `DVD/Blu-ray`; no blocker fields. |
-| `Show me the 20 most-circulated books at Neilson Library during the last five years. Include title, call number, publication year, checkout count, and most recent checkout date.` | `ai_built` / **AI-built** | Unsupported canonical outputs trigger one automatic AI-built request; unresolved Neilson candidates remain model-only context; safe SQL returns without clarification or recovery. |
+| `Show the 20 most-circulated books during the last five years at Neilson Library. Include title, call number, publication year, checkout count, and most recent checkout date.` | `verified_pattern` / **Verified pattern** | One structured-intent request; the canonical compiler groups copies by bibliographic instance and call number, applies the five-year checkout window, and emits every requested column without AI SQL repair. |
 | `Compare annual circulation with acquisition spending by material type for the last three completed fiscal years.` | `ai_built` / **AI-built** | No family match routes directly to safe AI-built SQL; no blocker fields. |
 
-The Neilson case deliberately omits `nl2sqlTwoLaneEnabled` and therefore also proves the default-on contract. With `nl2sqlTwoLaneEnabled=false`, the same resolver fixture returns the retained rollback-only clarification response before any provider request and does not claim SQL or provenance.
+The Neilson case deliberately omits `nl2sqlTwoLaneEnabled` and therefore also proves the default-on contract. Because the report is now canonically supported, it remains a verified builder result when `nl2sqlTwoLaneEnabled=false`; the switch still governs fallback behavior for unsupported requests.
 
 ## Provenance evidence
 

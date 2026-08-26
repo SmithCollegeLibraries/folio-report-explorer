@@ -93,24 +93,27 @@ namespace app\services {
                 ];
             }
 
-            if ($prompt === 'Show me the 20 most-circulated books at Neilson Library during the last five years. Include title, call number, publication year, checkout count, and most recent checkout date.') {
+            if ($prompt === 'Show the 20 most-circulated books during the last five years at Neilson Library. Include title, call number, publication year, checkout count, and most recent checkout date.') {
                 return [
-                    'needsClarification' => true,
-                    'route' => 'clarification',
-                    'routeReason' => 'reference_resolver_batch_clarification',
-                    'question' => 'Which Neilson Library value should I use?',
-                    'resolvedFilters' => [],
-                    'unresolvedNamedIntents' => [[
-                        'dimension' => 'library',
-                        'span' => 'Neilson Library',
-                    ]],
-                    'clarificationItems' => [[
-                        'term' => 'Neilson Library',
-                        'options' => [
-                            ['label' => 'SC Neilson Library'],
-                            ['label' => 'Neilson Library Annex'],
+                    'needsClarification' => false,
+                    'resolvedFilters' => [
+                        [
+                            'dimension' => 'library',
+                            'source_table' => 'inventory.loclibrary__t',
+                            'column' => 'name',
+                            'values' => ['SC Neilson Library'],
+                            'value_metadata' => [
+                                'SC Neilson Library' => ['campus_name' => 'Smith College'],
+                            ],
                         ],
-                    ]],
+                        [
+                            'dimension' => 'material_type',
+                            'source_table' => 'inventory.material_type__t',
+                            'column' => 'name',
+                            'values' => ['Book'],
+                        ],
+                    ],
+                    'guidanceLines' => [],
                 ];
             }
 
@@ -330,47 +333,28 @@ namespace {
     twoLaneAssertContains('Videocassette', (string)$hillyer['sql'], 'Verified SQL must preserve the VHS material value.');
     twoLaneAssertContains('DVD/Blu-ray', (string)$hillyer['sql'], 'Verified SQL must preserve the DVD material value.');
 
-    $neilsonPrompt = 'Show me the 20 most-circulated books at Neilson Library during the last five years. Include title, call number, publication year, checkout count, and most recent checkout date.';
-    $neilsonSql = <<<'SQL'
-SELECT inst.title,
-       hr.call_number,
-       inst.dates__date1 AS publication_year,
-       COUNT(al.id) AS checkout_count,
-       MAX(al.created_date) AS most_recent_checkout_date
-FROM circulation.audit_loan__t al
-JOIN inventory.item__t item ON item.id = al.loan__item_id
-JOIN inventory.holdings_record__t hr ON hr.id = item.holdings_record_id
-JOIN inventory.instance__t inst ON inst.id = hr.instance_id
-JOIN inventory.location__t loc ON loc.id = item.effective_location_id
-JOIN inventory.loclibrary__t lib ON lib.id = loc.library_id
-WHERE lib.name = 'SC Neilson Library'
-  AND al.created_date >= CURRENT_DATE - INTERVAL '5 years'
-GROUP BY inst.title, hr.call_number, inst.dates__date1
-ORDER BY checkout_count DESC
-LIMIT 20
-SQL;
+    $neilsonPrompt = 'Show the 20 most-circulated books during the last five years at Neilson Library. Include title, call number, publication year, checkout count, and most recent checkout date.';
     TestTransport::$responses = [
         twoLaneFamilyIntent('circulation_top_items', [
             'campus' => 'Smith College',
             'library' => 'Neilson Library',
             'material_type' => 'Book',
-            'limit' => '20',
-            'requested_outputs' => [
-                'title',
-                'call_number',
-                'publication_year',
-                'checkout_count',
-                'most_recent_checkout_date',
-            ],
+            'requested_outputs' => ['ranked_circulation_items'],
         ]),
-        twoLaneGeminiSql($neilsonSql),
     ];
     TestTransport::$requests = [];
     unset(Yii::$app->params['nl2sqlTwoLaneEnabled']);
     $neilson = GeminiService::generateSqlWithShadow($neilsonPrompt, 'Smith College');
-    twoLaneAssertTrustedSuccess($neilson, 'ai_built', 'Neilson unsupported canonical shape');
-    twoLaneAssertSame(2, count(TestTransport::$requests), 'Neilson routing must use one family attempt and one automatic AI-built request.');
-    twoLaneAssertContains('Local reference generation context', json_encode(TestTransport::$requests[0]), 'Neilson reference uncertainty must reach model-only context.');
+    twoLaneAssertTrustedSuccess($neilson, 'verified_pattern', 'Neilson detailed top-circulation pattern');
+    twoLaneAssertSame(1, count(TestTransport::$requests), 'Neilson routing must compile after one family-intent request without AI SQL repair.');
+    twoLaneAssertSame('builder_intent', $neilson['route'] ?? null, 'Neilson routing should use the canonical builder lane.');
+    twoLaneAssertSame(0, $neilson['repairAttempts'] ?? 0, 'Neilson canonical routing should not require automatic SQL repair.');
+    twoLaneAssertContains("INTERVAL '5 years'", (string)$neilson['sql'], 'Neilson canonical SQL must preserve the five-year window from the prompt.');
+    twoLaneAssertContains('COUNT(*) AS checkout_count', (string)$neilson['sql'], 'Neilson canonical SQL must aggregate checkout events across copies.');
+    twoLaneAssertContains('SC Neilson Library', (string)$neilson['sql'], 'Neilson canonical SQL must preserve the resolved library value.');
+    twoLaneAssertContains("imt.name ILIKE 'book'", (string)$neilson['sql'], 'Neilson canonical SQL must preserve the normalized resolved book material type.');
+    twoLaneAssertSame(false, strpos((string)$neilson['sql'], 'call_number_type__t') !== false, 'Neilson canonical SQL must not invent a call-number-type filter from the requested title output.');
+    twoLaneAssertContains('Resolved library values: SC Neilson Library', json_encode(TestTransport::$requests[0]), 'Neilson resolved reference context must reach the family-intent request.');
 
     $crossDomainPrompt = 'Compare annual circulation with acquisition spending by material type for the last three completed fiscal years.';
     $crossDomainSql = <<<'SQL'
@@ -434,13 +418,19 @@ SQL;
     twoLaneAssertTrustedSuccess($rollbackCanonical, 'verified_pattern', 'rollback verified inventory pattern');
     twoLaneAssertSame(1, count(TestTransport::$requests), 'Rollback canonical routing must use one structured-intent request without AI rewriting.');
 
+    TestTransport::$responses = [
+        twoLaneFamilyIntent('circulation_top_items', [
+            'campus' => 'Smith College',
+            'library' => 'Neilson Library',
+            'material_type' => 'Book',
+            'requested_outputs' => ['ranked_circulation_items'],
+        ]),
+    ];
     TestTransport::$requests = [];
     $rollback = GeminiService::generateSqlWithShadow($neilsonPrompt, 'Smith College');
-    twoLaneAssertSame(true, $rollback['needsClarification'] ?? null, 'False switch must retain rollback clarification compatibility.');
-    twoLaneAssertSame('clarification', $rollback['route'] ?? null, 'False switch must retain the strict blocker route.');
-    twoLaneAssertSame(false, isset($rollback['sql']), 'Rollback clarification must not expose SQL.');
-    twoLaneAssertSame(false, isset($rollback['generationProvenance']), 'Rollback clarification must not claim success provenance.');
-    twoLaneAssertSame(0, count(TestTransport::$requests), 'Rollback clarification must stop before model generation.');
+    twoLaneAssertTrustedSuccess($rollback, 'verified_pattern', 'rollback Neilson canonical pattern');
+    twoLaneAssertSame('builder_intent', $rollback['route'] ?? null, 'False switch should still compile a now-supported canonical report.');
+    twoLaneAssertSame(1, count(TestTransport::$requests), 'Rollback canonical routing should use one structured-intent request.');
     Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
     foreach ([

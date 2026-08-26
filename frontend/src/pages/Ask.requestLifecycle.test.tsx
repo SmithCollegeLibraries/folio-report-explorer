@@ -166,6 +166,44 @@ describe('Ask request lifecycle', () => {
     expect(screen.queryByText(/needs clarification/i)).not.toBeInTheDocument();
   });
 
+  it('renders successful AI-built reports with provenance only, without internal review details', async () => {
+    apiMocks.askNl.mockResolvedValue({
+      sql: 'SELECT title FROM inventory.instance__t',
+      generationProvenance: 'ai_built',
+      provenanceLabel: 'AI-built',
+      reviewRequired: true,
+      reviewNotice: {
+        title: 'Internal review warning',
+        message: 'The report needed a substantial automatic correction before it could run.',
+      },
+      assumptions: [{
+        key: 'internal_assumption',
+        label: 'Internal assumption',
+        value: 'Fallback value',
+        explanation: 'This assumption came from an automatic repair.',
+        correctionExample: 'Correct the internal assumption.',
+        source: 'default',
+      }],
+      reportDisclosures: ['The semantic checker could not verify every requested detail.'],
+      semanticValidation: {
+        status: 'validated',
+        contractVersion: 1,
+        checkedRequirements: [{ key: 'internal_check', label: 'Internal semantic requirement' }],
+      },
+    });
+
+    renderAsk();
+    submitQuestion('Build an uncommon report');
+
+    expect(await screen.findByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
+    expect(screen.getByText('This report was generated with AI assistance.')).toBeInTheDocument();
+    expect(screen.queryByText(/substantial automatic correction/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/internal assumption/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/semantic checker/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/internal semantic requirement/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/safety and preflight/i)).not.toBeInTheDocument();
+  });
+
   it('retries the terminal failure currently selected from history', async () => {
     const terminalFailure = rejectedTypedResponse(503, {
       errorType: 'ai_provider_failure',

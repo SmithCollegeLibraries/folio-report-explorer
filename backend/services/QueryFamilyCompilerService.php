@@ -1058,7 +1058,7 @@ class QueryFamilyCompilerService
     {
         $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
         if ($requestedOutputs !== ['ranked_circulation_items']) {
-            throw new \InvalidArgumentException('unsupported_top_items_output: The first top-items compiler slice only supports ranked_circulation_items output.');
+            return self::buildDetailedCirculationTopItemsSql($queryDef, $slots);
         }
 
         $filters = self::indexFilters($queryDef['filters'] ?? []);
@@ -1133,6 +1133,83 @@ class QueryFamilyCompilerService
             . "LEFT JOIN current_circ cc ON ti.item_id = cc.item_id\n"
             . "LEFT JOIN former_circ fc ON ti.hrid = fc.hrid\n"
             . "ORDER BY total_circulation DESC, ti.instance_title ASC\n"
+            . "LIMIT " . $limit;
+
+        return [
+            'sql' => $sql,
+            'params' => $params,
+        ];
+    }
+
+    private static function buildDetailedCirculationTopItemsSql(array $queryDef, array $slots): array
+    {
+        $requiredOutputs = [
+            'call_number',
+            'checkout_count',
+            'most_recent_checkout_date',
+            'publication_year',
+            'title',
+        ];
+        $requestedOutputs = is_array($slots['requested_outputs'] ?? null)
+            ? array_values($slots['requested_outputs'])
+            : [];
+        sort($requestedOutputs, SORT_STRING);
+        if ($requestedOutputs !== $requiredOutputs) {
+            throw new \InvalidArgumentException('unsupported_top_items_output: Detailed top-items compilation requires title, call number, publication year, checkout count, and most recent checkout date.');
+        }
+
+        $lookbackYears = trim((string)($slots['lookback_years'] ?? ''));
+        if ($lookbackYears === '' || preg_match('/^[1-9]\d?$/', $lookbackYears) !== 1) {
+            throw new \InvalidArgumentException('invalid_top_items_lookback: Detailed top-items compilation requires a lookback_years value from 1 through 99.');
+        }
+
+        $filters = self::indexFilters($queryDef['filters'] ?? []);
+        $params = [];
+        $where = [];
+        $parameterIndex = 0;
+        foreach ([
+            ['inventory_campuses', 'name', 'ic.name'],
+            ['inventory_libraries', 'name', 'il.name'],
+            ['inventory_material_types', 'name', 'imt.name'],
+            ['inventory_locations', 'name', 'ilo.name'],
+        ] as $filterSpec) {
+            $key = self::filterKey($filterSpec[0], $filterSpec[1]);
+            if (!isset($filters[$key])) {
+                continue;
+            }
+
+            $placeholder = ':p' . $parameterIndex;
+            $where[] = $filterSpec[2] . ' ILIKE ' . $placeholder;
+            $params[$placeholder] = (string)$filters[$key]['value'];
+            $parameterIndex++;
+        }
+
+        if ($where === []) {
+            throw new \InvalidArgumentException('missing_top_items_scope: Top-items compilation requires at least library scope filters.');
+        }
+
+        $where[] = "al.loan__action IN ('checkedout', 'checkedOutThroughOverride')";
+        $where[] = "al.created_date >= CURRENT_DATE - INTERVAL '" . $lookbackYears . " years'";
+        $callNumber = 'COALESCE(ii.effective_call_number_components__call_number, ih.call_number)';
+        $limit = self::resolveRequestedLimit($slots);
+
+        $sql = "SELECT\n"
+            . "    inst.title AS title,\n"
+            . "    " . $callNumber . " AS call_number,\n"
+            . "    inst.dates__date1 AS publication_year,\n"
+            . "    COUNT(*) AS checkout_count,\n"
+            . "    MAX(al.created_date) AS most_recent_checkout_date\n"
+            . "FROM circulation.audit_loan__t al\n"
+            . "JOIN inventory.item__t ii ON al.loan__item_id = ii.id\n"
+            . "JOIN inventory.holdings_record__t ih ON ii.holdings_record_id = ih.id\n"
+            . "JOIN inventory.instance__t inst ON ih.instance_id = inst.id\n"
+            . "JOIN inventory.material_type__t imt ON ii.material_type_id = imt.id\n"
+            . "JOIN inventory.location__t ilo ON ii.effective_location_id = ilo.id\n"
+            . "JOIN inventory.loclibrary__t il ON ilo.library_id = il.id\n"
+            . "JOIN inventory.loccampus__t ic ON il.campus_id = ic.id\n"
+            . "WHERE " . implode("\n  AND ", $where) . "\n"
+            . "GROUP BY inst.id, inst.title, " . $callNumber . ", inst.dates__date1\n"
+            . "ORDER BY checkout_count DESC, most_recent_checkout_date DESC, title ASC, call_number ASC, inst.id ASC\n"
             . "LIMIT " . $limit;
 
         return [

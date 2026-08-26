@@ -731,6 +731,39 @@ assertContainsText(
     'The top-items compiler should preserve the explicit top-N limit in the compiled SQL.'
 );
 
+$detailedTopItemsBuilt = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'circulation_top_items',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'SC Neilson Library',
+        'material_type' => 'Book',
+        'limit' => '20',
+        'lookback_years' => '5',
+        'requested_outputs' => [
+            'title',
+            'call_number',
+            'publication_year',
+            'checkout_count',
+            'most_recent_checkout_date',
+        ],
+        'match_policy' => 'exact_phrase',
+    ],
+]);
+
+$detailedTopItemsSql = $detailedTopItemsBuilt['sql'] ?? '';
+assertContainsText('inst.title AS title', $detailedTopItemsSql, 'Detailed top-items reports should return title.');
+assertContainsText('AS call_number', $detailedTopItemsSql, 'Detailed top-items reports should return call number.');
+assertContainsText('inst.dates__date1 AS publication_year', $detailedTopItemsSql, 'Detailed top-items reports should return publication year.');
+assertContainsText('COUNT(*) AS checkout_count', $detailedTopItemsSql, 'Detailed top-items reports should count checkout events.');
+assertContainsText('MAX(al.created_date) AS most_recent_checkout_date', $detailedTopItemsSql, 'Detailed top-items reports should return the latest checkout audit date.');
+assertContainsText("al.loan__action IN ('checkedout', 'checkedOutThroughOverride')", $detailedTopItemsSql, 'Detailed top-items reports should count checkout actions only.');
+assertContainsText("al.created_date >= CURRENT_DATE - INTERVAL '5 years'", $detailedTopItemsSql, 'Detailed top-items reports should apply the requested five-year window to the typed audit timestamp.');
+assertContainsText('GROUP BY inst.id, inst.title, COALESCE(ii.effective_call_number_components__call_number, ih.call_number), inst.dates__date1', $detailedTopItemsSql, 'Detailed top-items reports should combine copies of the same instance and call number.');
+assertContainsText('ORDER BY checkout_count DESC, most_recent_checkout_date DESC, title ASC, call_number ASC, inst.id ASC', $detailedTopItemsSql, 'Detailed top-items reports should use the instance ID as a final stable ranking tie-breaker.');
+assertContainsText('LIMIT 20', $detailedTopItemsSql, 'Detailed top-items reports should preserve the requested top-N limit.');
+assertSameValue(false, strpos($detailedTopItemsSql, 'inventory.call_number_type__t') !== false, 'Requested title output must not become a call-number-type filter.');
+assertSameValue(false, strpos($detailedTopItemsSql, 'inventory.item__t__notes') !== false, 'Time-bounded reports must not add all-time former-circulation notes.');
+
 $compiledAge = QueryFamilyCompilerService::compileToQueryDefinition([
     'familyKey' => 'inventory_collection_age',
     'slots' => [

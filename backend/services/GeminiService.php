@@ -4213,6 +4213,16 @@ PROMPT;
             $slotProvenance = $inventoryListingRecovery['slotProvenance'];
         }
 
+        if ($familyKey === 'circulation_top_items') {
+            $topItemsRecovery = self::recoverTopItemsFamilySlotsFromPrompt(
+                $intent['slots'],
+                $prompt,
+                $slotProvenance
+            );
+            $intent['slots'] = $topItemsRecovery['slots'];
+            $slotProvenance = $topItemsRecovery['slotProvenance'];
+        }
+
         return [
             'intent' => $intent,
             'slotProvenance' => $slotProvenance,
@@ -4236,6 +4246,105 @@ PROMPT;
 
         ksort($provenance, SORT_STRING);
         return $provenance;
+    }
+
+    private static function recoverTopItemsFamilySlotsFromPrompt(
+        array $slots,
+        string $prompt,
+        array $slotProvenance = []
+    ): array {
+        $limit = self::extractTopItemsLimitFromPrompt($prompt);
+        if ($limit !== null && trim((string)($slots['limit'] ?? '')) !== (string)$limit) {
+            $slots['limit'] = (string)$limit;
+            $slotProvenance['limit'] = 'prompt_repaired';
+        }
+
+        $lookbackYears = self::extractTopItemsLookbackYearsFromPrompt($prompt);
+        if ($lookbackYears !== null && trim((string)($slots['lookback_years'] ?? '')) !== (string)$lookbackYears) {
+            $slots['lookback_years'] = (string)$lookbackYears;
+            $slotProvenance['lookback_years'] = 'prompt_repaired';
+        }
+
+        $requestedOutputs = self::extractDetailedTopItemsOutputsFromPrompt($prompt);
+        if ($requestedOutputs !== []) {
+            $currentOutputs = is_array($slots['requested_outputs'] ?? null)
+                ? array_values($slots['requested_outputs'])
+                : [];
+            sort($currentOutputs, SORT_STRING);
+            $normalizedRequestedOutputs = $requestedOutputs;
+            sort($normalizedRequestedOutputs, SORT_STRING);
+            if ($currentOutputs !== $normalizedRequestedOutputs) {
+                $slots['requested_outputs'] = $requestedOutputs;
+                $slotProvenance['requested_outputs'] = 'prompt_repaired';
+            }
+        }
+
+        return [
+            'slots' => $slots,
+            'slotProvenance' => $slotProvenance,
+        ];
+    }
+
+    private static function extractTopItemsLimitFromPrompt(string $prompt): ?int
+    {
+        $patterns = [
+            '/\btop\s+(\d+)\b/i',
+            '/\bshow(?:\s+me)?\s+(?:the\s+)?(\d+)\s+most[-\s]+circulated\b/i',
+        ];
+
+        foreach ($patterns as $pattern) {
+            if (preg_match($pattern, $prompt, $matches) === 1) {
+                $limit = (int)($matches[1] ?? 0);
+                return $limit > 0 ? $limit : null;
+            }
+        }
+
+        return null;
+    }
+
+    private static function extractTopItemsLookbackYearsFromPrompt(string $prompt): ?int
+    {
+        if (preg_match('/\blast\s+(\d+)\s+years?\b/i', $prompt, $matches) === 1) {
+            $years = (int)($matches[1] ?? 0);
+            return $years > 0 ? $years : null;
+        }
+
+        $numberWords = [
+            'one' => 1,
+            'two' => 2,
+            'three' => 3,
+            'four' => 4,
+            'five' => 5,
+            'six' => 6,
+            'seven' => 7,
+            'eight' => 8,
+            'nine' => 9,
+            'ten' => 10,
+        ];
+        if (preg_match('/\blast\s+(one|two|three|four|five|six|seven|eight|nine|ten)\s+years?\b/i', $prompt, $matches) === 1) {
+            return $numberWords[strtolower((string)$matches[1])] ?? null;
+        }
+
+        return null;
+    }
+
+    private static function extractDetailedTopItemsOutputsFromPrompt(string $prompt): array
+    {
+        $outputPatterns = [
+            'title' => '/\btitle\b/i',
+            'call_number' => '/\bcall\s+number\b/i',
+            'publication_year' => '/\bpublication\s+year\b/i',
+            'checkout_count' => '/\bcheckout\s+count\b/i',
+            'most_recent_checkout_date' => '/\bmost\s+recent\s+checkout\s+date\b/i',
+        ];
+        $outputs = [];
+        foreach ($outputPatterns as $output => $pattern) {
+            if (preg_match($pattern, $prompt) === 1) {
+                $outputs[] = $output;
+            }
+        }
+
+        return count($outputs) === count($outputPatterns) ? $outputs : [];
     }
 
     private static function getSupportedQueryFamilySlots(string $familyKey): array
@@ -4420,8 +4529,9 @@ PROMPT;
         string $originalQuestion,
         array &$slotProvenance
     ): array {
+        $familyKey = trim((string)($intent['familyKey'] ?? ''));
         if (
-            trim((string)($intent['familyKey'] ?? '')) !== 'inventory_library_location_listing'
+            !in_array($familyKey, ['inventory_library_location_listing', 'circulation_top_items'], true)
             || !is_array($intent['slots'] ?? null)
         ) {
             return $intent;
@@ -4483,7 +4593,8 @@ PROMPT;
         }
 
         if (
-            isset($intent['slots']['material_type'])
+            $familyKey === 'inventory_library_location_listing'
+            && isset($intent['slots']['material_type'])
             && !self::promptMentionsCoveredInventoryOutputs($originalQuestion)
         ) {
             $outputs = is_array($intent['slots']['requested_outputs'] ?? null)
@@ -5334,9 +5445,19 @@ PROMPT;
             $slots['material_type'] = 'book';
         }
 
-        $limit = trim((string)($slots['limit'] ?? ''));
-        if ($limit === '' && preg_match('/\btop\s+(\d+)\b/i', $prompt, $matches) === 1) {
-            $slots['limit'] = $matches[1];
+        $limit = self::extractTopItemsLimitFromPrompt($prompt);
+        if ($limit !== null) {
+            $slots['limit'] = (string)$limit;
+        }
+
+        $lookbackYears = self::extractTopItemsLookbackYearsFromPrompt($prompt);
+        if ($lookbackYears !== null) {
+            $slots['lookback_years'] = (string)$lookbackYears;
+        }
+
+        $requestedOutputs = self::extractDetailedTopItemsOutputsFromPrompt($prompt);
+        if ($requestedOutputs !== []) {
+            $slots['requested_outputs'] = $requestedOutputs;
         }
 
         return $slots;
@@ -6066,17 +6187,35 @@ PROMPT;
 
             $limit = trim((string)($slots['limit'] ?? ''));
             $expectedLimit = $limit === '' ? QueryFamilySlotService::DEFAULT_LIMIT : max(1, min((int)$limit, QueryFamilySlotService::DEFAULT_LIMIT));
-            $hasCirculationAnchor = stripos($sql, 'FROM circulation.audit_loan__t al') !== false
-                && stripos($sql, "al.loan__action IN ('checkedout', 'checkedOutThroughOverride')") !== false
-                && stripos($sql, 'FROM inventory.item__t__notes itn') !== false
-                && stripos($sql, "itn.notes__item_note_type_id = '" . QueryFamilyCompilerService::FORMER_CIRCULATION_NOTE_TYPE_ID . "'") !== false
-                && stripos($sql, 'AS total_circulation') !== false
-                && stripos($sql, 'ORDER BY total_circulation DESC') !== false
-                && stripos($sql, 'LIMIT ' . $expectedLimit) !== false;
+            $requestedOutputs = is_array($slots['requested_outputs'] ?? null)
+                ? $slots['requested_outputs']
+                : [];
+            $isDetailedTimeBoundedReport = in_array('checkout_count', $requestedOutputs, true)
+                && in_array('most_recent_checkout_date', $requestedOutputs, true);
+            if ($isDetailedTimeBoundedReport) {
+                $lookbackYears = trim((string)($slots['lookback_years'] ?? ''));
+                $hasCirculationAnchor = stripos($sql, 'FROM circulation.audit_loan__t al') !== false
+                    && stripos($sql, "al.loan__action IN ('checkedout', 'checkedOutThroughOverride')") !== false
+                    && stripos($sql, "al.created_date >= CURRENT_DATE - INTERVAL '" . $lookbackYears . " years'") !== false
+                    && stripos($sql, 'COUNT(*) AS checkout_count') !== false
+                    && stripos($sql, 'MAX(al.created_date) AS most_recent_checkout_date') !== false
+                    && stripos($sql, 'GROUP BY inst.id, inst.title') !== false
+                    && stripos($sql, 'ORDER BY checkout_count DESC') !== false
+                    && stripos($sql, 'LIMIT ' . $expectedLimit) !== false
+                    && stripos($sql, 'inventory.item__t__notes') === false;
+            } else {
+                $hasCirculationAnchor = stripos($sql, 'FROM circulation.audit_loan__t al') !== false
+                    && stripos($sql, "al.loan__action IN ('checkedout', 'checkedOutThroughOverride')") !== false
+                    && stripos($sql, 'FROM inventory.item__t__notes itn') !== false
+                    && stripos($sql, "itn.notes__item_note_type_id = '" . QueryFamilyCompilerService::FORMER_CIRCULATION_NOTE_TYPE_ID . "'") !== false
+                    && stripos($sql, 'AS total_circulation') !== false
+                    && stripos($sql, 'ORDER BY total_circulation DESC') !== false
+                    && stripos($sql, 'LIMIT ' . $expectedLimit) !== false;
+            }
 
             if (!$hasCirculationAnchor) {
                 throw new \InvalidArgumentException(
-                    'missing_top_items_circulation_anchor: Top-items family prompts require audit-loan counts, former-circulation notes, total_circulation ranking, and the requested top-N limit.'
+                    'missing_top_items_circulation_anchor: Top-items family prompts require the canonical circulation aggregation, requested time scope, and top-N limit.'
                 );
             }
 

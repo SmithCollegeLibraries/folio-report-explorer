@@ -353,7 +353,8 @@ AI-built reports are not promoted automatically. Administrators may review repea
 ### Required regression prompts
 
 - `Show me the 20 most-circulated books at Neilson Library during the last five years. Include title, call number, publication year, checkout count, and most recent checkout date.`
-  - This must produce an **AI-built** result until a canonical family supports every requested constraint and output.
+  - This now produces a **Verified pattern** result because `circulation_top_items` supports the five-year window and every requested output.
+  - Copies sharing a bibliographic instance and call number are combined into one row before ranking.
   - It must not display clarification or recovery screens.
 - `Show me a list of VHS and DVDs at Hillyer Library.`
   - This should produce **Verified pattern** when its canonical contract succeeds.
@@ -381,7 +382,7 @@ The legacy strict blocker path is a rollback mechanism only; it is not exposed a
 - Every safe successful request returns a preview labeled **Verified pattern** or **AI-built**.
 - Canonical failures automatically attempt AI generation.
 - Reference-resolution uncertainty is supplied to AI and shown as an assumption when relevant.
-- The Neilson five-year top-circulation regression prompt reaches an AI-built preview rather than a blocker.
+- The Neilson five-year top-circulation regression prompt reaches a Verified pattern preview without a blocker or AI SQL repair.
 - Existing SQL write protection, restricted-table policy, authorization, preflight, timeout, cancellation, and resource-limit tests continue to pass.
 - Technical failure messages never instruct users to repair internal SQL or rewrite a request for canonical coverage.
 - Phase 2 revisions preserve lineage and route through the same two-lane orchestrator.

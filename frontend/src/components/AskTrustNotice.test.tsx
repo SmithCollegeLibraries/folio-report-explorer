@@ -4,15 +4,6 @@ import AskTrustNotice from './AskTrustNotice';
 import HistoryResultsModal from '../pages/history/HistoryResultsModal';
 import type { HistoryItem, JobStatusResponse } from '../types';
 
-const assumptions = [{
-  key: 'campus_scope',
-  label: 'Campus scope',
-  value: 'Smith College',
-  explanation: 'Results are limited to Smith College.',
-  correctionExample: 'Use all campuses.',
-  source: 'explicit' as const,
-}];
-
 afterEach(cleanup);
 
 describe('AskTrustNotice', () => {
@@ -21,9 +12,6 @@ describe('AskTrustNotice', () => {
       <AskTrustNotice
         generationProvenance="verified_pattern"
         provenanceLabel="Verified pattern"
-        reviewRequired={false}
-        reviewNotice={{ title: 'Untrusted title', message: 'Untrusted message' }}
-        assumptions={assumptions}
       />,
     );
 
@@ -36,12 +24,6 @@ describe('AskTrustNotice', () => {
       <AskTrustNotice
         generationProvenance="ai_built"
         provenanceLabel="AI-built"
-        reviewRequired={false}
-        reviewNotice={{
-          title: 'Internal classifier result',
-          message: 'This report uses the assumptions shown here.',
-        }}
-        assumptions={assumptions}
       />,
     );
 
@@ -49,30 +31,21 @@ describe('AskTrustNotice', () => {
     expect(screen.getByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
     expect(screen.queryByText('Verified pattern')).not.toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByText('This report uses the assumptions shown here.')).toBeInTheDocument();
-    expect(screen.getByText(/^Campus scope:/)).toBeInTheDocument();
-    expect(screen.getByText('Smith College')).toBeInTheDocument();
-    expect(notice).not.toHaveTextContent('Internal classifier result');
+    expect(screen.getByText('This report was generated with AI assistance.')).toBeInTheDocument();
     expect(notice).not.toHaveTextContent(/route|validator|schema|table|%/i);
   });
 
-  it('uses stronger nonblocking copy when routine review is flagged', () => {
+  it('renders no review or correction controls in the AI-built notice', () => {
     render(
       <AskTrustNotice
         generationProvenance="ai_built"
         provenanceLabel="AI-built"
-        reviewRequired
-        reviewNotice={{
-          title: 'Do not expose this title',
-          message: 'The available reporting data has an important limitation for this question.',
-        }}
-        assumptions={[]}
       />,
     );
 
-    expect(screen.getByRole('heading', { name: 'AI-built — review flagged' })).toBeInTheDocument();
-    expect(screen.getByText(/important limitation/i)).toBeInTheDocument();
-    expect(screen.getByText(/flagged for routine review/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
+    expect(screen.getByText('This report was generated with AI assistance.')).toBeInTheDocument();
+    expect(screen.queryByText(/flagged for routine review/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /approve|continue|confirm/i })).not.toBeInTheDocument();
     expect(screen.getByRole('note')).not.toHaveTextContent(/review (the )?sql/i);
   });

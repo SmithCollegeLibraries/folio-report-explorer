@@ -93,12 +93,18 @@
                     "library",
                     "location",
                     "material_type",
+                    "lookback_years",
                     "limit"
                 ]
             },
             "outputs": {
                 "allowed": [
-                    "ranked_circulation_items"
+                    "ranked_circulation_items",
+                    "title",
+                    "call_number",
+                    "publication_year",
+                    "checkout_count",
+                    "most_recent_checkout_date"
                 ],
                 "holdingsScoped": []
             },

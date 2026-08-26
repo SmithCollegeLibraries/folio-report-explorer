@@ -8,9 +8,7 @@ import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
-import { ExploratoryAssumptionsPanel } from '../components/ExploratoryAssumptionsPanel';
 import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel';
-import { ExploratorySemanticValidationPanel } from '../components/ExploratorySemanticValidationPanel';
 import AskTrustNotice from '../components/AskTrustNotice';
 import { useToast } from '../components/ToastProvider';
 import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
@@ -1122,29 +1120,6 @@ export default function Ask() {
     setPrompt('');
   };
 
-  const handleCorrectAssumption = (example: string) => {
-    const context = buildCurrentAskFollowUpContext(
-      history[0]?.prompt || prompt,
-      nlResult,
-      results?.columns || [],
-    );
-    if (!context) {
-      setFollowUpError('Assumptions can be corrected after a query has generated SQL.');
-      return;
-    }
-
-    setPrompt(example);
-    setAskProgressPhase('generating');
-    askMut.mutate({
-      question: example,
-      includeSuggestions: true,
-      shouldExecute: true,
-      followUpContext: context,
-      allowExploratory: true,
-      parentGenerationId: context.parentGenerationId ?? null,
-    });
-  };
-
   const handleRetryExploratory = (question: string) => {
     const preservedQuestion = question.trim();
     if (!preservedQuestion) return;
@@ -2239,23 +2214,7 @@ export default function Ask() {
             <AskTrustNotice
               generationProvenance={nlResult.generationProvenance}
               provenanceLabel={nlResult.provenanceLabel}
-              reviewRequired={nlResult.reviewRequired}
-              reviewNotice={nlResult.reviewNotice}
-              assumptions={nlResult.assumptions}
             />
-            {nlResult.generationProvenance === 'ai_built'
-              && ((nlResult.assumptions?.length ?? 0) > 0 || (nlResult.reportDisclosures?.length ?? 0) > 0)
-              && (
-              <ExploratoryAssumptionsPanel
-                assumptions={nlResult.assumptions ?? []}
-                repairCount={nlResult.repairAttempts ?? nlResult.validationSummary?.repairAttempts ?? 0}
-                onCorrect={handleCorrectAssumption}
-                reportDisclosures={nlResult.reportDisclosures}
-              />
-            )}
-            {nlResult.generationProvenance === 'ai_built' && nlResult.semanticValidation && (
-              <ExploratorySemanticValidationPanel validation={nlResult.semanticValidation} />
-            )}
 
             {/* Tab toggle bar */}
             <div className="flex items-center gap-1 border-b pb-0">

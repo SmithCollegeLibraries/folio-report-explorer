@@ -46,6 +46,12 @@ $materialType = new ReflectionMethod(GeminiService::class, 'extractInventoryList
 $materialType->setAccessible(true);
 $itemStatus = new ReflectionMethod(GeminiService::class, 'extractInventoryListingItemStatusFromPrompt');
 $itemStatus->setAccessible(true);
+$topItemsLimit = new ReflectionMethod(GeminiService::class, 'extractTopItemsLimitFromPrompt');
+$topItemsLimit->setAccessible(true);
+$topItemsLookback = new ReflectionMethod(GeminiService::class, 'extractTopItemsLookbackYearsFromPrompt');
+$topItemsLookback->setAccessible(true);
+$topItemsOutputs = new ReflectionMethod(GeminiService::class, 'extractDetailedTopItemsOutputsFromPrompt');
+$topItemsOutputs->setAccessible(true);
 
 // Quoted values are unaffected.
 assertSameValue('e-book', $materialType->invoke(null, 'List items with material type "e-book". Include title.'), 'Quoted material type must be extracted verbatim.');
@@ -60,5 +66,19 @@ assertSameValue('book', $materialType->invoke(null, 'material type of book and i
 // Item status is normalized so hyphen/case variants match the stored value.
 assertSameValue('checked out', $itemStatus->invoke(null, 'items with item status "checked-out"'), 'Hyphenated item status must normalize to the canonical spaced form.');
 assertSameValue('in process', $itemStatus->invoke(null, 'item status of "In Process"'), 'Item status must be lowercased/normalized.');
+
+$detailedTopItemsPrompt = 'Show the 20 most-circulated books during the last five years. Include title, call number, publication year, checkout count, and most recent checkout date.';
+assertSameValue(20, $topItemsLimit->invoke(null, $detailedTopItemsPrompt), 'Top-items extraction must recover a show-the-N limit.');
+assertSameValue(5, $topItemsLookback->invoke(null, $detailedTopItemsPrompt), 'Top-items extraction must recover a word-based lookback window.');
+assertSameValue(
+    ['title', 'call_number', 'publication_year', 'checkout_count', 'most_recent_checkout_date'],
+    $topItemsOutputs->invoke(null, $detailedTopItemsPrompt),
+    'Top-items extraction must recover the complete supported detailed output shape.'
+);
+assertSameValue(
+    [],
+    $topItemsOutputs->invoke(null, 'Show the top 10 circulated books and include title.'),
+    'Partial detailed output wording must retain the legacy ranked-items shape instead of forcing an unsupported partial compiler mode.'
+);
 
 fwrite(STDOUT, "GeminiService inventory listing extraction test passed\n");
