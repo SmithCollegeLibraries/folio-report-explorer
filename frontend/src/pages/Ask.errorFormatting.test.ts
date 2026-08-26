@@ -26,6 +26,10 @@ describe('Ask error formatting', () => {
     expect(message).toBe('Report Explorer could not safely run this report. Please retry.');
     expect(message).not.toMatch(/correction|clarification|refine|resolved/i);
     expect(AskPage.getAskResponseView?.({ errorType: 'sql_generation_failed' })).toBe('terminal_failure');
+    expect(AskPage.getAskTerminalFailureAriaProps()).toEqual({
+      role: 'alert',
+      'aria-live': 'assertive',
+    });
   });
 
   it('keeps clarification and recovery screens exclusively for no-SQL rollback responses', () => {

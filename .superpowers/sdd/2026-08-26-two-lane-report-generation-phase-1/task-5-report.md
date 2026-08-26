@@ -62,3 +62,39 @@ npm test -- src/components/AskTrustNotice.test.tsx src/pages/Ask.errorFormatting
 ## Concerns
 
 - Lint remains unverified solely because the project does not provide its `eslint` executable. Build and all frontend tests pass; Vite emitted its existing Browserslist-age and chunk-size warnings.
+
+## Fix round 1: review findings
+
+### Changes
+
+- Query-reuse candidates now carry trusted stored generation provenance from query-job metadata when it exists. The frontend preserves a valid stored label and derives the matching public label when needed. Legacy candidates with no stored provenance are explicitly presented as `AI-built`, because reuse does not re-verify them against a canonical compiler.
+- The Ask reuse path uses the same provenance-bearing `NlResponse` for accepted and edited SQL, so its normal result experience always has exactly one label.
+- Assumption details now say only that executable SQL passed safety and preflight checks (including automatic repairs). They no longer claim semantic validation.
+- Only the asynchronous no-SQL `sql_generation_failed` notice is announced with `role="alert"` and `aria-live="assertive"`; AI-built provenance remains a nonblocking `role="note"`.
+
+### RED/GREEN evidence
+
+RED before implementation:
+
+```text
+frontend focused tests: 6 failures
+backend/tests/PreviousSuccessfulQueryReuseServiceTest.php: failed because stored provenance was omitted
+```
+
+GREEN:
+
+```text
+npm test -- src/pages/Ask.queryReuse.test.ts src/components/ExploratoryAssumptionsPanel.test.tsx src/pages/Ask.errorFormatting.test.ts
+3 files passed, 36 tests passed
+
+php backend/tests/PreviousSuccessfulQueryReuseServiceTest.php
+PreviousSuccessfulQueryReuseServiceTest passed
+```
+
+Final verification:
+
+- Full frontend suite: 39 files, 216 tests passed.
+- Frontend build: passed.
+- PHP syntax check for `PreviousSuccessfulQueryReuseService.php`: passed.
+- `git diff --check`: passed.
+- Lint remained unavailable because `eslint` is not installed; no dependency changes were made.

@@ -24,11 +24,11 @@ const assumptions = [
 afterEach(cleanup);
 
 describe('ExploratoryAssumptionsPanel', () => {
-  it('shows assumptions, their sources, explanations, and initial validation status', () => {
+  it('shows assumptions with an executable safety and preflight status', () => {
     render(<ExploratoryAssumptionsPanel assumptions={assumptions} repairCount={0} onCorrect={() => undefined} />);
 
     expect(screen.getByRole('heading', { name: 'Assumptions used' })).toBeInTheDocument();
-    expect(screen.getByText('Initial SQL passed validation')).toBeInTheDocument();
+    expect(screen.getByText('Executable SQL passed safety and preflight checks')).toBeInTheDocument();
     expect(screen.getByText('Purchase date')).toBeInTheDocument();
     expect(screen.getByText('payment_date')).toBeInTheDocument();
     expect(screen.getByText('Purchases are assigned to the date the invoice was paid.')).toBeInTheDocument();
@@ -36,13 +36,27 @@ describe('ExploratoryAssumptionsPanel', () => {
     expect(screen.getByText('Explicit')).toBeInTheDocument();
   });
 
-  it('reports automatic repairs and starts a correction with the example', () => {
+  it('reports automatic repairs without claiming semantic validation', () => {
     const onCorrect = vi.fn();
     render(<ExploratoryAssumptionsPanel assumptions={assumptions.slice(0, 1)} repairCount={2} onCorrect={onCorrect} />);
 
-    expect(screen.getByText('Validated after 2 automatic repairs')).toBeInTheDocument();
+    expect(screen.getByText('Executable SQL passed safety and preflight checks after 2 automatic repairs')).toBeInTheDocument();
+    expect(screen.queryByText(/validated/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Correct Purchase date assumption' }));
     expect(onCorrect).toHaveBeenCalledWith('Use invoice date instead of payment date.');
+  });
+
+  it('does not make semantic-advisory results look independently verified', () => {
+    render(
+      <ExploratoryAssumptionsPanel
+        assumptions={assumptions.slice(0, 1)}
+        repairCount={0}
+        onCorrect={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText('Executable SQL passed safety and preflight checks')).toBeInTheDocument();
+    expect(screen.queryByText(/semantic validation|validated against your request/i)).not.toBeInTheDocument();
   });
 
   it('shows successful report coverage in plain language beside the assumptions', () => {

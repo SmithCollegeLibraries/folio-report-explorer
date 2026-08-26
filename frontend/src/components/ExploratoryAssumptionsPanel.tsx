@@ -16,8 +16,8 @@ export function ExploratoryAssumptionsPanel({
   if (assumptions.length === 0 && reportDisclosures.length === 0) return null;
 
   const validationLabel = repairCount === 0
-    ? 'Initial SQL passed validation'
-    : `Validated after ${repairCount} automatic repair${repairCount === 1 ? '' : 's'}`;
+    ? 'Executable SQL passed safety and preflight checks'
+    : `Executable SQL passed safety and preflight checks after ${repairCount} automatic repair${repairCount === 1 ? '' : 's'}`;
 
   return (
     <section className="rounded-lg border border-folio-200 bg-white p-4 shadow-sm" aria-label="Report details">

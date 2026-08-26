@@ -245,6 +245,10 @@ export function getAskTerminalFailureMessage(result: NlResponse | null | undefin
   return null;
 }
 
+export function getAskTerminalFailureAriaProps(): { role: 'alert'; 'aria-live': 'assertive' } {
+  return { role: 'alert', 'aria-live': 'assertive' };
+}
+
 export type AskResponseView = 'success' | 'terminal_failure' | 'legacy_clarification' | 'legacy_recovery' | 'none';
 
 export function getAskResponseView(result: NlResponse | null | undefined): AskResponseView {
@@ -526,6 +530,25 @@ export function buildQueryReuseResolvedContext(selectedCampus: string): Record<s
   }
 
   return { campus };
+}
+
+export function buildReusedNlResult(reuseCandidate: QueryReuseCandidate, sql: string): NlResponse {
+  const generationProvenance = reuseCandidate.generationProvenance === 'verified_pattern'
+    ? 'verified_pattern'
+    : 'ai_built';
+  const expectedProvenanceLabel = generationProvenance === 'verified_pattern'
+    ? 'Verified pattern'
+    : 'AI-built';
+  const provenanceLabel = reuseCandidate.provenanceLabel === expectedProvenanceLabel
+    ? reuseCandidate.provenanceLabel
+    : expectedProvenanceLabel;
+
+  return {
+    sql,
+    dataSource: reuseCandidate.dataSource as 'folio' | 'local',
+    generationProvenance,
+    provenanceLabel,
+  };
 }
 
 export function buildGeneratedQuerySubmitOptions(
@@ -935,10 +958,7 @@ export default function Ask() {
 
   const handleRunReuseCandidate = () => {
     if (!reuseCandidate || !reuseSql.trim()) return;
-    const result: NlResponse = {
-      sql: reuseSql,
-      dataSource: reuseCandidate.dataSource as 'folio' | 'local',
-    };
+    const result = buildReusedNlResult(reuseCandidate, reuseSql);
     const originalSql = reuseCandidate.sql.trim();
     const editedSql = reuseSql.trim();
     const edited = originalSql !== editedSql;
@@ -2115,7 +2135,10 @@ export default function Ask() {
 
         {nlResult && !isLoading && askResponseView === 'terminal_failure' && (
           <div className="mx-auto w-full max-w-4xl p-3">
-            <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+            <div
+              className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+              {...getAskTerminalFailureAriaProps()}
+            >
               <p>{getAskTerminalFailureMessage(nlResult)}</p>
               <button
                 type="button"

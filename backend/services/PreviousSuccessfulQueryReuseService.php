@@ -73,7 +73,7 @@ class PreviousSuccessfulQueryReuseService
             $matchReasons[] = 'human_reviewed_reuse';
         }
 
-        return [
+        $candidate = [
             'jobId' => (string)($job['id'] ?? ''),
             'previousPrompt' => $previousPrompt,
             'sql' => $sql,
@@ -87,6 +87,16 @@ class PreviousSuccessfulQueryReuseService
             '_rankReuseOutcome' => $reuseOutcomeRank,
             '_rankCompletedAt' => self::timestampRank($job['completed_at'] ?? $job['completedAt'] ?? $job['created_at'] ?? null),
         ];
+
+        $generationProvenance = self::extractGenerationProvenance($metadata);
+        if ($generationProvenance !== null) {
+            $candidate['generationProvenance'] = $generationProvenance;
+            $candidate['provenanceLabel'] = $generationProvenance === 'verified_pattern'
+                ? 'Verified pattern'
+                : 'AI-built';
+        }
+
+        return $candidate;
     }
 
     private static function compareCandidates(array $left, array $right): int
@@ -174,6 +184,24 @@ class PreviousSuccessfulQueryReuseService
         }
 
         return trim((string)($job['name'] ?? ''));
+    }
+
+    private static function extractGenerationProvenance(array $metadata): ?string
+    {
+        $askAiProvenance = $metadata['askAiProvenance'] ?? null;
+        if (!is_array($askAiProvenance)) {
+            return null;
+        }
+
+        $provenance = $askAiProvenance['provenance'] ?? null;
+        if (!is_array($provenance)) {
+            return null;
+        }
+
+        $generationProvenance = (string)($provenance['generationProvenance'] ?? '');
+        return in_array($generationProvenance, ['verified_pattern', 'ai_built'], true)
+            ? $generationProvenance
+            : null;
     }
 
     private static function scorePromptMatch(string $currentPrompt, string $previousPrompt): int

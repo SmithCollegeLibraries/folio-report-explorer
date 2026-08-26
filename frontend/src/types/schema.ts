@@ -902,6 +902,8 @@ export interface QueryReuseCandidate {
   rowCount: number | null;
   executionTimeMs: number | null;
   completedAt: string | null;
+  generationProvenance?: GenerationProvenance;
+  provenanceLabel?: 'Verified pattern' | 'AI-built';
 }
 
 export interface QueryReuseCandidateRequest {

@@ -66,6 +66,9 @@ $jobs = [
         'metadata' => json_encode([
             'originalPrompt' => 'How many items are in Smith College collection?',
             'resolvedContext' => ['campus' => 'Smith College', 'domain' => 'inventory'],
+            'askAiProvenance' => [
+                'provenance' => ['generationProvenance' => 'verified_pattern'],
+            ],
         ]),
         'completed_at' => '2026-06-04 09:00:00',
         'row_count' => 1,
@@ -87,6 +90,8 @@ assertReuseTest($match['score'] >= 90, 'Expected exact/near-exact normalized pro
 assertReuseTest(in_array('same_data_source', $match['matchReasons'], true), 'Expected same data source match reason.');
 assertReuseTest(in_array('same_campus', $match['matchReasons'], true), 'Expected same campus match reason.');
 assertReuseTest(in_array('completed_successfully', $match['matchReasons'], true), 'Expected successful completion match reason.');
+assertReuseTest(($match['generationProvenance'] ?? null) === 'verified_pattern', 'Expected stored stable provenance to be returned with a reuse candidate.');
+assertReuseTest(($match['provenanceLabel'] ?? null) === 'Verified pattern', 'Expected a reuse candidate to include the public label derived from stored provenance.');
 
 $legacyMatch = PreviousSuccessfulQueryReuseService::findStrongMatch(
     'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.',
