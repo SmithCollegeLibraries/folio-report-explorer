@@ -73,6 +73,14 @@ namespace app\services {
         {
             return $prompt;
         }
+
+        public static function appendGenerationContextToPrompt(
+            string $prompt,
+            array $resolution,
+            ?array $ambiguity = null
+        ): string {
+            return self::appendGuidanceToPrompt($prompt, $resolution);
+        }
     }
 
     class FolioSchemaService
@@ -179,22 +187,7 @@ function routingAssertContains(string $needle, string $haystack, string $message
 
 function routingCandidate(): string
 {
-    $sql = <<<'SQL'
-SELECT pc.call_number_class,
-       SUM(ilt.total) AS total_spent,
-       COUNT(DISTINCT pol.id) AS purchase_count,
-       SUM(ilt.total) / NULLIF(COUNT(al.id), 0) AS cost_per_checkout
-FROM orders.po_line__t pol
-JOIN orders.purchase_order__t pot ON pot.id = pol.purchase_order_id
-JOIN invoice.invoice_lines__t ilt ON ilt.po_line_id = pol.id
-JOIN inventory.item__t item ON item.material_type_id = 'book'
-LEFT JOIN circulation.audit_loan__t al ON al.loan__item_id = item.id
-JOIN inventory.holdings_record__t holdings ON holdings.id = item.holdings_record_id
-JOIN inventory.instance__t instance ON instance.id = holdings.instance_id
-JOIN classification.classification__t pc ON pc.instance_id = instance.id
-WHERE pot.date_ordered >= CURRENT_DATE - INTERVAL '5 years'
-GROUP BY pc.call_number_class
-SQL;
+    $sql = 'SELECT invalid_roi.id FROM inventory.missing_roi__t invalid_roi';
     return "```sql\n{$sql}\n```\nCandidate query.\nDATA SOURCE: folio";
 }
 

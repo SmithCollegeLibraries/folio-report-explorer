@@ -73,6 +73,33 @@ describe('Ask error formatting', () => {
     });
   });
 
+  it('routes typed no-SQL hard failures ahead of rollback recovery', () => {
+    const cases = [
+      {
+        errorType: 'postgres_connectivity',
+        message: 'I could not connect to the FOLIO reporting database. Please retry.',
+      },
+      {
+        errorType: 'unsafe_generated_sql',
+        message: 'Do not expose generated correction copy.',
+      },
+      {
+        errorType: 'database_resource_limit',
+        error: 'Database validation exceeded the configured resource limit. Please retry.',
+      },
+    ];
+
+    for (const response of cases) {
+      const result = {
+        ...response,
+        validationSummary: { status: 'rejected' as const, repairAttempts: 0 },
+      };
+      expect(AskPage.getAskResponseView?.(result)).toBe('terminal_failure');
+      expect(AskPage.getAskTerminalFailureMessage?.(result)).toMatch(/retry|try again/i);
+      expect(AskPage.shouldShowLegacyRecovery?.(result)).toBe(false);
+    }
+  });
+
   it('keeps clarification and recovery screens exclusively for no-SQL rollback responses', () => {
     expect(AskPage.getAskResponseView?.({ needsClarification: true })).toBe('legacy_clarification');
     expect(AskPage.getAskResponseView?.({

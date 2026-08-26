@@ -40,6 +40,7 @@ final class AskResponseContractService
     public static function toUserResponse(array $result): array
     {
         $result = self::normalizeMode($result);
+        $result = self::normalizeGenerationProvenance($result);
         $items = [];
         foreach (($result['unmetRequirements'] ?? []) as $requirement) {
             $label = trim((string)($requirement['label'] ?? ''));
@@ -66,5 +67,24 @@ final class AskResponseContractService
             $result['_attemptedPlanProvenance']
         );
         return $result;
+    }
+
+    public static function normalizeGenerationProvenance(array $result): array
+    {
+        if (!isset($result['sql']) || trim((string)$result['sql']) === '') {
+            unset($result['generationProvenance'], $result['provenanceLabel']);
+            return $result;
+        }
+
+        $isTrustedCanonical = ($result['generationProvenance'] ?? null) === self::PROVENANCE_VERIFIED_PATTERN
+            && ($result['route'] ?? null) === 'builder_intent'
+            && strpos((string)($result['routeReason'] ?? ''), 'family_contract_supported:') === 0;
+
+        return self::withGenerationProvenance(
+            $result,
+            $isTrustedCanonical
+                ? self::PROVENANCE_VERIFIED_PATTERN
+                : self::PROVENANCE_AI_BUILT
+        );
     }
 }

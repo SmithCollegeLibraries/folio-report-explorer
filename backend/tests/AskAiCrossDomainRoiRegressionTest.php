@@ -70,6 +70,14 @@ namespace app\services {
         {
             return $prompt;
         }
+
+        public static function appendGenerationContextToPrompt(
+            string $prompt,
+            array $resolution,
+            ?array $ambiguity = null
+        ): string {
+            return self::appendGuidanceToPrompt($prompt, $resolution);
+        }
     }
 
     class FolioSchemaService
@@ -351,27 +359,24 @@ RoiTestTransport::$requests = [];
 
 $exhausted = GeminiService::generateSqlWithShadow($question, 'Smith College');
 roiRegressionAssertSame(false, array_key_exists('sql', $exhausted), 'Exhausted recovery must not expose unvalidated SQL.');
-roiRegressionAssertSame(2, $exhausted['repairAttempts'] ?? null, 'Exhaustion must stop after two repair calls.');
+roiRegressionAssertSame('sql_generation_failed', $exhausted['errorType'] ?? null, 'Exhaustion must use the two-lane terminal failure type.');
+roiRegressionAssertSame('generation_failed', $exhausted['route'] ?? null, 'Exhaustion must not return the legacy recovery route.');
+roiRegressionAssertSame('sql_repair_exhausted', $exhausted['routeReason'] ?? null, 'Exhaustion must expose the shared repair-budget reason.');
+roiRegressionAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion must stop after two repair calls.');
 roiRegressionAssertSame(3, count(RoiTestTransport::$requests), 'Exhaustion should make one initial call and no more than two repairs.');
-roiRegressionAssertSame($question, $exhausted['recoveryContext']['originalQuestion'] ?? null, 'Exhausted recovery should preserve the original question.');
 roiRegressionAssertSame(
-    $expectedAssumptionValues,
-    array_column($exhausted['assumptions'] ?? [], 'value', 'key'),
-    'Exhausted recovery should preserve the exact five assumptions.'
+    'Report Explorer could not safely run this report. Please retry.',
+    $exhausted['message'] ?? null,
+    'Exhaustion must use concise Retry copy.'
 );
-roiRegressionAssertSame(5, count($exhausted['assumptions'] ?? []), 'Exhausted recovery should preserve exactly five assumptions without duplicates.');
-roiRegressionAssertContains('ROI PLAN GUIDANCE', $exhausted['attemptedPlan'] ?? '', 'Exhausted recovery should preserve the attempted plan.');
-roiRegressionAssertSame('unknown_table', $exhausted['validationSummary']['failureCategory'] ?? null, 'Exhausted recovery should expose a safe failure category.');
-roiRegressionAssertSame(
-    ['Retry the request.', 'Correct an assumption.', 'Narrow the period or output.'],
-    $exhausted['suggestions'] ?? null,
-    'Exhausted recovery should provide actionable suggestions.'
-);
+foreach (['recoveryContext', 'recoveryItems', 'assumptions', 'attemptedPlan', 'suggestions', 'generationProvenance', 'provenanceLabel'] as $forbiddenField) {
+    roiRegressionAssertSame(false, array_key_exists($forbiddenField, $exhausted), 'Exhaustion must omit rollback, correction, and provenance fields.');
+}
 $ordinaryExhausted = $exhausted;
 unset($ordinaryExhausted['_askEvidence']);
 roiRegressionAssertNoSqlLeak($ordinaryExhausted, $rejectedCandidates);
 roiRegressionAssertSame($rejectedCandidates[0], $exhausted['_askEvidence']['initialSql'] ?? null, 'Trusted exhausted evidence must retain the initial rejected candidate for structural persistence.');
-roiRegressionAssertSame($rejectedCandidates[2], $exhausted['_askEvidence']['finalSql'] ?? null, 'Trusted exhausted evidence must retain the last rejected candidate for structural persistence.');
+roiRegressionAssertSame(null, $exhausted['_askEvidence']['finalSql'] ?? null, 'Trusted exhausted evidence must not identify rejected SQL as executable final SQL.');
 
 fwrite(STDOUT, "Ask AI cross-domain ROI regression test passed\n");
 }

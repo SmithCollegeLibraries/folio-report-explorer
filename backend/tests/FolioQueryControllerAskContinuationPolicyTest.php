@@ -158,11 +158,13 @@ namespace {
 
     assertSameValue(200, Yii::$app->response->statusCode, 'Postgres connectivity failures should not be reported as AI timeouts.');
     assertSameValue('postgres_connectivity', $postgresFailure['errorType'] ?? null, 'Postgres connectivity failures should be classified separately.');
-    assertContainsText('FOLIO reporting database', $postgresFailure['exploratoryNotice']['message'] ?? '', 'Postgres connectivity recovery should name the database connection issue.');
-    assertContainsText('VPN', $postgresFailure['exploratoryNotice']['message'] ?? '', 'Postgres connectivity recovery should mention VPN/off-campus access.');
-    assertSameValue('postgres_connectivity_recovery', $postgresFailure['route'] ?? null, 'Postgres connectivity should not be routed as SQL repair exhaustion.');
-    assertSameValue('rejected', $postgresFailure['validationSummary']['status'] ?? null, 'HTTP-200 connectivity recovery must use the no-SQL recovery contract.');
-    assertSameValue('Show MRBC Reference Collection titles', $postgresFailure['recoveryContext']['originalQuestion'] ?? null, 'Connectivity recovery must preserve the original question for Retry.');
+    assertContainsText('FOLIO reporting database', $postgresFailure['message'] ?? '', 'Postgres connectivity failure should name the database connection issue.');
+    assertContainsText('VPN', $postgresFailure['message'] ?? '', 'Postgres connectivity failure should mention VPN/off-campus access.');
+    assertSameValue('postgres_connectivity', $postgresFailure['route'] ?? null, 'Postgres connectivity should remain a typed hard stop.');
+    assertSameValue('rejected', $postgresFailure['validationSummary']['status'] ?? null, 'HTTP-200 connectivity failure must use the no-SQL hard-failure contract.');
+    foreach (['needsClarification', 'exploratoryNotice', 'suggestions', 'recoveryContext'] as $forbiddenField) {
+        assertSameValue(false, array_key_exists($forbiddenField, $postgresFailure), 'Connectivity hard failures must omit rollback recovery fields.');
+    }
 
     Yii::$app->response->statusCode = 200;
     $policyFailure = $continuation->invoke(
@@ -173,6 +175,7 @@ namespace {
     );
 
     assertSameValue(403, Yii::$app->response->statusCode, 'Security and patron-PII policy failures should remain blocked.');
+    assertSameValue('policy_blocked', $policyFailure['errorType'] ?? null, 'Policy hard failures should expose a stable type.');
     assertContainsText('aggregate', $policyFailure['error'] ?? '', 'Policy blocks should offer an allowed aggregate-reporting alternative.');
 
     $policyRecorder = new PolicyCapturingReviewService();

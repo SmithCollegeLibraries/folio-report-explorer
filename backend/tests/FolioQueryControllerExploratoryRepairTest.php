@@ -32,8 +32,10 @@ namespace app\services {
         public static function validateSafety($sql): void
         {
             $trimmed = ltrim((string)$sql);
+            $singleStatement = rtrim($trimmed, " \t\r\n;");
             if (preg_match('/^(?:SELECT|WITH)\b/i', $trimmed) !== 1
                 || preg_match('/^DELETE\b/i', $trimmed) === 1
+                || strpos($singleStatement, ';') !== false
             ) {
                 throw new \InvalidArgumentException('Only SELECT queries are allowed.');
             }
@@ -49,7 +51,10 @@ namespace app\services {
         public static $preflightRepairResult;
         public static $preflightRepairFailure;
 
-        public static function isAiTimeoutMessage($message): bool { return false; }
+        public static function isAiTimeoutMessage($message): bool
+        {
+            return preg_match('/timeout|timed out|deadline exceeded|operation timed out/i', (string)$message) === 1;
+        }
 
         public static function isAiProviderFailureMessage($message): bool
         {
@@ -169,6 +174,33 @@ namespace {
             fwrite(STDERR, $message . "\nUnexpected text: {$needle}\nActual: {$haystack}\n");
             exit(1);
         }
+    }
+
+    function repairAssertPublicHardFailure(array $response, string $name): void
+    {
+        foreach ([
+            'sql',
+            'generationProvenance',
+            'provenanceLabel',
+            'needsClarification',
+            'clarificationItems',
+            'correctionInstruction',
+            'recoveryContext',
+            'recoveryItems',
+            'attemptedPlan',
+            'suggestions',
+        ] as $forbiddenField) {
+            repairAssertSame(
+                false,
+                array_key_exists($forbiddenField, $response),
+                $name . ' must omit forbidden response field ' . $forbiddenField . '.'
+            );
+        }
+        repairAssertSame(false, ($response['route'] ?? null) === 'clarification', $name . ' must not become clarification.');
+        repairAssertSame(false, ($response['route'] ?? null) === 'exploratory_recovery', $name . ' must not become recovery.');
+        $encoded = strtolower((string)json_encode($response));
+        repairAssertNotContains('request is preserved', $encoded, $name . ' must not emit legacy request-preserved copy.');
+        repairAssertNotContains('what still needs to be resolved', $encoded, $name . ' must not emit resolver blocker copy.');
     }
 
     require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
@@ -1218,9 +1250,9 @@ namespace {
     repairAssertSame(0, $unsafe['validationSummary']['repairAttempts'] ?? null, 'Unsafe generated SQL should report zero repairs.');
     repairAssertSame(false, array_key_exists('sql', $unsafe), 'Unsafe recovery must not include SQL.');
     repairAssertSame(
-        "I couldn't safely turn this request into a report. Nothing ran or changed. Retry the request or refine one part of it.",
+        'Report Explorer could not safely run this report. Please retry.',
         $unsafe['message'] ?? null,
-        'Unsafe recovery should use the safe rejected-response copy.'
+        'Unsafe recovery should use concise Retry-only copy.'
     );
 
     $unsafeCategory = $validateAndRepair->invoke(
@@ -1438,6 +1470,143 @@ namespace {
     }
     \app\services\GeminiService::$preflightRepairFailure = null;
     \app\services\GeminiService::$preflightRepairResult = null;
+
+    \app\services\GeminiService::$generationResult = [
+        'sql' => 'SELECT id FROM inventory.item__t',
+        'mode' => 'exploratory',
+        'route' => 'legacy_freeform',
+    ];
+    \app\services\SqlPreflightService::$calls = [];
+    \app\services\SqlPreflightService::$results = [[]];
+    Yii::$app->request = new TestRequest([
+        'prompt' => 'Show generic legacy item identifiers.',
+        'campus' => 'Smith College',
+        'includeSuggestions' => false,
+    ]);
+    Yii::$app->response->statusCode = 200;
+    $genericProvenanceRecorder = new CapturingAdministratorReviewService();
+    $genericProvenanceController = new TestableFolioQueryController('folio-query', null);
+    $genericProvenanceController->reviewService = $genericProvenanceRecorder;
+    $genericProvenanceResponse = $genericProvenanceController->actionNl();
+    repairAssertSame('ai_built', $genericProvenanceResponse['generationProvenance'] ?? null, 'Generic public SQL must normalize to AI-built provenance.');
+    repairAssertSame('AI-built', $genericProvenanceResponse['provenanceLabel'] ?? null, 'Generic public SQL must derive the AI-built label.');
+    repairAssertSame(
+        'ai_built',
+        $genericProvenanceRecorder->received['provenance']['generationProvenance'] ?? null,
+        'Generic executable SQL must persist the same trusted provenance shown to the user.'
+    );
+
+    foreach ([
+        ['DELETE FROM inventory.instance__t', 'destructive AI SQL'],
+        ['SELECT id FROM inventory.item__t; SELECT id FROM inventory.instance__t', 'multiple-statement AI SQL'],
+    ] as $unsafePublicCase) {
+        \app\services\GeminiService::$generationResult = [
+            'sql' => $unsafePublicCase[0],
+            'mode' => 'exploratory',
+            'route' => 'exploratory',
+            'generationProvenance' => 'ai_built',
+            'provenanceLabel' => 'AI-built',
+        ];
+        \app\services\SqlPreflightService::$calls = [];
+        \app\services\SqlPreflightService::$results = [];
+        Yii::$app->request = new TestRequest([
+            'prompt' => 'Unsafe fake-provider response.',
+            'campus' => 'Smith College',
+            'includeSuggestions' => false,
+        ]);
+        Yii::$app->response->statusCode = 200;
+        $unsafePublicController = new TestableFolioQueryController('folio-query', null);
+        $unsafePublicController->reviewService = new CapturingAdministratorReviewService();
+        $unsafePublicResponse = $unsafePublicController->actionNl();
+
+        repairAssertSame('unsafe_generated_sql', $unsafePublicResponse['errorType'] ?? null, $unsafePublicCase[1] . ' must retain its hard-failure type.');
+        repairAssertSame(0, count(\app\services\SqlPreflightService::$calls), $unsafePublicCase[1] . ' must stop before database preflight.');
+        repairAssertSame(
+            'Report Explorer could not safely run this report. Please retry.',
+            $unsafePublicResponse['message'] ?? null,
+            $unsafePublicCase[1] . ' must use concise Retry copy.'
+        );
+        repairAssertPublicHardFailure($unsafePublicResponse, $unsafePublicCase[1]);
+    }
+
+    $publicPreflightHardStops = [
+        [
+            'name' => 'database cancellation',
+            'preflight' => ['error' => 'SQLSTATE[57014]: canceling statement due to statement timeout'],
+            'errorType' => 'database_cancelled',
+        ],
+        [
+            'name' => 'database connectivity',
+            'preflight' => ['error' => 'connection failure', 'sqlState' => '08006', 'sqlStateClass' => '08'],
+            'errorType' => 'postgres_connectivity',
+        ],
+        [
+            'name' => 'database authentication',
+            'preflight' => ['error' => 'authentication failure', 'sqlState' => '28P01', 'sqlStateClass' => '28'],
+            'errorType' => 'policy_blocked',
+        ],
+        [
+            'name' => 'database resource limit',
+            'preflight' => ['error' => 'resource failure', 'sqlState' => '53200', 'sqlStateClass' => '53'],
+            'errorType' => 'database_resource_limit',
+        ],
+    ];
+    foreach ($publicPreflightHardStops as $hardStop) {
+        \app\services\GeminiService::$generationResult = [
+            'sql' => 'SELECT id FROM inventory.item__t',
+            'mode' => 'exploratory',
+            'route' => 'exploratory',
+            'generationProvenance' => 'ai_built',
+            'provenanceLabel' => 'AI-built',
+        ];
+        \app\services\GeminiService::$preflightRepairCalls = [];
+        \app\services\GeminiService::$preflightRepairFailure = null;
+        \app\services\GeminiService::$preflightRepairResult = null;
+        \app\services\SqlPreflightService::$calls = [];
+        \app\services\SqlPreflightService::$results = [$hardStop['preflight']];
+        Yii::$app->request = new TestRequest([
+            'prompt' => 'Show item identifiers.',
+            'campus' => 'Smith College',
+            'includeSuggestions' => false,
+        ]);
+        Yii::$app->response->statusCode = 200;
+        $hardStopController = new TestableFolioQueryController('folio-query', null);
+        $hardStopController->reviewService = new CapturingAdministratorReviewService();
+        $hardStopResponse = $hardStopController->actionNl();
+
+        repairAssertSame($hardStop['errorType'], $hardStopResponse['errorType'] ?? null, $hardStop['name'] . ' must retain its public hard-failure type.');
+        repairAssertSame(0, count(\app\services\GeminiService::$preflightRepairCalls), $hardStop['name'] . ' must not invoke AI repair.');
+        repairAssertPublicHardFailure($hardStopResponse, $hardStop['name']);
+    }
+
+    \app\services\GeminiService::$generationResult = [
+        'sql' => 'SELECT missing_column FROM inventory.item__t',
+        'mode' => 'canonical',
+        'route' => 'builder_intent',
+        'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+        'generationProvenance' => 'verified_pattern',
+        'provenanceLabel' => 'Verified pattern',
+        'repairAttempts' => 0,
+    ];
+    \app\services\GeminiService::$preflightRepairCalls = [];
+    \app\services\GeminiService::$preflightRepairResult = null;
+    \app\services\GeminiService::$preflightRepairFailure = new \RuntimeException('Operation timed out after 300000 milliseconds');
+    \app\services\SqlPreflightService::$results = [['error' => 'column "missing_column" does not exist']];
+    Yii::$app->request = new TestRequest([
+        'prompt' => 'Show item identifiers.',
+        'campus' => 'Smith College',
+        'includeSuggestions' => false,
+    ]);
+    Yii::$app->response->statusCode = 200;
+    $providerTimeoutController = new TestableFolioQueryController('folio-query', null);
+    $providerTimeoutController->reviewService = new CapturingAdministratorReviewService();
+    $providerTimeoutResponse = $providerTimeoutController->actionNl();
+    repairAssertSame('ai_timeout', $providerTimeoutResponse['errorType'] ?? null, 'Provider timeout must retain its public hard-failure type.');
+    repairAssertSame(504, Yii::$app->response->statusCode, 'Provider timeout must retain gateway-timeout status.');
+    repairAssertPublicHardFailure($providerTimeoutResponse, 'provider timeout');
+    \app\services\GeminiService::$preflightRepairFailure = null;
+
+    repairAssertPublicHardFailure($actionExhaustionResponse, 'shared repair-budget exhaustion');
 
     $controllerSource = file_get_contents(__DIR__ . '/../controllers/FolioQueryController.php');
     repairAssertSame(

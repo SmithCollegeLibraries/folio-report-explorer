@@ -495,11 +495,7 @@ class FolioQueryController extends Controller
             if (!$semanticRepairRequired && $this->isAskPostgresConnectivityFailure($error, $estimate)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'connectivity_failure', 'database_connectivity');
                 return $this->attachTrustedAskEvidence(
-                    $this->buildAskPostgresConnectivityRecovery(
-                        $rawQuestion,
-                        $campus,
-                        'ask_sql_preflight_recovery'
-                    ),
+                    $this->buildAskPostgresConnectivityFailure(),
                     $result
                 );
             }
@@ -829,7 +825,7 @@ class FolioQueryController extends Controller
             array_replace($result, ['repairAttempts' => 0])
         );
         $response['errorType'] = 'unsafe_generated_sql';
-        $response['message'] = "I couldn't safely turn this request into a report. Nothing ran or changed. Retry the request or refine one part of it.";
+        $response['message'] = 'Report Explorer could not safely run this report. Please retry.';
         $response['route'] = 'unsafe_generated_sql';
         $response['routeReason'] = 'unsafe_generated_sql';
         $response['validationSummary']['status'] = 'rejected';
@@ -1928,7 +1924,7 @@ class FolioQueryController extends Controller
                 $generationPrompt
             );
 
-            if (!array_key_exists('suggestions', $result)) {
+            if (!array_key_exists('suggestions', $result) && !empty($result['sql'])) {
                 $result['suggestions'] = [];
             }
             if ($includeSuggestions && empty($result['needsClarification']) && !empty($result['sql'])) {
@@ -2060,6 +2056,7 @@ class FolioQueryController extends Controller
     private function finalizeAskResponse(array $result, string $prompt, $userId, array $context): array
     {
         $result = AskResponseContractService::normalizeMode($result);
+        $result = AskResponseContractService::normalizeGenerationProvenance($result);
         $evidence = AskGenerationEvidenceService::build($result, $context + ['prompt' => $prompt]);
         $classification = AskConfidenceClassificationService::classify($evidence);
         try {
@@ -2425,10 +2422,6 @@ class FolioQueryController extends Controller
                 'status' => 'rejected',
                 'repairAttempts' => 0,
             ];
-            $response['recoveryContext'] = [
-                'originalQuestion' => $prompt,
-                'campus' => $campus,
-            ];
             $response['_askEvidence'] = [
                 'validationStatus' => 'rejected',
             ];
@@ -2439,6 +2432,7 @@ class FolioQueryController extends Controller
         if ($error instanceof \app\exceptions\PolicyViolationException || $this->isAskSecurityPolicyFailure($message)) {
             Yii::$app->response->statusCode = 403;
             return [
+                'errorType' => 'policy_blocked',
                 'error' => $this->buildAskPolicyBlockMessage($message),
                 'route' => 'blocked',
                 'routeReason' => 'ask_policy_block',
@@ -2449,7 +2443,7 @@ class FolioQueryController extends Controller
         }
 
         if ($this->isAskPostgresConnectivityFailure($message)) {
-            return $this->buildAskPostgresConnectivityRecovery($prompt, $campus, $routeReason);
+            return $this->buildAskPostgresConnectivityFailure();
         }
 
         Yii::$app->response->statusCode = 200;
@@ -2509,36 +2503,22 @@ class FolioQueryController extends Controller
         ];
     }
 
-    private function buildAskPostgresConnectivityRecovery(string $prompt, $campus, string $routeReason): array
+    private function buildAskPostgresConnectivityFailure(): array
     {
         Yii::$app->response->statusCode = 200;
         $message = 'I could not connect to the FOLIO reporting database to validate this query. If you are off campus, connect to VPN and try again.';
 
         return [
-            'needsClarification' => false,
-            'mode' => 'exploratory',
             'errorType' => 'postgres_connectivity',
             'message' => $message,
-            'exploratoryNotice' => [
-                'title' => 'Database connection issue',
-                'message' => $message,
-                'detail' => 'The AI request may have generated SQL, but the app could not verify it against FOLIO Postgres.',
-                'reason' => $routeReason,
-            ],
-            'warnings' => [
-                'FOLIO Postgres validation was unavailable.',
-            ],
-            'suggestions' => [],
-            'route' => 'postgres_connectivity_recovery',
-            'routeReason' => $routeReason,
+            'route' => 'postgres_connectivity',
+            'routeReason' => 'database_connectivity',
             'validationSummary' => [
                 'status' => 'rejected',
                 'repairAttempts' => 0,
             ],
-            'recoveryContext' => [
-                'originalQuestion' => $prompt,
-                'campus' => $campus,
-                'promptFingerprint' => $this->fingerprintPrompt($prompt),
+            '_askEvidence' => [
+                'validationStatus' => 'rejected',
             ],
         ];
     }

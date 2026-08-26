@@ -350,6 +350,7 @@ export interface SemanticValidation {
 
 export interface NlResponse {
   errorType?: string;
+  error?: string;
   generationId?: string;
   conversationId?: string;
   reviewRequired?: boolean;

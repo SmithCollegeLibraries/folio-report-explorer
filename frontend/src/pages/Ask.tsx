@@ -247,15 +247,36 @@ export function normalizeAskResultProvenance(result: NlResponse): NlResponse {
 }
 
 export function shouldShowLegacyRecovery(result: NlResponse | null | undefined): boolean {
-  return !hasGeneratedSql(result) && isExploratoryValidationHardStop(result?.validationSummary);
+  return !hasGeneratedSql(result)
+    && !isTypedAskTerminalFailure(result)
+    && isExploratoryValidationHardStop(result?.validationSummary);
 }
 
 export function getAskTerminalFailureMessage(result: NlResponse | null | undefined): string | null {
-  if (!hasGeneratedSql(result) && result?.errorType === 'sql_generation_failed') {
+  if (hasGeneratedSql(result) || !isTypedAskTerminalFailure(result)) {
+    return null;
+  }
+
+  if (result?.errorType === 'sql_generation_failed' || result?.errorType === 'unsafe_generated_sql') {
     return 'Report Explorer could not safely run this report. Please retry.';
   }
 
-  return null;
+  return result?.message?.trim()
+    || result?.error?.trim()
+    || 'Report Explorer could not safely run this report. Please retry.';
+}
+
+function isTypedAskTerminalFailure(result: NlResponse | null | undefined): boolean {
+  return [
+    'sql_generation_failed',
+    'unsafe_generated_sql',
+    'postgres_connectivity',
+    'database_cancelled',
+    'database_resource_limit',
+    'policy_blocked',
+    'ai_timeout',
+    'ai_provider_failure',
+  ].includes(result?.errorType ?? '');
 }
 
 export function getAskTerminalFailureAriaProps(): { role: 'alert'; 'aria-live': 'assertive' } {

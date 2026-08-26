@@ -43,10 +43,71 @@ askResponseAssertSame('ai_built', $aiBuilt['generationProvenance'], 'AI success 
 askResponseAssertSame('AI-built', $aiBuilt['provenanceLabel'], 'AI success needs the public label.');
 
 $failure = AskResponseContractService::withGenerationProvenance(
-    ['errorType' => 'sql_generation_failed'],
+    [
+        'errorType' => 'sql_generation_failed',
+        'generationProvenance' => 'verified_pattern',
+        'provenanceLabel' => 'Verified pattern',
+    ],
     AskResponseContractService::PROVENANCE_AI_BUILT
 );
 askResponseAssertSame(false, isset($failure['generationProvenance']), 'No-SQL failures must not claim successful provenance.');
+askResponseAssertSame(false, isset($failure['provenanceLabel']), 'No-SQL failures must not retain a stale provenance label.');
+
+$finalizedSuccessCases = [
+    [
+        'name' => 'trusted canonical success',
+        'result' => [
+            'sql' => 'SELECT 1',
+            'route' => 'builder_intent',
+            'routeReason' => 'family_contract_supported:inventory_collection_age',
+            'generationProvenance' => 'verified_pattern',
+            'provenanceLabel' => 'AI-built',
+        ],
+        'provenance' => 'verified_pattern',
+        'label' => 'Verified pattern',
+    ],
+    [
+        'name' => 'missing provenance',
+        'result' => ['sql' => 'SELECT 1'],
+        'provenance' => 'ai_built',
+        'label' => 'AI-built',
+    ],
+    [
+        'name' => 'invalid provenance',
+        'result' => [
+            'sql' => 'SELECT 1',
+            'generationProvenance' => 'legacy_generated',
+            'provenanceLabel' => 'Verified pattern',
+        ],
+        'provenance' => 'ai_built',
+        'label' => 'AI-built',
+    ],
+    [
+        'name' => 'exploratory response claiming verified provenance',
+        'result' => [
+            'sql' => 'SELECT 1',
+            'mode' => 'exploratory',
+            'route' => 'legacy_freeform',
+            'generationProvenance' => 'verified_pattern',
+            'provenanceLabel' => 'Verified pattern',
+        ],
+        'provenance' => 'ai_built',
+        'label' => 'AI-built',
+    ],
+];
+foreach ($finalizedSuccessCases as $case) {
+    $finalized = AskResponseContractService::toUserResponse($case['result']);
+    askResponseAssertSame(
+        $case['provenance'],
+        $finalized['generationProvenance'] ?? null,
+        $case['name'] . ' must have one trusted provenance enum.'
+    );
+    askResponseAssertSame(
+        $case['label'],
+        $finalized['provenanceLabel'] ?? null,
+        $case['name'] . ' must derive its matching public label.'
+    );
+}
 
 $user = AskResponseContractService::toUserResponse([
     'mode' => 'exploratory',
