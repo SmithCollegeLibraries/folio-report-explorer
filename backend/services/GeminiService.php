@@ -4,6 +4,7 @@ namespace app\services;
 
 use Yii;
 use yii\httpclient\Client;
+use app\exceptions\CanonicalLaneFallbackException;
 use app\exceptions\DatabaseQueryCancelledException;
 use app\exceptions\ExploratorySqlValidationException;
 
@@ -19,6 +20,7 @@ require_once __DIR__ . '/ExploratorySqlRepairService.php';
 require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
 require_once __DIR__ . '/ExplicitReportRequestService.php';
 require_once __DIR__ . '/../exceptions/ExploratorySqlValidationException.php';
+require_once __DIR__ . '/../exceptions/CanonicalLaneFallbackException.php';
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
 
@@ -173,8 +175,7 @@ class GeminiService
             $referenceEvidence
         );
         self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt($rawQuestion));
-        $twoLaneEnabled = !array_key_exists('nl2sqlTwoLaneEnabled', Yii::$app->params)
-            || (bool)Yii::$app->params['nl2sqlTwoLaneEnabled'];
+        $twoLaneEnabled = self::isTwoLaneEnabled();
         $ambiguity = ClarificationService::detectPromptAmbiguity(
             $rawQuestion,
             self::loadAcceptedClarificationKeys($userId)
@@ -261,11 +262,11 @@ class GeminiService
         }
 
         if ($allowExploratory) {
-            $primary = self::generateExploratorySqlResponse(
+            $primary = self::generateAiBuiltLane(
+                $rawQuestion,
                 (string)$effectivePrompt,
                 $campus,
                 'user_requested_exploratory_generation',
-                $rawQuestion,
                 $resolvedFilters
             );
 
@@ -286,11 +287,11 @@ class GeminiService
             $exploratoryReason = self::promptRequiresLegacyFreeform($rawQuestion)
                 ? 'canonical_path_unavailable_for_marc_source_records'
                 : 'unsupported_query_family';
-            $primary = self::generateExploratorySqlResponse(
+            $primary = self::generateAiBuiltLane(
+                $rawQuestion,
                 (string)$effectivePrompt,
                 $campus,
                 $exploratoryReason,
-                $rawQuestion,
                 $resolvedFilters
             );
 
@@ -304,35 +305,108 @@ class GeminiService
         }
 
         $primaryMode = self::resolvePrimaryModeForPrompt($rawQuestion, $campus);
+        $usedAiBuiltLane = false;
         try {
             $primary = $primaryMode === 'intent'
                 ? self::generateSql($effectivePrompt, $campus, false, true, $rawQuestion, $resolvedFilters)
                 : self::generateSql($effectivePrompt, $campus, true, false, $rawQuestion, $resolvedFilters);
-        } catch (ExploratorySqlValidationException $exception) {
-            if ($exception->getSafeCategory() !== 'resolved_reference_filter_mismatch') {
+        } catch (CanonicalLaneFallbackException $exception) {
+            if (!$twoLaneEnabled) {
                 throw $exception;
             }
-            $primary = self::repairExploratorySqlAfterPreflight(
+            $usedAiBuiltLane = true;
+            $primary = self::generateAiBuiltLane(
                 $rawQuestion,
+                (string)$effectivePrompt,
                 $campus,
-                [
+                $exception->getSafeReason(),
+                $resolvedFilters,
+                $exception->getCandidateResult(),
+                'Canonical validation requires AI review.',
+                $exception->getFamilyKey()
+            );
+        } catch (ExploratorySqlValidationException $exception) {
+            if (self::isHardCanonicalFailure($exception)) {
+                throw $exception;
+            }
+            $candidate = trim($exception->getCandidateSql()) === ''
+                ? []
+                : [
                     'sql' => $exception->getCandidateSql(),
                     'route' => $primaryMode === 'intent' ? 'builder_intent' : 'legacy_freeform',
-                    'routeReason' => 'resolved_reference_filter_mismatch',
+                    'routeReason' => $exception->getSafeCategory(),
                     'repairAttempts' => 0,
-                ],
-                'Resolved reference filters were not preserved.',
+                ];
+            if (!$twoLaneEnabled) {
+                if ($exception->getSafeCategory() !== 'resolved_reference_filter_mismatch') {
+                    throw $exception;
+                }
+                $primary = self::repairExploratorySqlAfterPreflight(
+                    $rawQuestion,
+                    $campus,
+                    $candidate,
+                    'Resolved reference filters were not preserved.',
+                    (string)$effectivePrompt,
+                    $resolvedFilters
+                );
+            } else {
+                $usedAiBuiltLane = true;
+                $primary = self::generateAiBuiltLane(
+                    $rawQuestion,
+                    (string)$effectivePrompt,
+                    $campus,
+                    'canonical_semantic_validation_failed',
+                    $resolvedFilters,
+                    $candidate,
+                    'Canonical semantic validation requires AI review.',
+                    (string)($queryFamily['familyKey'] ?? '')
+                );
+            }
+        } catch (\Exception $exception) {
+            if (!$twoLaneEnabled || self::isHardCanonicalFailure($exception)) {
+                throw $exception;
+            }
+            $usedAiBuiltLane = true;
+            $primary = self::generateAiBuiltLane(
+                $rawQuestion,
                 (string)$effectivePrompt,
+                $campus,
+                'canonical_generation_failed',
+                $resolvedFilters,
+                [],
+                '',
+                (string)($queryFamily['familyKey'] ?? '')
+            );
+        }
+
+        if ($twoLaneEnabled && !$usedAiBuiltLane && !isset($primary['sql'])) {
+            $usedAiBuiltLane = true;
+            $primary = self::generateAiBuiltLane(
+                $rawQuestion,
+                (string)$effectivePrompt,
+                $campus,
+                'canonical_incomplete_result',
+                $resolvedFilters,
+                [],
+                '',
+                (string)($queryFamily['familyKey'] ?? '')
+            );
+        } elseif (!$twoLaneEnabled) {
+            $primary = self::repairRoutedCandidateMissingExplicitValues(
+                $primary,
+                (string)$effectivePrompt,
+                $campus,
+                $rawQuestion,
                 $resolvedFilters
             );
         }
-        $primary = self::repairRoutedCandidateMissingExplicitValues(
-            $primary,
-            (string)$effectivePrompt,
-            $campus,
-            $rawQuestion,
-            $resolvedFilters
-        );
+
+        if ($twoLaneEnabled && isset($primary['sql']) && !isset($primary['generationProvenance'])) {
+            $primary = AskResponseContractService::withGenerationProvenance(
+                $primary,
+                AskResponseContractService::PROVENANCE_VERIFIED_PATTERN
+            );
+        }
 
         if (($primary['route'] ?? null) === 'legacy_freeform' && ($primary['routeReason'] ?? '') === 'forced_legacy_mode') {
             $primary['routeReason'] = !empty(Yii::$app->params['nl2sqlForceLegacy'])
@@ -377,6 +451,83 @@ class GeminiService
             $primary,
             $askEvidence
         ));
+    }
+
+    private static function generateAiBuiltLane(
+        string $rawQuestion,
+        string $generationPrompt,
+        $campus,
+        string $reason,
+        array $resolvedFilters,
+        array $seededCandidate = [],
+        string $diagnostic = '',
+        string $familyKey = ''
+    ): array {
+        self::logNlTelemetry('nl2sql.lane_transition', [
+            'from' => 'verified_pattern',
+            'to' => 'ai_built',
+            'reason' => self::sanitizeTelemetryLabel($reason, 'canonical_generation_failed'),
+            'familyKey' => $familyKey === ''
+                ? null
+                : self::sanitizeTelemetryLabel($familyKey, 'canonical_family'),
+            'seededCandidate' => isset($seededCandidate['sql']),
+            'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
+        ]);
+
+        if (isset($seededCandidate['sql'])) {
+            $result = self::repairExploratorySqlAfterPreflight(
+                $rawQuestion,
+                $campus,
+                $seededCandidate,
+                $diagnostic === '' ? 'Canonical semantic validation requires AI review.' : $diagnostic,
+                $generationPrompt,
+                $resolvedFilters
+            );
+        } else {
+            $result = self::generateExploratorySqlResponse(
+                $generationPrompt,
+                $campus,
+                $reason,
+                $rawQuestion,
+                $resolvedFilters
+            );
+        }
+
+        if (isset($result['sql'])) {
+            $result['mode'] = 'exploratory';
+            $result = AskResponseContractService::withGenerationProvenance(
+                $result,
+                AskResponseContractService::PROVENANCE_AI_BUILT
+            );
+        }
+        return $result;
+    }
+
+    private static function isHardCanonicalFailure(\Throwable $exception): bool
+    {
+        if ($exception instanceof \app\exceptions\PolicyViolationException
+            || $exception instanceof DatabaseQueryCancelledException
+        ) {
+            return true;
+        }
+        if ($exception instanceof ExploratorySqlValidationException && !$exception->isRepairable()) {
+            return true;
+        }
+
+        $message = $exception->getMessage();
+        if (self::isAiTimeoutMessage($message)) {
+            return true;
+        }
+
+        return preg_match(
+            '/API key not configured|provider failure|AI (?:API error|request failed)|API request failed|fallback request failed|fallback failed|'
+                . 'connection (?:refused|reset|failed)|failed to connect|network is unreachable|could not resolve host|SSL|'
+                . 'unauthori[sz]ed|authentication|permission denied|insufficient privilege|access denied|'
+                . 'RESOURCE_EXHAUSTED|SQLSTATE\[(?:28P01|42501|53[0-9A-Z]{3})\]|quota|billing|rate limit|'
+                . 'HTTP\s*(?:401|403|429)|MAX_TOKENS|truncated|only (?:a single )?SELECT|multiple statements|'
+                . 'destructive (?:query|statement|SQL)|restricted (?:data|table)|read-only query/i',
+            $message
+        ) === 1;
     }
 
     private static function generateExploratorySqlResponse(
@@ -2042,7 +2193,17 @@ GUIDANCE;
                         $originalQuestion,
                         $resolvedFilters
                     );
+                } catch (
+                    CanonicalLaneFallbackException
+                    | \app\exceptions\PolicyViolationException
+                    | DatabaseQueryCancelledException
+                    | ExploratorySqlValidationException $e
+                ) {
+                    throw $e;
                 } catch (\InvalidArgumentException | \RuntimeException $e) {
+                    if (self::isHardCanonicalFailure($e)) {
+                        throw $e;
+                    }
                     self::logValidationFailure('family_contract_prompt_recovery', [
                         'route' => 'intent_json',
                         'model' => $telemetryContext['model'] ?? null,
@@ -2078,7 +2239,17 @@ GUIDANCE;
                 $originalQuestion,
                 $resolvedFilters
             );
+        } catch (
+            CanonicalLaneFallbackException
+            | \app\exceptions\PolicyViolationException
+            | DatabaseQueryCancelledException
+            | ExploratorySqlValidationException $e
+        ) {
+            throw $e;
         } catch (\InvalidArgumentException | \RuntimeException $e) {
+            if (self::isHardCanonicalFailure($e)) {
+                throw $e;
+            }
             self::logValidationFailure('family_contract_prompt_recovery', [
                 'route' => 'intent_json',
                 'model' => $telemetryContext['model'] ?? null,
@@ -2168,7 +2339,8 @@ GUIDANCE;
         string $familyKey,
         string $failureReason,
         array $telemetryContext,
-        ?\Throwable $error = null
+        ?\Throwable $error = null,
+        array $candidateResult = []
     ): void {
         if (!empty(Yii::$app->params['nl2sqlForceLegacy'])) {
             return;
@@ -2182,9 +2354,36 @@ GUIDANCE;
             'error' => $error ? $error->getMessage() : null,
         ] + $telemetryContext);
 
+        if (self::isTwoLaneEnabled()) {
+            throw new CanonicalLaneFallbackException(
+                $familyKey,
+                self::canonicalFallbackReason($failureReason),
+                $candidateResult,
+                $error
+            );
+        }
+
         throw new \RuntimeException(
             self::buildCoveredFamilyFallbackGuardMessage($familyKey, $failureReason)
         );
+    }
+
+    private static function isTwoLaneEnabled(): bool
+    {
+        return !array_key_exists('nl2sqlTwoLaneEnabled', Yii::$app->params)
+            || (bool)Yii::$app->params['nl2sqlTwoLaneEnabled'];
+    }
+
+    private static function canonicalFallbackReason(string $failureReason): string
+    {
+        $reasons = [
+            'family_compiler_failed' => 'canonical_compiler_failed',
+            'family_contract_mismatch' => 'canonical_family_contract_mismatch',
+            'missing_required_slot' => 'canonical_missing_required_slot',
+            'reference_not_representable' => 'canonical_reference_not_representable',
+            'semantic_validation_failed' => 'canonical_semantic_validation_failed',
+        ];
+        return $reasons[$failureReason] ?? 'canonical_generation_failed';
     }
 
     private static function buildCoveredFamilyFallbackGuardMessage(string $familyKey, string $failureReason): string
@@ -3703,6 +3902,13 @@ PROMPT;
                 $slotValidation['errors'] ?? [],
                 $originalQuestion
             )) {
+                if (self::isTwoLaneEnabled()) {
+                    self::guardCoveredFamilyFallback(
+                        (string)($intent['familyKey'] ?? $queryFamily['familyKey'] ?? ''),
+                        'missing_required_slot',
+                        $telemetryContext
+                    );
+                }
                 $fallback = $exploratoryFallbackFactory === null
                     ? self::generateExploratorySqlResponse(
                         (string)$prompt,
@@ -3725,6 +3931,14 @@ PROMPT;
             );
             if ($clarification !== null) {
                 return $clarification;
+            }
+
+            if (self::isTwoLaneEnabled()) {
+                self::guardCoveredFamilyFallback(
+                    (string)($intent['familyKey'] ?? $queryFamily['familyKey'] ?? ''),
+                    'family_contract_mismatch',
+                    $telemetryContext
+                );
             }
 
             $first = $slotValidation['errors'][0] ?? [];
@@ -3831,6 +4045,15 @@ PROMPT;
             $originalQuestion
         );
         if ($explicitValidation !== null) {
+            if (self::isTwoLaneEnabled()) {
+                self::guardCoveredFamilyFallback(
+                    (string)($normalizedPayload['familyKey'] ?? $queryFamily['familyKey'] ?? ''),
+                    'semantic_validation_failed',
+                    $telemetryContext,
+                    null,
+                    $compiledFamily
+                );
+            }
             $repair = $explicitRepairFactory === null
                 ? function (string $repairPrompt, $repairCampus, array $candidate) use ($originalQuestion, $resolvedFilters): array {
                     return self::repairRoutedCandidateAfterExplicitFailure(
@@ -5167,6 +5390,14 @@ PROMPT;
             return null;
         }
 
+        if (self::isTwoLaneEnabled()) {
+            self::guardCoveredFamilyFallback(
+                (string)($intent['familyKey'] ?? ''),
+                'missing_required_slot',
+                $telemetryContext
+            );
+        }
+
         $question = self::buildFamilySlotClarificationQuestion($missingSlots);
         $routeReason = 'family_slot_missing_required_slot';
 
@@ -5296,7 +5527,17 @@ PROMPT;
 
         try {
             $compiled = $compiler($normalizedPayload, $routeReason);
+        } catch (
+            CanonicalLaneFallbackException
+            | \app\exceptions\PolicyViolationException
+            | DatabaseQueryCancelledException
+            | ExploratorySqlValidationException $e
+        ) {
+            throw $e;
         } catch (\InvalidArgumentException | \RuntimeException $e) {
+            if (self::isHardCanonicalFailure($e)) {
+                throw $e;
+            }
             $reason = 'family_compiler_failed';
             $familyKey = trim((string)($normalizedPayload['familyKey'] ?? ''));
 
@@ -5354,6 +5595,15 @@ PROMPT;
         ?string $originalQuestion = null,
         array $resolvedFilters = []
     ): array {
+        if (self::isTwoLaneEnabled()) {
+            self::guardCoveredFamilyFallback(
+                (string)($normalizedPayload['familyKey'] ?? ''),
+                'family_compiler_failed',
+                $telemetryContext,
+                $error
+            );
+        }
+
         $originalQuestion = $originalQuestion === null ? $prompt : $originalQuestion;
         $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
         $library = trim((string)($slots['library'] ?? ''));
@@ -6444,6 +6694,8 @@ PROMPT;
     {
         $startedAt = microtime(true);
         $repairNumber = (int)($context['repairNumber'] ?? 0);
+        $result = null;
+        $semanticValidation = [];
         $assumptionKeys = [];
         foreach (($context['assumptions'] ?? []) as $assumption) {
             if (is_array($assumption) && isset($assumption['key'])) {
@@ -6524,6 +6776,40 @@ PROMPT;
             ]));
             return $result;
         } catch (\Throwable $exception) {
+            if (is_array($result)
+                && $exception instanceof ExploratorySqlValidationException
+                && self::mayAcceptAdvisoryFailure($context, $exception)
+            ) {
+                $result['semanticValidation'] = [
+                    'status' => 'advisory',
+                    'contractVersion' => (int)($semanticValidation['contractVersion'] ?? 0),
+                    'checkedRequirements' => is_array($semanticValidation['checkedRequirements'] ?? null)
+                        ? $semanticValidation['checkedRequirements']
+                        : [],
+                ];
+                $result['reviewRequired'] = true;
+                $disclosures = is_array($result['reportDisclosures'] ?? null)
+                    ? $result['reportDisclosures']
+                    : [];
+                $disclosures[] = 'AI reviewed this interpretation, but the semantic checker could not verify every requested detail.';
+                $result['reportDisclosures'] = array_values(array_unique($disclosures));
+                $result['assumptions'] = self::mergeAdvisoryAssumptions(
+                    is_array($result['assumptions'] ?? null) ? $result['assumptions'] : [],
+                    $exception->getSafeViolations()
+                );
+
+                self::logNlTelemetry('nl2sql.exploratory_repair_outcome', array_merge($telemetry, [
+                    'stage' => $exception->getStage(),
+                    'category' => $exception->getSafeCategory(),
+                    'candidateLength' => strlen((string)($result['sql'] ?? '')),
+                    'contractVersion' => (int)($semanticValidation['contractVersion'] ?? 0),
+                    'failureCount' => count($exception->getSafeViolations()),
+                    'elapsedMs' => (int)round((microtime(true) - $startedAt) * 1000),
+                    'outcome' => 'advisory',
+                ]), true);
+                return $result;
+            }
+
             $failureTelemetry = $telemetry;
             if ($exception instanceof ExploratorySqlValidationException) {
                 $failureTelemetry['stage'] = $exception->getStage();
@@ -6546,6 +6832,63 @@ PROMPT;
             self::logNlTelemetry('nl2sql.exploratory_repair_outcome', $failureTelemetry, true);
             throw $exception;
         }
+    }
+
+    private static function mayAcceptAdvisoryFailure(
+        array $context,
+        ExploratorySqlValidationException $exception
+    ): bool {
+        if ((int)($context['repairNumber'] ?? 0) < ExploratorySqlRepairService::MAX_REPAIR_ATTEMPTS) {
+            return false;
+        }
+        return in_array($exception->getStage(), [
+            'semantic_conformance',
+            'semantic_validation',
+            'explicit_values',
+        ], true);
+    }
+
+    private static function mergeAdvisoryAssumptions(array $assumptions, array $safeViolations): array
+    {
+        $existingKeys = [];
+        foreach ($assumptions as $assumption) {
+            if (is_array($assumption) && isset($assumption['key'])) {
+                $existingKeys[(string)$assumption['key']] = true;
+            }
+        }
+
+        foreach ($safeViolations as $violation) {
+            if (!is_array($violation)) {
+                continue;
+            }
+            $violationKey = (string)($violation['key'] ?? 'unverified_requirement');
+            $category = (string)($violation['category'] ?? 'semantic_validation');
+            $label = self::safeAdvisoryLabel((string)($violation['label'] ?? 'Requested report detail'));
+            $key = 'advisory_' . substr(hash('sha256', $category . '|' . $violationKey . '|' . $label), 0, 12);
+            if (isset($existingKeys[$key])) {
+                continue;
+            }
+            $assumptions[] = [
+                'key' => $key,
+                'label' => $label,
+                'value' => 'not_fully_verified',
+                'explanation' => 'AI review could not independently verify this requested detail.',
+                'correctionExample' => 'Review this detail before relying on the report.',
+                'source' => 'default',
+            ];
+            $existingKeys[$key] = true;
+        }
+
+        return $assumptions;
+    }
+
+    private static function safeAdvisoryLabel(string $label): string
+    {
+        $label = trim((string)preg_replace('/\s+/', ' ', strip_tags($label)));
+        if ($label === '' || preg_match('/\b(?:SELECT|FROM|WHERE|JOIN|HAVING|UNION)\b|[a-z0-9_]+\.[a-z0-9_]+/i', $label) === 1) {
+            return 'Requested report detail';
+        }
+        return substr($label, 0, 120);
     }
 
     private static function isPreflightConnectivityFailure(string $error): bool

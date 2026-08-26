@@ -78,6 +78,7 @@ Yii::$app = (object) [
         'derivedPath' => __DIR__ . '/../data/folio_derived_tables.json',
         'defaultQueryLimit' => 100,
         'maxQueryRows' => 1000,
+        'nl2sqlTwoLaneEnabled' => false,
     ],
 ];
 
@@ -289,6 +290,49 @@ assertSameValue('test-model', $canonicalEvidence['_askEvidence']['modelName'] ??
 assertSameValue('family_slot_prompt.v1', $canonicalEvidence['_askEvidence']['promptVersion'] ?? null, 'Canonical family results must retain prompt provenance.');
 assertSameValue('2026-07-21T00:00:00Z', $canonicalEvidence['_askEvidence']['schemaMetadata']['version'] ?? null, 'Canonical family results must retain schema provenance.');
 
+$seededCompilerSql = "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001','in0002','in9999')";
+$deepExplicitRepairCalls = 0;
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
+try {
+    $familyBranch->invoke(
+        null,
+        [
+            'familyKey' => 'inventory_library_location_listing',
+            'slots' => [
+                'campus' => 'Smith College',
+                'library' => 'Josten Library',
+                'requested_outputs' => ['title'],
+                'match_policy' => 'case_insensitive_contains',
+            ],
+        ],
+        ['familyKey' => 'inventory_library_location_listing'],
+        'For instance numbers in0001 and in0002, show title in Josten Library.',
+        'Smith College',
+        ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+        function () use ($seededCompilerSql): array {
+            return [
+                'sql' => $seededCompilerSql,
+                'dataSource' => 'folio',
+                'route' => 'builder_intent',
+                'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+                'queryDefinition' => ['tables' => [], 'columns' => [], 'filters' => [], 'joins' => []],
+            ];
+        },
+        null,
+        function () use (&$deepExplicitRepairCalls): array {
+            $deepExplicitRepairCalls++;
+            return ['sql' => 'SELECT should_not_run'];
+        }
+    );
+    fwrite(STDERR, "Expected explicit-output Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_semantic_validation_failed', $exception->getSafeReason(), 'Explicit-output failures need a semantic Lane 2 reason.');
+    assertSameValue($seededCompilerSql, $exception->getCandidateResult()['sql'] ?? null, 'The internal Lane 2 signal must preserve the safe canonical SQL candidate.');
+}
+assertSameValue(0, $deepExplicitRepairCalls, 'Deep explicit-output validation must not invoke AI repair itself in enabled mode.');
+
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
 $familyRepairCalls = 0;
 $explicitFamilyCandidate = $familyBranch->invoke(
     null,
@@ -408,35 +452,48 @@ assertSameValue('family_contract_supported:inventory_contributor_campus_item_bar
 assertSameValue('exact_phrase', $receivedPayload['normalizedPayload']['slots']['match_policy'] ?? null, 'Named contributor prompts should normalize contributor matching to exact_phrase before compilation.');
 
 $clarificationBuilderCalled = false;
-$clarificationResult = $familyBranch->invoke(
-    null,
-    [
-        'familyKey' => 'inventory_contributor_campus_item_barcode',
-        'slots' => [
-            'campus' => 'Smith College',
-            'requested_outputs' => ['barcode'],
+$missingSlotInvocation = function () use ($familyBranch, &$clarificationBuilderCalled): array {
+    return $familyBranch->invoke(
+        null,
+        [
+            'familyKey' => 'inventory_contributor_campus_item_barcode',
+            'slots' => [
+                'campus' => 'Smith College',
+                'requested_outputs' => ['barcode'],
+            ],
         ],
-    ],
-    [
-        'familyKey' => 'inventory_contributor_campus_item_barcode',
-    ],
-    'Show me Smith College items with barcodes',
-    'Smith College',
-    [
-        'model' => 'test-model',
-        'promptVersion' => 'family_slot_prompt.v1',
-        'promptFingerprint' => 'intent-clarification-test-fingerprint',
-        'finishReason' => 'STOP',
-        'attempts' => 1,
-        'elapsedMs' => 5,
-    ],
-    function () use (&$clarificationBuilderCalled): array {
-        $clarificationBuilderCalled = true;
-        return [
-            'sql' => 'SELECT should_not_run',
-        ];
-    }
-);
+        [
+            'familyKey' => 'inventory_contributor_campus_item_barcode',
+        ],
+        'Show me Smith College items with barcodes',
+        'Smith College',
+        [
+            'model' => 'test-model',
+            'promptVersion' => 'family_slot_prompt.v1',
+            'promptFingerprint' => 'intent-clarification-test-fingerprint',
+            'finishReason' => 'STOP',
+            'attempts' => 1,
+            'elapsedMs' => 5,
+        ],
+        function () use (&$clarificationBuilderCalled): array {
+            $clarificationBuilderCalled = true;
+            return ['sql' => 'SELECT should_not_run'];
+        }
+    );
+};
+
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
+try {
+    $missingSlotInvocation();
+    fwrite(STDERR, "Expected missing-slot Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_missing_required_slot', $exception->getSafeReason(), 'Missing required slots need a safe routing reason.');
+}
+assertSameValue(false, $clarificationBuilderCalled, 'The family compiler helper should not run when required family slots are missing.');
+
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
+$clarificationResult = $missingSlotInvocation();
 
 assertSameValue(false, $clarificationBuilderCalled, 'The family compiler helper should not run when required family slots are missing.');
 assertSameValue(true, $clarificationResult['needsClarification'] ?? null, 'Missing required family slots should return a structured clarification response.');
@@ -444,6 +501,34 @@ assertSameValue('Which contributor should I use for this report?', $clarificatio
 assertSameValue('family_slot:contributor_name', $clarificationResult['clarificationKey'] ?? null, 'Missing required family slot clarifications should expose a stable clarification key for free-text responses.');
 assertSameValue(true, $clarificationResult['freeTextAllowed'] ?? null, 'Missing required family slot clarifications should allow users to type the missing value.');
 assertSameValue(['contributor_name'], $clarificationResult['missingSlots'] ?? null, 'Clarification responses should expose the missing contributor_name slot.');
+
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
+try {
+    $familyBranch->invoke(
+        null,
+        [
+            'familyKey' => 'inventory_contributor_campus_item_barcode',
+            'slots' => [
+                'campus' => 'Smith College',
+                'contributor_name' => 'Smith College. Department of Biological Sciences.',
+                'material_type' => 'Theses',
+                'requested_outputs' => ['unsupported_projection'],
+            ],
+        ],
+        ['familyKey' => 'inventory_contributor_campus_item_barcode'],
+        'Show an unsupported output for Smith College theses by this contributor.',
+        'Smith College',
+        ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+        function (): array {
+            return ['sql' => 'SELECT should_not_run'];
+        }
+    );
+    fwrite(STDERR, "Expected unsupported-contract Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_family_contract_mismatch', $exception->getSafeReason(), 'Unsupported family output shapes need a safe routing reason.');
+}
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
 
 $listingBuilderCalled = false;
 $listingClarificationResult = $familyBranch->invoke(

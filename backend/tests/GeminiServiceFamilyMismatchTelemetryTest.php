@@ -166,6 +166,7 @@ if (PHP_VERSION_ID < 80500) {
 Yii::$warnings = [];
 Yii::$infos = [];
 Yii::$app->params['nl2sqlForceLegacy'] = true;
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
 
 $overrideResponse = $familyRouteHelper->invoke(
     null,
@@ -232,45 +233,50 @@ assertSameValue('legacy_fallback', $generatedTelemetry['route'] ?? null, 'Mismat
 Yii::$warnings = [];
 Yii::$infos = [];
 Yii::$app->params['nl2sqlForceLegacy'] = false;
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
-assertThrowsRuntimeException(
-    function () use ($familyRouteHelper): void {
-        $familyRouteHelper->invoke(
-            null,
-            [
-                'familyKey' => 'circulation_top_items',
-                'slots' => [
-                    'campus' => 'Smith College',
-                    'library' => 'Neilson Library',
-                    'material_type' => 'book',
-                    'requested_outputs' => ['ranked_circulation_items'],
-                ],
+$guardedMismatchInvocation = function () use ($familyRouteHelper): array {
+    return $familyRouteHelper->invoke(
+        null,
+        [
+            'familyKey' => 'circulation_top_items',
+            'slots' => [
+                'campus' => 'Smith College',
+                'library' => 'Neilson Library',
+                'material_type' => 'book',
+                'requested_outputs' => ['ranked_circulation_items'],
             ],
-            [
-                'familyKey' => 'inventory_library_location_listing',
-            ],
-            'List of materials in Neilson Library. Include title and barcode.',
-            'Smith College',
-            [
-                'model' => 'test-model',
-                'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
-                'promptFingerprint' => 'family-mismatch-telemetry-guard-fingerprint',
-                'finishReason' => 'STOP',
-                'attempts' => 1,
-                'elapsedMs' => 5,
-            ],
-            null,
-            function (): array {
-                return [
-                    'sql' => 'SELECT should_not_run',
-                    'dataSource' => 'folio',
-                ];
-            }
-        );
-    },
-    'legacy fallback is disabled for this route',
-    'Covered-family mismatches should still fail safe when the legacy override is disabled.'
-);
+        ],
+        [
+            'familyKey' => 'inventory_library_location_listing',
+        ],
+        'List of materials in Neilson Library. Include title and barcode.',
+        'Smith College',
+        [
+            'model' => 'test-model',
+            'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
+            'promptFingerprint' => 'family-mismatch-telemetry-guard-fingerprint',
+            'finishReason' => 'STOP',
+            'attempts' => 1,
+            'elapsedMs' => 5,
+        ],
+        null,
+        function (): array {
+            return [
+                'sql' => 'SELECT should_not_run',
+                'dataSource' => 'folio',
+            ];
+        }
+    );
+};
+
+try {
+    $guardedMismatchInvocation();
+    fwrite(STDERR, "Expected family-mismatch Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_family_contract_mismatch', $exception->getSafeReason(), 'Wrong model families need a safe routing reason.');
+}
 
 $guardWarnings = array_values(array_filter(
     Yii::$warnings,
@@ -279,13 +285,39 @@ $guardWarnings = array_values(array_filter(
     }
 ));
 
-assertCountValue(2, $guardWarnings, 'Guarded mismatches should emit both the mismatch warning and the guarded-failure warning.');
+assertCountValue(2, $guardWarnings, 'Lane-transition mismatches should emit both the mismatch warning and the guarded-failure warning.');
 
 $guardTelemetry = decodeTelemetryRecord((string)($guardWarnings[1]['message'] ?? ''));
 
-assertSameValue('nl2sql.validation_failure', $guardTelemetry['event'] ?? null, 'Guarded mismatches should log validation_failure telemetry.');
-assertSameValue('family_fallback_guard', $guardTelemetry['stage'] ?? null, 'Guarded mismatches should classify the second warning as the fallback guard stage.');
-assertSameValue('model_output', $guardTelemetry['slotProvenance']['library'] ?? null, 'Guarded mismatch warnings should preserve model-output slot provenance.');
+assertSameValue('nl2sql.validation_failure', $guardTelemetry['event'] ?? null, 'Lane-transition mismatches should log validation_failure telemetry.');
+assertSameValue('family_fallback_guard', $guardTelemetry['stage'] ?? null, 'Lane-transition mismatches should classify the second warning as the fallback guard stage.');
+assertSameValue('model_output', $guardTelemetry['slotProvenance']['library'] ?? null, 'Lane-transition mismatch warnings should preserve model-output slot provenance.');
+
+Yii::$warnings = [];
+Yii::$infos = [];
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
+assertThrowsRuntimeException(
+    function () use ($guardedMismatchInvocation): void {
+        $guardedMismatchInvocation();
+    },
+    'legacy fallback is disabled for this route',
+    'Disabling two-lane routing should preserve the strict covered-family mismatch blocker.'
+);
+
+$disabledGuardWarnings = array_values(array_filter(
+    Yii::$warnings,
+    static function (array $entry): bool {
+        return ($entry['category'] ?? null) === 'nl2sql.telemetry';
+    }
+));
+
+assertCountValue(2, $disabledGuardWarnings, 'Disabled mismatches should emit both the mismatch warning and the guarded-failure warning.');
+
+$disabledGuardTelemetry = decodeTelemetryRecord((string)($disabledGuardWarnings[1]['message'] ?? ''));
+
+assertSameValue('nl2sql.validation_failure', $disabledGuardTelemetry['event'] ?? null, 'Disabled mismatches should log validation_failure telemetry.');
+assertSameValue('family_fallback_guard', $disabledGuardTelemetry['stage'] ?? null, 'Disabled mismatches should classify the second warning as the fallback guard stage.');
+assertSameValue('model_output', $disabledGuardTelemetry['slotProvenance']['library'] ?? null, 'Disabled mismatch warnings should preserve model-output slot provenance.');
 
 $onlyHoldingMismatchResponse = $familyRouteHelper->invoke(
     null,

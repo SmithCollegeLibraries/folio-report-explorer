@@ -28,8 +28,10 @@ namespace yii\httpclient {
 
         public function send()
         {
-            TestTransport::$requests[] = json_decode($this->content, true);
-            $text = array_shift(TestTransport::$responses);
+            $request = json_decode($this->content, true);
+            TestTransport::$requests[] = $request;
+            $response = array_shift(TestTransport::$responses);
+            $text = is_callable($response) ? $response($request) : $response;
             if ($text === null) {
                 throw new \RuntimeException('No queued Gemini response.');
             }
@@ -100,6 +102,14 @@ namespace app\services {
                 . "\n\nReference resolver guidance:\n"
                 . "- Resolved local reference filter: use exactly inventory.loclibrary__t.name = 'SC Hillyer Art Library'.\n"
                 . "- Resolved local reference filter: use exactly inventory.material_type__t.name IN ('Videocassette', 'DVD/Blu-ray').";
+        }
+
+        public static function appendGenerationContextToPrompt(
+            string $prompt,
+            array $resolution,
+            ?array $ambiguity = null
+        ): string {
+            return self::appendGuidanceToPrompt($prompt, $resolution);
         }
     }
 
@@ -201,6 +211,9 @@ class Yii
         if ($alias === '@app/data/reference_cache.json') {
             return __DIR__ . '/../data/reference_cache.json';
         }
+        if ($alias === '@app/data/query_family_contracts.json') {
+            return __DIR__ . '/../data/query_family_contracts.json';
+        }
         return self::$aliases[$alias] ?? (__DIR__ . '/../data/settings.json');
     }
     public static function info($message, $category = null) { self::$logs[] = ['level' => 'info', 'message' => $message, 'category' => $category]; }
@@ -218,6 +231,7 @@ Yii::$app = (object)['params' => [
 
 require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
 require_once __DIR__ . '/../services/QueryFamilyContractService.php';
+require_once __DIR__ . '/../services/QueryFamilySlotService.php';
 require_once __DIR__ . '/../services/GeminiService.php';
 
 use app\exceptions\PolicyViolationException;
@@ -258,9 +272,49 @@ function terminalTelemetryOutcomes(): array
     return $outcomes;
 }
 
+function telemetryEvents(string $event): array
+{
+    $events = [];
+    foreach (Yii::$logs as $logRecord) {
+        $message = (string)($logRecord['message'] ?? '');
+        if (strpos($message, 'NL2SQL telemetry: ') !== 0) {
+            continue;
+        }
+        $record = json_decode(substr($message, strlen('NL2SQL telemetry: ')), true);
+        if (($record['event'] ?? null) === $event) {
+            $events[] = $record;
+        }
+    }
+    return $events;
+}
+
 function geminiText(string $sql, string $explanation = 'Candidate query.'): string
 {
     return "```sql\n{$sql}\n```\n{$explanation}\nDATA SOURCE: folio";
+}
+
+function familyIntentText(string $familyKey, array $slots): string
+{
+    return json_encode([
+        'familyKey' => $familyKey,
+        'slots' => $slots,
+    ]);
+}
+
+function unchangedCandidateResponse(array $request): string
+{
+    $encoded = json_encode($request);
+    if (preg_match('/PREVIOUS CANDIDATE\\\\n(.*?)\\\\n\\\\nVALIDATOR STAGE/s', $encoded, $matches) !== 1) {
+        throw new \RuntimeException('Repair payload did not contain a seeded candidate.');
+    }
+    return geminiText(str_replace('\\n', "\n", (string)$matches[1]), 'Reviewed candidate unchanged.');
+}
+
+function generateTwoLaneCase(string $question, array $responses, ?string $campus = 'Smith College'): array
+{
+    TestTransport::$responses = $responses;
+    TestTransport::$requests = [];
+    return GeminiService::generateSqlWithShadow($question, $campus);
 }
 
 function roiPrompt(): string
@@ -287,6 +341,11 @@ WHERE pot.date_ordered >= CURRENT_DATE - INTERVAL '5 years'
   AND item.material_type_id = 'book'
 GROUP BY pc.call_number_class
 SQL;
+}
+
+function semanticallyUnverifiedCteSql(): string
+{
+    return "WITH report AS (\n" . semanticallyFlawedRoiSql() . "\n)\nSELECT * FROM report";
 }
 
 function scopedVideoSql(string $library, array $materialTypes): string
@@ -332,6 +391,171 @@ LIMIT 100
 SQL;
 }
 
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
+$aiBuiltSql = 'SELECT ii.id AS title, ii.barcode FROM inventory.item__t ii LIMIT 100';
+
+$missingSlotLane = generateTwoLaneCase(
+    'Show me Smith College theses by this contributor with barcodes.',
+    [
+        familyIntentText('inventory_contributor_campus_item_barcode', [
+            'campus' => 'Smith College',
+            'material_type' => 'Theses',
+            'requested_outputs' => ['barcode'],
+        ]),
+        geminiText($aiBuiltSql),
+    ]
+);
+repairAssertSame($aiBuiltSql, $missingSlotLane['sql'] ?? null, 'Missing canonical slots must automatically consume the AI-built response.');
+repairAssertSame('ai_built', $missingSlotLane['generationProvenance'] ?? null, 'Missing canonical slots must return AI-built provenance.');
+repairAssertSame(false, isset($missingSlotLane['needsClarification']), 'Missing canonical slots must not return clarification when two-lane routing is enabled.');
+repairAssertSame(2, count(TestTransport::$requests), 'Missing canonical slots must make one intent call and one AI-built generation call.');
+
+Yii::$logs = [];
+$wrongFamilyQuestion = 'Show barcodes for Smith College theses with the contributor named Smith College Biology.';
+$wrongFamilyLane = generateTwoLaneCase(
+    $wrongFamilyQuestion,
+    [
+        familyIntentText('circulation_top_items', [
+            'campus' => 'Smith College',
+            'library' => 'Neilson Library',
+            'material_type' => 'Book',
+            'requested_outputs' => ['ranked_circulation_items'],
+        ]),
+        geminiText($aiBuiltSql),
+    ]
+);
+repairAssertSame($aiBuiltSql, $wrongFamilyLane['sql'] ?? null, 'A wrong model family must automatically consume the AI-built response.');
+repairAssertSame('ai_built', $wrongFamilyLane['generationProvenance'] ?? null, 'A wrong model family must return AI-built provenance.');
+repairAssertSame(2, count(TestTransport::$requests), 'A wrong model family must make one intent call and one AI-built generation call.');
+$wrongFamilyTransitions = telemetryEvents('nl2sql.lane_transition');
+repairAssertSame(1, count($wrongFamilyTransitions), 'A canonical failure must emit exactly one lane-transition event.');
+repairAssertSame('canonical_family_contract_mismatch', $wrongFamilyTransitions[0]['reason'] ?? null, 'Lane telemetry must retain the safe transition reason.');
+repairAssertSame('inventory_contributor_campus_item_barcode', $wrongFamilyTransitions[0]['familyKey'] ?? null, 'Lane telemetry must retain only the sanitized family key.');
+repairAssertSame(false, $wrongFamilyTransitions[0]['seededCandidate'] ?? null, 'Fresh AI generation must not claim a seeded candidate.');
+$wrongFamilyTelemetryJson = json_encode($wrongFamilyTransitions);
+repairAssertSame(false, strpos($wrongFamilyTelemetryJson, $wrongFamilyQuestion) !== false, 'Lane telemetry must not contain prompt text.');
+repairAssertSame(false, strpos($wrongFamilyTelemetryJson, $aiBuiltSql) !== false, 'Lane telemetry must not contain generated SQL.');
+
+$unsupportedContractLane = generateTwoLaneCase(
+    'Show barcodes for Smith College theses with the contributor named Smith College Biology.',
+    [
+        familyIntentText('inventory_contributor_campus_item_barcode', [
+            'campus' => 'Smith College',
+            'contributor_name' => 'Smith College Biology',
+            'material_type' => 'Theses',
+            'requested_outputs' => ['unsupported_projection'],
+        ]),
+        geminiText($aiBuiltSql),
+    ]
+);
+repairAssertSame($aiBuiltSql, $unsupportedContractLane['sql'] ?? null, 'Unsupported canonical output shapes must automatically consume the AI-built response.');
+repairAssertSame('ai_built', $unsupportedContractLane['generationProvenance'] ?? null, 'Unsupported canonical output shapes must return AI-built provenance.');
+repairAssertSame(2, count(TestTransport::$requests), 'Unsupported canonical output shapes must make one intent call and one AI-built generation call.');
+
+$invalidIntentLane = generateTwoLaneCase(
+    'Show barcodes for Smith College theses with the contributor named Smith College Biology.',
+    [
+        '{malformed structured intent',
+        geminiText($aiBuiltSql),
+    ]
+);
+repairAssertSame($aiBuiltSql, $invalidIntentLane['sql'] ?? null, 'Invalid structured intent must automatically consume the AI-built response.');
+repairAssertSame('ai_built', $invalidIntentLane['generationProvenance'] ?? null, 'Invalid structured intent must return AI-built provenance.');
+repairAssertSame(2, count(TestTransport::$requests), 'Invalid structured intent must make one intent call and one AI-built generation call.');
+
+$inventoryClarificationLane = generateTwoLaneCase(
+    'List materials in location code SJTR. Include title and barcode.',
+    [
+        familyIntentText('inventory_library_location_listing', [
+            'campus' => 'Smith College',
+            'location_code' => 'SJTR',
+            'requested_outputs' => ['title', 'barcode'],
+        ]),
+        geminiText($aiBuiltSql),
+    ]
+);
+repairAssertSame($aiBuiltSql, $inventoryClarificationLane['sql'] ?? null, 'Inventory compiler clarification outcomes must automatically consume the AI-built response.');
+repairAssertSame('ai_built', $inventoryClarificationLane['generationProvenance'] ?? null, 'Inventory compiler clarification outcomes must return AI-built provenance.');
+repairAssertSame(false, isset($inventoryClarificationLane['needsClarification']), 'Inventory compiler clarification outcomes must not reach the user in enabled mode.');
+repairAssertSame(2, count(TestTransport::$requests), 'Inventory compiler clarification outcomes must make one intent call and one AI-built generation call.');
+
+Yii::$logs = [];
+TestTransport::$responses = [];
+TestTransport::$requests = [];
+try {
+    GeminiService::generateSqlWithShadow($wrongFamilyQuestion, 'Smith College');
+    fwrite(STDERR, "Canonical provider failures must propagate.\n");
+    exit(1);
+} catch (\RuntimeException $exception) {
+    repairAssertContains('AI request failed', $exception->getMessage(), 'Canonical provider failures should preserve the transport failure.');
+}
+repairAssertSame(1, count(TestTransport::$requests), 'A canonical provider failure must not trigger a second Lane 2 request.');
+repairAssertSame(0, count(telemetryEvents('nl2sql.lane_transition')), 'A canonical provider failure must not emit a lane transition.');
+
+$seededPrompt = 'For instance numbers in0001 and in0002, show title and publication date.';
+$seededCandidateSql = 'SELECT inst.title FROM inventory.instance__t inst';
+$seededRepairedSql = "SELECT inst.title, inst.publication_date FROM inventory.instance__t inst "
+    . "WHERE inst.hrid IN ('in0001','in0002')";
+$aiBuiltLane = new ReflectionMethod(GeminiService::class, 'generateAiBuiltLane');
+TestTransport::$responses = [geminiText($seededRepairedSql)];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$seededSemanticLane = $aiBuiltLane->invoke(
+    null,
+    $seededPrompt,
+    $seededPrompt,
+    'Smith College',
+    'canonical_semantic_validation_failed',
+    [],
+    [
+        'sql' => $seededCandidateSql,
+        'route' => 'builder_intent',
+        'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+        'repairAttempts' => 0,
+    ],
+    'Canonical semantic validation requires AI review.',
+    'inventory_library_location_listing'
+);
+repairAssertSame($seededRepairedSql, $seededSemanticLane['sql'] ?? null, 'Canonical semantic failure must return the repaired AI candidate.');
+repairAssertContains($seededCandidateSql, json_encode(TestTransport::$requests[0] ?? []), 'Lane 2 must receive the compiled SQL as its seeded candidate.');
+repairAssertSame('ai_built', $seededSemanticLane['generationProvenance'] ?? null, 'AI-owned repaired SQL must not remain verified.');
+repairAssertSame(false, ($seededSemanticLane['generationProvenance'] ?? null) === 'verified_pattern', 'Semantic fallback must downgrade provenance.');
+$seededTransitions = telemetryEvents('nl2sql.lane_transition');
+repairAssertSame(1, count($seededTransitions), 'Seeded AI review must emit exactly one lane-transition event.');
+repairAssertSame(true, $seededTransitions[0]['seededCandidate'] ?? null, 'Seeded AI review telemetry must record candidate presence without SQL.');
+$seededTelemetryJson = json_encode($seededTransitions);
+repairAssertSame(false, strpos($seededTelemetryJson, $seededPrompt) !== false, 'Seeded lane telemetry must not contain prompt text.');
+repairAssertSame(false, strpos($seededTelemetryJson, $seededCandidateSql) !== false, 'Seeded lane telemetry must not contain candidate SQL.');
+
+$unchangedCandidateSql = "SELECT inst.title, inst.publication_date FROM inventory.instance__t inst "
+    . "WHERE inst.hrid = 'in0001'";
+TestTransport::$responses = [
+    'unchangedCandidateResponse',
+    'unchangedCandidateResponse',
+];
+TestTransport::$requests = [];
+$unchangedSeededLane = $aiBuiltLane->invoke(
+    null,
+    $seededPrompt,
+    $seededPrompt,
+    'Smith College',
+    'canonical_semantic_validation_failed',
+    [],
+    [
+        'sql' => $unchangedCandidateSql,
+        'route' => 'builder_intent',
+        'routeReason' => 'family_contract_supported:inventory_library_location_listing',
+        'repairAttempts' => 0,
+    ],
+    'Canonical semantic validation requires AI review.',
+    'inventory_library_location_listing'
+);
+repairAssertSame(true, isset($unchangedSeededLane['sql']), 'A safe canonical candidate returned unchanged after final AI review remains eligible for preflight.');
+repairAssertSame('ai_built', $unchangedSeededLane['generationProvenance'] ?? null, 'An unchanged AI-reviewed candidate must remain AI-built.');
+repairAssertSame('advisory', $unchangedSeededLane['semanticValidation']['status'] ?? null, 'An unchanged candidate with unverified explicit values must carry advisory validation.');
+repairAssertSame(true, $unchangedSeededLane['reviewRequired'] ?? null, 'An unchanged advisory candidate must require review.');
+repairAssertSame(2, count(TestTransport::$requests), 'An unchanged seeded candidate must use both bounded AI reviews.');
+
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
     geminiText('SELECT ii.id FROM inventory.item__t ii'),
@@ -341,6 +565,7 @@ Yii::$logs = [];
 
 $repaired = GeminiService::generateSqlWithShadow('Show item identifiers for inventory.', 'Smith College', null, true);
 repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $repaired['sql'] ?? null, 'A bad initial table should be replaced by the valid repair candidate.');
+repairAssertSame('ai_built', $repaired['generationProvenance'] ?? null, 'Direct exploratory generation must return AI-built provenance.');
 repairAssertSame(1, $repaired['repairAttempts'] ?? null, 'One automatic repair should be reported.');
 repairAssertSame('SELECT mt.id FROM inventory.missing_table__t mt', $repaired['_askEvidence']['initialSql'] ?? null, 'Gemini exploratory repair must retain the genuine pre-repair candidate.');
 repairAssertSame('SELECT ii.id FROM inventory.item__t ii', $repaired['_askEvidence']['finalSql'] ?? null, 'Gemini exploratory repair must retain the validated final candidate.');
@@ -413,12 +638,9 @@ $organizationExhaustion = GeminiService::generateSqlWithShadow(
     true
 );
 repairAssertSame(2, $organizationExhaustion['repairAttempts'] ?? null, 'Organization semantic repair must use the shared two-attempt budget.');
-repairAssertSame(false, isset($organizationExhaustion['sql']), 'Rejected organization SQL must not be exposed.');
-repairAssertContains(
-    'I could not build a report I could safely run',
-    $organizationExhaustion['validationSummary']['message'] ?? '',
-    'Organization exhaustion must use family-neutral safe recovery.'
-);
+repairAssertSame(true, isset($organizationExhaustion['sql']), 'A safe final organization candidate must remain eligible for preflight.');
+repairAssertSame('advisory', $organizationExhaustion['semanticValidation']['status'] ?? null, 'Organization semantic exhaustion must be advisory after final AI review.');
+repairAssertSame(true, $organizationExhaustion['reviewRequired'] ?? null, 'Organization advisory results must require review.');
 
 TestTransport::$responses = [
     geminiText(str_replace(
@@ -472,16 +694,15 @@ $resolvedFilterExhausted = GeminiService::generateSqlWithShadow(
     null,
     true
 );
-repairAssertSame(false, isset($resolvedFilterExhausted['sql']), 'Resolved-filter repair exhaustion must not return a candidate for database preflight.');
-repairAssertSame('exploratory_recovery', $resolvedFilterExhausted['route'] ?? null, 'Resolved-filter repair exhaustion must return a no-result recovery.');
+repairAssertSame(true, isset($resolvedFilterExhausted['sql']), 'A safe final resolved-filter candidate must remain eligible for database preflight.');
+repairAssertSame('advisory', $resolvedFilterExhausted['semanticValidation']['status'] ?? null, 'Resolved-filter proof exhaustion must be marked advisory.');
+repairAssertSame(true, $resolvedFilterExhausted['reviewRequired'] ?? null, 'Resolved-filter proof exhaustion must require review.');
+repairAssertSame('ai_built', $resolvedFilterExhausted['generationProvenance'] ?? null, 'Resolved-filter proof exhaustion must remain AI-built.');
 repairAssertSame(2, $resolvedFilterExhausted['repairAttempts'] ?? null, 'Resolved-filter exhaustion must preserve the shared two-repair maximum.');
 repairAssertSame(3, count(TestTransport::$requests), 'Resolved-filter exhaustion must use one initial generation and exactly two repairs.');
-repairAssertSame(
-    'resolved_reference_filter_mismatch',
-    $resolvedFilterExhausted['validationSummary']['failureCategory'] ?? null,
-    'Resolved-filter exhaustion must retain only the safe mismatch category.'
-);
-repairAssertSame(false, strpos(json_encode($resolvedFilterExhausted), 'Reference resolver guidance') !== false, 'Resolved-filter recovery must not leak generated guidance.');
+repairAssertSame(false, ($resolvedFilterExhausted['route'] ?? null) === 'exploratory_recovery', 'Resolved-filter advisory success must not become recovery.');
+repairAssertSame(false, isset($resolvedFilterExhausted['needsClarification']), 'Resolved-filter advisory success must not become clarification.');
+repairAssertSame(false, strpos(json_encode($resolvedFilterExhausted), 'top-level WHERE clause') !== false, 'Resolved-filter advisory output must not expose validator guidance.');
 repairAssertContains('unknown_table', $repairPayload, 'The repair request should contain the safe validation category.');
 repairAssertContains('None documented.', $repairPayload, 'The repair request should safely represent absent assumptions.');
 repairAssertContains('SCOPED SCHEMA', $repairPayload, 'The repair request should contain fresh scoped schema context.');
@@ -707,10 +928,11 @@ TestTransport::$responses = [
 ];
 Yii::$logs = [];
 $explicitRecovery = GeminiService::generateSqlWithShadow($explicitRecoveryPrompt, null, null, true);
-repairAssertSame(false, isset($explicitRecovery['sql']), 'Exhausted explicit-value generation must not return an invalid SQL candidate.');
-repairAssertSame($explicitRecoveryPrompt, $explicitRecovery['recoveryContext']['originalQuestion'] ?? null, 'Recovery context must retain the raw user question, not server guidance.');
-repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT VALUES') !== false, 'Exhausted ordinary responses must not expose server-authored explicit-value guidance.');
-repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Exhausted ordinary responses must not expose SQL-oriented repair guidance.');
+repairAssertSame(true, isset($explicitRecovery['sql']), 'A safe final explicit-value candidate must remain eligible for preflight.');
+repairAssertSame('advisory', $explicitRecovery['semanticValidation']['status'] ?? null, 'Explicit-value exhaustion must become advisory after final AI review.');
+repairAssertSame(true, $explicitRecovery['reviewRequired'] ?? null, 'Explicit-value advisory results must require review.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT VALUES') !== false, 'Advisory responses must not expose server-authored explicit-value guidance.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Advisory responses must not expose SQL-oriented repair guidance.');
 
 $routedExplicitPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
 $routedReferencePrompt = $routedExplicitPrompt
@@ -741,27 +963,30 @@ $routedExhausted = $routedRepair->invoke(
     $routedExplicitPrompt
 );
 repairAssertSame(2, $routedExhausted['repairAttempts'] ?? null, 'Routed-family explicit repair exhaustion must preserve the shared two-attempt maximum.');
-repairAssertSame(false, isset($routedExhausted['sql']), 'Routed-family explicit repair exhaustion must not return invalid SQL.');
-repairAssertSame($routedExplicitPrompt, $routedExhausted['recoveryContext']['originalQuestion'] ?? null, 'Routed-family exhaustion must retain only the raw user question.');
-repairAssertSame(false, strpos(json_encode($routedExhausted), 'EXPLICIT REPORT VALUES') !== false, 'Routed-family exhaustion must not expose server guidance.');
-repairAssertSame(false, strpos(json_encode($routedExhausted), 'Reference resolver guidance') !== false, 'Routed-family exhaustion must not expose resolver schema guidance.');
-repairAssertSame(false, strpos(json_encode($routedExhausted), 'explicitReportRequest') !== false, 'Routed-family exhaustion must not expose internal explicit-value keys.');
+repairAssertSame(true, isset($routedExhausted['sql']), 'Routed-family explicit repair exhaustion must retain the safe final candidate.');
+repairAssertSame('advisory', $routedExhausted['semanticValidation']['status'] ?? null, 'Routed-family explicit repair exhaustion must become advisory.');
+repairAssertSame(true, $routedExhausted['reviewRequired'] ?? null, 'Routed-family advisory results must require review.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'EXPLICIT REPORT VALUES') !== false, 'Routed-family advisory results must not expose server guidance.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'Reference resolver guidance') !== false, 'Routed-family advisory results must not expose resolver schema guidance.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'explicitReportRequest') !== false, 'Routed-family advisory results must not expose internal explicit-value keys.');
 $routedRepairPayload = json_encode(TestTransport::$requests[0] ?? []);
 repairAssertContains('Reference resolver guidance', $routedRepairPayload, 'Routed-family repair must retain resolver guidance as model-only generation context.');
 repairAssertContains('EXPLICIT REPORT VALUES', $routedRepairPayload, 'Routed-family repair must retain explicit-value guidance as model-only generation context.');
 
 TestTransport::$responses = [
-    geminiText(semanticallyFlawedRoiSql()),
-    geminiText(semanticallyFlawedRoiSql()),
-    geminiText(semanticallyFlawedRoiSql()),
+    geminiText(semanticallyUnverifiedCteSql()),
+    geminiText(semanticallyUnverifiedCteSql()),
+    geminiText(semanticallyUnverifiedCteSql()),
 ];
 TestTransport::$requests = [];
 $compiledFallback = GeminiService::generateSqlWithShadow(roiPrompt(), 'Smith College', null, true);
-repairAssertSame('validated', $compiledFallback['validationSummary']['status'] ?? null, 'Semantic exhaustion for the documented ROI contract should use validated deterministic SQL.');
-repairAssertSame(2, $compiledFallback['repairAttempts'] ?? null, 'The deterministic fallback should preserve the exhausted model repair count.');
-repairAssertSame('physical_roi_v2', $compiledFallback['compilerVersion'] ?? null, 'Semantic exhaustion should use the hardened compiler.');
-repairAssertContains('physical_copies_purchased', $compiledFallback['sql'] ?? '', 'The hardened fallback should return physical-copy measures.');
-repairAssertSame(3, count(TestTransport::$requests), 'The fallback must run only after the initial candidate and two repairs.');
+repairAssertSame('advisory', $compiledFallback['semanticValidation']['status'] ?? null, 'A safe CTE the semantic analyzer cannot fully verify must become advisory.');
+repairAssertSame(true, $compiledFallback['reviewRequired'] ?? null, 'A semantically unverified CTE must require review.');
+repairAssertSame('ai_built', $compiledFallback['generationProvenance'] ?? null, 'A semantically unverified CTE must remain AI-built.');
+repairAssertSame(false, ($compiledFallback['route'] ?? null) === 'exploratory_recovery', 'A semantically unverified safe CTE must not become recovery.');
+repairAssertSame(false, isset($compiledFallback['needsClarification']), 'A semantically unverified safe CTE must not become clarification.');
+repairAssertSame(2, $compiledFallback['repairAttempts'] ?? null, 'The advisory CTE should preserve the exhausted model repair count.');
+repairAssertSame(3, count(TestTransport::$requests), 'The advisory CTE must use the initial candidate and two bounded repairs.');
 
 SqlBuilderService::$blockPolicy = true;
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];
@@ -879,11 +1104,9 @@ $semanticPreflightExhaustion = GeminiService::repairExploratorySqlAfterPreflight
 );
 repairAssertSame(1, count(TestTransport::$requests), 'A semantic rejection after preflight should use only the one remaining repair call.');
 repairAssertSame(2, $semanticPreflightExhaustion['repairAttempts'] ?? null, 'Semantic rejection after preflight must consume the remaining shared repair budget.');
-repairAssertSame(false, isset($semanticPreflightExhaustion['sql']), 'Semantic exhaustion after preflight must not expose rejected SQL.');
-repairAssertSame('semantic_conformance', $semanticPreflightExhaustion['validationSummary']['validatorStage'] ?? null, 'Recovery should identify semantic conformance as the exhausted stage.');
-repairAssertSame(true, count($semanticPreflightExhaustion['unmetRequirements'] ?? []) > 0, 'Recovery should return safe unmet semantic requirements.');
-repairAssertContains('I could not build a report I could safely run', $semanticPreflightExhaustion['validationSummary']['message'] ?? '', 'Semantic exhaustion should use novice-facing recovery copy.');
-repairAssertSame(false, strpos(json_encode($semanticPreflightExhaustion), semanticallyFlawedRoiSql()) !== false, 'Semantic recovery must not leak the rejected SQL candidate.');
+repairAssertSame(true, isset($semanticPreflightExhaustion['sql']), 'Safe semantic exhaustion after preflight must retain the final candidate.');
+repairAssertSame('advisory', $semanticPreflightExhaustion['semanticValidation']['status'] ?? null, 'Semantic exhaustion after preflight must become advisory.');
+repairAssertSame(true, $semanticPreflightExhaustion['reviewRequired'] ?? null, 'Semantic exhaustion after preflight must require review.');
 $semanticTelemetry = implode("\n", array_map(function ($record) { return (string)$record['message']; }, Yii::$logs));
 repairAssertSame(false, strpos($semanticTelemetry, semanticallyFlawedRoiSql()) !== false, 'Semantic telemetry must not expose rejected SQL.');
 repairAssertSame(false, strpos($semanticTelemetry, roiPrompt()) !== false, 'Semantic telemetry must not expose the original prompt.');
@@ -911,12 +1134,9 @@ $followUpSemanticExhaustion = GeminiService::repairExploratorySqlAfterPreflight(
 );
 repairAssertSame(1, count(TestTransport::$requests), 'A terse follow-up semantic rejection should use only the one remaining repair call.');
 repairAssertSame(2, $followUpSemanticExhaustion['repairAttempts'] ?? null, 'Terse follow-up semantic rejection must consume the remaining shared repair budget.');
-repairAssertSame(false, isset($followUpSemanticExhaustion['sql']), 'A repair that drops the augmented ROI semantics must be rejected.');
-repairAssertSame(
-    'semantic_conformance',
-    $followUpSemanticExhaustion['validationSummary']['validatorStage'] ?? null,
-    'Terse follow-up recovery should identify semantic conformance as the exhausted stage.'
-);
+repairAssertSame(true, isset($followUpSemanticExhaustion['sql']), 'A safe follow-up candidate must remain eligible for preflight after bounded review.');
+repairAssertSame('advisory', $followUpSemanticExhaustion['semanticValidation']['status'] ?? null, 'A semantically unverified follow-up must become advisory.');
+repairAssertSame(true, $followUpSemanticExhaustion['reviewRequired'] ?? null, 'A semantically unverified follow-up must require review.');
 $followUpAssumptions = [];
 foreach (($followUpSemanticExhaustion['assumptions'] ?? []) as $assumption) {
     if (is_array($assumption) && isset($assumption['key'])) {
@@ -927,11 +1147,6 @@ repairAssertSame(
     'invoice_date',
     $followUpAssumptions['purchase_date_basis'] ?? null,
     'Post-preflight assumptions must preserve the invoice-date correction from augmented generation context.'
-);
-repairAssertSame(
-    $terseFollowUp,
-    $followUpSemanticExhaustion['recoveryContext']['originalQuestion'] ?? null,
-    'Terse follow-up recovery must still expose only the raw latest question.'
 );
 
 Yii::$logs = [];

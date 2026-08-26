@@ -130,43 +130,40 @@ $compilerInvocations = 0;
 
 $helper = new ReflectionMethod(GeminiService::class, 'buildCompiledQueryFamilyOrLegacyFallback');
 Yii::$app->params['nl2sqlForceLegacy'] = false;
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
-assertThrowsRuntimeException(
-    function () use ($helper, $validation, &$compilerInvocations, &$fallbackInvocations): void {
-        $helper->invoke(
-            null,
-            $validation['normalizedPayload'],
-            'family_contract_supported:inventory_contributor_campus_item_barcode',
-            'Show me Smith College theses by this contributor with barcodes',
-            'Smith College',
-            [
-                'model' => 'test-model',
-                'promptVersion' => 'family_slot_prompt.v1',
-                'promptFingerprint' => 'test-fingerprint',
-                'finishReason' => 'STOP',
-                'attempts' => 1,
-                'elapsedMs' => 5,
-            ],
-            function () use (&$compilerInvocations) {
-                $compilerInvocations++;
-                throw new InvalidArgumentException('missing_holdings_item_branch: Covered-family item outputs require holdings-to-items joins.');
-            },
-            function () use (&$fallbackInvocations) {
-                $fallbackInvocations++;
-                return [
-                    'sql' => 'SELECT legacy_fallback_stub',
-                    'explanation' => 'Legacy fallback stub.',
-                    'dataSource' => 'folio',
-                ];
-            }
-        );
-    },
-    'legacy fallback is disabled for this route',
-    'Covered-family compiler failures should fail safe instead of silently downgrading to legacy freeform SQL.'
-);
+try {
+    $helper->invoke(
+        null,
+        $validation['normalizedPayload'],
+        'family_contract_supported:inventory_contributor_campus_item_barcode',
+        'Show me Smith College theses by this contributor with barcodes',
+        'Smith College',
+        [
+            'model' => 'test-model',
+            'promptVersion' => 'family_slot_prompt.v1',
+            'promptFingerprint' => 'test-fingerprint',
+            'finishReason' => 'STOP',
+            'attempts' => 1,
+            'elapsedMs' => 5,
+        ],
+        function () use (&$compilerInvocations) {
+            $compilerInvocations++;
+            throw new InvalidArgumentException('missing_holdings_item_branch');
+        },
+        function () use (&$fallbackInvocations) {
+            $fallbackInvocations++;
+            return ['sql' => 'SELECT legacy_fallback_stub'];
+        }
+    );
+    fwrite(STDERR, "Expected canonical Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_compiler_failed', $exception->getSafeReason(), 'Compiler failure needs a safe routing reason.');
+}
 
-assertSameValue(1, $compilerInvocations, 'The covered-family compiler helper should attempt compilation once before blocking the unsafe fallback.');
-assertSameValue(0, $fallbackInvocations, 'The covered-family compiler helper should not invoke the legacy fallback when the family guard is active.');
+assertSameValue(1, $compilerInvocations, 'Canonical compilation should run once.');
+assertSameValue(0, $fallbackInvocations, 'Deep compiler code must not invoke AI or legacy fallback itself.');
 
 $inventoryListingValidation = QueryFamilySlotService::validateFamilyPayload([
     'familyKey' => 'inventory_library_location_listing',
@@ -185,41 +182,38 @@ if (empty($inventoryListingValidation['valid'])) {
 
 $inventoryListingCompilerInvocations = 0;
 $inventoryListingFallbackInvocations = 0;
-$inventoryListingResult = $helper->invoke(
-    null,
-    $inventoryListingValidation['normalizedPayload'],
-    'family_contract_supported:inventory_library_location_listing',
-    'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.',
-    'Smith College',
-    [
-        'model' => 'test-model',
-        'promptVersion' => 'family_slot_prompt.v1',
-        'promptFingerprint' => 'inventory-listing-clarification-guard-fingerprint',
-        'finishReason' => 'STOP',
-        'attempts' => 1,
-        'elapsedMs' => 5,
-    ],
-    function () use (&$inventoryListingCompilerInvocations) {
-        $inventoryListingCompilerInvocations++;
-        throw new InvalidArgumentException('missing_location_scope_anchor: Library/location listing prompts require a location lookup filter when explicit location scope is present.');
-    },
-    function () use (&$inventoryListingFallbackInvocations) {
-        $inventoryListingFallbackInvocations++;
-        return [
-            'sql' => 'SELECT inventory_listing_legacy_fallback_stub',
-            'explanation' => 'Legacy fallback stub.',
-            'dataSource' => 'folio',
-        ];
-    }
-);
+try {
+    $helper->invoke(
+        null,
+        $inventoryListingValidation['normalizedPayload'],
+        'family_contract_supported:inventory_library_location_listing',
+        'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.',
+        'Smith College',
+        [
+            'model' => 'test-model',
+            'promptVersion' => 'family_slot_prompt.v1',
+            'promptFingerprint' => 'inventory-listing-clarification-guard-fingerprint',
+            'finishReason' => 'STOP',
+            'attempts' => 1,
+            'elapsedMs' => 5,
+        ],
+        function () use (&$inventoryListingCompilerInvocations) {
+            $inventoryListingCompilerInvocations++;
+            throw new InvalidArgumentException('missing_location_scope_anchor');
+        },
+        function () use (&$inventoryListingFallbackInvocations) {
+            $inventoryListingFallbackInvocations++;
+            return ['sql' => 'SELECT inventory_listing_legacy_fallback_stub'];
+        }
+    );
+    fwrite(STDERR, "Expected inventory compiler Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_compiler_failed', $exception->getSafeReason(), 'Inventory compiler failure needs a safe routing reason.');
+}
 
 assertSameValue(1, $inventoryListingCompilerInvocations, 'Inventory listing compiler failures should still be observed once.');
 assertSameValue(0, $inventoryListingFallbackInvocations, 'Inventory listing compiler failures should not invoke legacy fallback.');
-assertSameValue(true, $inventoryListingResult['needsClarification'] ?? null, 'Inventory listing compiler failures should return a clarification instead of throwing an AI error.');
-assertSameValue('clarification', $inventoryListingResult['route'] ?? null, 'Inventory listing compiler failures should use the clarification route.');
-assertSameValue('inventory_listing_compiler_failed', $inventoryListingResult['routeReason'] ?? null, 'Inventory listing compiler failures should expose a stable clarification route reason.');
-assertSameValue('inventory_listing_scope', $inventoryListingResult['clarificationKey'] ?? null, 'Inventory listing compiler clarifications should expose a key so users can submit free-text responses.');
-assertSameValue(true, $inventoryListingResult['freeTextAllowed'] ?? null, 'Inventory listing compiler clarifications should allow users to type the library, location, or location code.');
 
 $onlineInventoryValidation = QueryFamilySlotService::validateFamilyPayload([
     'familyKey' => 'inventory_library_location_listing',
@@ -236,41 +230,38 @@ if (empty($onlineInventoryValidation['valid'])) {
     exit(1);
 }
 
-$onlineInventoryResult = $helper->invoke(
-    null,
-    $onlineInventoryValidation['normalizedPayload'],
-    'family_contract_supported:inventory_library_location_listing',
-    'List of items with material type "e-book" and item status of "in process". Include title, barcode and instance number at Smith College',
-    'Smith College',
-    [
-        'model' => 'test-model',
-        'promptVersion' => 'family_slot_prompt.v1',
-        'promptFingerprint' => 'online-inventory-no-library-scope-fingerprint',
-        'finishReason' => 'STOP',
-        'attempts' => 1,
-        'elapsedMs' => 5,
-    ],
-    function () {
-        throw new InvalidArgumentException('missing_library_scope_anchor: Library/location listing prompts require a library lookup filter.');
-    },
-    function () {
-        return [
-            'sql' => 'SELECT should_not_run',
-            'explanation' => 'Legacy fallback stub.',
-            'dataSource' => 'folio',
-        ];
-    }
-);
-
-assertSameValue(true, $onlineInventoryResult['needsClarification'] ?? null, 'Covered online material/status listing compiler failures should fail safe instead of calling unvalidated AI generation.');
-assertSameValue('inventory_listing_compiler_failed', $onlineInventoryResult['routeReason'] ?? null, 'Covered online material/status listings should expose the stable compiler-failure clarification reason.');
-assertSameValue(false, strpos((string)($onlineInventoryResult['question'] ?? ''), 'exact library') !== false, 'Online material/status listings should not ask for an exact library.');
+try {
+    $helper->invoke(
+        null,
+        $onlineInventoryValidation['normalizedPayload'],
+        'family_contract_supported:inventory_library_location_listing',
+        'List of items with material type "e-book" and item status of "in process". Include title, barcode and instance number at Smith College',
+        'Smith College',
+        [
+            'model' => 'test-model',
+            'promptVersion' => 'family_slot_prompt.v1',
+            'promptFingerprint' => 'online-inventory-no-library-scope-fingerprint',
+            'finishReason' => 'STOP',
+            'attempts' => 1,
+            'elapsedMs' => 5,
+        ],
+        function () {
+            throw new InvalidArgumentException('missing_library_scope_anchor');
+        },
+        function () {
+            return ['sql' => 'SELECT should_not_run'];
+        }
+    );
+    fwrite(STDERR, "Expected online inventory compiler Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_compiler_failed', $exception->getSafeReason(), 'Online inventory compiler failure needs a safe routing reason.');
+}
 
 $runtimeFallbackInvocations = 0;
 $runtimeCompilerInvocations = 0;
 
-assertThrowsRuntimeException(
-    function () use ($helper, $validation, &$runtimeCompilerInvocations, &$runtimeFallbackInvocations): void {
+try {
         $helper->invoke(
             null,
             $validation['normalizedPayload'],
@@ -298,13 +289,93 @@ assertThrowsRuntimeException(
                 ];
             }
         );
-    },
-    'legacy fallback is disabled for this route',
-    'Runtime compiler failures should fail safe instead of silently downgrading to legacy freeform SQL.'
-);
+    fwrite(STDERR, "Expected runtime compiler Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue('canonical_compiler_failed', $exception->getSafeReason(), 'Runtime compiler failure needs a safe routing reason.');
+}
 
 assertSameValue(1, $runtimeCompilerInvocations, 'Runtime compiler failures should still attempt compilation once before the guard blocks fallback.');
 assertSameValue(0, $runtimeFallbackInvocations, 'Runtime compiler failures should not invoke legacy fallback while the family guard is active.');
+
+$policyFallbackInvocations = 0;
+try {
+    $helper->invoke(
+        null,
+        $validation['normalizedPayload'],
+        'family_contract_supported:inventory_contributor_campus_item_barcode',
+        'Show me Smith College theses by this contributor with barcodes',
+        'Smith College',
+        ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+        function () {
+            throw new \app\exceptions\PolicyViolationException('Blocked by reporting policy.');
+        },
+        function () use (&$policyFallbackInvocations) {
+            $policyFallbackInvocations++;
+            return ['sql' => 'SELECT should_not_run'];
+        }
+    );
+    fwrite(STDERR, "Expected canonical policy failure to remain blocked.\n");
+    exit(1);
+} catch (\app\exceptions\PolicyViolationException $exception) {
+    assertSameValue('Blocked by reporting policy.', $exception->getMessage(), 'Canonical policy failures must propagate unchanged.');
+}
+assertSameValue(0, $policyFallbackInvocations, 'Canonical policy failures must not invoke any fallback lane.');
+
+$hardFailureCases = [
+    [InvalidArgumentException::class, 'Only a single SELECT statement is allowed.', 'SQL-safety'],
+    [RuntimeException::class, 'SQLSTATE[42501] permission denied', 'authorization'],
+    [RuntimeException::class, 'SQLSTATE[53200] out of memory', 'resource-limit'],
+];
+foreach ($hardFailureCases as $hardFailureCase) {
+    $hardFallbackInvocations = 0;
+    try {
+        $helper->invoke(
+            null,
+            $validation['normalizedPayload'],
+            'family_contract_supported:inventory_contributor_campus_item_barcode',
+            'Show me Smith College theses by this contributor with barcodes',
+            'Smith College',
+            ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+            function () use ($hardFailureCase) {
+                $exceptionClass = $hardFailureCase[0];
+                throw new $exceptionClass($hardFailureCase[1]);
+            },
+            function () use (&$hardFallbackInvocations) {
+                $hardFallbackInvocations++;
+                return ['sql' => 'SELECT should_not_run'];
+            }
+        );
+        fwrite(STDERR, "Expected canonical {$hardFailureCase[2]} failure to remain blocked.\n");
+        exit(1);
+    } catch (\Throwable $exception) {
+        assertSameValue($hardFailureCase[0], get_class($exception), "Canonical {$hardFailureCase[2]} failures must preserve their exception type.");
+        assertSameValue($hardFailureCase[1], $exception->getMessage(), "Canonical {$hardFailureCase[2]} failures must propagate unchanged.");
+    }
+    assertSameValue(0, $hardFallbackInvocations, "Canonical {$hardFailureCase[2]} failures must not invoke any fallback lane.");
+}
+
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
+assertThrowsRuntimeException(
+    function () use ($helper, $validation): void {
+        $helper->invoke(
+            null,
+            $validation['normalizedPayload'],
+            'family_contract_supported:inventory_contributor_campus_item_barcode',
+            'Show me Smith College theses by this contributor with barcodes',
+            'Smith College',
+            ['model' => 'test-model', 'promptVersion' => 'family_slot_prompt.v1'],
+            function () {
+                throw new InvalidArgumentException('missing_holdings_item_branch');
+            },
+            function () {
+                return ['sql' => 'SELECT should_not_run'];
+            }
+        );
+    },
+    'legacy fallback is disabled for this route',
+    'Disabling two-lane routing must preserve the strict canonical blocker.'
+);
 
 Yii::$app->params['nl2sqlForceLegacy'] = true;
 
