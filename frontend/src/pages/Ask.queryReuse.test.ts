@@ -40,30 +40,56 @@ describe('Ask query reuse helpers', () => {
     expect(formatQueryReuseMatchReason('custom_reason')).toBe('custom reason');
   });
 
-  it('renders the stored provenance for accepted and edited reused SQL', () => {
-    for (const sql of [verifiedCandidate.sql, `${verifiedCandidate.sql} WHERE true`]) {
-      const result = buildReusedNlResult(verifiedCandidate, sql);
+  it('renders truthful provenance for unchanged, edited, stored-AI, and legacy reused SQL', () => {
+    const cases = [
+      {
+        name: 'unchanged verified SQL',
+        candidate: verifiedCandidate,
+        sql: verifiedCandidate.sql,
+        label: 'Verified pattern',
+        absentLabel: 'AI-built',
+      },
+      {
+        name: 'edited verified SQL',
+        candidate: verifiedCandidate,
+        sql: `${verifiedCandidate.sql} WHERE true`,
+        label: 'AI-built',
+        absentLabel: 'Verified pattern',
+      },
+      {
+        name: 'unchanged stored AI-built SQL',
+        candidate: {
+          ...verifiedCandidate,
+          generationProvenance: 'ai_built' as const,
+          provenanceLabel: 'AI-built' as const,
+        },
+        sql: verifiedCandidate.sql,
+        label: 'AI-built',
+        absentLabel: 'Verified pattern',
+      },
+      {
+        name: 'legacy SQL without stored provenance',
+        candidate: {
+          ...verifiedCandidate,
+          generationProvenance: undefined,
+          provenanceLabel: undefined,
+        },
+        sql: verifiedCandidate.sql,
+        label: 'AI-built',
+        absentLabel: 'Verified pattern',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = buildReusedNlResult(testCase.candidate, testCase.sql);
       render(createElement(AskTrustNotice, {
         generationProvenance: result.generationProvenance,
         provenanceLabel: result.provenanceLabel,
       }));
 
-      expect(screen.getByRole('heading', { name: 'Verified pattern' })).toBeInTheDocument();
-      expect(screen.queryByText('AI-built')).not.toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: testCase.label })).toBeInTheDocument();
+      expect(screen.queryByText(testCase.absentLabel)).not.toBeInTheDocument();
       cleanup();
     }
-  });
-
-  it('uses AI-built provenance for a legacy reuse record without stored provenance', () => {
-    const { generationProvenance, provenanceLabel } = buildReusedNlResult({
-      ...verifiedCandidate,
-      generationProvenance: undefined,
-      provenanceLabel: undefined,
-    }, verifiedCandidate.sql);
-
-    render(createElement(AskTrustNotice, { generationProvenance, provenanceLabel }));
-
-    expect(screen.getByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
-    expect(screen.queryByText('Verified pattern')).not.toBeInTheDocument();
   });
 });

@@ -98,3 +98,16 @@ Final verification:
 - PHP syntax check for `PreviousSuccessfulQueryReuseService.php`: passed.
 - `git diff --check`: passed.
 - Lint remained unavailable because `eslint` is not installed; no dependency changes were made.
+
+## Fix round 2: edited reuse provenance
+
+An edited reuse candidate is no longer treated as compiler-unchanged. `buildReusedNlResult()` compares the selected SQL with the stored candidate SQL and assigns `AI-built` whenever text differs. The four-case reuse matrix now covers unchanged verified SQL, edited verified SQL, unchanged stored AI-built SQL, and legacy SQL without provenance.
+
+TDD evidence:
+
+```text
+RED: edited verified SQL rendered "Verified pattern" instead of "AI-built".
+GREEN focused suite: 2 files, 8 tests passed.
+```
+
+Final verification: full frontend suite passed (39 files, 215 tests), frontend build passed, and `git diff --check` passed. Lint remained unavailable because `eslint` is not installed.

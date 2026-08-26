@@ -533,7 +533,8 @@ export function buildQueryReuseResolvedContext(selectedCampus: string): Record<s
 }
 
 export function buildReusedNlResult(reuseCandidate: QueryReuseCandidate, sql: string): NlResponse {
-  const generationProvenance = reuseCandidate.generationProvenance === 'verified_pattern'
+  const isEdited = sql.trim() !== reuseCandidate.sql.trim();
+  const generationProvenance = !isEdited && reuseCandidate.generationProvenance === 'verified_pattern'
     ? 'verified_pattern'
     : 'ai_built';
   const expectedProvenanceLabel = generationProvenance === 'verified_pattern'
