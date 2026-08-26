@@ -515,6 +515,21 @@ repairAssertSame($aiBuiltSql, $forcedLegacyLane['sql'] ?? null, 'Forced legacy g
 repairAssertSame('ai_built', $forcedLegacyLane['generationProvenance'] ?? null, 'Forced legacy freeform SQL must never be labeled verified.');
 repairAssertSame(false, ($forcedLegacyLane['generationProvenance'] ?? null) === 'verified_pattern', 'Forced legacy freeform SQL must not claim verified-pattern provenance.');
 repairAssertSame(1, count(TestTransport::$requests), 'Forced legacy generation should make exactly one AI request.');
+
+$forcedLegacyExplicitPrompt = 'For instance numbers in0001 and in0002, show title.';
+$forcedLegacyMissingIdentifierSql = "SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid = 'in0001'";
+$forcedLegacyExplicitFailure = generateTwoLaneCase(
+    $forcedLegacyExplicitPrompt,
+    [
+        geminiText($forcedLegacyMissingIdentifierSql),
+        geminiText($forcedLegacyMissingIdentifierSql),
+        geminiText($forcedLegacyMissingIdentifierSql),
+    ],
+    null
+);
+repairAssertSame(false, isset($forcedLegacyExplicitFailure['sql']), 'Forced legacy SQL that drops an explicit identifier must never execute.');
+repairAssertSame('sql_generation_failed', $forcedLegacyExplicitFailure['errorType'] ?? null, 'Forced legacy explicit-value exhaustion must use the terminal generation failure.');
+repairAssertSame(3, count(TestTransport::$requests), 'Forced legacy explicit-value validation must consume the initial request and two bounded repairs.');
 Yii::$app->params['nl2sqlForceLegacy'] = false;
 
 Yii::$logs = [];
@@ -588,15 +603,10 @@ $unchangedSeededLane = $aiBuiltLane->invoke(
     'Canonical semantic validation requires AI review.',
     'inventory_library_location_listing'
 );
-repairAssertSame(true, isset($unchangedSeededLane['sql']), 'A safe canonical candidate returned unchanged after final AI review remains eligible for preflight.');
-repairAssertSame('ai_built', $unchangedSeededLane['generationProvenance'] ?? null, 'An unchanged AI-reviewed candidate must remain AI-built.');
-repairAssertSame('advisory', $unchangedSeededLane['semanticValidation']['status'] ?? null, 'An unchanged candidate with unverified explicit values must carry advisory validation.');
-repairAssertSame(true, $unchangedSeededLane['reviewRequired'] ?? null, 'An unchanged advisory candidate must require review.');
+repairAssertSame(false, isset($unchangedSeededLane['sql']), 'A canonical candidate that still omits an explicit identifier after final AI review must not execute.');
+repairAssertSame('sql_generation_failed', $unchangedSeededLane['errorType'] ?? null, 'An unchanged explicit-identifier mismatch must remain terminal after bounded AI review.');
 repairAssertSame(2, count(TestTransport::$requests), 'An unchanged seeded candidate must use both bounded AI reviews.');
-$seededAdvisoryAssumptionsJson = json_encode($unchangedSeededLane['assumptions'] ?? []);
-repairAssertContains('Explicit report identifier', $seededAdvisoryAssumptionsJson, 'Seeded advisory results must retain a safe assumption for each unverified requirement.');
-repairAssertContains('not_fully_verified', $seededAdvisoryAssumptionsJson, 'Seeded advisory assumptions must disclose their unverified status.');
-repairAssertSame(false, strpos($seededAdvisoryAssumptionsJson, 'inst.hrid') !== false, 'Seeded advisory assumptions must not expose SQL predicates.');
+repairAssertSame(false, isset($unchangedSeededLane['assumptions']), 'Terminal explicit-identifier failures must not expose advisory assumptions.');
 
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
@@ -981,11 +991,10 @@ TestTransport::$responses = [
 ];
 Yii::$logs = [];
 $explicitRecovery = GeminiService::generateSqlWithShadow($explicitRecoveryPrompt, null, null, true);
-repairAssertSame(true, isset($explicitRecovery['sql']), 'A safe final explicit-value candidate must remain eligible for preflight.');
-repairAssertSame('advisory', $explicitRecovery['semanticValidation']['status'] ?? null, 'Explicit-value exhaustion must become advisory after final AI review.');
-repairAssertSame(true, $explicitRecovery['reviewRequired'] ?? null, 'Explicit-value advisory results must require review.');
-repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT VALUES') !== false, 'Advisory responses must not expose server-authored explicit-value guidance.');
-repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Advisory responses must not expose SQL-oriented repair guidance.');
+repairAssertSame(false, isset($explicitRecovery['sql']), 'A final candidate with missing or unexpected explicit identifiers must never execute.');
+repairAssertSame('sql_generation_failed', $explicitRecovery['errorType'] ?? null, 'Explicit-value exhaustion must remain a terminal data-correctness failure.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT VALUES') !== false, 'Terminal responses must not expose server-authored explicit-value guidance.');
+repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Terminal responses must not expose SQL-oriented repair guidance.');
 
 $routedExplicitPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
 $routedReferencePrompt = $routedExplicitPrompt
@@ -1017,13 +1026,12 @@ $routedExhausted = $routedRepair->invoke(
     null,
     $routedExplicitPrompt
 );
-repairAssertSame(2, $routedExhausted['repairAttempts'] ?? null, 'Routed-family explicit repair exhaustion must preserve the shared two-attempt maximum.');
-repairAssertSame(true, isset($routedExhausted['sql']), 'Routed-family explicit repair exhaustion must retain the safe final candidate.');
-repairAssertSame('advisory', $routedExhausted['semanticValidation']['status'] ?? null, 'Routed-family explicit repair exhaustion must become advisory.');
-repairAssertSame(true, $routedExhausted['reviewRequired'] ?? null, 'Routed-family advisory results must require review.');
-repairAssertSame(false, strpos(json_encode($routedExhausted), 'EXPLICIT REPORT VALUES') !== false, 'Routed-family advisory results must not expose server guidance.');
-repairAssertSame(false, strpos(json_encode($routedExhausted), 'Reference resolver guidance') !== false, 'Routed-family advisory results must not expose resolver schema guidance.');
-repairAssertSame(false, strpos(json_encode($routedExhausted), 'explicitReportRequest') !== false, 'Routed-family advisory results must not expose internal explicit-value keys.');
+repairAssertSame(2, $routedExhausted['validationSummary']['repairAttempts'] ?? null, 'Routed-family explicit repair exhaustion must preserve the shared two-attempt maximum.');
+repairAssertSame(false, isset($routedExhausted['sql']), 'Routed-family explicit repair exhaustion must not retain an incomplete final candidate.');
+repairAssertSame('sql_generation_failed', $routedExhausted['errorType'] ?? null, 'Routed-family explicit repair exhaustion must remain terminal.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'EXPLICIT REPORT VALUES') !== false, 'Routed-family terminal results must not expose server guidance.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'Reference resolver guidance') !== false, 'Routed-family terminal results must not expose resolver schema guidance.');
+repairAssertSame(false, strpos(json_encode($routedExhausted), 'explicitReportRequest') !== false, 'Routed-family terminal results must not expose internal explicit-value keys.');
 $routedRepairPayload = json_encode(TestTransport::$requests[0] ?? []);
 repairAssertContains('Reference resolver guidance', $routedRepairPayload, 'Routed-family repair must retain resolver guidance as model-only generation context.');
 repairAssertContains('EXPLICIT REPORT VALUES', $routedRepairPayload, 'Routed-family repair must retain explicit-value guidance as model-only generation context.');

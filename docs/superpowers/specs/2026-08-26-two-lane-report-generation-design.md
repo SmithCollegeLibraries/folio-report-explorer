@@ -217,6 +217,8 @@ These checks may trigger automatic repair or an AI-built assumption but may not 
 
 If a semantic check positively identifies a likely error, the system routes the SQL through the AI lane's seeded-candidate repair process. The SQL is never merely relabeled without AI review. If AI returns safe executable SQL, it runs as **AI-built**, with the relevant interpretation shown as an assumption.
 
+Explicit identifiers are a data-correctness exception to advisory acceptance. If validation can prove that the final candidate omitted a supplied identifier or added an identifier the user did not request, that candidate must not execute after repair exhaustion. Return the concise Retry-oriented generation failure instead; this is an objective mismatch, not an uncertain semantic interpretation.
+
 ## Reference resolution behavior
 
 The downloaded reference cache remains authoritative context.

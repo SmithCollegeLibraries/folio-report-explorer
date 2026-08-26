@@ -592,6 +592,32 @@ namespace {
     repairAssertSame('ai_built', $canonicalFailure['generationProvenance'] ?? null, 'Repaired canonical SQL is AI-built.');
     repairAssertSame('SELECT title FROM inventory.instance__t', $canonicalFailure['sql'] ?? null, 'Repaired SQL must pass a second preflight.');
 
+    Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
+    $rollbackCanonicalRepairCalls = 0;
+    $rollbackCanonicalFailure = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT broken_column FROM inventory.instance__t',
+            'mode' => 'canonical',
+            'route' => 'builder_intent',
+            'routeReason' => 'family_contract_supported:inventory_listing',
+            'generationProvenance' => 'verified_pattern',
+        ],
+        'Show titles',
+        'Smith College',
+        function (): array {
+            return ['error' => 'column "broken_column" does not exist'];
+        },
+        function () use (&$rollbackCanonicalRepairCalls): array {
+            $rollbackCanonicalRepairCalls++;
+            return ['sql' => 'SELECT title FROM inventory.instance__t'];
+        }
+    );
+    repairAssertSame(0, $rollbackCanonicalRepairCalls, 'The false switch must not AI-rewrite canonical SQL after preflight failure.');
+    repairAssertSame('exploratory_recovery', $rollbackCanonicalFailure['route'] ?? null, 'Rollback canonical preflight failure must retain the strict compatibility response.');
+    repairAssertSame(false, isset($rollbackCanonicalFailure['sql']), 'Rollback canonical preflight failure must not expose the rejected SQL.');
+    Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
+
     foreach ([
         'SQLSTATE[53200]: Out of memory',
         'SQLSTATE[53400]: Configuration limit exceeded',

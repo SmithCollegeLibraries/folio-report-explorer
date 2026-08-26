@@ -27,7 +27,7 @@ No test contacted production FOLIO or an external AI provider. Routing tests use
 - `dbf89a9` — `fix: downgrade edited reuse provenance`
 - `a0bf0d9` — `fix: normalize ask success provenance`
 - `ed46fde` — `test: verify two-lane report generation`
-- `d5b375b` — `fix: enforce two-lane hard-failure boundaries`
+- `d5b375b` — `fix: route ask hard limits as terminal failures`
 - Final cross-phase fix wave — advisory evidence and terminal-boundary hardening
 
 ## Required routing matrix

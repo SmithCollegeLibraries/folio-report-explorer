@@ -2215,7 +2215,7 @@ export default function Ask() {
               <p>{getAskTerminalFailureMessage(nlResult)}</p>
               <button
                 type="button"
-                onClick={() => handleRetryExploratory(history[0]?.prompt || prompt)}
+                onClick={() => handleRetryExploratory(prompt)}
                 className="mt-3 rounded bg-folio-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-folio-800"
               >
                 Retry

@@ -514,31 +514,15 @@ $modelEchoRecovery = GeminiService::repairExploratorySqlAfterPreflight(
     $routedGenerationPrompt
 );
 assertSameValue(2, count(TestTransport::$requests), 'A routed candidate should consume exactly the shared two repair attempts before exhaustion.');
-assertSameValue(2, $modelEchoRecovery['repairAttempts'] ?? null, 'Model-echo advisory review must preserve the shared two-attempt cap.');
-assertSameValue(true, isset($modelEchoRecovery['sql']), 'A statically safe final candidate must remain eligible for database preflight after bounded review.');
-assertSameValue('advisory', $modelEchoRecovery['semanticValidation']['status'] ?? null, 'Model-echo proof exhaustion must return advisory validation.');
-assertSameValue(true, $modelEchoRecovery['reviewRequired'] ?? null, 'Model-echo proof exhaustion must require review.');
-assertSameValue(false, ($modelEchoRecovery['route'] ?? null) === 'exploratory_recovery', 'Model-echo proof exhaustion must not erase safe SQL into recovery.');
-$modelEchoAssumptionsJson = json_encode($modelEchoRecovery['assumptions'] ?? []);
-assertContainsText('Explicit report identifier', $modelEchoAssumptionsJson, 'Model-echo advisory output must retain safe per-requirement assumptions.');
-assertNotContainsText('top-level WHERE clause', $modelEchoAssumptionsJson, 'Model-echo advisory assumptions must not expose validator guidance.');
-assertSameValue(
-    false,
-    strpos((string)($modelEchoRecovery['attemptedPlan'] ?? ''), "inventory.material_type__t.name = 'E-Book'") !== false,
-    'Routed advisory attemptedPlan must not expose the resolver predicate echoed by the initial model explanation.'
-);
+assertSameValue(2, $modelEchoRecovery['validationSummary']['repairAttempts'] ?? null, 'Model-echo terminal review must preserve the shared two-attempt cap.');
+assertSameValue(false, isset($modelEchoRecovery['sql']), 'A final candidate with an unrequested explicit identifier must not remain executable.');
+assertSameValue('sql_generation_failed', $modelEchoRecovery['errorType'] ?? null, 'Model-echo explicit-identifier exhaustion must remain terminal.');
+assertSameValue(false, isset($modelEchoRecovery['assumptions']), 'Terminal explicit-identifier failures must not expose advisory assumptions.');
 assertSameValue(
     false,
     strpos(json_encode($modelEchoRecovery), $untrustedRoutedExplanation) !== false,
-    'Routed advisory result must not expose the untrusted initial model explanation anywhere.'
+    'Routed terminal result must not expose the untrusted initial model explanation anywhere.'
 );
-if (isset($modelEchoRecovery['attemptedPlan'])) {
-    assertSameValue(
-        'server_defaults',
-        $modelEchoRecovery['_attemptedPlanProvenance'] ?? null,
-        'Any routed advisory attempted plan must carry explicit server-authored provenance.'
-    );
-}
 $modelEchoRepairPayload = json_encode(TestTransport::$requests);
 assertContainsText(
     $untrustedRoutedExplanation,
@@ -579,41 +563,20 @@ $routedRecovery = GeminiService::generateSqlWithShadow(
 );
 Yii::$app->params['nl2sqlForceLegacy'] = $previousForceLegacy;
 assertSameValue(3, count(TestTransport::$requests), 'Routed exhaustion should make one generation call plus exactly two repair calls.');
-assertSameValue(2, $routedRecovery['repairAttempts'] ?? null, 'Routed advisory review must preserve the shared two-attempt repair cap.');
-assertSameValue(true, isset($routedRecovery['sql']), 'Routed advisory review must retain statically safe SQL for database preflight.');
-assertSameValue('advisory', $routedRecovery['semanticValidation']['status'] ?? null, 'Routed proof exhaustion must return advisory validation.');
-assertSameValue(true, $routedRecovery['reviewRequired'] ?? null, 'Routed proof exhaustion must require review.');
-assertSameValue('ai_built', $routedRecovery['generationProvenance'] ?? null, 'Forced legacy advisory SQL must remain AI-built.');
-assertSameValue(false, ($routedRecovery['route'] ?? null) === 'exploratory_recovery', 'Routed proof exhaustion must not erase safe SQL into recovery.');
-$routedAdvisoryAssumptionsJson = json_encode($routedRecovery['assumptions'] ?? []);
-assertContainsText('Explicit report identifier', $routedAdvisoryAssumptionsJson, 'Routed advisory output must retain safe per-requirement assumptions.');
-assertNotContainsText('top-level WHERE clause', $routedAdvisoryAssumptionsJson, 'Routed advisory assumptions must not expose validator guidance.');
-assertSameValue(
-    false,
-    strpos((string)($routedRecovery['attemptedPlan'] ?? ''), "inventory.material_type__t.name = 'E-Book'") !== false,
-    'Routed advisory attemptedPlan must not expose the resolver predicate echoed by the initial model explanation.'
-);
-assertSameValue(
-    false,
-    strpos((string)($routedRecovery['attemptedPlan'] ?? ''), $untrustedRoutedExplanation) !== false,
-    'Routed advisory result must never promote a model-authored explanation into the user-visible attempted plan.'
-);
-if (isset($routedRecovery['attemptedPlan'])) {
-    assertSameValue(
-        'server_defaults',
-        $routedRecovery['_attemptedPlanProvenance'] ?? null,
-        'Any routed advisory attempted plan must carry explicit server-authored provenance.'
-    );
-}
+assertSameValue(2, $routedRecovery['validationSummary']['repairAttempts'] ?? null, 'Routed terminal review must preserve the shared two-attempt repair cap.');
+assertSameValue(false, isset($routedRecovery['sql']), 'Routed explicit-identifier exhaustion must not retain executable SQL.');
+assertSameValue('sql_generation_failed', $routedRecovery['errorType'] ?? null, 'Routed explicit-identifier exhaustion must remain terminal.');
+assertSameValue(false, isset($routedRecovery['generationProvenance']), 'Terminal explicit-identifier failures must not claim success provenance.');
+assertSameValue(false, isset($routedRecovery['assumptions']), 'Terminal explicit-identifier failures must not expose advisory assumptions.');
 $routedUserResponseJson = json_encode(\app\services\AskResponseContractService::toUserResponse($routedRecovery));
-assertSameValue(false, strpos($routedUserResponseJson, 'Previous SQL:') !== false, 'Advisory response must not expose follow-up generation context.');
-assertSameValue(false, strpos($routedUserResponseJson, 'Reference resolver guidance:') !== false, 'Advisory response must not expose resolver guidance.');
+assertSameValue(false, strpos($routedUserResponseJson, 'Previous SQL:') !== false, 'Terminal response must not expose follow-up generation context.');
+assertSameValue(false, strpos($routedUserResponseJson, 'Reference resolver guidance:') !== false, 'Terminal response must not expose resolver guidance.');
 assertSameValue(
     false,
     strpos($routedUserResponseJson, "inventory.material_type__t.name = 'E-Book'") !== false,
-    'Advisory response must not expose the resolver guidance predicate even when its wrapper heading is absent.'
+    'Terminal response must not expose the resolver guidance predicate even when its wrapper heading is absent.'
 );
-assertSameValue(false, strpos($routedUserResponseJson, 'EXPLICIT REPORT VALUES') !== false, 'Advisory response must not expose explicit-value guidance.');
+assertSameValue(false, strpos($routedUserResponseJson, 'EXPLICIT REPORT VALUES') !== false, 'Terminal response must not expose explicit-value guidance.');
 assertSameValue($routedRawQuestion, $routedTransport['rawQuestion'] ?? null, 'Routed transport must retain the exact raw question.');
 assertContainsText('Previous SQL:', $routedTransport['generationPrompt'] ?? '', 'Routed transport must retain follow-up generation context.');
 assertContainsText('Reference resolver guidance:', $routedTransport['generationPrompt'] ?? '', 'Routed transport must retain resolver guidance.');

@@ -675,6 +675,16 @@ class FolioQueryController extends Controller
         if (!isset($result['sql'])) {
             return false;
         }
+        $params = is_array(Yii::$app->params ?? null) ? Yii::$app->params : [];
+        $twoLaneEnabled = !array_key_exists('nl2sqlTwoLaneEnabled', $params)
+            || (bool)$params['nl2sqlTwoLaneEnabled'];
+        $isCanonical = ($result['generationProvenance'] ?? null) === AskResponseContractService::PROVENANCE_VERIFIED_PATTERN
+            || ($result['mode'] ?? null) === 'canonical'
+            || (($result['route'] ?? null) === 'builder_intent'
+                && strpos((string)($result['routeReason'] ?? ''), 'family_contract_supported:') === 0);
+        if (!$twoLaneEnabled && $isCanonical) {
+            return false;
+        }
         return in_array(
             (string)($result['generationProvenance'] ?? ''),
             [

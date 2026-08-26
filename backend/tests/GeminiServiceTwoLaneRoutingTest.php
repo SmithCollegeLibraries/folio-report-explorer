@@ -421,6 +421,20 @@ SQL;
     twoLaneAssertSame('clarification', $rollbackOverflow['route'] ?? null, 'False switch must retain the 501-identifier clarification route.');
     twoLaneAssertSame(0, count(TestTransport::$requests), 'Rollback identifier clarification must stop before provider generation.');
 
+    TestTransport::$responses = [
+        twoLaneFamilyIntent('inventory_library_location_listing', [
+            'campus' => 'Smith College',
+            'library' => 'Hillyer Library',
+            'material_type' => 'DVD',
+            'requested_outputs' => ['title', 'material_type'],
+        ]),
+    ];
+    TestTransport::$requests = [];
+    $rollbackCanonical = GeminiService::generateSqlWithShadow($hillyerPrompt, 'Smith College');
+    twoLaneAssertTrustedSuccess($rollbackCanonical, 'verified_pattern', 'rollback verified inventory pattern');
+    twoLaneAssertSame(1, count(TestTransport::$requests), 'Rollback canonical routing must use one structured-intent request without AI rewriting.');
+
+    TestTransport::$requests = [];
     $rollback = GeminiService::generateSqlWithShadow($neilsonPrompt, 'Smith College');
     twoLaneAssertSame(true, $rollback['needsClarification'] ?? null, 'False switch must retain rollback clarification compatibility.');
     twoLaneAssertSame('clarification', $rollback['route'] ?? null, 'False switch must retain the strict blocker route.');

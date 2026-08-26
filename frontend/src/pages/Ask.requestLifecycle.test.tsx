@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Ask from './Ask';
@@ -164,5 +164,37 @@ describe('Ask request lifecycle', () => {
 
     expect(screen.queryByText(/when the request is clear/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/needs clarification/i)).not.toBeInTheDocument();
+  });
+
+  it('retries the terminal failure currently selected from history', async () => {
+    const terminalFailure = rejectedTypedResponse(503, {
+      errorType: 'ai_provider_failure',
+      error: 'The AI provider could not complete this report. Please retry.',
+      route: 'ai_provider_failure',
+    });
+    apiMocks.askNl.mockRejectedValue(terminalFailure);
+
+    renderAsk();
+    submitQuestion('First failed report');
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    submitQuestion('Second failed report');
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTitle('Recent questions')[0]);
+    fireEvent.click((await screen.findAllByText('First failed report'))[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Retry' })[0]);
+
+    await waitFor(() => {
+      expect(apiMocks.askNl).toHaveBeenCalledTimes(3);
+      expect(apiMocks.askNl).toHaveBeenLastCalledWith(
+        'First failed report',
+        'Smith College',
+        true,
+        null,
+        true,
+        null,
+      );
+    });
   });
 });

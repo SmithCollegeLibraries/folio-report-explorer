@@ -408,7 +408,9 @@ class GeminiService
                 '',
                 (string)($queryFamily['familyKey'] ?? '')
             );
-        } elseif (!$twoLaneEnabled) {
+        }
+
+        if (isset($primary['sql'])) {
             $primary = self::repairRoutedCandidateMissingExplicitValues(
                 $primary,
                 (string)$effectivePrompt,
@@ -418,10 +420,13 @@ class GeminiService
             );
         }
 
-        if ($twoLaneEnabled && isset($primary['sql']) && !isset($primary['generationProvenance'])) {
-            $provenance = !empty(Yii::$app->params['nl2sqlForceLegacy'])
-                ? AskResponseContractService::PROVENANCE_AI_BUILT
-                : AskResponseContractService::PROVENANCE_VERIFIED_PATTERN;
+        if (isset($primary['sql']) && !isset($primary['generationProvenance'])) {
+            $isVerifiedCanonical = ($primary['route'] ?? null) === 'builder_intent'
+                && strpos((string)($primary['routeReason'] ?? ''), 'family_contract_supported:') === 0
+                && empty(Yii::$app->params['nl2sqlForceLegacy']);
+            $provenance = $isVerifiedCanonical
+                ? AskResponseContractService::PROVENANCE_VERIFIED_PATTERN
+                : AskResponseContractService::PROVENANCE_AI_BUILT;
             $primary = AskResponseContractService::withGenerationProvenance(
                 $primary,
                 $provenance
@@ -549,16 +554,14 @@ class GeminiService
         }
 
         $message = $exception->getMessage();
-        if (self::isAiTimeoutMessage($message)) {
+        if (self::isAiTimeoutMessage($message) || self::isAiProviderFailureMessage($message)) {
             return true;
         }
 
         return preg_match(
-            '/API key not configured|provider failure|AI (?:API error|request failed)|API request failed|fallback request failed|fallback failed|'
-                . 'connection (?:refused|reset|failed)|failed to connect|network is unreachable|could not resolve host|SSL|'
+            '/connection (?:refused|reset|failed)|failed to connect|network is unreachable|could not resolve host|SSL|'
                 . 'unauthori[sz]ed|authentication|permission denied|insufficient privilege|access denied|'
-                . 'RESOURCE_EXHAUSTED|SQLSTATE\[(?:28P01|42501|53[0-9A-Z]{3})\]|quota|billing|rate limit|'
-                . 'HTTP\s*(?:401|403|429)|MAX_TOKENS|truncated|only (?:a single )?SELECT|multiple statements|'
+                . 'SQLSTATE\[(?:28P01|42501|53[0-9A-Z]{3})\]|only (?:a single )?SELECT|multiple statements|'
                 . 'destructive (?:query|statement|SQL)|restricted (?:data|table)|read-only query/i',
             $message
         ) === 1;
@@ -3420,7 +3423,7 @@ GUIDANCE;
     public static function isAiProviderFailureMessage(string $message): bool
     {
         return preg_match(
-            '/API key not configured|provider failure|AI (?:API error|request failed)|API request failed|'
+            '/API key not configured|AI (?:API error|request failed)|API request failed|'
                 . 'OpenAI fallback (?:request )?failed|RESOURCE_EXHAUSTED|MAX_TOKENS|AI (?:intent )?response was truncated|'
                 . 'quota|billing|rate limit|HTTP\s*(?:401|403|429)/i',
             $message
@@ -6903,10 +6906,17 @@ PROMPT;
         if ((int)($context['repairNumber'] ?? 0) < ExploratorySqlRepairService::MAX_REPAIR_ATTEMPTS) {
             return false;
         }
+        if ($exception->getStage() === 'explicit_values') {
+            foreach ($exception->getSafeViolations() as $violation) {
+                if (strpos((string)($violation['key'] ?? ''), 'explicit_identifier_') === 0) {
+                    return false;
+                }
+            }
+            return true;
+        }
         return in_array($exception->getStage(), [
             'semantic_conformance',
             'semantic_validation',
-            'explicit_values',
         ], true);
     }
 

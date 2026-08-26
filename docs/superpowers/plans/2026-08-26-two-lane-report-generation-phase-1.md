@@ -598,13 +598,22 @@ private static function mayAcceptAdvisoryFailure(
     if ((int)($context['repairNumber'] ?? 0) < ExploratorySqlRepairService::MAX_REPAIR_ATTEMPTS) {
         return false;
     }
+    if ($exception->getStage() === 'explicit_values') {
+        foreach ($exception->getSafeViolations() as $violation) {
+            if (strpos((string)($violation['key'] ?? ''), 'explicit_identifier_') === 0) {
+                return false;
+            }
+        }
+        return true;
+    }
     return in_array($exception->getStage(), [
         'semantic_conformance',
         'semantic_validation',
-        'explicit_values',
     ], true);
 }
 ```
+
+Explicit identifier mismatches are never advisory: a final candidate that omits a supplied identifier or adds an unrequested identifier returns the concise terminal generation failure after the bounded repair budget. Other parser-limited explicit-output checks may remain advisory.
 
 Restructure `runExploratorySqlAttempt()` so a final advisory failure returns the current candidate with:
 

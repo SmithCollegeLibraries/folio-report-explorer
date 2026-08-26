@@ -69,4 +69,20 @@ assertSameValue(
     'Database connectivity messages must not be mislabeled as AI provider failures.'
 );
 
+assertSameValue(
+    false,
+    GeminiService::isAiProviderFailureMessage('The report must include the provider failure rate.'),
+    'Business-language mentions of a provider failure rate must not be mistaken for an AI transport failure.'
+);
+
+$hardCanonicalFailure = new ReflectionMethod(GeminiService::class, 'isHardCanonicalFailure');
+if (PHP_VERSION_ID < 80100) {
+    $hardCanonicalFailure->setAccessible(true);
+}
+assertSameValue(
+    false,
+    $hardCanonicalFailure->invoke(null, new RuntimeException('The report must include the provider failure rate.')),
+    'Canonical compiler diagnostics containing ordinary business language must remain eligible for Lane 2.'
+);
+
 fwrite(STDOUT, "GeminiService timeout classification test passed\n");
