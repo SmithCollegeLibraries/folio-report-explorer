@@ -525,6 +525,51 @@ class ReferenceResolverService
     }
 
     /**
+     * Append bounded local-reference uncertainty as model-only advisory context.
+     *
+     * @param array<string, mixed> $resolution
+     * @param array<string, mixed>|null $ambiguity
+     */
+    public static function appendGenerationContextToPrompt(
+        string $prompt,
+        array $resolution,
+        ?array $ambiguity = null
+    ): string {
+        $prompt = self::appendGuidanceToPrompt($prompt, $resolution);
+        $lines = [];
+
+        foreach (array_slice($resolution['unresolvedNamedIntents'] ?? [], 0, 8) as $intent) {
+            $span = trim((string)($intent['span'] ?? ''));
+            $dimension = trim((string)($intent['dimension'] ?? 'unknown'));
+            if ($span !== '') {
+                $lines[] = 'Unresolved local term: ' . $span . ' (' . $dimension . ')';
+            }
+        }
+
+        foreach (array_slice($resolution['clarificationItems'] ?? [], 0, 8) as $item) {
+            $term = trim((string)($item['term'] ?? ''));
+            $labels = [];
+            foreach (array_slice($item['options'] ?? [], 0, 5) as $option) {
+                $label = trim((string)($option['label'] ?? ''));
+                if ($label !== '') {
+                    $labels[] = $label;
+                }
+            }
+            if ($term !== '' && $labels !== []) {
+                $lines[] = $term . ' candidate values: ' . implode('; ', array_values(array_unique($labels)));
+            }
+        }
+
+        if ($ambiguity !== null && trim((string)($ambiguity['question'] ?? '')) !== '') {
+            $lines[] = 'Advisory interpretation note: ' . trim((string)$ambiguity['question']);
+        }
+
+        return $lines === []
+            ? $prompt
+            : $prompt . "\n\nLocal reference generation context:\n- " . implode("\n- ", $lines);
+    }
+
+    /**
      * @param array<string, mixed> $filter
      */
     private static function buildResolvedFilterGuidanceLine(array $filter): string

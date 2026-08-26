@@ -87,12 +87,11 @@ namespace yii\httpclient {
 namespace app\services {
     class ReferenceResolverService
     {
+        public static $resolution = [];
+
         public static function resolvePrompt(string $prompt, $userId = null): array
         {
-            return [
-                'needsClarification' => false,
-                'guidanceLines' => self::guidanceLines(),
-            ];
+            return self::$resolution;
         }
 
         // Mirror the real boilerplate that every resolved reference appends. The
@@ -100,6 +99,45 @@ namespace app\services {
         public static function appendGuidanceToPrompt(string $prompt, array $referenceResolution): string
         {
             return rtrim($prompt) . "\n\nReference resolver guidance:\n" . implode("\n", self::guidanceLines());
+        }
+
+        public static function appendGenerationContextToPrompt(
+            string $prompt,
+            array $resolution,
+            ?array $ambiguity = null
+        ): string {
+            $prompt = self::appendGuidanceToPrompt($prompt, $resolution);
+            $lines = [];
+
+            foreach (array_slice($resolution['unresolvedNamedIntents'] ?? [], 0, 8) as $intent) {
+                $span = trim((string)($intent['span'] ?? ''));
+                $dimension = trim((string)($intent['dimension'] ?? 'unknown'));
+                if ($span !== '') {
+                    $lines[] = 'Unresolved local term: ' . $span . ' (' . $dimension . ')';
+                }
+            }
+
+            foreach (array_slice($resolution['clarificationItems'] ?? [], 0, 8) as $item) {
+                $term = trim((string)($item['term'] ?? ''));
+                $labels = [];
+                foreach (array_slice($item['options'] ?? [], 0, 5) as $option) {
+                    $label = trim((string)($option['label'] ?? ''));
+                    if ($label !== '') {
+                        $labels[] = $label;
+                    }
+                }
+                if ($term !== '' && $labels !== []) {
+                    $lines[] = $term . ' candidate values: ' . implode('; ', array_values(array_unique($labels)));
+                }
+            }
+
+            if ($ambiguity !== null && trim((string)($ambiguity['question'] ?? '')) !== '') {
+                $lines[] = 'Advisory interpretation note: ' . trim((string)$ambiguity['question']);
+            }
+
+            return $lines === []
+                ? $prompt
+                : $prompt . "\n\nLocal reference generation context:\n- " . implode("\n- ", $lines);
         }
 
         private static function guidanceLines(): array
@@ -255,6 +293,105 @@ function geminiSql(string $sql, string $explanation = 'Candidate query.'): strin
 }
 
 $realResolverPath = realpath(__DIR__ . '/../services/ReferenceResolverService.php');
+$neilsonResolution = [
+    'needsClarification' => true,
+    'resolvedFilters' => [],
+    'unresolvedNamedIntents' => [[
+        'dimension' => 'library',
+        'span' => 'Neilson Library',
+    ]],
+    'clarificationItems' => [[
+        'term' => 'Neilson Library',
+        'confidence' => 'ambiguous',
+        'options' => [
+            ['label' => 'SC Neilson Library'],
+            ['label' => 'Neilson Library Annex'],
+        ],
+    ]],
+];
+$generationContextProbe = 'require ' . var_export($realResolverPath, true) . ';'
+    . '$resolution=' . var_export($neilsonResolution, true) . ';'
+    . 'echo app\\services\\ReferenceResolverService::appendGenerationContextToPrompt('
+    . var_export('Show the 20 most-circulated books at Neilson Library during the last five years.', true)
+    . ', $resolution);';
+$generationContextLines = [];
+$generationContextStatus = 0;
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($generationContextProbe), $generationContextLines, $generationContextStatus);
+assertSameValue(0, $generationContextStatus, 'The real resolver generation-context probe must execute successfully.');
+$generationContext = implode("\n", $generationContextLines);
+assertContainsText(
+    'Unresolved local term: Neilson Library (library)',
+    $generationContext,
+    'Raw named terms must reach generation.'
+);
+assertContainsText(
+    'Neilson Library candidate values: SC Neilson Library; Neilson Library Annex',
+    $generationContext,
+    'Ranked candidates must reach generation.'
+);
+assertNotContainsText('ask the user', strtolower($generationContext), 'Context must not direct a blocker.');
+
+\app\services\ReferenceResolverService::$resolution = $neilsonResolution;
+TestTransport::$responses = [
+    geminiSql('SELECT i.title FROM inventory.instance__t AS i LIMIT 20'),
+];
+TestTransport::$requests = [];
+$neilsonTransport = null;
+$previousNeilsonForceLegacy = Yii::$app->params['nl2sqlForceLegacy'];
+Yii::$app->params['nl2sqlForceLegacy'] = true;
+$neilsonResult = GeminiService::generateSqlWithShadow(
+    'Show the 20 most-circulated books at Neilson Library during the last five years.',
+    'Smith College',
+    null,
+    false,
+    null,
+    $neilsonTransport
+);
+Yii::$app->params['nl2sqlForceLegacy'] = $previousNeilsonForceLegacy;
+assertSameValue(1, count(TestTransport::$requests), 'Enabled two-lane reference ambiguity must still make an AI request.');
+assertContainsText('Unresolved local term: Neilson Library (library)', json_encode(TestTransport::$requests[0] ?? []), 'Unresolved reference context must reach the model request.');
+assertContainsText('Neilson Library candidate values: SC Neilson Library; Neilson Library Annex', json_encode(TestTransport::$requests[0] ?? []), 'Reference candidates must reach the model request.');
+assertContainsText('SELECT i.title', $neilsonResult['sql'] ?? '', 'Enabled two-lane reference ambiguity must return model SQL.');
+assertSameValue(false, isset($neilsonResult['needsClarification']), 'Enabled two-lane response must not serialize resolver clarification state.');
+
+$eBookResolution = [
+    'needsClarification' => false,
+    'guidanceLines' => [
+        "- Resolved local reference: use exactly inventory.material_type__t.name = 'E-Book'. Do not apply this value to library or campus name columns. Do not add code filters unless the user explicitly asks to filter by code.",
+    ],
+];
+\app\services\ReferenceResolverService::$resolution = $eBookResolution;
+TestTransport::$responses = [
+    geminiSql('SELECT i.title FROM inventory.instance__t AS i LIMIT 20'),
+];
+TestTransport::$requests = [];
+$previousMrbcForceLegacy = Yii::$app->params['nl2sqlForceLegacy'];
+Yii::$app->params['nl2sqlForceLegacy'] = true;
+$mrbcResult = GeminiService::generateSqlWithShadow('List holdings in MRBC.', 'Smith College');
+Yii::$app->params['nl2sqlForceLegacy'] = $previousMrbcForceLegacy;
+assertSameValue(1, count(TestTransport::$requests), 'Enabled two-lane prompt ambiguity must still make an AI request.');
+assertContainsText('Advisory interpretation note: Which rare book location do you mean?', json_encode(TestTransport::$requests[0] ?? []), 'Prompt ambiguity must reach the model only as advisory context.');
+assertContainsText('SELECT i.title', $mrbcResult['sql'] ?? '', 'Enabled two-lane prompt ambiguity must return model SQL.');
+assertSameValue(false, isset($mrbcResult['needsClarification']), 'Enabled two-lane response must not serialize prompt clarification state.');
+
+\app\services\ReferenceResolverService::$resolution = $neilsonResolution;
+TestTransport::$responses = [];
+TestTransport::$requests = [];
+$previousTwoLaneEnabled = Yii::$app->params['nl2sqlTwoLaneEnabled'] ?? null;
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
+$rollbackResult = GeminiService::generateSqlWithShadow(
+    'Show the 20 most-circulated books at Neilson Library during the last five years.',
+    'Smith College'
+);
+if ($previousTwoLaneEnabled === null) {
+    unset(Yii::$app->params['nl2sqlTwoLaneEnabled']);
+} else {
+    Yii::$app->params['nl2sqlTwoLaneEnabled'] = $previousTwoLaneEnabled;
+}
+assertSameValue(0, count(TestTransport::$requests), 'Disabled two-lane mode must retain strict resolver clarification without an AI request.');
+assertSameValue(true, $rollbackResult['needsClarification'] ?? false, 'Disabled two-lane mode must retain resolver clarification responses.');
+
+\app\services\ReferenceResolverService::$resolution = $eBookResolution;
 $structuredResolution = [
     'guidanceLines' => [],
     'resolvedFilters' => [

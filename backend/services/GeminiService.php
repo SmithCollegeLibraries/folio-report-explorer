@@ -173,7 +173,13 @@ class GeminiService
             $referenceEvidence
         );
         self::logReferenceResolverTelemetry($referenceResolution, self::fingerprintPrompt($rawQuestion));
-        if (!empty($referenceResolution['needsClarification'])) {
+        $twoLaneEnabled = !array_key_exists('nl2sqlTwoLaneEnabled', Yii::$app->params)
+            || (bool)Yii::$app->params['nl2sqlTwoLaneEnabled'];
+        $ambiguity = ClarificationService::detectPromptAmbiguity(
+            $rawQuestion,
+            self::loadAcceptedClarificationKeys($userId)
+        );
+        if (!$twoLaneEnabled && !empty($referenceResolution['needsClarification'])) {
             self::logRouteSelection('clarification', (string)($referenceResolution['routeReason'] ?? 'reference_resolver_batch_clarification'), [
                 'clarificationBatchId' => $referenceResolution['clarificationBatchId'] ?? null,
                 'clarificationSource' => $referenceResolution['clarificationSource'] ?? null,
@@ -214,32 +220,44 @@ class GeminiService
             ));
         }
 
-        $effectivePrompt = ReferenceResolverService::appendGuidanceToPrompt($generationPrompt, $referenceResolution);
+        $effectivePrompt = $twoLaneEnabled
+            ? ReferenceResolverService::appendGenerationContextToPrompt(
+                $generationPrompt,
+                $referenceResolution,
+                $ambiguity
+            )
+            : ReferenceResolverService::appendGuidanceToPrompt($generationPrompt, $referenceResolution);
         $effectivePrompt = ExplicitReportRequestService::appendGuidance($effectivePrompt, $explicitReportRequest);
         $generationTransport = [
             'rawQuestion' => $rawQuestion,
             'generationPrompt' => $effectivePrompt,
         ];
 
-        $clarification = ClarificationService::detectPromptAmbiguity(
-            $rawQuestion,
-            self::loadAcceptedClarificationKeys($userId)
-        );
-        if ($clarification !== null) {
-            self::logRouteSelection('clarification', (string)$clarification['routeReason'], [
-                'clarificationKey' => $clarification['clarificationKey'] ?? null,
+        if (!$twoLaneEnabled && $ambiguity !== null) {
+            self::logRouteSelection('clarification', (string)$ambiguity['routeReason'], [
+                'clarificationKey' => $ambiguity['clarificationKey'] ?? null,
             ]);
             self::logNlTelemetry('nl2sql.generated', [
                 'route' => 'clarification',
-                'routeReason' => $clarification['routeReason'] ?? null,
-                'clarificationType' => $clarification['clarificationType'] ?? null,
-                'clarificationKey' => $clarification['clarificationKey'] ?? null,
+                'routeReason' => $ambiguity['routeReason'] ?? null,
+                'clarificationType' => $ambiguity['clarificationType'] ?? null,
+                'clarificationKey' => $ambiguity['clarificationKey'] ?? null,
                 'dataSource' => null,
             ]);
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
-                $clarification,
+                $ambiguity,
                 $askEvidence
             ));
+        }
+
+        if ($twoLaneEnabled && $ambiguity !== null) {
+            self::logRouteSelection('reference_context_advisory', (string)($ambiguity['routeReason'] ?? 'prompt_ambiguity'), []);
+            self::logNlTelemetry('nl2sql.reference_context_advisory', [
+                'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
+                'routeReason' => $ambiguity['routeReason'] ?? null,
+                'clarificationType' => $ambiguity['clarificationType'] ?? null,
+                'clarificationKey' => $ambiguity['clarificationKey'] ?? null,
+            ]);
         }
 
         if ($allowExploratory) {
@@ -252,6 +270,7 @@ class GeminiService
             );
 
             $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
+            $primary = self::withoutEnabledTwoLaneClarificationState($primary, $twoLaneEnabled);
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
@@ -276,6 +295,7 @@ class GeminiService
             );
 
             $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
+            $primary = self::withoutEnabledTwoLaneClarificationState($primary, $twoLaneEnabled);
 
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
                 $primary,
@@ -321,6 +341,7 @@ class GeminiService
         }
 
         $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
+        $primary = self::withoutEnabledTwoLaneClarificationState($primary, $twoLaneEnabled);
 
         if (!self::shouldRunShadowForUser($userId, $rawQuestion)) {
             return AskResponseContractService::normalizeMode(self::withAskEvidence(
@@ -2311,6 +2332,16 @@ GUIDANCE;
             'resolved' => true,
             'guidanceLines' => $referenceResolution['guidanceLines'],
         ];
+        return $result;
+    }
+
+    private static function withoutEnabledTwoLaneClarificationState(
+        array $result,
+        bool $twoLaneEnabled
+    ): array {
+        if ($twoLaneEnabled) {
+            unset($result['needsClarification']);
+        }
         return $result;
     }
 

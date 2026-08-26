@@ -119,8 +119,18 @@ $logger->invoke(null, [
     'routeReason' => 'reference_resolver_ambiguous_reference',
     'clarificationType' => 'batch_local_reference_resolution',
     'clarificationItems' => [
-        ['term' => 'Josten'],
+        [
+            'term' => 'Josten',
+            'options' => [
+                ['label' => 'SC Josten Treasure'],
+                ['label' => 'SC Josten Treasure Folio'],
+            ],
+        ],
     ],
+    'unresolvedNamedIntents' => [[
+        'dimension' => 'library',
+        'span' => 'Josten',
+    ]],
 ], 'clarification-fingerprint');
 
 assertTelemetrySame(1, count(Yii::$warnings), 'Clarification telemetry should emit one warning event.');
@@ -128,5 +138,12 @@ $clarificationTelemetry = decodeResolverTelemetry(Yii::$warnings[0]['message'] ?
 assertTelemetrySame('nl2sql.reference_resolver_clarification', $clarificationTelemetry['event'] ?? null, 'Clarifications should emit a resolver clarification event.');
 assertTelemetrySame('reference_resolver_ambiguous_reference', $clarificationTelemetry['routeReason'] ?? null, 'Clarification telemetry should include route reason.');
 assertTelemetrySame(1, $clarificationTelemetry['clarificationItemCount'] ?? null, 'Clarification telemetry should include item count.');
+$encodedClarificationTelemetry = json_encode($clarificationTelemetry);
+foreach (['Josten', 'SC Josten Treasure', 'SC Josten Treasure Folio'] as $leakedText) {
+    assertTelemetryTrue(
+        strpos($encodedClarificationTelemetry, $leakedText) === false,
+        'Resolver telemetry must not contain unresolved terms or candidate values reserved for model context.'
+    );
+}
 
 fwrite(STDOUT, "GeminiService reference resolver telemetry test passed\n");
