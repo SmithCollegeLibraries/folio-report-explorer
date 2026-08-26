@@ -6,7 +6,9 @@
 
 ## Outcome
 
-Phase 1 now has public-boundary regression coverage for the verified-pattern and AI-built lanes, stable server- and client-side provenance normalization, and terminal hard-failure responses that expose no SQL, success provenance, clarification, recovery, or correction payloads. Pre-result SQL-safety exceptions and the configured 500-identifier ceiling use the same terminal contract instead of entering normal recovery UI.
+Phase 1 now has public-boundary regression coverage for the verified-pattern and AI-built lanes, stable server- and client-side provenance normalization, and terminal hard-failure responses that expose no SQL, success provenance, clarification, recovery, or correction payloads. Pre-result SQL-safety exceptions, the configured 500-identifier ceiling, enabled-mode unclassified generation failures, and recognized non-2xx typed API failures use the same Retry-only terminal contract instead of entering normal recovery UI.
+
+Advisory semantic validation now remains review-required through evidence persistence and controller finalization. Provider truncation and structured PostgreSQL authorization, cancellation, and operator-intervention states stop before AI repair at both repair boundaries.
 
 No test contacted production FOLIO or an external AI provider. Routing tests used deterministic fake provider responses, isolated reference fixtures, the real canonical compiler, and checked-in schema metadata. Database-preflight tests used deterministic controller fixtures.
 
@@ -25,7 +27,8 @@ No test contacted production FOLIO or an external AI provider. Routing tests use
 - `dbf89a9` — `fix: downgrade edited reuse provenance`
 - `a0bf0d9` — `fix: normalize ask success provenance`
 - `ed46fde` — `test: verify two-lane report generation`
-- Task 6 fix round 1 — this commit
+- `d5b375b` — `fix: enforce two-lane hard-failure boundaries`
+- Final cross-phase fix wave — advisory evidence and terminal-boundary hardening
 
 ## Required routing matrix
 
@@ -55,9 +58,12 @@ Public service/controller cases cover:
 - 501 explicit identifiers with two-lane mode enabled: `configured_resource_limit`, zero provider calls, concise Retry copy, and no SQL/provenance/clarification/recovery/correction fields; the false switch retains the legacy identifier clarification for rollback;
 - restricted `users.users__t` patron data: `PolicyViolationException`, no repair request;
 - database cancellation / SQLSTATE `57014`: `database_cancelled`, no AI repair;
+- provider `MAX_TOKENS` during the real exploratory-repair transport: standard AI-provider hard stop before response parsing;
 - provider timeout: `ai_timeout`, HTTP 504, no recovery payload;
 - PostgreSQL SQLSTATE class `08`: typed `postgres_connectivity`, no AI repair;
 - PostgreSQL SQLSTATE class `28`: typed `policy_blocked`, HTTP 403, no AI repair;
+- exact PostgreSQL SQLSTATE `42501`: typed `policy_blocked`, HTTP 403, no AI repair even when the message is opaque;
+- exact PostgreSQL SQLSTATE `57014`: cancellation, while remaining class `57` states such as `57P01` are database availability hard stops; neither path invokes AI repair;
 - PostgreSQL SQLSTATE classes `53` and `54`: typed database resource limit, HTTP 503, no AI repair;
 - shared repair-budget exhaustion: exactly two repair attempts, `sql_generation_failed`, `generation_failed`, `sql_repair_exhausted`, Retry-only copy, and no SQL/provenance/correction fields.
 
@@ -68,8 +74,16 @@ All hard-failure response-shape assertions reject `needsClarification`, clarific
 - `backend/config/params.php` defaults `nl2sqlTwoLaneEnabled` on.
 - Runtime preflight reports the effective switch and warns when strict rollback is active.
 - The false-switch path retains clarification/recovery compatibility shapes for administrative rollback.
+- An unclassified generation exception returns typed `sql_generation_failed` in enabled mode; only the false-switch path can return `exploratory_recovery`.
 - `Ask.tsx` intentionally still contains the legacy clarification and `ExploratoryRecoveryPanel` implementation. The source audit found 11 rollback-related matches. This is intentional under the binding SDD ruling.
 - Behavioral routing is the gate: any response with SQL selects `success`; typed no-SQL hard failures select `terminal_failure`; only untyped no-SQL compatibility responses can select `legacy_clarification` or `legacy_recovery`.
+
+## Finalization and request-lifecycle evidence
+
+- `AskGenerationEvidenceService` treats `semanticValidation.status=advisory` as limited semantic coverage even if no independent coverage-status field is present.
+- Controller finalization persists the stable `limited_semantic_coverage` review reason and returns the public review notice without overwriting `reviewRequired=true`.
+- Direct AI and no-family transitions report `direct_ai` and `no_matching_pattern` source lanes instead of claiming `verified_pattern`.
+- Recognized Axios 403/503/504 typed response bodies replace any stale success in shared Ask state, reset prior execution results, render the assertive terminal alert, and expose Retry. Unknown rejected responses retain the existing generic error path.
 
 ## Verification
 
@@ -97,15 +111,15 @@ Frontend suite:
 cd frontend && npm test
 ```
 
-Result: **39/39 files, 218/218 tests passed**. Existing Browserslist staleness and Node localStorage experimental warnings were observed.
+Result: **40/40 files, 222/222 tests passed**. Existing Browserslist staleness and Node localStorage experimental warnings were observed.
 
 Focused blocker/provenance behavior:
 
 ```bash
-cd frontend && npm test -- src/pages/Ask.errorFormatting.test.ts src/components/AskTrustNotice.test.tsx
+cd frontend && npm test -- --run src/pages/Ask.requestLifecycle.test.tsx src/pages/Ask.errorFormatting.test.ts src/components/AskTrustNotice.test.tsx src/pages/Ask.followUp.test.ts
 ```
 
-Result: **2/2 files, 34/34 tests passed**. This includes typed HTTP-200 PostgreSQL connectivity, unsafe SQL, database-resource failures, and the 501-identifier configured-resource failure selecting `terminal_failure` ahead of the retained rollback recovery component.
+Result: **4/4 files, 43/43 tests passed**. This includes rendered request-lifecycle coverage for rejected 403/503/504 responses, stale-success removal, execution reset, assertive terminal alerts, and Retry, plus typed HTTP-200 PostgreSQL connectivity, unsafe SQL, database-resource failures, and the 501-identifier configured-resource failure selecting `terminal_failure` ahead of the retained rollback recovery component.
 
 Production build:
 

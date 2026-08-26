@@ -280,6 +280,23 @@ function isTypedAskTerminalFailure(result: NlResponse | null | undefined): boole
   ].includes(result?.errorType ?? '');
 }
 
+function typedAskTerminalFailureFromError(error: unknown): NlResponse | null {
+  if (!isAxiosError(error)) return null;
+  const data = error.response?.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+
+  const candidate = data as NlResponse;
+  if (hasGeneratedSql(candidate) || !isTypedAskTerminalFailure(candidate)) return null;
+
+  const terminalFailure: NlResponse = { errorType: candidate.errorType };
+  if (typeof candidate.error === 'string') terminalFailure.error = candidate.error;
+  if (typeof candidate.message === 'string') terminalFailure.message = candidate.message;
+  if (typeof candidate.route === 'string') terminalFailure.route = candidate.route;
+  if (typeof candidate.routeReason === 'string') terminalFailure.routeReason = candidate.routeReason;
+  if (candidate.validationSummary) terminalFailure.validationSummary = candidate.validationSummary;
+  return terminalFailure;
+}
+
 export function getAskTerminalFailureAriaProps(): { role: 'alert'; 'aria-live': 'assertive' } {
   return { role: 'alert', 'aria-live': 'assertive' };
 }
@@ -865,6 +882,25 @@ export default function Ask() {
         runGeneratedQuery(result, request.question);
       }
     },
+    onError: (error, request) => {
+      const terminalFailure = typedAskTerminalFailureFromError(error);
+      if (!terminalFailure) return;
+
+      setNlResult(terminalFailure);
+      resetJob();
+      setActiveJobId(null);
+      setSaveSuccess(null);
+      setLastSavedId(null);
+      setFeedbackNote('');
+      setFeedbackMessage(null);
+      setCorrecting(false);
+      setClarificationFreeText('');
+      setBatchClarificationChoices({});
+      setFollowUpContext(null);
+      setFollowUpError(null);
+      setDetailTab('results');
+      prependHistory(request.question, terminalFailure);
+    },
   });
 
   const savedMut = useMutation({
@@ -1258,7 +1294,7 @@ export default function Ask() {
   const hasFilePreview = !!(results?.outputMode === 'file' && results.columns.length > 0 && results.rows.length > 0);
   const askResponseView = getAskResponseView(nlResult);
   const showMiddlePanel = isGenerating
-    || askMut.isError
+    || (askMut.isError && askResponseView !== 'terminal_failure')
     || !!followUpError
     || !!reuseCandidate
     || (!isLoading && askResponseView === 'legacy_clarification');
@@ -1321,7 +1357,7 @@ export default function Ask() {
               </div>
 
               <p className="text-sm text-gray-500">
-                Describe the report you need. The app checks known FOLIO terms first, then generates SQL when the request is clear.
+                Describe the report you need. The app prepares context, generates SQL, and validates it automatically.
               </p>
 
               {followUpContext && (
@@ -1442,7 +1478,7 @@ export default function Ask() {
       <div className="border-b border-gray-100 px-4 py-3 xl:px-6">
         <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Question flow</div>
         <div className="mt-1 text-sm text-gray-600">
-          Follow-up questions and resolver checks appear here when the request needs clarification.
+          Generation details and rollback-only guidance appear here when needed.
         </div>
       </div>
 
@@ -1819,7 +1855,7 @@ export default function Ask() {
               </div>
 
               <p className="text-sm text-gray-500 mb-4">
-                Describe the report you need in plain English. The app checks known FOLIO terms first, then generates SQL when the request is clear.
+                Describe the report you need in plain English. The app prepares context, generates SQL, and validates it automatically.
               </p>
 
               {followUpContext && (

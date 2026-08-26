@@ -124,6 +124,7 @@ namespace {
     Yii::$app = (object) [
         'response' => new FakeAskContinuationResponse(),
         'user' => (object) ['isGuest' => true, 'id' => null, 'identity' => null],
+        'params' => ['nl2sqlTwoLaneEnabled' => false],
     ];
 
     $controller = new \app\controllers\FolioQueryController('folio-query', null);
@@ -205,6 +206,28 @@ namespace {
     assertSameValue(false, $clarificationRecorder->received['reviewRequired'] ?? null, 'Clarification outcomes must be recorded without administrator review.');
     assertSameValue(null, $clarificationRecorder->received['executionMode'] ?? null, 'Clarifications must not acquire an execution mode.');
     assertSameValue(false, $finalizedClarification['reviewRequired'] ?? null, 'Clarification responses must not be review flagged.');
+
+    $advisoryRecorder = new PolicyCapturingReviewService();
+    $policyController->reviewService = $advisoryRecorder;
+    $finalizedAdvisory = $finalize->invoke($policyController, [
+        'route' => 'exploratory',
+        'routeReason' => 'unsupported_query_family',
+        'mode' => 'exploratory',
+        'sql' => 'SELECT title FROM inventory.instance__t',
+        'generationProvenance' => 'ai_built',
+        'provenanceLabel' => 'AI-built',
+        'semanticValidation' => [
+            'status' => 'advisory',
+            'contractVersion' => 3,
+            'checkedRequirements' => [],
+        ],
+        'reviewRequired' => true,
+    ], 'Show titles using a semantic shape the checker cannot fully verify', 17, []);
+    assertSameValue(true, $advisoryRecorder->received['limitedSemanticCoverage'] ?? null, 'Finalization must persist advisory semantic coverage as limited.');
+    assertSameValue(true, $advisoryRecorder->received['reviewRequired'] ?? null, 'Trusted advisory evidence must create administrator review work.');
+    assertSameValue(['limited_semantic_coverage'], $advisoryRecorder->received['reviewReasons'] ?? null, 'Advisory review work needs the stable limited-coverage reason.');
+    assertSameValue(true, $finalizedAdvisory['reviewRequired'] ?? null, 'Finalization must not overwrite an advisory result with reviewRequired=false.');
+    assertContainsText('exploratory analysis', $finalizedAdvisory['reviewNotice']['message'] ?? '', 'The public advisory should explain the limited semantic coverage.');
 
     $controllerSource = file_get_contents($controllerPath);
     assertContainsText(

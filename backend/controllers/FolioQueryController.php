@@ -499,7 +499,7 @@ class FolioQueryController extends Controller
                     $result
                 );
             }
-            if (!$semanticRepairRequired && $this->isAskPreflightCancellationFailure($error)) {
+            if (!$semanticRepairRequired && $this->isAskPreflightCancellationFailure($error, $estimate)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
                 throw new \app\exceptions\DatabaseQueryCancelledException();
             }
@@ -616,7 +616,9 @@ class FolioQueryController extends Controller
 
     private function isAskPreflightPolicyFailure(string $message, array $preflightResult = []): bool
     {
-        if ($this->isAskSqlStateClass($preflightResult, ['28'])) {
+        if ($this->isAskSqlStateClass($preflightResult, ['28'])
+            || $this->isAskSqlState($preflightResult, ['42501'])
+        ) {
             return true;
         }
         return preg_match(
@@ -626,8 +628,11 @@ class FolioQueryController extends Controller
         ) === 1;
     }
 
-    private function isAskPreflightCancellationFailure(string $message): bool
+    private function isAskPreflightCancellationFailure(string $message, array $preflightResult = []): bool
     {
+        if ($this->isAskSqlState($preflightResult, ['57014'])) {
+            return true;
+        }
         return preg_match(
             '/SQLSTATE\[57014\]|statement timeout|cancel(?:ing|ling)? statement|query (?:canceled|cancelled)/i',
             $message
@@ -657,6 +662,12 @@ class FolioQueryController extends Controller
             $sqlStateClass = strlen($sqlState) >= 2 ? substr($sqlState, 0, 2) : '';
         }
         return in_array($sqlStateClass, $classes, true);
+    }
+
+    private function isAskSqlState(array $preflightResult, array $states): bool
+    {
+        $sqlState = strtoupper(trim((string)($preflightResult['sqlState'] ?? '')));
+        return in_array($sqlState, $states, true);
     }
 
     private function isAiRepairEligible(array $result): bool
@@ -2449,6 +2460,13 @@ class FolioQueryController extends Controller
             return $this->buildAskPostgresConnectivityFailure();
         }
 
+        $params = is_array(Yii::$app->params ?? null) ? Yii::$app->params : [];
+        $twoLaneEnabled = !array_key_exists('nl2sqlTwoLaneEnabled', $params)
+            || (bool)$params['nl2sqlTwoLaneEnabled'];
+        if ($twoLaneEnabled) {
+            return $this->buildAskGenerationFailedResponse();
+        }
+
         Yii::$app->response->statusCode = 200;
         Yii::warning(
             'Ask generation recovered with continuation response category: generation_failure',
@@ -2483,9 +2501,31 @@ class FolioQueryController extends Controller
         ];
     }
 
+    private function buildAskGenerationFailedResponse(): array
+    {
+        return [
+            'errorType' => 'sql_generation_failed',
+            'message' => 'Report Explorer could not safely run this report. Please retry.',
+            'route' => 'generation_failed',
+            'routeReason' => 'ask_generation_failed',
+            'validationSummary' => [
+                'status' => 'rejected',
+                'repairAttempts' => 0,
+            ],
+            '_askEvidence' => [
+                'finalSql' => null,
+                'repairAttempts' => 0,
+                'validationStatus' => 'rejected',
+            ],
+        ];
+    }
+
     private function isAskPostgresConnectivityFailure(string $message, array $preflightResult = []): bool
     {
-        if ($this->isAskSqlStateClass($preflightResult, ['08'])) {
+        if ($this->isAskSqlStateClass($preflightResult, ['08'])
+            || ($this->isAskSqlStateClass($preflightResult, ['57'])
+                && !$this->isAskSqlState($preflightResult, ['57014']))
+        ) {
             return true;
         }
         return preg_match(

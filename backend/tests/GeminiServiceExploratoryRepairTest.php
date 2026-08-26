@@ -31,11 +31,11 @@ namespace yii\httpclient {
             $request = json_decode($this->content, true);
             TestTransport::$requests[] = $request;
             $response = array_shift(TestTransport::$responses);
-            $text = is_callable($response) ? $response($request) : $response;
-            if ($text === null) {
+            $fixture = is_callable($response) ? $response($request) : $response;
+            if ($fixture === null) {
                 throw new \RuntimeException('No queued Gemini response.');
             }
-            return new Response($text);
+            return new Response($fixture);
         }
     }
 
@@ -45,14 +45,15 @@ namespace yii\httpclient {
         public $statusCode = 200;
         public $content;
 
-        public function __construct(string $text)
+        public function __construct($fixture)
         {
-            $this->content = json_encode([
+            $payload = is_array($fixture) ? $fixture : [
                 'candidates' => [[
                     'finishReason' => 'STOP',
-                    'content' => ['parts' => [['text' => $text]]],
+                    'content' => ['parts' => [['text' => (string)$fixture]]],
                 ]],
-            ]);
+            ];
+            $this->content = json_encode($payload);
         }
     }
 
@@ -393,6 +394,32 @@ SQL;
 
 Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 $aiBuiltSql = 'SELECT ii.id AS title, ii.barcode FROM inventory.item__t ii LIMIT 100';
+
+TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii LIMIT 10')];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$directAiLane = GeminiService::generateSqlWithShadow(
+    'Create an ad hoc export of ten item identifiers.',
+    'Smith College',
+    null,
+    true
+);
+repairAssertSame('ai_built', $directAiLane['generationProvenance'] ?? null, 'Explicit direct AI generation must return AI-built provenance.');
+$directAiTransitions = telemetryEvents('nl2sql.lane_transition');
+repairAssertSame(1, count($directAiTransitions), 'Explicit direct AI generation must emit one transition event.');
+repairAssertSame('direct_ai', $directAiTransitions[0]['from'] ?? null, 'Explicit direct AI telemetry must not claim it came from a verified pattern.');
+
+TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii LIMIT 10')];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$noFamilyLane = GeminiService::generateSqlWithShadow(
+    'Create an ad hoc export of ten item identifiers.',
+    'Smith College'
+);
+repairAssertSame('ai_built', $noFamilyLane['generationProvenance'] ?? null, 'A no-family request must return AI-built provenance.');
+$noFamilyTransitions = telemetryEvents('nl2sql.lane_transition');
+repairAssertSame(1, count($noFamilyTransitions), 'A no-family request must emit one transition event.');
+repairAssertSame('no_matching_pattern', $noFamilyTransitions[0]['from'] ?? null, 'No-family telemetry must not claim it came from a verified pattern.');
 
 $missingSlotLane = generateTwoLaneCase(
     'Show me Smith College theses by this contributor with barcodes.',
@@ -1145,6 +1172,26 @@ try {
     repairAssertSame('policy_blocked', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Structured SQLSTATE class 28 must retain policy telemetry.');
 }
 
+TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$structuredPrivilegeThrown = false;
+try {
+    GeminiService::repairExploratorySqlAfterPreflight(
+        'Show items',
+        null,
+        ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+        'opaque database failure',
+        null,
+        [],
+        ['sqlState' => '42501', 'sqlStateClass' => '42']
+    );
+} catch (PolicyViolationException $exception) {
+    $structuredPrivilegeThrown = true;
+}
+repairAssertSame(true, $structuredPrivilegeThrown, 'Exact structured SQLSTATE 42501 must remain an authorization hard stop independent of message text.');
+repairAssertSame(0, count(TestTransport::$requests), 'Exact structured SQLSTATE 42501 must not make an AI provider request.');
+
 foreach ([
     ['53100', 'could not write to temporary file: No space left on device'],
     ['53300', 'remaining connection slots are reserved for roles with the SUPERUSER attribute'],
@@ -1175,6 +1222,27 @@ foreach ([
     }
 }
 
+TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$structuredAvailabilityThrown = false;
+try {
+    GeminiService::repairExploratorySqlAfterPreflight(
+        'Show items',
+        null,
+        ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+        'opaque database failure',
+        null,
+        [],
+        ['sqlState' => '57P01', 'sqlStateClass' => '57']
+    );
+} catch (\RuntimeException $exception) {
+    $structuredAvailabilityThrown = true;
+}
+repairAssertSame(true, $structuredAvailabilityThrown, 'Structured class 57 operator-intervention failures must stop as database availability failures.');
+repairAssertSame(0, count(TestTransport::$requests), 'Structured SQLSTATE 57P01 must not make an AI provider request.');
+repairAssertSame('connectivity_failure', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Structured SQLSTATE 57P01 must retain database availability telemetry.');
+
 foreach ([
     'SQLSTATE[57014]: Query canceled: canceling statement due to user request',
     'SQLSTATE[57014]: Query canceled: canceling statement due to statement timeout',
@@ -1197,6 +1265,26 @@ foreach ([
     }
 }
 
+TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$structuredCancellationThrown = false;
+try {
+    GeminiService::repairExploratorySqlAfterPreflight(
+        'Show items',
+        null,
+        ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+        'opaque database failure',
+        null,
+        [],
+        ['sqlState' => '57014', 'sqlStateClass' => '57']
+    );
+} catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
+    $structuredCancellationThrown = true;
+}
+repairAssertSame(true, $structuredCancellationThrown, 'Exact structured SQLSTATE 57014 must remain a cancellation independent of message text.');
+repairAssertSame(0, count(TestTransport::$requests), 'Exact structured SQLSTATE 57014 must not make an AI provider request.');
+
 TestTransport::$responses = [];
 $requestCount = count(TestTransport::$requests);
 try {
@@ -1212,6 +1300,37 @@ try {
 } catch (PolicyViolationException $exception) {
     repairAssertSame($requestCount, count(TestTransport::$requests), 'PostgreSQL permission failures should make no repair request.');
 }
+
+TestTransport::$responses = [
+    [
+        'candidates' => [[
+            'finishReason' => 'MAX_TOKENS',
+            'content' => ['parts' => [[
+                'text' => geminiText('SELECT ii.id FROM inventory.item__t ii'),
+            ]]],
+        ]],
+    ],
+];
+TestTransport::$requests = [];
+Yii::$logs = [];
+$repairTruncationThrown = false;
+try {
+    GeminiService::repairExploratorySqlAfterPreflight(
+        'Show item identifiers.',
+        'Smith College',
+        [
+            'sql' => 'SELECT ii.missing_column FROM inventory.item__t ii',
+            'repairAttempts' => 1,
+            'routeReason' => 'unsupported_query_family',
+        ],
+        'ERROR: column ii.missing_column does not exist'
+    );
+} catch (\RuntimeException $exception) {
+    $repairTruncationThrown = true;
+    repairAssertSame(true, GeminiService::isAiProviderFailureMessage($exception->getMessage()), 'Repair truncation must use the standard provider hard-stop contract.');
+}
+repairAssertSame(true, $repairTruncationThrown, 'A parseable MAX_TOKENS repair response must be rejected before SQL parsing.');
+repairAssertSame(1, count(TestTransport::$requests), 'A truncated repair response must consume only the real provider request that returned it.');
 
 TestTransport::$responses = [geminiText('SELECT ii.id FROM inventory.item__t ii')];
 Yii::$logs = [];

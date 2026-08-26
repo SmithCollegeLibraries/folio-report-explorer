@@ -176,7 +176,7 @@ final class AskGenerationEvidenceService
             $confidenceEvidence['semanticCoverageStatus'],
             ['limited', 'partial'],
             true
-        );
+        ) || ($semanticValidation['status'] ?? null) === 'advisory';
         return [
             'originalQuestion' => (string)($requestContext['prompt'] ?? $requestContext['originalQuestion'] ?? ''),
             'prompt' => (string)($requestContext['prompt'] ?? $requestContext['originalQuestion'] ?? ''),

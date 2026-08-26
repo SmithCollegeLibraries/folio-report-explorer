@@ -130,6 +130,24 @@ evidenceAssertSame(['purchase_date_basis', 'display_order'], $flagged['defaulted
 evidenceAssertSame(['purchase_date_basis'], $flagged['materialDefaultedAssumptionKeys'], 'Only known material defaults should be marked material.');
 evidenceAssertSame(true, $flagged['limitedSemanticCoverage'], 'Limited passing semantic coverage must remain confidence evidence.');
 
+$advisory = AskGenerationEvidenceService::build([
+    'route' => 'exploratory',
+    'mode' => 'exploratory',
+    'sql' => 'SELECT title FROM inventory.instance__t',
+    'generationProvenance' => 'ai_built',
+    'semanticValidation' => [
+        'status' => 'advisory',
+        'contractVersion' => 3,
+        'checkedRequirements' => [],
+    ],
+    'reviewRequired' => true,
+], ['prompt' => 'Show titles using a semantic shape the checker cannot fully verify']);
+evidenceAssertSame(
+    true,
+    $advisory['limitedSemanticCoverage'],
+    'A bounded advisory success must persist limited semantic coverage even when no coverageStatus field is present.'
+);
+
 $clarification = AskGenerationEvidenceService::build([
     'route' => 'clarification',
     'needsClarification' => true,

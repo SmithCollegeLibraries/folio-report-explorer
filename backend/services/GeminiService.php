@@ -484,7 +484,7 @@ class GeminiService
         string $familyKey = ''
     ): array {
         self::logNlTelemetry('nl2sql.lane_transition', [
-            'from' => 'verified_pattern',
+            'from' => self::aiBuiltSourceLane($reason),
             'to' => 'ai_built',
             'reason' => self::sanitizeTelemetryLabel($reason, 'canonical_generation_failed'),
             'familyKey' => $familyKey === ''
@@ -521,6 +521,20 @@ class GeminiService
             );
         }
         return $result;
+    }
+
+    private static function aiBuiltSourceLane(string $reason): string
+    {
+        if ($reason === 'user_requested_exploratory_generation') {
+            return 'direct_ai';
+        }
+        if (in_array($reason, [
+            'unsupported_query_family',
+            'canonical_path_unavailable_for_marc_source_records',
+        ], true)) {
+            return 'no_matching_pattern';
+        }
+        return 'verified_pattern';
     }
 
     private static function isHardCanonicalFailure(\Throwable $exception): bool
@@ -6341,7 +6355,7 @@ PROMPT;
             self::logExploratoryTerminalOutcome($terminalContext, 'connectivity_failure', 'database_connectivity');
             throw new \RuntimeException($preflightError);
         }
-        if (self::isPreflightCancellationFailure($preflightError)) {
+        if (self::isPreflightCancellationFailure($preflightError, $preflightResult)) {
             self::logExploratoryTerminalOutcome($terminalContext, 'cancelled', 'database_cancelled');
             throw new DatabaseQueryCancelledException();
         }
@@ -6517,6 +6531,12 @@ PROMPT;
             'nl2sql.exploratory_repair'
         );
         $data = json_decode($requestResult['response']->content, true);
+        $finishReason = strtoupper((string)($data['candidates'][0]['finishReason'] ?? ''));
+        if ($finishReason === 'MAX_TOKENS') {
+            throw new \RuntimeException(
+                'AI response was truncated because the query is too complex. Please retry.'
+            );
+        }
         $text = $data['candidates'][0]['content']['parts'][0]['text'] ?? '';
 
         try {
@@ -6935,7 +6955,10 @@ PROMPT;
 
     private static function isPreflightConnectivityFailure(string $error, array $preflightResult = []): bool
     {
-        if (self::isPreflightSqlStateClass($preflightResult, ['08'])) {
+        if (self::isPreflightSqlStateClass($preflightResult, ['08'])
+            || (self::isPreflightSqlStateClass($preflightResult, ['57'])
+                && !self::isPreflightSqlState($preflightResult, ['57014']))
+        ) {
             return true;
         }
         return preg_match(
@@ -6944,8 +6967,11 @@ PROMPT;
         ) === 1;
     }
 
-    private static function isPreflightCancellationFailure(string $error): bool
+    private static function isPreflightCancellationFailure(string $error, array $preflightResult = []): bool
     {
+        if (self::isPreflightSqlState($preflightResult, ['57014'])) {
+            return true;
+        }
         return preg_match(
             '/SQLSTATE\[57014\]|cancel(?:ing|ling)? statement due to|query (?:canceled|cancelled)/i',
             $error
@@ -6954,7 +6980,9 @@ PROMPT;
 
     private static function isPreflightPolicyFailure(string $error, array $preflightResult = []): bool
     {
-        if (self::isPreflightSqlStateClass($preflightResult, ['28'])) {
+        if (self::isPreflightSqlStateClass($preflightResult, ['28'])
+            || self::isPreflightSqlState($preflightResult, ['42501'])
+        ) {
             return true;
         }
         return preg_match(
@@ -6987,6 +7015,12 @@ PROMPT;
             $sqlStateClass = strlen($sqlState) >= 2 ? substr($sqlState, 0, 2) : '';
         }
         return in_array($sqlStateClass, $classes, true);
+    }
+
+    private static function isPreflightSqlState(array $preflightResult, array $states): bool
+    {
+        $sqlState = strtoupper(trim((string)($preflightResult['sqlState'] ?? '')));
+        return in_array($sqlState, $states, true);
     }
 
     private static function sanitizePreflightFailureCategory(string $error): string

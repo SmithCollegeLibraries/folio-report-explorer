@@ -76,6 +76,7 @@ namespace {
     Yii::$app = (object) [
         'response' => (object) ['statusCode' => 200, 'format' => null],
         'user' => (object) ['isGuest' => true, 'id' => null, 'identity' => null],
+        'params' => ['nl2sqlTwoLaneEnabled' => false],
     ];
 
     $controller = new \app\controllers\FolioQueryController('folio-query', null);
@@ -116,8 +117,8 @@ namespace {
         );
     }
 
-    // The same neutral wording as a plain InvalidArgumentException is a soft
-    // failure and must still recover with 200.
+    // The same neutral wording as a plain InvalidArgumentException retains the
+    // soft recovery contract only on the explicit rollback path.
     Yii::$app->response->statusCode = 200;
     $softResult = $continuation->invoke(
         $controller,

@@ -673,6 +673,29 @@ namespace {
     repairAssertSame('blocked', $structuredAuthorization['route'] ?? null, 'Structured SQLSTATE class 28 must retain policy behavior.');
     repairAssertSame(403, Yii::$app->response->statusCode, 'Structured SQLSTATE class 28 must retain forbidden status.');
 
+    Yii::$app->response->statusCode = 200;
+    $structuredPrivilegeRepairCalls = 0;
+    $structuredPrivilege = $validateAndRepair->invoke(
+        $controller,
+        ['sql' => 'SELECT title FROM inventory.instance__t', 'mode' => 'canonical', 'repairAttempts' => 0],
+        'Show titles',
+        'Smith College',
+        function (): array {
+            return [
+                'error' => 'opaque database failure',
+                'sqlState' => '42501',
+                'sqlStateClass' => '42',
+            ];
+        },
+        function () use (&$structuredPrivilegeRepairCalls): array {
+            $structuredPrivilegeRepairCalls++;
+            return ['sql' => 'SELECT should_not_run'];
+        }
+    );
+    repairAssertSame(0, $structuredPrivilegeRepairCalls, 'Exact structured SQLSTATE 42501 must stop before controller AI repair.');
+    repairAssertSame('blocked', $structuredPrivilege['route'] ?? null, 'Exact structured SQLSTATE 42501 must retain policy behavior.');
+    repairAssertSame(403, Yii::$app->response->statusCode, 'Exact structured SQLSTATE 42501 must retain forbidden status.');
+
     foreach ([
         ['53100', 'could not write to temporary file: No space left on device'],
         ['53300', 'remaining connection slots are reserved for roles with the SUPERUSER attribute'],
@@ -703,6 +726,29 @@ namespace {
         repairAssertSame(503, Yii::$app->response->statusCode, 'Structured SQLSTATE classes 53/54 must retain service-unavailable status.');
     }
 
+    Yii::$app->response->statusCode = 200;
+    $structuredAvailabilityRepairCalls = 0;
+    $structuredAvailability = $validateAndRepair->invoke(
+        $controller,
+        ['sql' => 'SELECT title FROM inventory.instance__t', 'mode' => 'canonical', 'repairAttempts' => 0],
+        'Show titles',
+        'Smith College',
+        function (): array {
+            return [
+                'error' => 'opaque database failure',
+                'sqlState' => '57P01',
+                'sqlStateClass' => '57',
+            ];
+        },
+        function () use (&$structuredAvailabilityRepairCalls): array {
+            $structuredAvailabilityRepairCalls++;
+            return ['sql' => 'SELECT should_not_run'];
+        }
+    );
+    repairAssertSame(0, $structuredAvailabilityRepairCalls, 'Structured SQLSTATE 57P01 must stop before controller AI repair.');
+    repairAssertSame('postgres_connectivity', $structuredAvailability['errorType'] ?? null, 'Structured SQLSTATE 57P01 must retain database availability behavior.');
+    repairAssertSame(200, Yii::$app->response->statusCode, 'Structured SQLSTATE 57P01 must retain the compatibility connectivity status.');
+
     $cancelRepairCalls = 0;
     try {
         $validateAndRepair->invoke(
@@ -726,6 +772,33 @@ namespace {
         repairAssertSame(true, $typedCancellation, 'SQLSTATE 57014 should become a typed database cancellation.');
     }
     repairAssertSame(0, $cancelRepairCalls, 'Database cancellation must never call Gemini repair.');
+
+    $structuredCancelRepairCalls = 0;
+    $structuredCancellationThrown = false;
+    try {
+        $validateAndRepair->invoke(
+            $controller,
+            ['sql' => 'SELECT title FROM inventory.instance__t', 'mode' => 'exploratory', 'route' => 'exploratory'],
+            'Show titles',
+            'Smith College',
+            function (): array {
+                return [
+                    'error' => 'opaque database failure',
+                    'sqlState' => '57014',
+                    'sqlStateClass' => '57',
+                ];
+            },
+            function () use (&$structuredCancelRepairCalls): array {
+                $structuredCancelRepairCalls++;
+                return ['sql' => 'SELECT should_not_run'];
+            }
+        );
+    } catch (\Throwable $exception) {
+        $structuredCancellationThrown = $exception instanceof \app\exceptions\DatabaseQueryCancelledException
+            || $exception->getPrevious() instanceof \app\exceptions\DatabaseQueryCancelledException;
+    }
+    repairAssertSame(true, $structuredCancellationThrown, 'Exact structured SQLSTATE 57014 must remain a cancellation independent of message text.');
+    repairAssertSame(0, $structuredCancelRepairCalls, 'Exact structured SQLSTATE 57014 must never call Gemini repair.');
 
     $continuation = new ReflectionMethod($controller, 'buildAskContinuationFromFailure');
     $cancelResponse = $continuation->invoke(
@@ -1500,6 +1573,38 @@ namespace {
         $genericProvenanceRecorder->received['provenance']['generationProvenance'] ?? null,
         'Generic executable SQL must persist the same trusted provenance shown to the user.'
     );
+
+    foreach ([true, false] as $twoLaneEnabled) {
+        Yii::$app->params['nl2sqlTwoLaneEnabled'] = $twoLaneEnabled;
+        \app\services\GeminiService::$generationFailure = new \RuntimeException('unclassified generation exception');
+        \app\services\GeminiService::$generationCalls = [];
+        \app\services\GeminiService::$preflightRepairCalls = [];
+        \app\services\SqlPreflightService::$calls = [];
+        \app\services\SqlPreflightService::$results = [];
+        Yii::$app->request = new TestRequest([
+            'prompt' => 'Show item identifiers after an unexpected generator failure.',
+            'campus' => 'Smith College',
+            'includeSuggestions' => false,
+        ]);
+        Yii::$app->response->statusCode = 200;
+        $genericFailureController = new TestableFolioQueryController('folio-query', null);
+        $genericFailureController->reviewService = new CapturingAdministratorReviewService();
+        $genericFailureResponse = $genericFailureController->actionNl();
+
+        repairAssertSame(1, count(\app\services\GeminiService::$generationCalls), 'Generic runtime failures must cross the public generation boundary once.');
+        if ($twoLaneEnabled) {
+            repairAssertSame('sql_generation_failed', $genericFailureResponse['errorType'] ?? null, 'Enabled two-lane mode must convert an unclassified runtime exception to a typed terminal failure.');
+            repairAssertSame('generation_failed', $genericFailureResponse['route'] ?? null, 'Enabled two-lane mode must not select rollback recovery for an unclassified runtime exception.');
+            repairAssertSame('Report Explorer could not safely run this report. Please retry.', $genericFailureResponse['message'] ?? null, 'Enabled generic failures must use concise Retry-only copy.');
+            repairAssertPublicHardFailure($genericFailureResponse, 'enabled generic generation failure');
+        } else {
+            repairAssertSame(null, $genericFailureResponse['errorType'] ?? null, 'Rollback mode must retain the legacy untyped recovery response.');
+            repairAssertSame('exploratory_recovery', $genericFailureResponse['route'] ?? null, 'Rollback mode must retain the legacy recovery route.');
+            repairAssertSame(true, isset($genericFailureResponse['recoveryContext']), 'Rollback mode must retain its recovery context.');
+        }
+    }
+    \app\services\GeminiService::$generationFailure = null;
+    Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
     foreach ([
         [
