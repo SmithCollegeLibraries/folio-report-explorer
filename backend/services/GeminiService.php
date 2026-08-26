@@ -402,9 +402,12 @@ class GeminiService
         }
 
         if ($twoLaneEnabled && isset($primary['sql']) && !isset($primary['generationProvenance'])) {
+            $provenance = !empty(Yii::$app->params['nl2sqlForceLegacy'])
+                ? AskResponseContractService::PROVENANCE_AI_BUILT
+                : AskResponseContractService::PROVENANCE_VERIFIED_PATTERN;
             $primary = AskResponseContractService::withGenerationProvenance(
                 $primary,
-                AskResponseContractService::PROVENANCE_VERIFIED_PATTERN
+                $provenance
             );
         }
 
@@ -733,7 +736,10 @@ class GeminiService
         array $assumptions,
         int $repairAttempts
     ): array {
-        $result['assumptions'] = $assumptions;
+        $result['assumptions'] = self::mergeExploratoryAssumptionLists(
+            $assumptions,
+            is_array($result['assumptions'] ?? null) ? $result['assumptions'] : []
+        );
         $result['repairAttempts'] = $repairAttempts;
         $result['validationSummary'] = [
             'status' => 'validated',
@@ -744,6 +750,22 @@ class GeminiService
         ];
 
         return $result;
+    }
+
+    private static function mergeExploratoryAssumptionLists(array $defaults, array $resultAssumptions): array
+    {
+        $merged = [];
+        foreach (array_merge($defaults, $resultAssumptions) as $assumption) {
+            if (!is_array($assumption)) {
+                continue;
+            }
+            $key = trim((string)($assumption['key'] ?? ''));
+            if ($key === '') {
+                continue;
+            }
+            $merged[$key] = $assumption;
+        }
+        return array_values($merged);
     }
 
     private static function buildExploratoryRecoveryResponse(
@@ -6788,6 +6810,8 @@ PROMPT;
                         : [],
                 ];
                 $result['reviewRequired'] = true;
+                $result['explanation'] = 'AI reviewed this interpretation, but some requested details '
+                    . 'could not be independently verified.';
                 $disclosures = is_array($result['reportDisclosures'] ?? null)
                     ? $result['reportDisclosures']
                     : [];

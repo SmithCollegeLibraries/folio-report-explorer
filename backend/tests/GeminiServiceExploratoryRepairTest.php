@@ -479,6 +479,17 @@ repairAssertSame('ai_built', $inventoryClarificationLane['generationProvenance']
 repairAssertSame(false, isset($inventoryClarificationLane['needsClarification']), 'Inventory compiler clarification outcomes must not reach the user in enabled mode.');
 repairAssertSame(2, count(TestTransport::$requests), 'Inventory compiler clarification outcomes must make one intent call and one AI-built generation call.');
 
+Yii::$app->params['nl2sqlForceLegacy'] = true;
+$forcedLegacyLane = generateTwoLaneCase(
+    $wrongFamilyQuestion,
+    [geminiText($aiBuiltSql)]
+);
+repairAssertSame($aiBuiltSql, $forcedLegacyLane['sql'] ?? null, 'Forced legacy generation must return the AI-built SQL candidate.');
+repairAssertSame('ai_built', $forcedLegacyLane['generationProvenance'] ?? null, 'Forced legacy freeform SQL must never be labeled verified.');
+repairAssertSame(false, ($forcedLegacyLane['generationProvenance'] ?? null) === 'verified_pattern', 'Forced legacy freeform SQL must not claim verified-pattern provenance.');
+repairAssertSame(1, count(TestTransport::$requests), 'Forced legacy generation should make exactly one AI request.');
+Yii::$app->params['nl2sqlForceLegacy'] = false;
+
 Yii::$logs = [];
 TestTransport::$responses = [];
 TestTransport::$requests = [];
@@ -555,6 +566,10 @@ repairAssertSame('ai_built', $unchangedSeededLane['generationProvenance'] ?? nul
 repairAssertSame('advisory', $unchangedSeededLane['semanticValidation']['status'] ?? null, 'An unchanged candidate with unverified explicit values must carry advisory validation.');
 repairAssertSame(true, $unchangedSeededLane['reviewRequired'] ?? null, 'An unchanged advisory candidate must require review.');
 repairAssertSame(2, count(TestTransport::$requests), 'An unchanged seeded candidate must use both bounded AI reviews.');
+$seededAdvisoryAssumptionsJson = json_encode($unchangedSeededLane['assumptions'] ?? []);
+repairAssertContains('Explicit report identifier', $seededAdvisoryAssumptionsJson, 'Seeded advisory results must retain a safe assumption for each unverified requirement.');
+repairAssertContains('not_fully_verified', $seededAdvisoryAssumptionsJson, 'Seeded advisory assumptions must disclose their unverified status.');
+repairAssertSame(false, strpos($seededAdvisoryAssumptionsJson, 'inst.hrid') !== false, 'Seeded advisory assumptions must not expose SQL predicates.');
 
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
@@ -703,6 +718,10 @@ repairAssertSame(3, count(TestTransport::$requests), 'Resolved-filter exhaustion
 repairAssertSame(false, ($resolvedFilterExhausted['route'] ?? null) === 'exploratory_recovery', 'Resolved-filter advisory success must not become recovery.');
 repairAssertSame(false, isset($resolvedFilterExhausted['needsClarification']), 'Resolved-filter advisory success must not become clarification.');
 repairAssertSame(false, strpos(json_encode($resolvedFilterExhausted), 'top-level WHERE clause') !== false, 'Resolved-filter advisory output must not expose validator guidance.');
+$referenceAdvisoryAssumptionsJson = json_encode($resolvedFilterExhausted['assumptions'] ?? []);
+repairAssertContains('Library and material filters', $referenceAdvisoryAssumptionsJson, 'Direct advisory results must retain a safe assumption for each unverified requirement.');
+repairAssertContains('not_fully_verified', $referenceAdvisoryAssumptionsJson, 'Direct advisory assumptions must disclose their unverified status.');
+repairAssertSame(false, strpos($referenceAdvisoryAssumptionsJson, 'top-level WHERE clause') !== false, 'Direct advisory assumptions must not expose validator guidance.');
 repairAssertContains('unknown_table', $repairPayload, 'The repair request should contain the safe validation category.');
 repairAssertContains('None documented.', $repairPayload, 'The repair request should safely represent absent assumptions.');
 repairAssertContains('SCOPED SCHEMA', $repairPayload, 'The repair request should contain fresh scoped schema context.');

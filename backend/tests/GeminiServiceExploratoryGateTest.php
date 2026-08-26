@@ -67,6 +67,14 @@ namespace app\services {
         {
             return $prompt;
         }
+
+        public static function appendGenerationContextToPrompt(
+            string $prompt,
+            array $referenceResolution,
+            ?array $ambiguity = null
+        ): string {
+            return self::appendGuidanceToPrompt($prompt, $referenceResolution);
+        }
     }
 
     class FolioSchemaService
@@ -251,6 +259,8 @@ $inventoryFallbackInvoker = \Closure::bind(
     null,
     GeminiService::class
 );
+$previousTwoLaneEnabled = Yii::$app->params['nl2sqlTwoLaneEnabled'] ?? null;
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
 $inventoryFallback = $inventoryFallbackInvoker(
     [
         'familyKey' => 'inventory_library_location_listing',
@@ -266,6 +276,11 @@ $inventoryFallback = $inventoryFallbackInvoker(
     'Show current inventory.',
     []
 );
+if ($previousTwoLaneEnabled === null) {
+    unset(Yii::$app->params['nl2sqlTwoLaneEnabled']);
+} else {
+    Yii::$app->params['nl2sqlTwoLaneEnabled'] = $previousTwoLaneEnabled;
+}
 assertContainsText(
     'reported scope and assumptions',
     $inventoryFallback['message'] ?? '',

@@ -255,52 +255,61 @@ assertSameValue(
 $mismatchCompilerCalled = false;
 $mismatchFallbackCalls = 0;
 Yii::$app->params['nl2sqlForceLegacy'] = false;
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
-assertThrowsRuntimeException(
-    function () use ($familyRouteHelper, &$mismatchCompilerCalled, &$mismatchFallbackCalls): void {
-        $familyRouteHelper->invoke(
-            null,
-            [
-                'familyKey' => 'circulation_top_items',
-                'slots' => [
-                    'campus' => 'Smith College',
-                    'library' => 'Neilson Library',
-                    'material_type' => 'book',
-                    'requested_outputs' => ['ranked_circulation_items'],
-                ],
+$mismatchInvocation = function () use ($familyRouteHelper, &$mismatchCompilerCalled, &$mismatchFallbackCalls): array {
+    return $familyRouteHelper->invoke(
+        null,
+        [
+            'familyKey' => 'circulation_top_items',
+            'slots' => [
+                'campus' => 'Smith College',
+                'library' => 'Neilson Library',
+                'material_type' => 'book',
+                'requested_outputs' => ['ranked_circulation_items'],
             ],
-            [
-                'familyKey' => 'inventory_library_location_listing',
-            ],
-            'List of materials in Neilson Library. Include title and barcode.',
-            'Smith College',
-            [
-                'model' => 'test-model',
-                'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
-                'promptFingerprint' => 'request-path-mismatch-fingerprint',
-                'finishReason' => 'STOP',
-                'attempts' => 1,
-                'elapsedMs' => 5,
-            ],
-            function () use (&$mismatchCompilerCalled): array {
-                $mismatchCompilerCalled = true;
-                return [
-                    'sql' => 'SELECT should_not_run',
-                ];
-            },
-            function () use (&$mismatchFallbackCalls): array {
-                $mismatchFallbackCalls++;
-                return [
-                    'sql' => 'SELECT mismatch_fallback_stub',
-                    'explanation' => 'Family mismatch fallback stub.',
-                    'dataSource' => 'folio',
-                ];
-            }
-        );
-    },
-    'legacy fallback is disabled for this route',
-    'Covered-family mismatches should fail safe instead of silently downgrading to legacy freeform SQL.'
-);
+        ],
+        [
+            'familyKey' => 'inventory_library_location_listing',
+        ],
+        'List of materials in Neilson Library. Include title and barcode.',
+        'Smith College',
+        [
+            'model' => 'test-model',
+            'promptVersion' => GeminiService::FAMILY_SLOT_PROMPT_VERSION,
+            'promptFingerprint' => 'request-path-mismatch-fingerprint',
+            'finishReason' => 'STOP',
+            'attempts' => 1,
+            'elapsedMs' => 5,
+        ],
+        function () use (&$mismatchCompilerCalled): array {
+            $mismatchCompilerCalled = true;
+            return [
+                'sql' => 'SELECT should_not_run',
+            ];
+        },
+        function () use (&$mismatchFallbackCalls): array {
+            $mismatchFallbackCalls++;
+            return [
+                'sql' => 'SELECT mismatch_fallback_stub',
+                'explanation' => 'Family mismatch fallback stub.',
+                'dataSource' => 'folio',
+            ];
+        }
+    );
+};
+
+try {
+    $mismatchInvocation();
+    fwrite(STDERR, "Expected enabled family mismatch Lane 2 signal.\n");
+    exit(1);
+} catch (\app\exceptions\CanonicalLaneFallbackException $exception) {
+    assertSameValue(
+        'canonical_family_contract_mismatch',
+        $exception->getSafeReason(),
+        'Enabled covered-family mismatches must emit the typed AI-lane signal.'
+    );
+}
 
 assertSameValue(
     false,
@@ -310,7 +319,27 @@ assertSameValue(
 assertSameValue(
     0,
     $mismatchFallbackCalls,
-    'The request-path family router should not invoke legacy fallback when the family guard is active.'
+    'The request-path family router should not invoke legacy fallback before the top-level AI lane.'
+);
+
+Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
+assertThrowsRuntimeException(
+    function () use ($mismatchInvocation): void {
+        $mismatchInvocation();
+    },
+    'legacy fallback is disabled for this route',
+    'Disabling two-lane routing must retain the strict covered-family mismatch blocker.'
+);
+
+assertSameValue(
+    false,
+    $mismatchCompilerCalled,
+    'Rollback mismatch handling must not dispatch the wrong model-returned family.'
+);
+assertSameValue(
+    0,
+    $mismatchFallbackCalls,
+    'Rollback mismatch handling must keep legacy fallback blocked without the emergency override.'
 );
 
 Yii::$app->params['nl2sqlForceLegacy'] = true;
