@@ -93,8 +93,16 @@ $postPreflightParameters = array_map(function (ReflectionParameter $parameter): 
     return $parameter->getName();
 }, (new ReflectionMethod(GeminiService::class, 'repairExploratorySqlAfterPreflight'))->getParameters());
 assertGuardTrue(
-    $postPreflightParameters === ['originalQuestion', 'campus', 'currentResult', 'preflightError', 'generationPrompt', 'resolvedFilters'],
-    'Post-preflight repair must preserve the raw/generation prompt ordering and append resolved filters.'
+    $postPreflightParameters === [
+        'originalQuestion',
+        'campus',
+        'currentResult',
+        'preflightError',
+        'generationPrompt',
+        'resolvedFilters',
+        'preflightResult',
+    ],
+    'Post-preflight repair must preserve existing argument ordering and append structured preflight context.'
 );
 
 $resolvedFilterValidator = new ReflectionMethod(GeminiService::class, 'validateResolvedReferenceSql');

@@ -137,11 +137,39 @@ assertSameValue(
     $errorEstimate['error'] ?? null,
     'Preflight should surface the useful PostgreSQL error text when EXPLAIN rejects invalid SQL.'
 );
+assertSameValue('42883', $errorEstimate['sqlState'] ?? null, 'Preflight should preserve the PostgreSQL SQLSTATE alongside normalized error text.');
+assertSameValue('42', $errorEstimate['sqlStateClass'] ?? null, 'Preflight should preserve the PostgreSQL SQLSTATE class alongside normalized error text.');
 assertSameValue(
     ['SET statement_timeout = 10000', 'SET statement_timeout = 1800000'],
     $errorDb->executedCommands,
     'Preflight should restore the configured timeout even when EXPLAIN fails.'
 );
+
+foreach ([
+    ['08P01', 'invalid frontend protocol message'],
+    ['28000', 'role "report_reader" is not permitted to log in'],
+    ['53100', 'could not write to temporary file: No space left on device'],
+    ['53300', 'remaining connection slots are reserved for roles with the SUPERUSER attribute'],
+    ['54011', 'target lists can have at most 1664 entries'],
+    ['54023', 'cannot pass more than 100 arguments to a function'],
+] as $sqlStateCase) {
+    $sqlState = $sqlStateCase[0];
+    $detail = $sqlStateCase[1];
+    $sqlStateDb = new FakeSqlPreflightDb(
+        null,
+        new RuntimeException("SQLSTATE[{$sqlState}]: PostgreSQL failure: 7 ERROR:  {$detail}\nDETAIL: hidden driver detail")
+    );
+
+    $sqlStateEstimate = $serviceClass::estimateQueryComplexity(
+        $sqlStateDb,
+        'SELECT candidate_sql',
+        1800000
+    );
+
+    assertSameValue($detail, $sqlStateEstimate['error'] ?? null, 'Preflight should retain normalized PostgreSQL detail for every structured hard-failure family.');
+    assertSameValue($sqlState, $sqlStateEstimate['sqlState'] ?? null, 'Preflight should retain the exact PostgreSQL SQLSTATE for downstream hard-stop routing.');
+    assertSameValue(substr($sqlState, 0, 2), $sqlStateEstimate['sqlStateClass'] ?? null, 'Preflight should retain the PostgreSQL SQLSTATE class for downstream hard-stop routing.');
+}
 
 $timeoutDb = new FakeSqlPreflightDb(
     null,

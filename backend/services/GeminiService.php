@@ -3390,7 +3390,8 @@ GUIDANCE;
     {
         return preg_match(
             '/API key not configured|provider failure|AI (?:API error|request failed)|API request failed|'
-                . 'OpenAI fallback (?:request )?failed|RESOURCE_EXHAUSTED|quota|billing|rate limit|HTTP\s*(?:401|403|429)/i',
+                . 'OpenAI fallback (?:request )?failed|RESOURCE_EXHAUSTED|MAX_TOKENS|AI (?:intent )?response was truncated|'
+                . 'quota|billing|rate limit|HTTP\s*(?:401|403|429)/i',
             $message
         ) === 1;
     }
@@ -6305,7 +6306,8 @@ PROMPT;
         array $currentResult,
         string $preflightError,
         ?string $generationPrompt = null,
-        array $resolvedFilters = []
+        array $resolvedFilters = [],
+        array $preflightResult = []
     ): array {
         $generationPrompt = $generationPrompt === null ? $originalQuestion : $generationPrompt;
         if (empty($resolvedFilters)) {
@@ -6318,7 +6320,7 @@ PROMPT;
             'route' => $currentResult['route'] ?? 'exploratory',
             'routeReason' => $currentResult['routeReason'] ?? 'preflight_validation_failed',
         ];
-        if (self::isPreflightConnectivityFailure($preflightError)) {
+        if (self::isPreflightConnectivityFailure($preflightError, $preflightResult)) {
             self::logExploratoryTerminalOutcome($terminalContext, 'connectivity_failure', 'database_connectivity');
             throw new \RuntimeException($preflightError);
         }
@@ -6326,11 +6328,11 @@ PROMPT;
             self::logExploratoryTerminalOutcome($terminalContext, 'cancelled', 'database_cancelled');
             throw new DatabaseQueryCancelledException();
         }
-        if (self::isPreflightPolicyFailure($preflightError)) {
+        if (self::isPreflightPolicyFailure($preflightError, $preflightResult)) {
             self::logExploratoryTerminalOutcome($terminalContext, 'policy_blocked', 'policy_blocked');
             throw new \app\exceptions\PolicyViolationException('Database access policy blocked query validation.');
         }
-        if (self::isPreflightResourceFailure($preflightError)) {
+        if (self::isPreflightResourceFailure($preflightError, $preflightResult)) {
             self::logExploratoryTerminalOutcome($terminalContext, 'resource_limited', 'resource_limit');
             throw new \RuntimeException('Database validation exceeded available resources or configured limits.');
         }
@@ -6914,8 +6916,11 @@ PROMPT;
         return substr($label, 0, 120);
     }
 
-    private static function isPreflightConnectivityFailure(string $error): bool
+    private static function isPreflightConnectivityFailure(string $error, array $preflightResult = []): bool
     {
+        if (self::isPreflightSqlStateClass($preflightResult, ['08'])) {
+            return true;
+        }
         return preg_match(
             '/SQLSTATE\[08[0-9A-Z]{3}\]|server closed the connection|connection (?:refused|reset|failed|does not exist|is closed)|could not connect|no connection to the server/i',
             $error
@@ -6930,8 +6935,11 @@ PROMPT;
         ) === 1;
     }
 
-    private static function isPreflightPolicyFailure(string $error): bool
+    private static function isPreflightPolicyFailure(string $error, array $preflightResult = []): bool
     {
+        if (self::isPreflightSqlStateClass($preflightResult, ['28'])) {
+            return true;
+        }
         return preg_match(
             '/SQLSTATE\[(?:28[0-9A-Z]{3}|42501)\]|password authentication failed|invalid authorization specification|'
                 . 'permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
@@ -6939,8 +6947,11 @@ PROMPT;
         ) === 1;
     }
 
-    private static function isPreflightResourceFailure(string $error): bool
+    private static function isPreflightResourceFailure(string $error, array $preflightResult = []): bool
     {
+        if (self::isPreflightSqlStateClass($preflightResult, ['53', '54'])) {
+            return true;
+        }
         return preg_match(
             '/SQLSTATE\[(?:53|54)[0-9A-Z]{3}\]|resource exhausted|out of memory|disk full|too many connections|'
                 . 'insufficient resources|configuration limit exceeded|program limit exceeded|stack depth limit exceeded|'
@@ -6949,6 +6960,16 @@ PROMPT;
                 . '(?:configured|complexity|resource|row|cost)\s+limit\s+(?:exceeded|reached)/i',
             $error
         ) === 1;
+    }
+
+    private static function isPreflightSqlStateClass(array $preflightResult, array $classes): bool
+    {
+        $sqlStateClass = strtoupper(trim((string)($preflightResult['sqlStateClass'] ?? '')));
+        if ($sqlStateClass === '') {
+            $sqlState = strtoupper(trim((string)($preflightResult['sqlState'] ?? '')));
+            $sqlStateClass = strlen($sqlState) >= 2 ? substr($sqlState, 0, 2) : '';
+        }
+        return in_array($sqlStateClass, $classes, true);
     }
 
     private static function sanitizePreflightFailureCategory(string $error): string

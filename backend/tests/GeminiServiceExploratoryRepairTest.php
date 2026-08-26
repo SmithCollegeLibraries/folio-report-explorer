@@ -1083,6 +1083,26 @@ foreach ([
     }
 }
 
+TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+TestTransport::$requests = [];
+Yii::$logs = [];
+try {
+    GeminiService::repairExploratorySqlAfterPreflight(
+        'Show items',
+        null,
+        ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+        'invalid frontend protocol message',
+        null,
+        [],
+        ['sqlState' => '08P01', 'sqlStateClass' => '08']
+    );
+    fwrite(STDERR, "Structured SQLSTATE class 08 must not be repaired.\n");
+    exit(1);
+} catch (\RuntimeException $exception) {
+    repairAssertSame(0, count(TestTransport::$requests), 'Structured SQLSTATE class 08 must not make an AI provider request.');
+    repairAssertSame('connectivity_failure', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Structured SQLSTATE class 08 must retain connectivity telemetry.');
+}
+
 foreach ([
     'SQLSTATE[28P01]: password authentication failed',
     'password authentication failed for user report_reader',
@@ -1102,6 +1122,56 @@ foreach ([
     } catch (PolicyViolationException $exception) {
         repairAssertSame(0, count(TestTransport::$requests), 'Normalized authentication failures must not make an AI repair request.');
         repairAssertSame('policy_blocked', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Normalized authentication failures should emit their distinct terminal outcome.');
+    }
+}
+
+TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+TestTransport::$requests = [];
+Yii::$logs = [];
+try {
+    GeminiService::repairExploratorySqlAfterPreflight(
+        'Show items',
+        null,
+        ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+        'role "report_reader" is not permitted to log in',
+        null,
+        [],
+        ['sqlState' => '28000', 'sqlStateClass' => '28']
+    );
+    fwrite(STDERR, "Structured SQLSTATE class 28 must not be repaired.\n");
+    exit(1);
+} catch (PolicyViolationException $exception) {
+    repairAssertSame(0, count(TestTransport::$requests), 'Structured SQLSTATE class 28 must not make an AI provider request.');
+    repairAssertSame('policy_blocked', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Structured SQLSTATE class 28 must retain policy telemetry.');
+}
+
+foreach ([
+    ['53100', 'could not write to temporary file: No space left on device'],
+    ['53300', 'remaining connection slots are reserved for roles with the SUPERUSER attribute'],
+    ['54011', 'target lists can have at most 1664 entries'],
+    ['54023', 'cannot pass more than 100 arguments to a function'],
+] as $structuredResourceCase) {
+    TestTransport::$responses = [geminiText('SELECT should_not_run FROM inventory.item__t')];
+    TestTransport::$requests = [];
+    Yii::$logs = [];
+    try {
+        GeminiService::repairExploratorySqlAfterPreflight(
+            'Show items',
+            null,
+            ['sql' => 'SELECT id FROM inventory.item__t', 'repairAttempts' => 0],
+            $structuredResourceCase[1],
+            null,
+            [],
+            [
+                'sqlState' => $structuredResourceCase[0],
+                'sqlStateClass' => substr($structuredResourceCase[0], 0, 2),
+            ]
+        );
+        fwrite(STDERR, "Structured SQLSTATE classes 53/54 must not be repaired.\n");
+        exit(1);
+    } catch (\RuntimeException $exception) {
+        repairAssertSame(0, count(TestTransport::$requests), 'Structured SQLSTATE classes 53/54 must not make an AI provider request.');
+        repairAssertSame('resource_limited', terminalTelemetryOutcomes()[0]['outcome'] ?? null, 'Structured SQLSTATE classes 53/54 must retain resource-limit telemetry.');
     }
 }
 

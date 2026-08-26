@@ -53,6 +53,8 @@ foreach ([
     'AI API error: quota exceeded',
     'AI request failed: provider unavailable',
     'OpenAI fallback request failed: connection reset',
+    'MAX_TOKENS',
+    'The AI response was truncated because the query is too complex. Try simplifying your request or asking for fewer fields.',
 ] as $providerFailure) {
     assertSameValue(
         true,

@@ -17,7 +17,8 @@ class SqlPreflightService
      * @param int $queryTimeoutMs
      * @param int $preflightTimeoutMs
      * @param array $params
-     * @return array|null ['rows' => int|null, 'cost' => float|null] or ['error' => string]
+     * @return array|null ['rows' => int|null, 'cost' => float|null] or
+     *   ['error' => string, 'sqlState' => string?, 'sqlStateClass' => string?]
      */
     public static function estimateQueryComplexity($db, string $sql, int $queryTimeoutMs, int $preflightTimeoutMs = 10000, array $params = [])
     {
@@ -81,10 +82,45 @@ class SqlPreflightService
             if (preg_match('/SQLSTATE\[57014\]|statement timeout|cancel(?:ing|ling)? statement|query (?:canceled|cancelled)/i', $msg) === 1) {
                 throw new DatabaseQueryCancelledException($e);
             }
+            $sqlState = self::extractSqlState($e);
             if (preg_match('/ERROR:\s*(.+?)(?:\n|HINT:|DETAIL:|$)/s', $msg, $matches) === 1) {
-                return ['error' => trim((string) ($matches[1] ?? ''))];
+                return self::withSqlState(
+                    ['error' => trim((string) ($matches[1] ?? ''))],
+                    $sqlState
+                );
             }
-            return ['error' => $msg];
+            return self::withSqlState(['error' => $msg], $sqlState);
         }
+    }
+
+    private static function extractSqlState(\Throwable $exception): ?string
+    {
+        if (
+            $exception instanceof \PDOException
+            && is_array($exception->errorInfo)
+            && isset($exception->errorInfo[0])
+        ) {
+            $sqlState = strtoupper(trim((string)$exception->errorInfo[0]));
+            if (preg_match('/^[0-9A-Z]{5}$/', $sqlState) === 1) {
+                return $sqlState;
+            }
+        }
+
+        if (preg_match('/SQLSTATE\[([0-9A-Z]{5})\]/i', $exception->getMessage(), $matches) === 1) {
+            return strtoupper((string)$matches[1]);
+        }
+
+        return null;
+    }
+
+    private static function withSqlState(array $result, ?string $sqlState): array
+    {
+        if ($sqlState === null) {
+            return $result;
+        }
+
+        $result['sqlState'] = $sqlState;
+        $result['sqlStateClass'] = substr($sqlState, 0, 2);
+        return $result;
     }
 }

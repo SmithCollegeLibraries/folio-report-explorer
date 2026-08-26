@@ -318,3 +318,155 @@ The output continues to include only the pre-existing PHP 8.5 `ReflectionMethod:
 - The provider classifier covers the service's missing-key, Gemini request/API, OpenAI fallback, quota/billing/rate-limit, resource-exhaustion, and provider HTTP authorization/throttling formats; a negative assertion prevents a normalized database connectivity message from being mislabeled as an AI provider failure.
 - The dedicated provider response does not reuse `buildAskContinuationFromFailure()`, so legacy exploratory recovery fields cannot leak into this path.
 - No functional blocker found. Unrelated dirty reports, cache JSON files, design/plan files, and the SQL dump remain untouched and unstaged.
+
+## Independent review fix round 2
+
+### Findings and implementation
+
+- Replaced dependence on finite normalized-message matching with a structured preflight contract. `SqlPreflightService` now returns `sqlState` and `sqlStateClass` beside its normalized safe `error` text, sourcing the state from PDO error information when available and otherwise from the original exception message.
+- The controller classifies structured SQLSTATE class `08` as connectivity, class `28` as authorization/policy, and classes `53`/`54` as resource/program limits before invoking any repair callback.
+- The controller passes the full preflight result through an optional trailing argument to `GeminiService::repairExploratorySqlAfterPreflight()`. Gemini independently repeats the class checks before constructing or invoking its repair operation.
+- Existing argument order remains unchanged and `preflightResult` is optional and last. Existing message-only test doubles and callers continue through the prior message classifiers.
+- Added explicit zero-call behavior coverage for PostgreSQL `08P01` protocol violation, `28000` role-not-permitted login, `53100` no-space, `53300` reserved connection slots, `54011` maximum columns, and `54023` maximum arguments in both controller and Gemini behavior suites.
+- Extended the provider-hard-failure classifier for `MAX_TOKENS` and Gemini's `The AI response was truncated...` exception. Both now finalize as the field-clean HTTP 503 `ai_provider_failure` response.
+
+### RED evidence: structured SQLSTATE retention and routing
+
+Commands:
+
+```bash
+php -l backend/tests/SqlPreflightServiceTest.php && php backend/tests/SqlPreflightServiceTest.php
+php -l backend/tests/FolioQueryControllerExploratoryRepairTest.php && php backend/tests/FolioQueryControllerExploratoryRepairTest.php
+php -l backend/tests/GeminiServiceExploratoryRepairTest.php && php backend/tests/GeminiServiceExploratoryRepairTest.php
+```
+
+Output:
+
+```text
+No syntax errors detected in backend/tests/SqlPreflightServiceTest.php
+Preflight should preserve the PostgreSQL SQLSTATE alongside normalized error text.
+Expected: '42883'
+Actual: NULL
+
+No syntax errors detected in backend/tests/FolioQueryControllerExploratoryRepairTest.php
+Structured SQLSTATE class 08 must stop before controller AI repair.
+Expected: 0
+Actual: 2
+
+No syntax errors detected in backend/tests/GeminiServiceExploratoryRepairTest.php
+Structured SQLSTATE class 08 must not be repaired.
+```
+
+These failures prove the state was absent at the preflight boundary and ignored by both downstream layers.
+
+### GREEN evidence: structured SQLSTATE retention and routing
+
+Commands:
+
+```bash
+php -l backend/services/SqlPreflightService.php && php backend/tests/SqlPreflightServiceTest.php
+php -l backend/controllers/FolioQueryController.php && php backend/tests/FolioQueryControllerExploratoryRepairTest.php
+php -l backend/services/GeminiService.php && php backend/tests/GeminiServiceExploratoryRepairTest.php
+```
+
+Output:
+
+```text
+No syntax errors detected in backend/services/SqlPreflightService.php
+SqlPreflightService test passed
+No syntax errors detected in backend/controllers/FolioQueryController.php
+FolioQueryController exploratory repair test passed
+No syntax errors detected in backend/services/GeminiService.php
+GeminiService exploratory repair test passed
+```
+
+### RED evidence: provider truncation contract
+
+Commands:
+
+```bash
+php -l backend/tests/FolioQueryControllerExploratoryRepairTest.php && php backend/tests/FolioQueryControllerExploratoryRepairTest.php
+php -l backend/tests/GeminiServiceTimeoutClassificationTest.php && php backend/tests/GeminiServiceTimeoutClassificationTest.php
+```
+
+Output:
+
+```text
+No syntax errors detected in backend/tests/FolioQueryControllerExploratoryRepairTest.php
+Provider repair failures must retain a distinct hard-failure type.
+Expected: 'ai_provider_failure'
+Actual: NULL
+
+No syntax errors detected in backend/tests/GeminiServiceTimeoutClassificationTest.php
+GeminiService should classify its provider exception messages for hard controller handling.
+Expected: true
+Actual: false
+```
+
+### GREEN evidence: provider truncation contract
+
+Command:
+
+```bash
+php backend/tests/FolioQueryControllerExploratoryRepairTest.php && php backend/tests/SqlPreflightServiceTest.php
+php backend/tests/GeminiServiceExploratoryRepairTest.php && php backend/tests/GeminiServiceTimeoutClassificationTest.php
+```
+
+Output:
+
+```text
+FolioQueryController exploratory repair test passed
+SqlPreflightService test passed
+GeminiService exploratory repair test passed
+GeminiService timeout classification test passed
+```
+
+### Compatibility regression and correction
+
+The first broad run correctly failed the existing reflection guard because it still asserted the old exact six-parameter list:
+
+```text
+Post-preflight repair must preserve the raw/generation prompt ordering and append resolved filters.
+```
+
+The guard now asserts that the original six parameters retain their exact order and that optional `preflightResult` is appended seventh. `GeminiServiceResolvedLocationGuardTest.php` then passed individually, followed by the complete suite.
+
+### Focused and broad verification
+
+Commands:
+
+```bash
+php backend/tests/SqlPreflightServiceTest.php && php backend/tests/SqlBuilderServicePolicyViolationTest.php && php backend/tests/FolioQueryControllerAskContinuationPolicyTest.php && php backend/tests/FolioQueryControllerExecutePreflightTest.php && php backend/tests/FolioQueryControllerExploratoryRepairTest.php
+php backend/tests/GeminiServiceExploratoryRepairTest.php && php backend/tests/GeminiServiceFamilyCompilerFallbackTest.php && php backend/tests/GeminiServiceProviderFallbackTelemetryTest.php && php backend/tests/GeminiServiceTimeoutClassificationTest.php
+for test_file in backend/tests/FolioQueryController*Test.php backend/tests/GeminiService*Test.php; do php "$test_file" || exit 1; done
+```
+
+Output summary:
+
+```text
+All nine focused safety/controller/Gemini scripts passed.
+40/40 controller and Gemini behavior scripts passed.
+No failures or fatal errors.
+```
+
+The broad output includes the same pre-existing PHP 8.5 reflection deprecations and no new warnings.
+
+### Fix-round files changed
+
+- `backend/services/SqlPreflightService.php`
+- `backend/controllers/FolioQueryController.php`
+- `backend/services/GeminiService.php`
+- `backend/tests/SqlPreflightServiceTest.php`
+- `backend/tests/FolioQueryControllerExploratoryRepairTest.php`
+- `backend/tests/GeminiServiceExploratoryRepairTest.php`
+- `backend/tests/GeminiServiceResolvedLocationGuardTest.php`
+- `backend/tests/GeminiServiceTimeoutClassificationTest.php`
+- `.superpowers/sdd/2026-08-26-two-lane-report-generation-phase-1/task-4-report.md`
+
+### Fix-round self-review and concerns
+
+- Mutation check: removing SQLSTATE extraction fails the `42883` and six hard-family structure assertions; ignoring the structured class in either downstream layer produces nonzero repair/provider calls.
+- Mutation check: moving any structured class check after repair fails the zero-call assertions; changing the connectivity/policy/resource branch fails its type, route/status, or telemetry assertion.
+- Mutation check: removing either truncation classifier alternative makes both the public controller response and direct provider classifier regressions fail.
+- Message-only connectivity, authentication, resource, cancellation, and ordinary repair cases remain covered and passing, protecting backward compatibility.
+- No functional blocker found. The optional trailing parameter is the only public signature extension and preserves all existing positional callers.

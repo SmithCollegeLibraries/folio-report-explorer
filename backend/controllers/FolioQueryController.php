@@ -432,13 +432,21 @@ class FolioQueryController extends Controller
         $preflight = $preflight ?: function (string $sql, string $dataSource): array {
             return $this->estimateQueryComplexity($sql, $dataSource) ?? [];
         };
-        $repair = $repair ?: function (string $question, $campusScope, array $currentResult, string $error) use ($generationPrompt): array {
+        $repair = $repair ?: function (
+            string $question,
+            $campusScope,
+            array $currentResult,
+            string $error,
+            array $preflightResult = []
+        ) use ($generationPrompt): array {
             return GeminiService::repairExploratorySqlAfterPreflight(
                 $question,
                 $campusScope,
                 $currentResult,
                 $error,
-                $generationPrompt
+                $generationPrompt,
+                [],
+                $preflightResult
             );
         };
 
@@ -484,7 +492,7 @@ class FolioQueryController extends Controller
                 );
             }
 
-            if (!$semanticRepairRequired && $this->isAskPostgresConnectivityFailure($error)) {
+            if (!$semanticRepairRequired && $this->isAskPostgresConnectivityFailure($error, $estimate)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'connectivity_failure', 'database_connectivity');
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskPostgresConnectivityRecovery(
@@ -499,7 +507,7 @@ class FolioQueryController extends Controller
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'cancelled', 'database_cancelled');
                 throw new \app\exceptions\DatabaseQueryCancelledException();
             }
-            if (!$semanticRepairRequired && $this->isAskPreflightPolicyFailure($error)) {
+            if (!$semanticRepairRequired && $this->isAskPreflightPolicyFailure($error, $estimate)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'policy_blocked', 'policy_blocked');
                 return $this->attachTrustedAskEvidence(
                     $this->buildAskContinuationFromFailure(
@@ -511,7 +519,7 @@ class FolioQueryController extends Controller
                     $result
                 );
             }
-            if (!$semanticRepairRequired && $this->isAskPreflightResourceFailure($error)) {
+            if (!$semanticRepairRequired && $this->isAskPreflightResourceFailure($error, $estimate)) {
                 $this->logExploratoryTerminalOutcome($result, $rawQuestion, 'resource_limited', 'resource_limit');
                 return $this->buildDatabaseResourceLimitResponse($result);
             }
@@ -547,7 +555,7 @@ class FolioQueryController extends Controller
             }
 
             $previousResult = $result;
-            $repairResult = $repair($rawQuestion, $campus, $result, $error);
+            $repairResult = $repair($rawQuestion, $campus, $result, $error, $estimate);
             if (!is_array($repairResult)) {
                 $repairResult = [];
             }
@@ -610,8 +618,11 @@ class FolioQueryController extends Controller
         }
     }
 
-    private function isAskPreflightPolicyFailure(string $message): bool
+    private function isAskPreflightPolicyFailure(string $message, array $preflightResult = []): bool
     {
+        if ($this->isAskSqlStateClass($preflightResult, ['28'])) {
+            return true;
+        }
         return preg_match(
             '/SQLSTATE\[(?:28[0-9A-Z]{3}|42501)\]|password authentication failed|invalid authorization specification|'
                 . 'permission denied|insufficient privilege|row-level security|access denied|not authorized|must be owner of/i',
@@ -627,8 +638,11 @@ class FolioQueryController extends Controller
         ) === 1;
     }
 
-    private function isAskPreflightResourceFailure(string $message): bool
+    private function isAskPreflightResourceFailure(string $message, array $preflightResult = []): bool
     {
+        if ($this->isAskSqlStateClass($preflightResult, ['53', '54'])) {
+            return true;
+        }
         return preg_match(
             '/SQLSTATE\[(?:53|54)[0-9A-Z]{3}\]|resource exhausted|out of memory|disk full|too many connections|'
                 . 'insufficient resources|configuration limit exceeded|program limit exceeded|stack depth limit exceeded|'
@@ -637,6 +651,16 @@ class FolioQueryController extends Controller
                 . '(?:configured|complexity|resource|row|cost)\s+limit\s+(?:exceeded|reached)/i',
             $message
         ) === 1;
+    }
+
+    private function isAskSqlStateClass(array $preflightResult, array $classes): bool
+    {
+        $sqlStateClass = strtoupper(trim((string)($preflightResult['sqlStateClass'] ?? '')));
+        if ($sqlStateClass === '') {
+            $sqlState = strtoupper(trim((string)($preflightResult['sqlState'] ?? '')));
+            $sqlStateClass = strlen($sqlState) >= 2 ? substr($sqlState, 0, 2) : '';
+        }
+        return in_array($sqlStateClass, $classes, true);
     }
 
     private function isAiRepairEligible(array $result): bool
@@ -2462,8 +2486,11 @@ class FolioQueryController extends Controller
         ];
     }
 
-    private function isAskPostgresConnectivityFailure(string $message): bool
+    private function isAskPostgresConnectivityFailure(string $message, array $preflightResult = []): bool
     {
+        if ($this->isAskSqlStateClass($preflightResult, ['08'])) {
+            return true;
+        }
         return preg_match(
             '/\bSQLSTATE\[08[0-9A-Z]{3}\]|\bSQLSTATE\[HY000\].*(?:timeout expired|could not connect|connection refused|no connection|SSL SYSCALL|server closed the connection)|'
                 . '\b(?:timeout expired|could not connect to server|connection refused|connection does not exist|connection is closed|no connection to the server|no route to host|server closed the connection)\b/i',
