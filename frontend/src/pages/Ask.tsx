@@ -233,6 +233,19 @@ export function hasGeneratedSql(result: Pick<NlResponse, 'sql'> | null | undefin
   return Boolean(result?.sql?.trim());
 }
 
+export function normalizeAskResultProvenance(result: NlResponse): NlResponse {
+  if (!hasGeneratedSql(result)) return result;
+
+  const generationProvenance = result.generationProvenance === 'verified_pattern'
+    ? 'verified_pattern'
+    : 'ai_built';
+  const provenanceLabel = generationProvenance === 'verified_pattern'
+    ? 'Verified pattern'
+    : 'AI-built';
+
+  return { ...result, generationProvenance, provenanceLabel };
+}
+
 export function shouldShowLegacyRecovery(result: NlResponse | null | undefined): boolean {
   return !hasGeneratedSql(result) && isExploratoryValidationHardStop(result?.validationSummary);
 }
@@ -810,7 +823,8 @@ export default function Ask() {
         request.parentGenerationId ?? null,
       ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
-      setNlResult(data);
+      const result = normalizeAskResultProvenance(data);
+      setNlResult(result);
       resetJob();
       setActiveJobId(null);
       setSaveSuccess(null);
@@ -823,10 +837,10 @@ export default function Ask() {
       setFollowUpContext(null);
       setFollowUpError(null);
       setDetailTab('results');
-      prependHistory(request.question, data);
+      prependHistory(request.question, result);
 
       if (request.shouldExecute !== false) {
-        runGeneratedQuery(data, request.question);
+        runGeneratedQuery(result, request.question);
       }
     },
   });

@@ -2,6 +2,47 @@ import { describe, expect, it } from 'vitest';
 import * as AskPage from './Ask';
 
 describe('Ask error formatting', () => {
+  it('normalizes ordinary executable API responses to one trusted provenance label', () => {
+    const cases = [
+      {
+        response: { sql: 'SELECT 1' },
+        generationProvenance: 'ai_built',
+        provenanceLabel: 'AI-built',
+      },
+      {
+        response: {
+          sql: 'SELECT 1',
+          generationProvenance: 'verified_pattern' as const,
+          provenanceLabel: 'AI-built' as const,
+        },
+        generationProvenance: 'verified_pattern',
+        provenanceLabel: 'Verified pattern',
+      },
+      {
+        response: {
+          sql: 'SELECT 1',
+          generationProvenance: 'ai_built' as const,
+          provenanceLabel: 'Verified pattern' as const,
+        },
+        generationProvenance: 'ai_built',
+        provenanceLabel: 'AI-built',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const normalized = AskPage.normalizeAskResultProvenance?.(testCase.response);
+      expect(normalized?.generationProvenance).toBe(testCase.generationProvenance);
+      expect(normalized?.provenanceLabel).toBe(testCase.provenanceLabel);
+      expect(AskPage.getAskResponseView?.(normalized)).toBe('success');
+    }
+  });
+
+  it('leaves no-SQL rollback compatibility responses unchanged', () => {
+    const response = { needsClarification: true, message: 'Choose a location.' };
+
+    expect(AskPage.normalizeAskResultProvenance?.(response)).toEqual(response);
+  });
+
   it('keeps a successful AI-built response on the normal results path', () => {
     const result = {
       sql: 'SELECT title FROM inventory.instance__t',

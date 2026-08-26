@@ -111,3 +111,16 @@ GREEN focused suite: 2 files, 8 tests passed.
 ```
 
 Final verification: full frontend suite passed (39 files, 215 tests), frontend build passed, and `git diff --check` passed. Lint remained unavailable because `eslint` is not installed.
+
+## Fix round 3: ordinary Ask response provenance
+
+`normalizeAskResultProvenance()` now runs at the normal Ask success boundary before the response is stored, run, or added to history. Every executable SQL response receives exactly one trusted provenance pair: valid `verified_pattern` and `ai_built` values are preserved, public labels are derived from that enum, and missing or invalid provenance becomes `AI-built`. No-SQL rollback compatibility responses are returned unchanged.
+
+TDD evidence:
+
+```text
+RED: ordinary SQL responses with missing provenance remained unlabeled; no normalizer existed.
+GREEN focused suite: 2 files, 33 tests passed.
+```
+
+Final verification: full frontend suite passed (39 files, 217 tests), frontend build passed, and `git diff --check` passed. Lint remained unavailable because `eslint` is not installed.
