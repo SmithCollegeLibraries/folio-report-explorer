@@ -28,6 +28,26 @@ $exploratory = AskResponseContractService::normalizeMode([
 ]);
 askResponseAssertSame('exploratory', $exploratory['mode'], 'Exploratory results should retain their mode.');
 
+$verified = AskResponseContractService::withGenerationProvenance(
+    ['sql' => 'SELECT 1', 'mode' => 'canonical'],
+    AskResponseContractService::PROVENANCE_VERIFIED_PATTERN
+);
+askResponseAssertSame('verified_pattern', $verified['generationProvenance'], 'Canonical success needs stable provenance.');
+askResponseAssertSame('Verified pattern', $verified['provenanceLabel'], 'Canonical success needs the public label.');
+
+$aiBuilt = AskResponseContractService::withGenerationProvenance(
+    ['sql' => 'SELECT 1', 'mode' => 'exploratory'],
+    AskResponseContractService::PROVENANCE_AI_BUILT
+);
+askResponseAssertSame('ai_built', $aiBuilt['generationProvenance'], 'AI success needs stable provenance.');
+askResponseAssertSame('AI-built', $aiBuilt['provenanceLabel'], 'AI success needs the public label.');
+
+$failure = AskResponseContractService::withGenerationProvenance(
+    ['errorType' => 'sql_generation_failed'],
+    AskResponseContractService::PROVENANCE_AI_BUILT
+);
+askResponseAssertSame(false, isset($failure['generationProvenance']), 'No-SQL failures must not claim successful provenance.');
+
 $user = AskResponseContractService::toUserResponse([
     'mode' => 'exploratory',
     'validationSummary' => [

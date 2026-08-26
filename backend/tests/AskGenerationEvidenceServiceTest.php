@@ -73,6 +73,28 @@ $ordinary = AskGenerationEvidenceService::build([
 evidenceAssertSame('exploratory', $ordinary['executionMode'], 'Exploratory results must persist exploratory execution mode.');
 evidenceAssertSame(false, $ordinary['materialRepair'], 'An unrepaired candidate must not be materially repaired.');
 
+$twoLaneEvidence = AskGenerationEvidenceService::build([
+    'sql' => 'SELECT 1',
+    'mode' => 'exploratory',
+    'generationProvenance' => 'ai_built',
+    'provenanceLabel' => 'AI-built',
+], ['prompt' => 'Show one row']);
+evidenceAssertSame(
+    'ai_built',
+    $twoLaneEvidence['provenance']['generationProvenance'] ?? null,
+    'Stable generation provenance must reach administrator and query-job metadata.'
+);
+
+$unknownProvenance = AskGenerationEvidenceService::build([
+    'sql' => 'SELECT 1',
+    'generationProvenance' => 'untrusted_label',
+], ['prompt' => 'Show one row']);
+evidenceAssertSame(
+    null,
+    $unknownProvenance['provenance']['generationProvenance'] ?? null,
+    'Only stable generation-provenance values may reach trusted persistence evidence.'
+);
+
 $flagged = AskGenerationEvidenceService::build([
     'route' => 'exploratory_legacy_freeform',
     'mode' => 'exploratory',
@@ -187,6 +209,7 @@ evidenceAssertSame(
         'referenceBundleMetadata' => null,
         'schemaMetadata' => null,
         'semanticContractVersion' => null,
+        'generationProvenance' => null,
     ],
     $ordinary['provenance'],
     'Unavailable provenance must be represented by explicit nulls.'

@@ -23,6 +23,8 @@ class Nl2sqlRuntimePreflightService
             'nl2sqlShadowUsers' => (string) ($params['nl2sqlShadowUsers'] ?? ''),
             'nl2sqlShadowSamplePercent' => (int) ($params['nl2sqlShadowSamplePercent'] ?? 100),
             'nl2sqlForceLegacy' => (bool) ($params['nl2sqlForceLegacy'] ?? false),
+            'nl2sqlTwoLaneEnabled' => !array_key_exists('nl2sqlTwoLaneEnabled', $params)
+                || (bool) $params['nl2sqlTwoLaneEnabled'],
         ];
 
         $persistedRuntimeSettings = array_intersect_key($settings, array_flip([
@@ -32,6 +34,7 @@ class Nl2sqlRuntimePreflightService
             'nl2sql_shadow_users',
             'nl2sql_shadow_sample_percent',
             'nl2sql_force_legacy',
+            'nl2sql_two_lane_enabled',
         ]));
 
         $warnings = [];
@@ -50,6 +53,10 @@ class Nl2sqlRuntimePreflightService
 
         if ($effective['nl2sqlForceLegacy']) {
             $warnings[] = 'Emergency rollback is active (`nl2sql_force_legacy=true`), so deterministic intent routing is disabled.';
+        }
+
+        if (!$effective['nl2sqlTwoLaneEnabled']) {
+            $warnings[] = 'The strict blocker rollback path is active (`nl2sql_two_lane_enabled=false`).';
         }
 
         $artifacts = [];

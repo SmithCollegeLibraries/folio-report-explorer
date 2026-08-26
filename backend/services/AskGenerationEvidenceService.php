@@ -112,6 +112,11 @@ final class AskGenerationEvidenceService
             $confidenceEvidence['explicitReportRequest'] = $explicitReportRequest;
         }
 
+        $generationProvenance = (string) ($result['generationProvenance'] ?? '');
+        if (!in_array($generationProvenance, ['verified_pattern', 'ai_built'], true)) {
+            $generationProvenance = null;
+        }
+
         $provenance = [
             'compilerVersion' => $compilerVersion,
             'modelName' => self::nullableString(
@@ -146,6 +151,7 @@ final class AskGenerationEvidenceService
                     ?? $result['semanticContractVersion']
                     ?? null
             ),
+            'generationProvenance' => $generationProvenance,
         ];
         if ($explicitReportRequest !== null) {
             $provenance['explicitReportRequestProvenance'] = 'server_extracted';

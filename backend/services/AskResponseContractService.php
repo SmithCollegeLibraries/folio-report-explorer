@@ -4,6 +4,28 @@ namespace app\services;
 
 final class AskResponseContractService
 {
+    const PROVENANCE_VERIFIED_PATTERN = 'verified_pattern';
+    const PROVENANCE_AI_BUILT = 'ai_built';
+
+    private static $provenanceLabels = [
+        self::PROVENANCE_VERIFIED_PATTERN => 'Verified pattern',
+        self::PROVENANCE_AI_BUILT => 'AI-built',
+    ];
+
+    public static function withGenerationProvenance(array $result, string $provenance): array
+    {
+        if (!isset($result['sql'])) {
+            unset($result['generationProvenance'], $result['provenanceLabel']);
+            return $result;
+        }
+        if (!isset(self::$provenanceLabels[$provenance])) {
+            throw new \InvalidArgumentException('Unknown report generation provenance.');
+        }
+        $result['generationProvenance'] = $provenance;
+        $result['provenanceLabel'] = self::$provenanceLabels[$provenance];
+        return $result;
+    }
+
     public static function normalizeMode(array $result): array
     {
         $route = (string)($result['route'] ?? '');

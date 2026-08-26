@@ -73,6 +73,11 @@ assertContainsText(
     implode(' ', $legacyDefaultReport['warnings'] ?? []),
     'The warning set should mention that the effective NL2SQL runtime flags still resolve to legacy defaults.'
 );
+assertSameValue(
+    true,
+    $legacyDefaultReport['effective']['nl2sqlTwoLaneEnabled'] ?? null,
+    'Older direct callers must retain the default-on two-lane rollout.'
+);
 assertTrueValue(!empty($legacyDefaultReport['artifacts']['canonicalQueryGraph']['hash'] ?? null), 'The preflight report should include canonical graph artifact hash metadata.');
 
 $intentReadyReport = $serviceClass::buildReport(
@@ -83,6 +88,7 @@ $intentReadyReport = $serviceClass::buildReport(
         'nl2sqlShadowUsers' => 'all',
         'nl2sqlShadowSamplePercent' => 100,
         'nl2sqlForceLegacy' => false,
+        'nl2sqlTwoLaneEnabled' => true,
     ],
     [
         'nl2sql_intent_mode' => true,
@@ -91,6 +97,7 @@ $intentReadyReport = $serviceClass::buildReport(
         'nl2sql_shadow_users' => 'all',
         'nl2sql_shadow_sample_percent' => 100,
         'nl2sql_force_legacy' => false,
+        'nl2sql_two_lane_enabled' => true,
     ],
     $artifactPaths
 );
@@ -100,6 +107,19 @@ assertSameValue(true, $intentReadyReport['settings']['hasSettingsFile'] ?? false
 assertSameValue(true, $intentReadyReport['effective']['nl2sqlIntentMode'] ?? false, 'The preflight report should surface the effective intent-mode flag.');
 assertSameValue('intent', $intentReadyReport['effective']['nl2sqlPrimaryMode'] ?? null, 'The preflight report should surface the effective primary mode.');
 assertSameValue(false, $intentReadyReport['effective']['nl2sqlForceLegacy'] ?? true, 'The preflight report should surface the effective emergency rollback state.');
+assertSameValue(true, $intentReadyReport['effective']['nl2sqlTwoLaneEnabled'], 'Two-lane routing should be visible in preflight.');
 assertSameValue([], $intentReadyReport['warnings'] ?? null, 'Healthy runtime parity should not emit warnings.');
+
+$rollback = $serviceClass::buildReport(
+    ['nl2sqlTwoLaneEnabled' => false],
+    ['nl2sql_two_lane_enabled' => false],
+    $artifactPaths
+);
+assertTrueValue(
+    count(array_filter($rollback['warnings'], function ($warning) {
+        return strpos($warning, 'strict blocker rollback') !== false;
+    })) === 1,
+    'Preflight should identify the rollback path.'
+);
 
 fwrite(STDOUT, "Nl2sqlRuntimePreflightService test passed\n");

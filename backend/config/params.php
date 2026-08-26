@@ -39,6 +39,10 @@ return [
         SettingsService::get('nl2sql_force_legacy', 'NL2SQL_FORCE_LEGACY', 'false'),
         FILTER_VALIDATE_BOOLEAN
     ),
+    'nl2sqlTwoLaneEnabled' => filter_var(
+        SettingsService::get('nl2sql_two_lane_enabled', 'NL2SQL_TWO_LANE_ENABLED', 'true'),
+        FILTER_VALIDATE_BOOLEAN
+    ),
     'nl2sqlHardenedPhysicalRoi' => filter_var(
         SettingsService::get(
             'nl2sql_hardened_physical_roi',
