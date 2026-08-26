@@ -28,7 +28,8 @@ No test contacted production FOLIO or an external AI provider. Routing tests use
 - `a0bf0d9` — `fix: normalize ask success provenance`
 - `ed46fde` — `test: verify two-lane report generation`
 - `d5b375b` — `fix: route ask hard limits as terminal failures`
-- Final cross-phase fix wave — advisory evidence and terminal-boundary hardening
+- `1b8b8b7` — `fix: harden final two-lane boundaries`
+- `4ff4587` — `fix: preserve identifiers and rollback semantics`
 
 ## Required routing matrix
 
@@ -111,7 +112,7 @@ Frontend suite:
 cd frontend && npm test
 ```
 
-Result: **40/40 files, 222/222 tests passed**. Existing Browserslist staleness and Node localStorage experimental warnings were observed.
+Result: **40/40 files, 223/223 tests passed**. Existing Browserslist staleness and Node localStorage experimental warnings were observed.
 
 Focused blocker/provenance behavior:
 
@@ -152,6 +153,19 @@ rg -n "generationProvenance|provenanceLabel" backend/services/AskResponseContrac
 ```
 
 Result: the first command found the 11 intentionally retained rollback-only matches; the second found provenance decoration, normalization, transport, and visible rendering. The behavioral tests above prove enabled two-lane success and terminal-failure responses cannot select the retained blocker branches.
+
+## Post-review correctness corrections
+
+An independent follow-up review identified objective explicit-identifier and rollback regressions that the original plan tests had permitted. The corrected behavior is:
+
+- a final AI candidate that omits a requested identifier or adds an unrequested identifier cannot execute after repair exhaustion;
+- forced-legacy/freeform SQL passes through the same explicit-identifier validation and bounded repair path;
+- the false rollout switch prevents AI rewriting of canonical SQL after database-preflight failure while preserving the strict rollback response;
+- successful rollback canonical compilation retains `verified_pattern` from the trusted generation source, without weakening response-contract normalization for missing or forged provenance;
+- ordinary business text such as “provider failure rate” is not classified as an AI transport failure; and
+- Retry resubmits the terminal report currently selected from history, not whichever report was generated most recently.
+
+The duplicated controller/service preflight classifier and repeated frontend provenance-label literals remain maintainability cleanups rather than current correctness failures.
 
 ## Deferred work
 
