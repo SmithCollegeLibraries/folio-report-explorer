@@ -396,9 +396,31 @@ SQL;
     twoLaneAssertTrustedSuccess($crossDomain, 'ai_built', 'novel cross-domain request');
     twoLaneAssertSame(1, count(TestTransport::$requests), 'Novel cross-domain routing must go directly to AI-built generation.');
 
+    $overflowIdentifiers = [];
+    foreach (range(1, 501) as $identifierNumber) {
+        $overflowIdentifiers[] = sprintf('in%04d', $identifierNumber);
+    }
+    $overflowPrompt = 'For instance HRIDs: ' . implode(', ', $overflowIdentifiers) . ', show title.';
+    TestTransport::$responses = [];
+    TestTransport::$requests = [];
+    $overflow = GeminiService::generateSqlWithShadow($overflowPrompt, 'Smith College');
+    twoLaneAssertSame('configured_resource_limit', $overflow['errorType'] ?? null, '501 identifiers must use a typed configured-resource hard failure when two-lane mode is enabled.');
+    twoLaneAssertSame('configured_resource_limit', $overflow['route'] ?? null, '501 identifiers must not select the clarification route when two-lane mode is enabled.');
+    twoLaneAssertSame('too_many_explicit_identifiers', $overflow['routeReason'] ?? null, '501 identifiers must retain a stable internal resource reason.');
+    twoLaneAssertContains('retry', strtolower((string)($overflow['message'] ?? '')), '501 identifiers must use concise Retry copy.');
+    foreach (['sql', 'generationProvenance', 'provenanceLabel', 'needsClarification', 'clarificationItems', 'correctionInstruction', 'recoveryContext', 'recoveryItems'] as $forbiddenField) {
+        twoLaneAssertSame(false, array_key_exists($forbiddenField, $overflow), '501-identifier hard failure must omit ' . $forbiddenField . '.');
+    }
+    twoLaneAssertSame(0, count(TestTransport::$requests), '501 identifiers must stop before any provider call.');
+
     Yii::$app->params['nl2sqlTwoLaneEnabled'] = false;
     TestTransport::$responses = [];
     TestTransport::$requests = [];
+    $rollbackOverflow = GeminiService::generateSqlWithShadow($overflowPrompt, 'Smith College');
+    twoLaneAssertSame(true, $rollbackOverflow['needsClarification'] ?? null, 'False switch may retain the 501-identifier rollback clarification.');
+    twoLaneAssertSame('clarification', $rollbackOverflow['route'] ?? null, 'False switch must retain the 501-identifier clarification route.');
+    twoLaneAssertSame(0, count(TestTransport::$requests), 'Rollback identifier clarification must stop before provider generation.');
+
     $rollback = GeminiService::generateSqlWithShadow($neilsonPrompt, 'Smith College');
     twoLaneAssertSame(true, $rollback['needsClarification'] ?? null, 'False switch must retain rollback clarification compatibility.');
     twoLaneAssertSame('clarification', $rollback['route'] ?? null, 'False switch must retain the strict blocker route.');
@@ -408,21 +430,34 @@ SQL;
     Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
     foreach ([
-        ['DELETE FROM inventory.item__t', 'destructive SQL'],
-        ['SELECT id FROM inventory.item__t; SELECT id FROM inventory.instance__t', 'multiple statements'],
+        [
+            'DELETE FROM inventory.item__t',
+            ExploratorySqlValidationException::class,
+            'The AI response contains a non-SELECT SQL command: DELETE.',
+            'destructive SQL',
+        ],
+        [
+            'SELECT id FROM inventory.item__t; SELECT id FROM inventory.instance__t',
+            \InvalidArgumentException::class,
+            'Only a single SELECT statement is allowed.',
+            'multiple statements',
+        ],
     ] as $unsafeCase) {
         TestTransport::$responses = [twoLaneGeminiSql($unsafeCase[0])];
         TestTransport::$requests = [];
         try {
             GeminiService::generateSqlWithShadow('Unsafe fake-provider response.', 'Smith College', null, true);
-            fwrite(STDERR, $unsafeCase[1] . " must remain a hard stop.\n");
+            fwrite(STDERR, $unsafeCase[3] . " must remain a hard stop.\n");
             exit(1);
-        } catch (ExploratorySqlValidationException $exception) {
-            twoLaneAssertSame(false, $exception->isRepairable(), $unsafeCase[1] . ' must not enter automatic repair.');
-        } catch (\InvalidArgumentException $exception) {
-            // The production safety validator intentionally retains this hard-stop type.
+        } catch (\Throwable $exception) {
+            twoLaneAssertSame($unsafeCase[1], get_class($exception), $unsafeCase[3] . ' must retain the production exception type.');
+            twoLaneAssertSame($unsafeCase[2], $exception->getMessage(), $unsafeCase[3] . ' must expose the production safety-validator message to the controller boundary.');
+            if ($exception instanceof ExploratorySqlValidationException) {
+                twoLaneAssertSame('safety', $exception->getStage(), $unsafeCase[3] . ' must retain the safety stage.');
+                twoLaneAssertSame(false, $exception->isRepairable(), $unsafeCase[3] . ' must not enter automatic repair.');
+            }
         }
-        twoLaneAssertSame(1, count(TestTransport::$requests), $unsafeCase[1] . ' must consume no repair request.');
+        twoLaneAssertSame(1, count(TestTransport::$requests), $unsafeCase[3] . ' must consume no repair request.');
     }
 
     TestTransport::$responses = [twoLaneGeminiSql('SELECT id FROM users.users__t')];
@@ -435,5 +470,5 @@ SQL;
         twoLaneAssertSame(1, count(TestTransport::$requests), 'Restricted patron SQL must consume no repair request.');
     }
 
-    fwrite(STDOUT, "GeminiService two-lane routing test passed (3 routing cases, 3 service hard gates)\n");
+    fwrite(STDOUT, "GeminiService two-lane routing test passed (3 routing cases, 4 service hard gates)\n");
 }

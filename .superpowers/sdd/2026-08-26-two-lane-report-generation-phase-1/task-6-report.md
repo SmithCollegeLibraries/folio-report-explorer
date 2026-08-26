@@ -105,12 +105,48 @@ The first full standalone run stopped at `AskAiCrossDomainRoiRegressionTest.php`
 
 `GeminiServiceTwoLaneRoutingTest.php` initially errored because the standalone fixture omitted the local domain-hint DB boundary. A deterministic empty local-DB fixture corrected the harness error. The exact three routing expectations then passed without a production routing change, confirming Task 1–5 behavior.
 
+### Fix round 1: pre-result safety exceptions
+
+The original public unsafe cases used a service double that returned SQL, exercising controller post-result validation but not the production service exception boundary. The corrected test makes the public generation seam throw the two real failure shapes proven by the real `GeminiService`/`SqlBuilderService` fixture: destructive SQL is a non-repairable `ExploratorySqlValidationException` at stage `safety`, while multiple statements throw `InvalidArgumentException: Only a single SELECT statement is allowed.`
+
+RED:
+
+```text
+destructive AI SQL must retain its hard-failure type.
+Expected: 'unsafe_generated_sql'
+Actual: NULL
+```
+
+Minimal fix: `buildAskContinuationFromFailure()` now recognizes only non-repairable safety exceptions and the exact production SELECT-safety messages, then reuses the existing sanitized `unsafe_generated_sql` response. Both cases cross generation once and make zero preflight and zero repair calls.
+
+### Fix round 1: configured identifier ceiling
+
+Added a real public service case with 501 explicit instance HRIDs and no queued provider response.
+
+Backend RED:
+
+```text
+501 identifiers must use a typed configured-resource hard failure when two-lane mode is enabled.
+Expected: 'configured_resource_limit'
+Actual: NULL
+```
+
+Frontend RED:
+
+```text
+Expected: "terminal_failure"
+Received: "legacy_recovery"
+```
+
+Minimal fix: enabled two-lane mode now returns `configured_resource_limit` with concise Retry copy before any provider call; no SQL, provenance, clarification, recovery, or correction fields are present. The false switch retains the prior clarification response. Ask treats the new type as terminal.
+
 ## Files
 
 Production:
 
 - `backend/services/AskResponseContractService.php`
 - `backend/controllers/FolioQueryController.php`
+- `backend/services/GeminiService.php`
 - `frontend/src/pages/Ask.tsx`
 - `frontend/src/types/schema.ts`
 
@@ -133,7 +169,7 @@ Evidence:
 
 - Backend standalone: **139/139 test files passed**.
 - Exact routing: **3/3 prompts passed** with `verified_pattern`, `ai_built`, `ai_built`.
-- Hard gates: destructive, multiple-statement, restricted patron, cancellation, timeout, SQLSTATE 08/28/53/54, and two-repair exhaustion passed.
+- Hard gates: destructive, multiple-statement, 501 explicit identifiers, restricted patron, cancellation, timeout, SQLSTATE 08/28/53/54, and two-repair exhaustion passed.
 - Frontend: **39/39 files, 218/218 tests passed**.
 - Focused frontend blocker/provenance: **2/2 files, 34/34 tests passed**.
 - Build: exit 0, **2,513 modules transformed**.
@@ -144,6 +180,7 @@ Evidence:
 
 - Every production edit followed a failing public behavior assertion.
 - Unsafe/multiple-statement SQL stops before preflight.
+- Enabled 501-identifier requests stop before provider generation; rollback mode retains its compatibility clarification.
 - Hard failures expose neither executable SQL nor success provenance.
 - Typed hard failures select terminal UI even when compatibility requires an HTTP-200 response.
 - Administrator evidence remains server-only and preserves candidate structure where required.
@@ -159,4 +196,5 @@ Evidence:
 
 ## Commit
 
-`test: verify two-lane report generation` (this commit)
+- `ed46fde` — `test: verify two-lane report generation`
+- Fix round 1 — this commit

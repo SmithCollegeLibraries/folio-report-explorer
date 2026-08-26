@@ -6,7 +6,7 @@
 
 ## Outcome
 
-Phase 1 now has public-boundary regression coverage for the verified-pattern and AI-built lanes, stable server- and client-side provenance normalization, and terminal hard-failure responses that expose no SQL, success provenance, clarification, recovery, or correction payloads.
+Phase 1 now has public-boundary regression coverage for the verified-pattern and AI-built lanes, stable server- and client-side provenance normalization, and terminal hard-failure responses that expose no SQL, success provenance, clarification, recovery, or correction payloads. Pre-result SQL-safety exceptions and the configured 500-identifier ceiling use the same terminal contract instead of entering normal recovery UI.
 
 No test contacted production FOLIO or an external AI provider. Routing tests used deterministic fake provider responses, isolated reference fixtures, the real canonical compiler, and checked-in schema metadata. Database-preflight tests used deterministic controller fixtures.
 
@@ -24,7 +24,8 @@ No test contacted production FOLIO or an external AI provider. Routing tests use
 - `bfd05d2` — `fix: preserve reuse provenance in ask`
 - `dbf89a9` — `fix: downgrade edited reuse provenance`
 - `a0bf0d9` — `fix: normalize ask success provenance`
-- Task 6 — this commit, `test: verify two-lane report generation`
+- `ed46fde` — `test: verify two-lane report generation`
+- Task 6 fix round 1 — this commit
 
 ## Required routing matrix
 
@@ -50,7 +51,8 @@ The Neilson case deliberately omits `nl2sqlTwoLaneEnabled` and therefore also pr
 
 Public service/controller cases cover:
 
-- destructive AI SQL and multiple statements: `unsafe_generated_sql`, zero database preflight calls, concise Retry copy, no repair;
+- destructive AI SQL and multiple statements: the real service retains its non-repairable safety exception / `InvalidArgumentException` paths and exact validator messages; `actionNl()` classifies both as `unsafe_generated_sql` with zero database preflight calls, concise Retry copy, and no repair;
+- 501 explicit identifiers with two-lane mode enabled: `configured_resource_limit`, zero provider calls, concise Retry copy, and no SQL/provenance/clarification/recovery/correction fields; the false switch retains the legacy identifier clarification for rollback;
 - restricted `users.users__t` patron data: `PolicyViolationException`, no repair request;
 - database cancellation / SQLSTATE `57014`: `database_cancelled`, no AI repair;
 - provider timeout: `ai_timeout`, HTTP 504, no recovery payload;
@@ -87,7 +89,7 @@ php backend/tests/FolioQueryControllerExploratoryRepairTest.php
 php backend/tests/AskResponseContractServiceTest.php
 ```
 
-Result: all three passed; the routing test reports **3 routing cases and 3 service hard gates**, while the controller test covers the database/provider/exhaustion public hard gates.
+Result: all three passed; the routing test reports **3 routing cases and 4 service hard gates**, while the controller test covers pre-result SQL-safety exceptions plus the database/provider/exhaustion public hard gates.
 
 Frontend suite:
 
@@ -103,7 +105,7 @@ Focused blocker/provenance behavior:
 cd frontend && npm test -- src/pages/Ask.errorFormatting.test.ts src/components/AskTrustNotice.test.tsx
 ```
 
-Result: **2/2 files, 34/34 tests passed**. This includes typed HTTP-200 PostgreSQL connectivity, unsafe SQL, and database-resource failures selecting `terminal_failure` ahead of the retained rollback recovery component.
+Result: **2/2 files, 34/34 tests passed**. This includes typed HTTP-200 PostgreSQL connectivity, unsafe SQL, database-resource failures, and the 501-identifier configured-resource failure selecting `terminal_failure` ahead of the retained rollback recovery component.
 
 Production build:
 

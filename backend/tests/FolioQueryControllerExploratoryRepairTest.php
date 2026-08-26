@@ -48,6 +48,7 @@ namespace app\services {
         public static $generationCalls = [];
         public static $generationResult = [];
         public static $generationTransport = [];
+        public static $generationFailure;
         public static $preflightRepairResult;
         public static $preflightRepairFailure;
 
@@ -79,6 +80,9 @@ namespace app\services {
                 'allowExploratory' => $allowExploratory,
                 'generationPrompt' => $generationPrompt,
             ];
+            if (self::$generationFailure instanceof \Throwable) {
+                throw self::$generationFailure;
+            }
             $generationTransport = self::$generationTransport;
             return self::$generationResult;
         }
@@ -203,6 +207,7 @@ namespace {
         repairAssertNotContains('what still needs to be resolved', $encoded, $name . ' must not emit resolver blocker copy.');
     }
 
+    require_once __DIR__ . '/../exceptions/ExploratorySqlValidationException.php';
     require_once __DIR__ . '/../exceptions/PolicyViolationException.php';
     require_once __DIR__ . '/../controllers/FolioQueryController.php';
 
@@ -1497,16 +1502,24 @@ namespace {
     );
 
     foreach ([
-        ['DELETE FROM inventory.instance__t', 'destructive AI SQL'],
-        ['SELECT id FROM inventory.item__t; SELECT id FROM inventory.instance__t', 'multiple-statement AI SQL'],
+        [
+            new \app\exceptions\ExploratorySqlValidationException(
+                'safety',
+                'non_select',
+                'DELETE FROM inventory.instance__t',
+                false,
+                'The AI response contains a non-SELECT SQL command: DELETE.'
+            ),
+            'destructive AI SQL',
+        ],
+        [
+            new \InvalidArgumentException('Only a single SELECT statement is allowed.'),
+            'multiple-statement AI SQL',
+        ],
     ] as $unsafePublicCase) {
-        \app\services\GeminiService::$generationResult = [
-            'sql' => $unsafePublicCase[0],
-            'mode' => 'exploratory',
-            'route' => 'exploratory',
-            'generationProvenance' => 'ai_built',
-            'provenanceLabel' => 'AI-built',
-        ];
+        \app\services\GeminiService::$generationFailure = $unsafePublicCase[0];
+        \app\services\GeminiService::$generationCalls = [];
+        \app\services\GeminiService::$preflightRepairCalls = [];
         \app\services\SqlPreflightService::$calls = [];
         \app\services\SqlPreflightService::$results = [];
         Yii::$app->request = new TestRequest([
@@ -1520,6 +1533,8 @@ namespace {
         $unsafePublicResponse = $unsafePublicController->actionNl();
 
         repairAssertSame('unsafe_generated_sql', $unsafePublicResponse['errorType'] ?? null, $unsafePublicCase[1] . ' must retain its hard-failure type.');
+        repairAssertSame(1, count(\app\services\GeminiService::$generationCalls), $unsafePublicCase[1] . ' must cross the public generation boundary once.');
+        repairAssertSame(0, count(\app\services\GeminiService::$preflightRepairCalls), $unsafePublicCase[1] . ' must not enter AI repair.');
         repairAssertSame(0, count(\app\services\SqlPreflightService::$calls), $unsafePublicCase[1] . ' must stop before database preflight.');
         repairAssertSame(
             'Report Explorer could not safely run this report. Please retry.',
@@ -1528,6 +1543,7 @@ namespace {
         );
         repairAssertPublicHardFailure($unsafePublicResponse, $unsafePublicCase[1]);
     }
+    \app\services\GeminiService::$generationFailure = null;
 
     $publicPreflightHardStops = [
         [

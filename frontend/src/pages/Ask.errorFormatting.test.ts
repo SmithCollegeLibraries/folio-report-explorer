@@ -87,6 +87,10 @@ describe('Ask error formatting', () => {
         errorType: 'database_resource_limit',
         error: 'Database validation exceeded the configured resource limit. Please retry.',
       },
+      {
+        errorType: 'configured_resource_limit',
+        message: 'This report includes more than 500 identifiers. Please retry with 500 or fewer identifiers.',
+      },
     ];
 
     for (const response of cases) {

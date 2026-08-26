@@ -2427,6 +2427,9 @@ class FolioQueryController extends Controller
             ];
             return $response;
         }
+        if ($this->isAskUnsafeGeneratedSqlFailure($error)) {
+            return $this->buildUnsafeGeneratedSqlResponse([]);
+        }
         // Prefer the typed policy violation; fall back to message matching for
         // policy errors that bubble up from elsewhere as plain exceptions.
         if ($error instanceof \app\exceptions\PolicyViolationException || $this->isAskSecurityPolicyFailure($message)) {
@@ -2488,6 +2491,26 @@ class FolioQueryController extends Controller
         return preg_match(
             '/\bSQLSTATE\[08[0-9A-Z]{3}\]|\bSQLSTATE\[HY000\].*(?:timeout expired|could not connect|connection refused|no connection|SSL SYSCALL|server closed the connection)|'
                 . '\b(?:timeout expired|could not connect to server|connection refused|connection does not exist|connection is closed|no connection to the server|no route to host|server closed the connection)\b/i',
+            $message
+        ) === 1;
+    }
+
+    private function isAskUnsafeGeneratedSqlFailure(\Throwable $error): bool
+    {
+        if ($error instanceof \app\exceptions\ExploratorySqlValidationException) {
+            return $error->getStage() === 'safety' && !$error->isRepairable();
+        }
+
+        if (!$error instanceof \InvalidArgumentException) {
+            return false;
+        }
+
+        $message = trim($error->getMessage());
+        return in_array($message, [
+            'Only SELECT queries are allowed.',
+            'Only a single SELECT statement is allowed.',
+        ], true) || preg_match(
+            '/^Query contains blocked keyword: [A-Z]+\. Only SELECT queries are allowed\.$/',
             $message
         ) === 1;
     }

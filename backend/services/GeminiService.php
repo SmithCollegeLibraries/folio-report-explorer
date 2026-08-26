@@ -202,6 +202,23 @@ class GeminiService
         }
 
         if (!empty($explicitReportRequest['needsClarification'])) {
+            if ($twoLaneEnabled) {
+                $resourceFailure = [
+                    'errorType' => 'configured_resource_limit',
+                    'message' => 'This report includes more than 500 identifiers. Please retry with 500 or fewer identifiers.',
+                    'route' => 'configured_resource_limit',
+                    'routeReason' => 'too_many_explicit_identifiers',
+                    'validationSummary' => [
+                        'status' => 'rejected',
+                        'repairAttempts' => 0,
+                    ],
+                ];
+                return AskResponseContractService::normalizeMode(self::withAskEvidence(
+                    $resourceFailure,
+                    $askEvidence
+                ));
+            }
+
             $clarification = [
                 'needsClarification' => true,
                 'clarificationType' => 'too_many_explicit_identifiers',

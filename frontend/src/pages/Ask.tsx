@@ -273,6 +273,7 @@ function isTypedAskTerminalFailure(result: NlResponse | null | undefined): boole
     'postgres_connectivity',
     'database_cancelled',
     'database_resource_limit',
+    'configured_resource_limit',
     'policy_blocked',
     'ai_timeout',
     'ai_provider_failure',
