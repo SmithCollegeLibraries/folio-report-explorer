@@ -85,6 +85,10 @@ final class AskGenerationEvidenceService
             $finalSql,
             $failureBoundary
         );
+        $generatedSql = $nonExecutableResponse
+            || in_array($validationStatus, ['exhausted', 'rejected'], true)
+            ? null
+            : $finalSql;
         $repairAttempts = max(0, min(2, (int)(
             $internalEvidence['repairAttempts']
                 ?? $result['repairAttempts']
@@ -113,7 +117,10 @@ final class AskGenerationEvidenceService
         }
 
         $generationProvenance = (string) ($result['generationProvenance'] ?? '');
-        if (!in_array($generationProvenance, ['verified_pattern', 'ai_built'], true)) {
+        if (
+            $generatedSql === null
+            || !in_array($generationProvenance, ['verified_pattern', 'ai_built'], true)
+        ) {
             $generationProvenance = null;
         }
 
@@ -170,11 +177,6 @@ final class AskGenerationEvidenceService
             ['limited', 'partial'],
             true
         );
-        $generatedSql = $nonExecutableResponse
-            || in_array($validationStatus, ['exhausted', 'rejected'], true)
-            ? null
-            : $finalSql;
-
         return [
             'originalQuestion' => (string)($requestContext['prompt'] ?? $requestContext['originalQuestion'] ?? ''),
             'prompt' => (string)($requestContext['prompt'] ?? $requestContext['originalQuestion'] ?? ''),

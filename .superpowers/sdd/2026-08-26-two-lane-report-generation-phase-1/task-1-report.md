@@ -90,3 +90,40 @@ Ask generation evidence service test passed
 ## Concerns
 
 None within Task 1 scope. The settings-display UI is intentionally untouched because the required Task 1 file contract limits the rollout switch change to application parameters and preflight reporting.
+
+## Fix Round 1
+
+### Change
+
+`AskGenerationEvidenceService::build()` now derives `generatedSql` before provenance and persists `generationProvenance` only when that executable SQL boundary is non-null. This prevents a failed/no-SQL response with stale or caller-supplied `ai_built` / `verified_pattern` from reaching trusted evidence.
+
+### TDD evidence
+
+RED command:
+
+```bash
+php backend/tests/AskGenerationEvidenceServiceTest.php
+```
+
+RED output:
+
+```text
+No-SQL failures must not persist a stale generation provenance.
+Expected: NULL
+Actual: 'ai_built'
+```
+
+GREEN and focused Task 1 command:
+
+```bash
+php backend/tests/AskGenerationEvidenceServiceTest.php && php backend/tests/AskResponseContractServiceTest.php && php backend/tests/Nl2sqlRuntimePreflightServiceTest.php && php -l backend/services/AskGenerationEvidenceService.php && git diff --check -- backend/services/AskGenerationEvidenceService.php backend/tests/AskGenerationEvidenceServiceTest.php
+```
+
+Output:
+
+```text
+Ask generation evidence service test passed
+Ask response contract service test passed
+Nl2sqlRuntimePreflightService test passed
+No syntax errors detected in backend/services/AskGenerationEvidenceService.php
+```

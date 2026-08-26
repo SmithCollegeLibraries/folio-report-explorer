@@ -85,6 +85,18 @@ evidenceAssertSame(
     'Stable generation provenance must reach administrator and query-job metadata.'
 );
 
+$failedTwoLaneEvidence = AskGenerationEvidenceService::build([
+    'route' => 'exploratory_recovery',
+    'mode' => 'exploratory',
+    'errorType' => 'sql_generation_failed',
+    'generationProvenance' => 'ai_built',
+], ['prompt' => 'Show one row']);
+evidenceAssertSame(
+    null,
+    $failedTwoLaneEvidence['provenance']['generationProvenance'] ?? null,
+    'No-SQL failures must not persist a stale generation provenance.'
+);
+
 $unknownProvenance = AskGenerationEvidenceService::build([
     'sql' => 'SELECT 1',
     'generationProvenance' => 'untrusted_label',
