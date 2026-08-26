@@ -149,10 +149,13 @@ The following conditions immediately route to Lane 2 instead of returning a clar
 - a requested filter, output, time window, grouping, or calculation is outside the family contract;
 - canonical graph or schema-manifest validation fails;
 - backend compilation fails;
-- a semantic validator cannot prove the compiled SQL shape;
+- a semantic validator cannot prove the compiled SQL shape or reports a likely mismatch;
+- canonically compiled SQL fails database syntax or preflight validation;
 - a resolved reference cannot be represented by the compiler.
 
 These conditions mean "not verified," not "unsafe."
+
+When canonical compilation has already produced safe SQL, Lane 2 must reuse that SQL as its initial candidate rather than discard it and generate from scratch. AI receives the candidate, original request, generation context, and semantic or preflight diagnostic, then repairs it or explicitly returns it unchanged. The resulting report is labeled **AI-built** because AI owns the final executable candidate. A canonical preflight failure becomes a hard failure only if the AI lane also exhausts its repair budget without producing safe executable SQL.
 
 ### Lane 2: AI-built
 
@@ -212,7 +215,7 @@ These checks may trigger automatic repair or an AI-built assumption but may not 
 - uncertain join, grouping, date, or material interpretation;
 - repeatability warning for AI-built SQL.
 
-If a semantic check positively identifies a likely error, the system attempts repair. If safe SQL remains executable after the repair budget, it may run only as **AI-built**, with the relevant interpretation shown as an assumption.
+If a semantic check positively identifies a likely error, the system routes the SQL through the AI lane's seeded-candidate repair process. The SQL is never merely relabeled without AI review. If AI returns safe executable SQL, it runs as **AI-built**, with the relevant interpretation shown as an assumption.
 
 ## Reference resolution behavior
 
