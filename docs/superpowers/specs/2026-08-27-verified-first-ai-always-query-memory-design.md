@@ -145,13 +145,15 @@ Only the coordinator maps these states to the public Ask response contract.
 
 Detect explicit imperative requests to change database state, including insert, update, delete, create, alter, drop, truncate, grant, revoke, copy, call, and equivalent operations.
 
+The hard-gate detector is a deterministic, high-precision heuristic, not model classification. It blocks only when an imperative write verb is coupled to a database object or mutation target, including polite command forms such as “please delete these records” and “can you update this table.” Reporting language is explicitly excluded. A model may annotate intent for telemetry, but its classification cannot block a request.
+
 Analytical uses of the same words do not count as write intent. Examples that remain read-only include:
 
 - “Count records updated last month.”
 - “Show deleted inventory records.”
 - “Include the purchase-order create date.”
 
-Uncertain intent continues through report generation in enforced read-only mode.
+Uncertain intent continues through report generation in enforced read-only mode. The detector is biased toward `uncertain/read_only`; token-aware SQL enforcement and the database read-only transaction provide the actual write protection.
 
 Existing authentication, authorization, and protected-data policy remain independent hard gates. They must return their own policy response, never a canonical or SQL-safety response.
 
@@ -235,7 +237,9 @@ The AI coordinator uses a bounded, configurable budget consisting of:
 
 An unsafe candidate is never repaired by editing it locally and executing without another complete safety check. Every replacement repeats safety, table policy, schema validation, and preflight.
 
-If the budget is exhausted, return `sql_generation_failed` with Retry. Do not return `unsafe_generated_sql` unless the request itself was explicitly destructive. The response must not ask the user to clarify, correct, or rewrite the request.
+If the budget is exhausted, return `sql_generation_failed` with Retry and the message `Report Explorer could not build a valid report after retrying. Please retry.` The response must not ask the user to clarify, correct, or rewrite the request.
+
+Retire `unsafe_generated_sql` from the backend response contract. Explicit destructive intent returns `request_blocked` before generation with a read-only reporting message. Unsafe generated candidates remain internal `candidate_rejected` states. During a rolling deployment, the frontend may continue recognizing legacy `unsafe_generated_sql` responses from an older backend, but the new coordinator never emits that type.
 
 Provider, connectivity, cancellation, authorization, timeout, and configured resource failures retain their accurate typed responses.
 
@@ -325,13 +329,13 @@ Normal read-only requests never show clarification, correction, request-preserve
 
 Public terminal categories are limited to accurate conditions:
 
-- explicit write request;
+- explicit write request (`request_blocked`);
 - configured protected-data or authorization policy;
 - provider unavailable or timed out;
 - database unavailable, cancelled, or resource-limited;
 - no safe executable SQL after the complete generation budget.
 
-`Report Explorer could not safely run this report` is reserved for explicit request-level write intent. Protected-data and authorization failures use their own policy messages. Candidate-level safety failures are invisible to users unless all generation attempts fail, in which case the message describes generation exhaustion rather than calling the request unsafe.
+Explicit request-level write intent uses a direct read-only-policy message such as `Report Explorer runs read-only reports and cannot modify database data.` Protected-data and authorization failures use their own policy messages. Candidate-level safety failures are invisible to users unless all generation attempts fail, in which case the `sql_generation_failed` message describes generation exhaustion rather than calling the request unsafe. `Report Explorer could not safely run this report` is legacy copy and is not emitted by the new coordinator.
 
 ## Data changes
 
@@ -361,12 +365,14 @@ Roll out in two implementation phases:
 ### Phase 1: routing and safety reliability
 
 1. Add the single generation coordinator boundary.
-2. Normalize every canonical failure to internal `not_handled`.
-3. Regenerate unsafe AI candidates for read-only requests.
-4. Replace raw-text safety scanning with token-aware validation.
-5. remove silent unsafe-candidate terminal paths;
-6. add coordinator telemetry and stable public failure mapping;
-7. remove remaining normal-flow blocker rendering.
+2. Add conservative deterministic request-level write-intent detection.
+3. Normalize every canonical failure to internal `not_handled`.
+4. Regenerate unsafe AI candidates for read-only requests.
+5. Replace raw-text safety scanning with token-aware validation.
+6. Retire backend `unsafe_generated_sql` emission while retaining temporary frontend compatibility.
+7. Preserve the distinct `sql_generation_failed` exhaustion copy and update obsolete safety assertions explicitly.
+8. Add coordinator telemetry and stable public failure mapping.
+9. Remove remaining normal-flow blocker rendering.
 
 ### Phase 2: feedback-ranked query memory
 
@@ -394,6 +400,7 @@ Tests cover every coordinator state transition:
 - invalid candidate followed by database-guided repair;
 - exhausted generation budget;
 - explicit destructive intent;
+- analytical phrases containing mutation vocabulary, including “update me on circulation,” “records updated last month,” and “deleted inventory records”;
 - provider, authorization, connectivity, cancellation, timeout, and resource failure.
 
 ### Safety regressions
@@ -401,6 +408,8 @@ Tests cover every coordinator state transition:
 - `SELECT 'update' AS note` is accepted.
 - `SELECT 1 AS "Create"` is accepted.
 - blocked words in comments are ignored.
+- reporting prompts containing update, created, or deleted vocabulary are not classified as destructive intent.
+- imperative requests to insert, update, delete, or alter database state return `request_blocked` before generation.
 - `WITH changed AS (DELETE ... RETURNING ...) SELECT ...` is rejected.
 - multiple executable statements are rejected.
 - executable INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, CALL, DO, COPY, VACUUM, and ANALYZE commands are rejected.
@@ -443,7 +452,8 @@ The vendor receipt-time regression specifically supplies an unsafe first AI cand
 - An unsafe AI candidate for a read-only request triggers regeneration, not a safety screen.
 - The SQL validator ignores blocked words in literals, comments, and quoted aliases while rejecting executable writes, including data-modifying CTEs.
 - Safe, policy-allowed, preflighted AI SQL runs as AI-built even when semantic analysis is uncertain.
-- Ordinary read-only requests never produce clarification, correction, request-preserved, or `unsafe_generated_sql` responses.
+- The new backend never emits `unsafe_generated_sql`; the frontend accepts it only as temporary rolling-deployment compatibility.
+- Ordinary read-only requests never produce clarification, correction, request-preserved, `request_blocked`, or legacy `unsafe_generated_sql` responses.
 - Verified, AI-built, edited, reused, and administrator-approved provenance remains truthful.
 - Positive, negative, neutral, and weak feedback signals affect reuse and AI-example ranking according to this design.
 - No existing authentication, authorization, protected-data, read-only transaction, timeout, cancellation, or resource-limit protection is weakened.
