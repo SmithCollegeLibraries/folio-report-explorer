@@ -348,6 +348,14 @@ export interface SemanticValidation {
   checkedRequirements: SemanticRequirementLabel[];
 }
 
+export interface NlQueryReuseMetadata {
+  candidateJobId: string;
+  requestedPrompt: string;
+  previousPrompt: string;
+  completedAt: string | null;
+  score: number;
+}
+
 export interface NlResponse {
   errorType?: string;
   error?: string;
@@ -358,6 +366,7 @@ export interface NlResponse {
   sql?: string;
   generationProvenance?: GenerationProvenance;
   provenanceLabel?: 'Verified pattern' | 'AI-built';
+  queryReuse?: NlQueryReuseMetadata;
   explanation?: string;
   reportDisclosures?: string[];
   dataSource?: 'folio' | 'local';

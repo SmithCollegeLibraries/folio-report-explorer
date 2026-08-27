@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   askNl: vi.fn(),
   submitQuery: vi.fn(),
   fetchQueryReuseCandidate: vi.fn(),
+  recordQueryReuseDecision: vi.fn(),
 }));
 
 const toastMocks = vi.hoisted(() => ({
@@ -30,7 +31,7 @@ vi.mock('../api/client', () => ({
   downloadExportCsv: vi.fn(),
   saveClarificationResolution: vi.fn(),
   saveQueryFeedback: vi.fn(),
-  recordQueryReuseDecision: vi.fn().mockResolvedValue(undefined),
+  recordQueryReuseDecision: apiMocks.recordQueryReuseDecision,
 }));
 
 vi.mock('../hooks/useAuth', () => ({
@@ -102,6 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   apiMocks.fetchQueryReuseCandidate.mockResolvedValue({ match: null });
   apiMocks.submitQuery.mockResolvedValue({ jobId: 'job-success' });
+  apiMocks.recordQueryReuseDecision.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -234,5 +236,131 @@ describe('Ask request lifecycle', () => {
         null,
       );
     });
+  });
+
+  it('automatically executes a reusable query without showing a reuse interstitial', async () => {
+    const reusedSql = 'SELECT COUNT(*) AS item_count FROM inventory.item__t';
+    apiMocks.fetchQueryReuseCandidate.mockResolvedValue({
+      match: {
+        jobId: 'job-previous',
+        previousPrompt: 'Count inventory items',
+        sql: reusedSql,
+        dataSource: 'folio',
+        score: 100,
+        matchReasons: ['completed_successfully', 'same_data_source', 'same_campus'],
+        rowCount: 1,
+        executionTimeMs: 24,
+        completedAt: '2026-08-26 12:00:00',
+        generationProvenance: 'verified_pattern',
+        provenanceLabel: 'Verified pattern',
+      },
+    });
+
+    renderAsk();
+    submitQuestion('Count inventory items');
+
+    expect(await screen.findByRole('heading', { name: 'Reused previous query' })).toBeInTheDocument();
+    expect(screen.queryByText('Previous successful query found')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run SQL' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiMocks.submitQuery).toHaveBeenCalledTimes(1);
+      expect(apiMocks.submitQuery.mock.calls[0][0]).toBe(reusedSql);
+    });
+  });
+
+  it('generates fresh SQL from a reused result without checking reuse again', async () => {
+    const reusedSql = 'SELECT COUNT(*) AS item_count FROM inventory.item__t';
+    apiMocks.fetchQueryReuseCandidate.mockResolvedValue({
+      match: {
+        jobId: 'job-previous',
+        previousPrompt: 'Count inventory items',
+        sql: reusedSql,
+        dataSource: 'folio',
+        score: 100,
+        matchReasons: ['completed_successfully'],
+        rowCount: 1,
+        executionTimeMs: 24,
+        completedAt: '2026-08-26 12:00:00',
+        generationProvenance: 'verified_pattern',
+        provenanceLabel: 'Verified pattern',
+      },
+    });
+    apiMocks.askNl.mockResolvedValue({
+      sql: 'SELECT COUNT(*) AS fresh_count FROM inventory.item__t',
+      dataSource: 'folio',
+      generationProvenance: 'ai_built',
+      provenanceLabel: 'AI-built',
+    });
+
+    renderAsk();
+    submitQuestion('Count inventory items');
+    fireEvent.click(await screen.findByRole('button', { name: 'Ask AI for new SQL' }));
+
+    expect(await screen.findByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Reused previous query' })).not.toBeInTheDocument();
+    expect(apiMocks.fetchQueryReuseCandidate).toHaveBeenCalledTimes(1);
+    expect(apiMocks.recordQueryReuseDecision).toHaveBeenCalledWith({
+      decision: 'bypassed',
+      candidateJobId: 'job-previous',
+      prompt: 'Count inventory items',
+    });
+  });
+
+  it('opens the existing SQL correction editor from a reused result', async () => {
+    const reusedSql = 'SELECT COUNT(*) AS item_count FROM inventory.item__t';
+    apiMocks.fetchQueryReuseCandidate.mockResolvedValue({
+      match: {
+        jobId: 'job-previous',
+        previousPrompt: 'Count inventory items',
+        sql: reusedSql,
+        dataSource: 'folio',
+        score: 100,
+        matchReasons: ['completed_successfully'],
+        rowCount: 1,
+        executionTimeMs: 24,
+        completedAt: '2026-08-26 12:00:00',
+        generationProvenance: 'verified_pattern',
+        provenanceLabel: 'Verified pattern',
+      },
+    });
+
+    renderAsk();
+    submitQuestion('Count inventory items');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit SQL' }));
+
+    expect(screen.getByRole('heading', { name: 'Correct this query' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue(reusedSql)).toBeInTheDocument();
+  });
+
+  it('runs edited reused SQL as an AI-built result', async () => {
+    const reusedSql = 'SELECT COUNT(*) AS item_count FROM inventory.item__t';
+    const editedSql = 'SELECT COUNT(*) AS item_count FROM inventory.item__t WHERE true';
+    apiMocks.fetchQueryReuseCandidate.mockResolvedValue({
+      match: {
+        jobId: 'job-previous',
+        previousPrompt: 'Count inventory items',
+        sql: reusedSql,
+        dataSource: 'folio',
+        score: 100,
+        matchReasons: ['completed_successfully'],
+        rowCount: 1,
+        executionTimeMs: 24,
+        completedAt: '2026-08-26 12:00:00',
+        generationProvenance: 'verified_pattern',
+        provenanceLabel: 'Verified pattern',
+      },
+    });
+
+    renderAsk();
+    submitQuestion('Count inventory items');
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit SQL' }));
+    fireEvent.change(screen.getByDisplayValue(reusedSql), { target: { value: editedSql } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run edited SQL' }));
+
+    await waitFor(() => {
+      expect(apiMocks.submitQuery).toHaveBeenCalledTimes(2);
+      expect(apiMocks.submitQuery.mock.calls[1][0]).toBe(editedSql);
+    });
+    expect(screen.getByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
   });
 });

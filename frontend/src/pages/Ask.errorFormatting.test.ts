@@ -377,11 +377,6 @@ describe('Ask error formatting', () => {
     expect(copy?.steps.join(' ')).not.toMatch(/review (the )?sql/i);
   });
 
-  it('offers reuse choices without assigning SQL review to the user', () => {
-    expect(AskPage.ASK_REUSE_CANDIDATE_MESSAGE).toContain('use the previous query');
-    expect(AskPage.ASK_REUSE_CANDIDATE_MESSAGE).not.toMatch(/review (the )?sql/i);
-  });
-
   it('does not treat advisory exploratory results as blocking clarifications', () => {
     expect(AskPage.shouldShowBlockingClarification?.({
       needsClarification: false,
