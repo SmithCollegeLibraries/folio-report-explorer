@@ -53,6 +53,15 @@ $failure = AskResponseContractService::withGenerationProvenance(
 askResponseAssertSame(false, isset($failure['generationProvenance']), 'No-SQL failures must not claim successful provenance.');
 askResponseAssertSame(false, isset($failure['provenanceLabel']), 'No-SQL failures must not retain a stale provenance label.');
 
+$requestBlocked = AskResponseContractService::toUserResponse([
+    'errorType' => 'request_blocked',
+    'message' => 'Report Explorer runs read-only reports and cannot modify database data.',
+    'route' => 'request_blocked',
+    'routeReason' => 'explicit_write_intent',
+]);
+askResponseAssertSame('request_blocked', $requestBlocked['errorType'] ?? null, 'Response normalization must preserve request-level write blocks.');
+askResponseAssertSame('request_blocked', $requestBlocked['route'] ?? null, 'A request block must not become a generation failure.');
+
 $finalizedSuccessCases = [
     [
         'name' => 'trusted canonical success',

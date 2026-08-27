@@ -356,8 +356,22 @@ export interface NlQueryReuseMetadata {
   score: number;
 }
 
+export type AskErrorType =
+  | 'request_blocked'
+  | 'sql_generation_failed'
+  | 'unsafe_generated_sql' // Older backend compatibility during rolling deployments.
+  | 'postgres_connectivity'
+  | 'database_cancelled'
+  | 'database_resource_limit'
+  | 'configured_resource_limit'
+  | 'policy_blocked'
+  | 'ai_timeout'
+  | 'ai_provider_failure'
+  | 'query_execution_failed'
+  | (string & {});
+
 export interface NlResponse {
-  errorType?: string;
+  errorType?: AskErrorType;
   error?: string;
   generationId?: string;
   conversationId?: string;

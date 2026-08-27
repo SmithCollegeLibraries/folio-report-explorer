@@ -258,18 +258,23 @@ export function getAskTerminalFailureMessage(result: NlResponse | null | undefin
     return 'Report Explorer could not build a valid report after retrying. Please retry.';
   }
 
+  if (result?.errorType === 'request_blocked') {
+    return 'Report Explorer runs read-only reports and cannot modify database data.';
+  }
+
   if (result?.errorType === 'unsafe_generated_sql') {
     return 'Report Explorer could not safely run this report. Please retry.';
   }
 
   return result?.message?.trim()
     || result?.error?.trim()
-    || 'Report Explorer could not safely run this report. Please retry.';
+    || 'Report Explorer could not build a valid report after retrying. Please retry.';
 }
 
 function isTypedAskTerminalFailure(result: NlResponse | null | undefined): boolean {
   return [
     'sql_generation_failed',
+    'request_blocked',
     'unsafe_generated_sql',
     'postgres_connectivity',
     'database_cancelled',

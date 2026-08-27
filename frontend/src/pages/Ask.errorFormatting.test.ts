@@ -67,6 +67,9 @@ describe('Ask error formatting', () => {
     expect(message).toBe('Report Explorer could not build a valid report after retrying. Please retry.');
     expect(message).not.toMatch(/correction|clarification|refine|resolved/i);
     expect(AskPage.getAskTerminalFailureMessage?.({
+      errorType: 'request_blocked',
+    })).toBe('Report Explorer runs read-only reports and cannot modify database data.');
+    expect(AskPage.getAskTerminalFailureMessage?.({
       errorType: 'unsafe_generated_sql',
       message: 'Do not expose this repair diagnostic.',
     })).toBe('Report Explorer could not safely run this report. Please retry.');
@@ -79,6 +82,10 @@ describe('Ask error formatting', () => {
 
   it('routes typed no-SQL hard failures ahead of rollback recovery', () => {
     const cases = [
+      {
+        errorType: 'request_blocked',
+        message: 'Do not expose generated correction copy.',
+      },
       {
         errorType: 'postgres_connectivity',
         message: 'I could not connect to the FOLIO reporting database. Please retry.',
@@ -103,7 +110,11 @@ describe('Ask error formatting', () => {
         validationSummary: { status: 'rejected' as const, repairAttempts: 0 },
       };
       expect(AskPage.getAskResponseView?.(result)).toBe('terminal_failure');
-      expect(AskPage.getAskTerminalFailureMessage?.(result)).toMatch(/retry|try again/i);
+      if (response.errorType === 'request_blocked') {
+        expect(AskPage.getAskTerminalFailureMessage?.(result)).toMatch(/read-only/i);
+      } else {
+        expect(AskPage.getAskTerminalFailureMessage?.(result)).toMatch(/retry|try again/i);
+      }
       expect(AskPage.shouldShowLegacyRecovery?.(result)).toBe(false);
     }
   });
