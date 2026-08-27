@@ -524,12 +524,12 @@ $forcedLegacyExplicitFailure = generateTwoLaneCase(
         geminiText($forcedLegacyMissingIdentifierSql),
         geminiText($forcedLegacyMissingIdentifierSql),
         geminiText($forcedLegacyMissingIdentifierSql),
+        geminiText("SELECT inst.title FROM inventory.instance__t inst WHERE inst.hrid IN ('in0001', 'in0002')"),
     ],
     null
 );
-repairAssertSame(false, isset($forcedLegacyExplicitFailure['sql']), 'Forced legacy SQL that drops an explicit identifier must never execute.');
-repairAssertSame('sql_generation_failed', $forcedLegacyExplicitFailure['errorType'] ?? null, 'Forced legacy explicit-value exhaustion must use the terminal generation failure.');
-repairAssertSame(3, count(TestTransport::$requests), 'Forced legacy explicit-value validation must consume the initial request and two bounded repairs.');
+repairAssertSame(true, isset($forcedLegacyExplicitFailure['sql']), 'Forced legacy explicit-value exhaustion must start a fresh AI generation cycle.');
+repairAssertSame(4, count(TestTransport::$requests), 'Forced legacy explicit-value recovery must use one fresh AI request after the first bounded cycle.');
 Yii::$app->params['nl2sqlForceLegacy'] = false;
 
 Yii::$logs = [];
@@ -585,6 +585,7 @@ $unchangedCandidateSql = "SELECT inst.title, inst.publication_date FROM inventor
 TestTransport::$responses = [
     'unchangedCandidateResponse',
     'unchangedCandidateResponse',
+    geminiText($seededRepairedSql),
 ];
 TestTransport::$requests = [];
 $unchangedSeededLane = $aiBuiltLane->invoke(
@@ -603,10 +604,8 @@ $unchangedSeededLane = $aiBuiltLane->invoke(
     'Canonical semantic validation requires AI review.',
     'inventory_library_location_listing'
 );
-repairAssertSame(false, isset($unchangedSeededLane['sql']), 'A canonical candidate that still omits an explicit identifier after final AI review must not execute.');
-repairAssertSame('sql_generation_failed', $unchangedSeededLane['errorType'] ?? null, 'An unchanged explicit-identifier mismatch must remain terminal after bounded AI review.');
-repairAssertSame(2, count(TestTransport::$requests), 'An unchanged seeded candidate must use both bounded AI reviews.');
-repairAssertSame(false, isset($unchangedSeededLane['assumptions']), 'Terminal explicit-identifier failures must not expose advisory assumptions.');
+repairAssertSame($seededRepairedSql, $unchangedSeededLane['sql'] ?? null, 'A seeded explicit-identifier mismatch must receive one fresh AI generation cycle.');
+repairAssertSame(3, count(TestTransport::$requests), 'A seeded explicit-identifier mismatch must use a fresh AI request after both bounded reviews.');
 
 TestTransport::$responses = [
     geminiText('SELECT mt.id FROM inventory.missing_table__t mt'),
@@ -967,6 +966,9 @@ TestTransport::$responses = [
     geminiText('SELECT a.id FROM inventory.missing_a__t a'),
     geminiText('SELECT b.id FROM inventory.missing_b__t b'),
     geminiText('SELECT c.id FROM inventory.missing_c__t c'),
+    geminiText('SELECT d.id FROM inventory.missing_d__t d'),
+    geminiText('SELECT e.id FROM inventory.missing_e__t e'),
+    geminiText('SELECT f.id FROM inventory.missing_f__t f'),
 ];
 Yii::$logs = [];
 $exhaustedPrompt = 'Compare identifiers across unsupported inventory relations.';
@@ -988,13 +990,14 @@ TestTransport::$responses = [
     geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
     geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
     geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20"),
+    geminiText("SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002') LIMIT 20"),
 ];
 Yii::$logs = [];
+TestTransport::$requests = [];
 $explicitRecovery = GeminiService::generateSqlWithShadow($explicitRecoveryPrompt, null, null, true);
-repairAssertSame(false, isset($explicitRecovery['sql']), 'A final candidate with missing or unexpected explicit identifiers must never execute.');
-repairAssertSame('sql_generation_failed', $explicitRecovery['errorType'] ?? null, 'Explicit-value exhaustion must remain a terminal data-correctness failure.');
-repairAssertSame(false, strpos(json_encode($explicitRecovery), 'EXPLICIT REPORT VALUES') !== false, 'Terminal responses must not expose server-authored explicit-value guidance.');
-repairAssertSame(false, strpos(json_encode($explicitRecovery), 'SQL filter') !== false, 'Terminal responses must not expose SQL-oriented repair guidance.');
+repairAssertSame(true, isset($explicitRecovery['sql']), 'Explicit-value exhaustion must start a fresh AI generation cycle.');
+repairAssertSame(4, count(TestTransport::$requests), 'Explicit-value recovery must use one fresh AI request after the first bounded cycle.');
+repairAssertSame(1, $explicitRecovery['_askEvidence']['freshGenerationAttempts'] ?? null, 'Explicit-value recovery evidence must record the fresh generation cycle.');
 
 $routedExplicitPrompt = 'For instance numbers in0001, in0002, show title, barcode, and publication date. Limit 20.';
 $routedReferencePrompt = $routedExplicitPrompt

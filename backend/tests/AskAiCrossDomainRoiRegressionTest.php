@@ -349,11 +349,17 @@ RoiTestTransport::$responses = [
     roiRegressionGeminiText('SELECT first.id FROM inventory.missing_first__t first'),
     roiRegressionGeminiText('SELECT second.id FROM inventory.missing_second__t second'),
     roiRegressionGeminiText('SELECT third.id FROM inventory.missing_third__t third'),
+    roiRegressionGeminiText('SELECT fourth.id FROM inventory.missing_fourth__t fourth'),
+    roiRegressionGeminiText('SELECT fifth.id FROM inventory.missing_fifth__t fifth'),
+    roiRegressionGeminiText('SELECT sixth.id FROM inventory.missing_sixth__t sixth'),
 ];
 $rejectedCandidates = [
     'SELECT first.id FROM inventory.missing_first__t first',
     'SELECT second.id FROM inventory.missing_second__t second',
     'SELECT third.id FROM inventory.missing_third__t third',
+    'SELECT fourth.id FROM inventory.missing_fourth__t fourth',
+    'SELECT fifth.id FROM inventory.missing_fifth__t fifth',
+    'SELECT sixth.id FROM inventory.missing_sixth__t sixth',
 ];
 RoiTestTransport::$requests = [];
 
@@ -363,7 +369,11 @@ roiRegressionAssertSame('sql_generation_failed', $exhausted['errorType'] ?? null
 roiRegressionAssertSame('generation_failed', $exhausted['route'] ?? null, 'Exhaustion must not return the legacy recovery route.');
 roiRegressionAssertSame('sql_repair_exhausted', $exhausted['routeReason'] ?? null, 'Exhaustion must expose the shared repair-budget reason.');
 roiRegressionAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion must stop after two repair calls.');
-roiRegressionAssertSame(3, count(RoiTestTransport::$requests), 'Exhaustion should make one initial call and no more than two repairs.');
+roiRegressionAssertSame(
+    6,
+    count(RoiTestTransport::$requests),
+    'Exhaustion should occur only after the original and fresh AI generation cycles each use their two repairs.'
+);
 roiRegressionAssertSame(
     'Report Explorer could not safely run this report. Please retry.',
     $exhausted['message'] ?? null,
@@ -377,6 +387,7 @@ unset($ordinaryExhausted['_askEvidence']);
 roiRegressionAssertNoSqlLeak($ordinaryExhausted, $rejectedCandidates);
 roiRegressionAssertSame($rejectedCandidates[0], $exhausted['_askEvidence']['initialSql'] ?? null, 'Trusted exhausted evidence must retain the initial rejected candidate for structural persistence.');
 roiRegressionAssertSame(null, $exhausted['_askEvidence']['finalSql'] ?? null, 'Trusted exhausted evidence must not identify rejected SQL as executable final SQL.');
+roiRegressionAssertSame(1, $exhausted['_askEvidence']['freshGenerationAttempts'] ?? null, 'Exhausted evidence must record the fresh AI generation cycle.');
 
 fwrite(STDOUT, "Ask AI cross-domain ROI regression test passed\n");
 }

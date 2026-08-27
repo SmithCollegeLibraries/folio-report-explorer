@@ -117,6 +117,24 @@ namespace app\services {
                 ];
             }
 
+            if ($prompt === 'Show annual checkout counts at Neilson Library for each of the last five completed calendar years.') {
+                return [
+                    'needsClarification' => false,
+                    'resolvedFilters' => [
+                        [
+                            'dimension' => 'library',
+                            'source_table' => 'inventory.loclibrary__t',
+                            'column' => 'name',
+                            'values' => ['SC Neilson Library'],
+                            'value_metadata' => [
+                                'SC Neilson Library' => ['campus_name' => 'Smith College'],
+                            ],
+                        ],
+                    ],
+                    'guidanceLines' => [],
+                ];
+            }
+
             return [
                 'needsClarification' => false,
                 'resolvedFilters' => [],
@@ -379,6 +397,42 @@ SQL;
     $crossDomain = GeminiService::generateSqlWithShadow($crossDomainPrompt, 'Smith College');
     twoLaneAssertTrustedSuccess($crossDomain, 'ai_built', 'novel cross-domain request');
     twoLaneAssertSame(1, count(TestTransport::$requests), 'Novel cross-domain routing must go directly to AI-built generation.');
+
+    $annualCheckoutPrompt = 'Show annual checkout counts at Neilson Library for each of the last five completed calendar years.';
+    $invalidAnnualCheckoutSql = 'SELECT checkout_year FROM circulation.unknown_checkout_events__t';
+    $validAnnualCheckoutSql = <<<'SQL'
+SELECT EXTRACT(YEAR FROM al.created_date)::int AS calendar_year,
+       COUNT(*) AS checkout_count
+FROM circulation.audit_loan__t al
+JOIN inventory.item__t item ON item.id = al.loan__item_id
+JOIN inventory.location__t loc ON loc.id = item.effective_location_id
+JOIN inventory.loclibrary__t lib ON lib.id = loc.library_id
+WHERE lib.name = 'SC Neilson Library'
+  AND al.loan__action IN ('checkedout', 'checkedOutThroughOverride')
+  AND al.created_date >= DATE_TRUNC('year', CURRENT_DATE) - INTERVAL '5 years'
+  AND al.created_date < DATE_TRUNC('year', CURRENT_DATE)
+GROUP BY EXTRACT(YEAR FROM al.created_date)
+ORDER BY calendar_year
+SQL;
+    TestTransport::$responses = [
+        twoLaneGeminiSql($invalidAnnualCheckoutSql),
+        twoLaneGeminiSql($invalidAnnualCheckoutSql),
+        twoLaneGeminiSql($invalidAnnualCheckoutSql),
+        twoLaneGeminiSql($validAnnualCheckoutSql),
+    ];
+    TestTransport::$requests = [];
+    $annualCheckouts = GeminiService::generateSqlWithShadow($annualCheckoutPrompt, 'Smith College');
+    twoLaneAssertTrustedSuccess($annualCheckouts, 'ai_built', 'annual Neilson checkout fallback');
+    twoLaneAssertSame(
+        4,
+        count(TestTransport::$requests),
+        'An unsupported report whose first AI candidate chain exhausts validation must receive one fresh AI generation.'
+    );
+    twoLaneAssertContains(
+        "lib.name = 'SC Neilson Library'",
+        (string)$annualCheckouts['sql'],
+        'Fresh AI generation must retain the resolved Neilson library scope.'
+    );
 
     $overflowIdentifiers = [];
     foreach (range(1, 501) as $identifierNumber) {

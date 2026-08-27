@@ -548,6 +548,18 @@ TestTransport::$responses = [
         "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
         $untrustedRoutedExplanation
     ),
+    geminiSql(
+        "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
+        $untrustedRoutedExplanation
+    ),
+    geminiSql(
+        "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
+        $untrustedRoutedExplanation
+    ),
+    geminiSql(
+        "SELECT inst.title, item.barcode, inst.publication_date FROM inventory.instance__t inst JOIN inventory.item__t item ON item.id = inst.id WHERE inst.hrid IN ('in0001','in0002','in9999') LIMIT 20",
+        $untrustedRoutedExplanation
+    ),
 ];
 TestTransport::$requests = [];
 $previousForceLegacy = Yii::$app->params['nl2sqlForceLegacy'];
@@ -562,7 +574,7 @@ $routedRecovery = GeminiService::generateSqlWithShadow(
     $routedTransport
 );
 Yii::$app->params['nl2sqlForceLegacy'] = $previousForceLegacy;
-assertSameValue(3, count(TestTransport::$requests), 'Routed exhaustion should make one generation call plus exactly two repair calls.');
+assertSameValue(6, count(TestTransport::$requests), 'Routed exhaustion should occur only after the original and fresh AI cycles each use two repairs.');
 assertSameValue(2, $routedRecovery['validationSummary']['repairAttempts'] ?? null, 'Routed terminal review must preserve the shared two-attempt repair cap.');
 assertSameValue(false, isset($routedRecovery['sql']), 'Routed explicit-identifier exhaustion must not retain executable SQL.');
 assertSameValue('sql_generation_failed', $routedRecovery['errorType'] ?? null, 'Routed explicit-identifier exhaustion must remain terminal.');

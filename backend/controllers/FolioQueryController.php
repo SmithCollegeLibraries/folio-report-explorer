@@ -541,6 +541,19 @@ class FolioQueryController extends Controller
                 : $this->classifyPreflightErrorFamily($error);
             $repairAttempts = (int)($result['repairAttempts'] ?? 0);
             if ($repairAttempts >= 2) {
+                $freshResult = $this->regenerateAiBuiltNlResultAfterExhaustion(
+                    $result,
+                    $rawQuestion,
+                    $campus,
+                    $generationPrompt
+                );
+                if ($freshResult !== null) {
+                    if (!isset($freshResult['sql'])) {
+                        return $freshResult;
+                    }
+                    $result = $freshResult;
+                    continue;
+                }
                 $this->logExploratoryTerminalOutcome(
                     $result,
                     $rawQuestion,
@@ -592,11 +605,49 @@ class FolioQueryController extends Controller
             }
 
             if (!isset($result['sql'])) {
+                $freshResult = $this->regenerateAiBuiltNlResultAfterExhaustion(
+                    $result,
+                    $rawQuestion,
+                    $campus,
+                    $generationPrompt
+                );
+                if ($freshResult !== null) {
+                    if (!isset($freshResult['sql'])) {
+                        return $freshResult;
+                    }
+                    $result = $freshResult;
+                    continue;
+                }
                 return $this->buildAiSqlGenerationFailedResponse($result);
             }
         }
 
         return $result;
+    }
+
+    private function regenerateAiBuiltNlResultAfterExhaustion(
+        array $result,
+        string $rawQuestion,
+        $campus,
+        string $generationPrompt
+    ): ?array {
+        if (!$this->isAiRepairEligible($result)) {
+            return null;
+        }
+        $evidence = is_array($result['_askEvidence'] ?? null)
+            ? $result['_askEvidence']
+            : [];
+        if ((int)($evidence['freshGenerationAttempts'] ?? 0) >= 1) {
+            return null;
+        }
+
+        $freshResult = GeminiService::regenerateAiBuiltSqlAfterExhaustion(
+            $rawQuestion,
+            $campus,
+            $generationPrompt,
+            $result
+        );
+        return $freshResult === [] ? null : $freshResult;
     }
 
     private function clampExploratoryRepairAttempts($repairAttempts): int

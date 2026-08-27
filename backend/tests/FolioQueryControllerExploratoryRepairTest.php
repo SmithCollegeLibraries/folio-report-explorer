@@ -51,6 +51,8 @@ namespace app\services {
         public static $generationFailure;
         public static $preflightRepairResult;
         public static $preflightRepairFailure;
+        public static $freshGenerationCalls = [];
+        public static $freshGenerationResult = [];
 
         public static function isAiTimeoutMessage($message): bool
         {
@@ -122,6 +124,22 @@ namespace app\services {
                     ],
                 ],
             ];
+        }
+
+        public static function regenerateAiBuiltSqlAfterExhaustion(
+            string $originalQuestion,
+            $campus,
+            string $generationPrompt,
+            array $currentResult
+        ): array {
+            self::$freshGenerationCalls[] = [
+                'originalQuestion' => $originalQuestion,
+                'campus' => $campus,
+                'generationPrompt' => $generationPrompt,
+                'currentResult' => $currentResult,
+            ];
+
+            return self::$freshGenerationResult;
         }
     }
     class SettingsService {}
@@ -438,6 +456,57 @@ namespace {
     repairAssertNotContains('request is preserved', strtolower($exhaustedJson), 'Exhaustion must not promise request preservation.');
     repairAssertNotContains('missing_column', $exhaustedJson, 'Exhaustion must not expose rejected SQL.');
     repairAssertNotContains('internal resolver trace', $exhaustedJson, 'Exhaustion must not expose resolver traces.');
+
+    \app\services\GeminiService::$freshGenerationCalls = [];
+    \app\services\GeminiService::$freshGenerationResult = [
+        'sql' => 'SELECT EXTRACT(YEAR FROM al.created_date) AS calendar_year, COUNT(*) AS checkout_count FROM circulation.audit_loan__t al GROUP BY EXTRACT(YEAR FROM al.created_date)',
+        'dataSource' => 'folio',
+        'mode' => 'exploratory',
+        'route' => 'exploratory_legacy_freeform',
+        'routeReason' => 'unsupported_query_family',
+        'generationProvenance' => 'ai_built',
+        'provenanceLabel' => 'AI-built',
+        'repairAttempts' => 0,
+        '_askEvidence' => ['freshGenerationAttempts' => 1],
+    ];
+    $freshPreflightCalls = 0;
+    $freshAfterPreflightExhaustion = $validateAndRepair->invoke(
+        $controller,
+        [
+            'sql' => 'SELECT missing_column FROM inventory.instance__t',
+            'dataSource' => 'folio',
+            'mode' => 'exploratory',
+            'route' => 'exploratory_legacy_freeform',
+            'routeReason' => 'unsupported_query_family',
+            'generationProvenance' => 'ai_built',
+            'provenanceLabel' => 'AI-built',
+            'repairAttempts' => 2,
+            '_askEvidence' => ['freshGenerationAttempts' => 0],
+        ],
+        'Show annual checkout counts at Neilson Library for each of the last five completed calendar years.',
+        'Smith College',
+        function () use (&$freshPreflightCalls): array {
+            $freshPreflightCalls++;
+            return $freshPreflightCalls === 1
+                ? ['error' => 'column "missing_column" does not exist']
+                : ['rows' => 5, 'cost' => 10.0];
+        },
+        null,
+        'Show annual checkout counts at Neilson Library for each of the last five completed calendar years.'
+    );
+    repairAssertSame(
+        1,
+        count(\app\services\GeminiService::$freshGenerationCalls),
+        'Database-preflight repair exhaustion must start one fresh AI generation before returning a terminal failure.'
+    );
+    repairAssertSame(2, $freshPreflightCalls, 'Fresh AI SQL must be preflighted before it is returned.');
+    repairAssertSame(
+        \app\services\GeminiService::$freshGenerationResult['sql'],
+        $freshAfterPreflightExhaustion['sql'] ?? null,
+        'A fresh AI candidate that passes preflight must run as the final AI-built result.'
+    );
+    \app\services\GeminiService::$freshGenerationCalls = [];
+    \app\services\GeminiService::$freshGenerationResult = [];
 
     $semanticRepairCalls = 0;
     $semanticExhausted = $validateAndRepair->invoke(

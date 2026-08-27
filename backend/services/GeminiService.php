@@ -518,6 +518,27 @@ class GeminiService
             );
         }
 
+        if (self::isRetryableAiBuiltExhaustion($result)) {
+            self::logNlTelemetry('nl2sql.ai_fresh_generation_retry', [
+                'reason' => self::sanitizeTelemetryLabel($reason, 'ai_generation_exhausted'),
+                'familyKey' => $familyKey === ''
+                    ? null
+                    : self::sanitizeTelemetryLabel($familyKey, 'canonical_family'),
+                'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
+            ]);
+            $previousEvidence = is_array($result['_askEvidence'] ?? null)
+                ? $result['_askEvidence']
+                : [];
+            $result = self::generateExploratorySqlResponse(
+                $generationPrompt,
+                $campus,
+                $reason,
+                $rawQuestion,
+                $resolvedFilters
+            );
+            $result = self::withFreshGenerationEvidence($result, $previousEvidence);
+        }
+
         if (isset($result['sql'])) {
             $result['mode'] = 'exploratory';
             $result = AskResponseContractService::withGenerationProvenance(
@@ -526,6 +547,13 @@ class GeminiService
             );
         }
         return $result;
+    }
+
+    private static function isRetryableAiBuiltExhaustion(array $result): bool
+    {
+        return !isset($result['sql'])
+            && ($result['errorType'] ?? null) === 'sql_generation_failed'
+            && ($result['routeReason'] ?? null) === 'sql_repair_exhausted';
     }
 
     private static function aiBuiltSourceLane(string $reason): string
@@ -6466,6 +6494,77 @@ PROMPT;
     public static function intentToQueryDefinition($intent)
     {
         return QueryIntentService::toQueryDefinition($intent);
+    }
+
+    /**
+     * Start one new AI generation cycle after a candidate exhausts database
+     * preflight repair. The controller preflights the returned candidate again.
+     */
+    public static function regenerateAiBuiltSqlAfterExhaustion(
+        string $originalQuestion,
+        $campus,
+        string $generationPrompt,
+        array $currentResult
+    ): array {
+        $currentEvidence = is_array($currentResult['_askEvidence'] ?? null)
+            ? $currentResult['_askEvidence']
+            : [];
+        if ((int)($currentEvidence['freshGenerationAttempts'] ?? 0) >= 1) {
+            return $currentResult;
+        }
+
+        $resolvedFilters = is_array($currentEvidence['resolvedReferenceFilters'] ?? null)
+            ? $currentEvidence['resolvedReferenceFilters']
+            : [];
+        $reason = trim((string)($currentResult['routeReason'] ?? ''));
+        if ($reason === '' || $reason === 'sql_repair_exhausted') {
+            $reason = 'unsupported_query_family';
+        }
+
+        self::logNlTelemetry('nl2sql.ai_fresh_generation_retry', [
+            'reason' => self::sanitizeTelemetryLabel($reason, 'preflight_repair_exhausted'),
+            'promptFingerprint' => self::fingerprintPrompt($originalQuestion),
+            'stage' => 'postgres_preflight',
+        ]);
+
+        $freshResult = self::generateExploratorySqlResponse(
+            $generationPrompt,
+            $campus,
+            $reason,
+            $originalQuestion,
+            $resolvedFilters
+        );
+        if (isset($freshResult['sql'])) {
+            $freshResult['mode'] = 'exploratory';
+            $freshResult = AskResponseContractService::withGenerationProvenance(
+                $freshResult,
+                AskResponseContractService::PROVENANCE_AI_BUILT
+            );
+        }
+
+        return self::withFreshGenerationEvidence($freshResult, $currentEvidence);
+    }
+
+    private static function withFreshGenerationEvidence(
+        array $freshResult,
+        array $previousEvidence
+    ): array {
+        $freshEvidence = is_array($freshResult['_askEvidence'] ?? null)
+            ? $freshResult['_askEvidence']
+            : [];
+
+        return self::withAskEvidence($freshResult, array_merge(
+            $previousEvidence,
+            $freshEvidence,
+            [
+                'initialSql' => $previousEvidence['initialSql']
+                    ?? $freshEvidence['initialSql']
+                    ?? null,
+                'finalSql' => $freshEvidence['finalSql'] ?? null,
+                'repairAttempts' => $freshEvidence['repairAttempts'] ?? 0,
+                'freshGenerationAttempts' => 1,
+            ]
+        ));
     }
 
     /**
