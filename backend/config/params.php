@@ -43,6 +43,10 @@ return [
         SettingsService::get('nl2sql_two_lane_enabled', 'NL2SQL_TWO_LANE_ENABLED', 'true'),
         FILTER_VALIDATE_BOOLEAN
     ),
+    'nl2sqlCoordinatorEnabled' => filter_var(
+        SettingsService::get('nl2sql_coordinator_enabled', 'NL2SQL_COORDINATOR_ENABLED', 'true'),
+        FILTER_VALIDATE_BOOLEAN
+    ),
     'nl2sqlHardenedPhysicalRoi' => filter_var(
         SettingsService::get(
             'nl2sql_hardened_physical_roi',

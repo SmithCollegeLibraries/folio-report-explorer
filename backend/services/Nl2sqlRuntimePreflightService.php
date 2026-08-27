@@ -25,6 +25,8 @@ class Nl2sqlRuntimePreflightService
             'nl2sqlForceLegacy' => (bool) ($params['nl2sqlForceLegacy'] ?? false),
             'nl2sqlTwoLaneEnabled' => !array_key_exists('nl2sqlTwoLaneEnabled', $params)
                 || (bool) $params['nl2sqlTwoLaneEnabled'],
+            'nl2sqlCoordinatorEnabled' => !array_key_exists('nl2sqlCoordinatorEnabled', $params)
+                || (bool) $params['nl2sqlCoordinatorEnabled'],
         ];
 
         $persistedRuntimeSettings = array_intersect_key($settings, array_flip([
@@ -35,6 +37,7 @@ class Nl2sqlRuntimePreflightService
             'nl2sql_shadow_sample_percent',
             'nl2sql_force_legacy',
             'nl2sql_two_lane_enabled',
+            'nl2sql_coordinator_enabled',
         ]));
 
         $warnings = [];
@@ -59,6 +62,10 @@ class Nl2sqlRuntimePreflightService
             $warnings[] = 'The strict blocker rollback path is active (`nl2sql_two_lane_enabled=false`).';
         }
 
+        if (!$effective['nl2sqlCoordinatorEnabled']) {
+            $warnings[] = 'The Ask generation coordinator rollback path is active (`nl2sql_coordinator_enabled=false`).';
+        }
+
         $artifacts = [];
         foreach ($artifactPaths as $label => $path) {
             $artifacts[$label] = self::buildArtifactSummary((string) $path);
@@ -76,6 +83,9 @@ class Nl2sqlRuntimePreflightService
                 'settingsPath' => dirname(__DIR__) . '/data/settings.json',
             ],
             'artifacts' => $artifacts,
+            'readinessNotes' => [
+                'nl2sqlCoordinatorEnabled' => 'This flag changes Ask routing only and does not rewrite stored provenance.',
+            ],
             'warnings' => $warnings,
         ];
     }

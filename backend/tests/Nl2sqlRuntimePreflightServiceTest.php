@@ -78,6 +78,11 @@ assertSameValue(
     $legacyDefaultReport['effective']['nl2sqlTwoLaneEnabled'] ?? null,
     'Older direct callers must retain the default-on two-lane rollout.'
 );
+assertSameValue(
+    true,
+    $legacyDefaultReport['effective']['nl2sqlCoordinatorEnabled'] ?? null,
+    'Older direct callers must receive the default-on Ask coordinator.'
+);
 assertTrueValue(!empty($legacyDefaultReport['artifacts']['canonicalQueryGraph']['hash'] ?? null), 'The preflight report should include canonical graph artifact hash metadata.');
 
 $intentReadyReport = $serviceClass::buildReport(
@@ -89,6 +94,7 @@ $intentReadyReport = $serviceClass::buildReport(
         'nl2sqlShadowSamplePercent' => 100,
         'nl2sqlForceLegacy' => false,
         'nl2sqlTwoLaneEnabled' => true,
+        'nl2sqlCoordinatorEnabled' => true,
     ],
     [
         'nl2sql_intent_mode' => true,
@@ -98,6 +104,7 @@ $intentReadyReport = $serviceClass::buildReport(
         'nl2sql_shadow_sample_percent' => 100,
         'nl2sql_force_legacy' => false,
         'nl2sql_two_lane_enabled' => true,
+        'nl2sql_coordinator_enabled' => true,
     ],
     $artifactPaths
 );
@@ -108,12 +115,24 @@ assertSameValue(true, $intentReadyReport['effective']['nl2sqlIntentMode'] ?? fal
 assertSameValue('intent', $intentReadyReport['effective']['nl2sqlPrimaryMode'] ?? null, 'The preflight report should surface the effective primary mode.');
 assertSameValue(false, $intentReadyReport['effective']['nl2sqlForceLegacy'] ?? true, 'The preflight report should surface the effective emergency rollback state.');
 assertSameValue(true, $intentReadyReport['effective']['nl2sqlTwoLaneEnabled'], 'Two-lane routing should be visible in preflight.');
+assertSameValue(true, $intentReadyReport['effective']['nl2sqlCoordinatorEnabled'], 'Ask coordinator routing should be visible in preflight.');
+assertContainsText(
+    'does not rewrite stored provenance',
+    (string)($intentReadyReport['readinessNotes']['nl2sqlCoordinatorEnabled'] ?? ''),
+    'Preflight should explain that the routing flag never rewrites stored provenance.'
+);
 assertSameValue([], $intentReadyReport['warnings'] ?? null, 'Healthy runtime parity should not emit warnings.');
 
 $rollback = $serviceClass::buildReport(
-    ['nl2sqlTwoLaneEnabled' => false],
-    ['nl2sql_two_lane_enabled' => false],
+    ['nl2sqlTwoLaneEnabled' => false, 'nl2sqlCoordinatorEnabled' => false],
+    ['nl2sql_two_lane_enabled' => false, 'nl2sql_coordinator_enabled' => false],
     $artifactPaths
+);
+assertTrueValue(
+    count(array_filter($rollback['warnings'], function ($warning) {
+        return strpos($warning, 'Ask generation coordinator rollback') !== false;
+    })) === 1,
+    'Preflight should identify the Ask coordinator rollback path.'
 );
 assertTrueValue(
     count(array_filter($rollback['warnings'], function ($warning) {
