@@ -199,8 +199,43 @@ $reviewedReuseMatch = PreviousSuccessfulQueryReuseService::findStrongMatch(
     ]
 );
 
-assertReuseTest($reviewedReuseMatch !== null, 'Expected a reviewed reuse match.');
-assertReuseTest($reviewedReuseMatch['jobId'] === 'older-human-reviewed-reuse', 'Expected human-reviewed reuse outcomes to outrank newer plain successful runs.');
+assertReuseTest($reviewedReuseMatch !== null, 'Expected a successful query candidate.');
+assertReuseTest($reviewedReuseMatch['jobId'] === 'newer-plain-run', 'Legacy reuse-panel decisions must not promote trust or outrank newer equivalent candidates.');
+assertReuseTest(
+    !in_array('human_reviewed_reuse', $reviewedReuseMatch['matchReasons'], true),
+    'Legacy reuse-panel decisions must not appear as trust evidence.'
+);
+
+$allStrongMatches = PreviousSuccessfulQueryReuseService::findStrongMatches(
+    'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.',
+    'folio',
+    ['campus' => 'Smith College'],
+    [
+        [
+            'id' => 'first-candidate',
+            'name' => 'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.',
+            'status' => 'completed',
+            'source' => 'nl',
+            'data_source' => 'folio',
+            'sql_text' => 'SELECT first.po_number FROM orders.purchase_order__t first',
+            'metadata' => json_encode(['originalPrompt' => 'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.']),
+            'completed_at' => '2026-06-06 09:00:00',
+        ],
+        [
+            'id' => 'second-candidate',
+            'name' => 'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.',
+            'status' => 'completed',
+            'source' => 'nl',
+            'data_source' => 'folio',
+            'sql_text' => 'SELECT second.po_number FROM orders.purchase_order__t second',
+            'metadata' => json_encode(['originalPrompt' => 'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.']),
+            'completed_at' => '2026-06-07 09:00:00',
+        ],
+    ]
+);
+assertReuseTest(count($allStrongMatches) === 2, 'The shaping helper must expose every strong candidate for QueryMemoryService trust evaluation.');
+assertReuseTest($allStrongMatches[0]['jobId'] === 'second-candidate', 'Candidate shaping should retain deterministic recency ordering.');
+assertReuseTest($allStrongMatches[0]['question'] !== '', 'Candidate shaping must expose the prior question to QueryMemoryService.');
 
 $newestTieMatch = PreviousSuccessfulQueryReuseService::findStrongMatch(
     'I would like to see all of the open standing orders with the fund code SCDPG or SCXPG we have at Smith College.',

@@ -17,22 +17,29 @@ class PreviousSuccessfulQueryReuseService
      */
     public static function findStrongMatch(string $prompt, string $dataSource, array $resolvedContext, array $jobs): ?array
     {
-        $best = null;
+        $matches = self::findStrongMatches($prompt, $dataSource, $resolvedContext, $jobs);
+        return $matches[0] ?? null;
+    }
+
+    /** Shape all strong candidates so QueryMemoryService can decide trust. */
+    public static function findStrongMatches(string $prompt, string $dataSource, array $resolvedContext, array $jobs): array
+    {
+        $matches = [];
         foreach ($jobs as $job) {
             $candidate = self::buildCandidate($prompt, $dataSource, $resolvedContext, $job);
             if ($candidate === null) {
                 continue;
             }
-            if ($best === null || self::compareCandidates($candidate, $best) > 0) {
-                $best = $candidate;
+            if ($candidate['score'] >= self::STRONG_MATCH_THRESHOLD) {
+                $matches[] = $candidate;
             }
         }
 
-        if ($best === null || $best['score'] < self::STRONG_MATCH_THRESHOLD) {
-            return null;
-        }
+        usort($matches, static function (array $left, array $right): int {
+            return -self::compareCandidates($left, $right);
+        });
 
-        return self::stripInternalRanking($best);
+        return array_map([self::class, 'stripInternalRanking'], $matches);
     }
 
     private static function buildCandidate(string $prompt, string $dataSource, array $resolvedContext, array $job): ?array
@@ -68,13 +75,9 @@ class PreviousSuccessfulQueryReuseService
             $matchReasons[] = 'same_domain';
         }
 
-        $reuseOutcomeRank = self::reuseOutcomeRank($metadata);
-        if ($reuseOutcomeRank > 0) {
-            $matchReasons[] = 'human_reviewed_reuse';
-        }
-
         $candidate = [
             'jobId' => (string)($job['id'] ?? ''),
+            'question' => $previousPrompt,
             'previousPrompt' => $previousPrompt,
             'sql' => $sql,
             'dataSource' => (string)($job['data_source'] ?? $job['dataSource'] ?? 'folio'),
@@ -84,7 +87,6 @@ class PreviousSuccessfulQueryReuseService
             'executionTimeMs' => isset($job['execution_time_ms']) ? (int)$job['execution_time_ms'] : null,
             'completedAt' => $job['completed_at'] ?? $job['completedAt'] ?? null,
             '_rankExactPrompt' => self::normalizePrompt($prompt) === self::normalizePrompt($previousPrompt) ? 1 : 0,
-            '_rankReuseOutcome' => $reuseOutcomeRank,
             '_rankCompletedAt' => self::timestampRank($job['completed_at'] ?? $job['completedAt'] ?? $job['created_at'] ?? null),
         ];
 
@@ -101,7 +103,7 @@ class PreviousSuccessfulQueryReuseService
 
     private static function compareCandidates(array $left, array $right): int
     {
-        foreach (['_rankExactPrompt', '_rankReuseOutcome', 'score', '_rankCompletedAt'] as $field) {
+        foreach (['_rankExactPrompt', 'score', '_rankCompletedAt'] as $field) {
             $leftValue = (int)($left[$field] ?? 0);
             $rightValue = (int)($right[$field] ?? 0);
             if ($leftValue === $rightValue) {
@@ -115,23 +117,8 @@ class PreviousSuccessfulQueryReuseService
 
     private static function stripInternalRanking(array $candidate): array
     {
-        unset($candidate['_rankExactPrompt'], $candidate['_rankReuseOutcome'], $candidate['_rankCompletedAt']);
+        unset($candidate['_rankExactPrompt'], $candidate['_rankCompletedAt']);
         return $candidate;
-    }
-
-    private static function reuseOutcomeRank(array $metadata): int
-    {
-        $reuse = $metadata['queryReuse'] ?? null;
-        if (!is_array($reuse)) {
-            return 0;
-        }
-
-        $decision = strtolower(trim((string)($reuse['decision'] ?? '')));
-        if (!in_array($decision, ['accepted', 'edited'], true)) {
-            return 0;
-        }
-
-        return !empty($reuse['edited']) || $decision === 'edited' ? 2 : 1;
     }
 
     private static function timestampRank($value): int
