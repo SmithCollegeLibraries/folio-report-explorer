@@ -179,6 +179,9 @@ namespace app\services {
             if (strpos((string)$sql, 'invalid_repair_shape') !== false) {
                 throw new \InvalidArgumentException('Only a single SELECT statement is allowed.');
             }
+            if (preg_match('/\b(?:INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|EXECUTE|COPY|MERGE|CALL|DO|VACUUM|ANALYZE)\b/i', (string)$sql) === 1) {
+                throw new \InvalidArgumentException('Only a read-only SELECT statement is allowed.');
+            }
             if (preg_match('/^\s*SELECT\b|^\s*WITH\b/i', (string)$sql) !== 1) {
                 throw new \InvalidArgumentException('Only SELECT queries are allowed.');
             }
@@ -943,24 +946,42 @@ repairAssertSame(2, $invalidRepairShape['repairAttempts'] ?? null, 'An invalid r
 repairAssertSame(3, count(TestTransport::$requests), 'The invalid repair scenario should consume its initial request and both repair requests.');
 repairAssertContains('multiple_statements', json_encode(TestTransport::$requests[count(TestTransport::$requests) - 1]), 'The remaining repair should receive only a safe multiple-statement category.');
 
-foreach ([
+TestTransport::$responses = [
     'DELETE FROM inventory.item__t',
-    "Here is the requested statement:\nDELETE FROM inventory.item__t",
-    "-- generated statement\nDELETE FROM inventory.item__t",
-    "/* generated statement */\nDELETE FROM inventory.item__t",
-] as $destructiveResponse) {
-    TestTransport::$responses = [$destructiveResponse];
-    $requestCount = count(TestTransport::$requests);
-    try {
-        GeminiService::generateSqlWithShadow('Remove obsolete items.', null, null, true);
-        fwrite(STDERR, "An unfenced destructive response must be a hard stop.\n");
-        exit(1);
-    } catch (ExploratorySqlValidationException $exception) {
-        repairAssertSame('non_select', $exception->getSafeCategory(), 'An unfenced destructive response should retain a non-SELECT safety category.');
-        repairAssertSame(false, $exception->isRepairable(), 'An unfenced destructive response must not be repairable.');
-        repairAssertSame($requestCount + 1, count(TestTransport::$requests), 'An unfenced destructive response should make no repair request.');
-    }
-}
+    geminiText('SELECT COUNT(*) AS item_count FROM inventory.item__t'),
+];
+TestTransport::$requests = [];
+$unsafeThenSafe = GeminiService::generateSqlWithShadow(
+    'Summarize inventory item counts for collection planning.',
+    null,
+    null,
+    true
+);
+repairAssertSame(
+    'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+    $unsafeThenSafe['sql'] ?? null,
+    'An unsafe AI candidate for a reporting request must consume regeneration, not the request.'
+);
+repairAssertSame(2, count(TestTransport::$requests), 'The unsafe candidate should trigger one replacement request.');
+repairAssertSame('ai_built', $unsafeThenSafe['generationProvenance'] ?? null, 'The safe replacement must retain AI-built provenance.');
+
+TestTransport::$responses = [
+    geminiText('WITH changed AS (DELETE FROM inventory.item__t RETURNING id) SELECT id FROM changed'),
+    geminiText('SELECT COUNT(*) AS item_count FROM inventory.item__t'),
+];
+TestTransport::$requests = [];
+$unsafeCteThenSafe = GeminiService::generateSqlWithShadow(
+    'Summarize inventory item counts for collection planning.',
+    null,
+    null,
+    true
+);
+repairAssertSame(
+    'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+    $unsafeCteThenSafe['sql'] ?? null,
+    'A data-modifying CTE must be rejected as a candidate and regenerated.'
+);
+repairAssertSame(2, count(TestTransport::$requests), 'A data-modifying CTE should consume one replacement request.');
 
 TestTransport::$responses = [
     geminiText('SELECT a.id FROM inventory.missing_a__t a'),

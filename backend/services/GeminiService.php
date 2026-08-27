@@ -770,7 +770,18 @@ class GeminiService
     ): array
     {
         $sql = (string)($result['sql'] ?? '');
-        SqlBuilderService::validateSafety($sql);
+        try {
+            SqlBuilderService::validateSafety($sql);
+        } catch (\InvalidArgumentException $exception) {
+            throw new ExploratorySqlValidationException(
+                'safety',
+                self::classifyInvalidRepairResponse($exception),
+                $sql,
+                true,
+                'The generated candidate was not a single read-only SELECT statement.',
+                $exception
+            );
+        }
         SqlBuilderService::validateTablePolicy($sql);
         self::validateTableReferences($sql);
 
@@ -7419,10 +7430,20 @@ PROMPT;
             );
         }
 
-        // Policy and destructive/non-SELECT failures are deliberate hard stops.
-        // Keep their original exception types so the repair coordinator cannot
-        // convert them into retryable validation feedback.
-        SqlBuilderService::validateSafety($sql);
+        // Policy violations remain hard stops. Candidate safety failures are
+        // adapted so a reporting request can spend its repair budget.
+        try {
+            SqlBuilderService::validateSafety($sql);
+        } catch (\InvalidArgumentException $exception) {
+            throw new ExploratorySqlValidationException(
+                'safety',
+                self::classifyInvalidRepairResponse($exception),
+                $sql,
+                true,
+                'The generated candidate was not a single read-only SELECT statement.',
+                $exception
+            );
+        }
         SqlBuilderService::validateTablePolicy($sql);
         self::validateTableReferences($sql);
 
@@ -7451,7 +7472,7 @@ PROMPT;
                 'safety',
                 'non_select',
                 trim($text),
-                false,
+                true,
                 'The AI response contains a non-SELECT SQL command: ' . $destructiveCommand . '.'
             );
         }
@@ -7499,7 +7520,7 @@ PROMPT;
 
     private static function findDestructiveSqlCommand(string $text): ?string
     {
-        $commands = 'INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|MERGE|CALL|DO|COPY|VACUUM|ANALYZE';
+        $commands = 'INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|EXECUTE|COPY|MERGE|CALL|DO|VACUUM|ANALYZE';
         if (preg_match('/(?:^|\R)\s*(' . $commands . ')\b/im', $text, $matches) === 1) {
             return strtoupper($matches[1]);
         }
