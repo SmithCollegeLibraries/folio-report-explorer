@@ -72,6 +72,8 @@ final class AskGenerationEvidenceService
         $policyBlocked = !empty($result['policyBlocked'])
             || !empty($requestContext['policyBlocked'])
             || $route === 'blocked'
+            || $route === 'request_blocked'
+            || ($result['errorType'] ?? null) === 'request_blocked'
             || ($result['routeReason'] ?? null) === 'ask_policy_block';
         $failureBoundary = self::isFailureBoundary($result, $route, $policyBlocked);
         $nonExecutableResponse = $failureBoundary
@@ -269,6 +271,7 @@ final class AskGenerationEvidenceService
     ): bool {
         if (
             $policyBlocked
+            || ($result['state'] ?? null) === 'candidate_rejected'
             || array_key_exists('error', $result)
             || self::nullableString($result['errorType'] ?? null) !== null
         ) {

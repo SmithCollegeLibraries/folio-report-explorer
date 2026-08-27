@@ -141,6 +141,23 @@ namespace app\services {
 
             return self::$freshGenerationResult;
         }
+
+        public static function generateFreshAiBuiltSql(
+            string $rawQuestion,
+            string $generationPrompt,
+            ?string $campus,
+            array $resolvedFilters = [],
+            string $reason = 'candidate_rejected'
+        ): array {
+            self::$freshGenerationCalls[] = [
+                'originalQuestion' => $rawQuestion,
+                'campus' => $campus,
+                'generationPrompt' => $generationPrompt,
+                'resolvedFilters' => $resolvedFilters,
+                'reason' => $reason,
+            ];
+            return self::$freshGenerationResult;
+        }
     }
     class SettingsService {}
     class DatabaseRetryService {}
@@ -272,7 +289,7 @@ namespace {
     Yii::$app = (object) [
         'response' => (object) ['statusCode' => 200, 'format' => null],
         'user' => (object) ['isGuest' => true, 'id' => null, 'identity' => null],
-        'params' => ['queryTimeoutMs' => 30000],
+        'params' => ['queryTimeoutMs' => 30000, 'nl2sqlCoordinatorEnabled' => false],
         'folioDb' => (object) [],
     ];
 
@@ -1403,30 +1420,27 @@ namespace {
     repairAssertSame(2, $staleSemantic['validationSummary']['repairAttempts'] ?? null, 'Semantic boundary recovery must preserve the exact shared repair count.');
 
     $unsafeRepairCalls = 0;
-    $unsafe = $validateAndRepair->invoke(
-        $controller,
-        ['sql' => 'DELETE FROM inventory.instance__t', 'mode' => 'canonical', 'repairAttempts' => 1],
-        'Delete old titles',
-        'Smith College',
-        function (): array {
-            fwrite(STDERR, "Unsafe SQL must be rejected before database preflight.\n");
-            exit(1);
-        },
-        function () use (&$unsafeRepairCalls): array {
-            $unsafeRepairCalls++;
-            return [];
-        }
-    );
-
+    $unsafeRejected = false;
+    try {
+        $validateAndRepair->invoke(
+            $controller,
+            ['sql' => 'DELETE FROM inventory.instance__t', 'mode' => 'canonical', 'repairAttempts' => 1],
+            'Delete old titles',
+            'Smith College',
+            function (): array {
+                fwrite(STDERR, "Unsafe SQL must be rejected before database preflight.\n");
+                exit(1);
+            },
+            function () use (&$unsafeRepairCalls): array {
+                $unsafeRepairCalls++;
+                return [];
+            }
+        );
+    } catch (\app\exceptions\ExploratorySqlValidationException $exception) {
+        $unsafeRejected = $exception->getStage() === 'safety' && $exception->isRepairable();
+    }
     repairAssertSame(0, $unsafeRepairCalls, 'Unsafe generated SQL must not enter repair.');
-    repairAssertSame('unsafe_generated_sql', $unsafe['errorType'] ?? null, 'Unsafe generated SQL should expose a distinct error type.');
-    repairAssertSame(0, $unsafe['validationSummary']['repairAttempts'] ?? null, 'Unsafe generated SQL should report zero repairs.');
-    repairAssertSame(false, array_key_exists('sql', $unsafe), 'Unsafe recovery must not include SQL.');
-    repairAssertSame(
-        'Report Explorer could not safely run this report. Please retry.',
-        $unsafe['message'] ?? null,
-        'Unsafe recovery should use concise Retry-only copy.'
-    );
+    repairAssertSame(true, $unsafeRejected, 'Unsafe generated SQL must become an internal repairable candidate rejection.');
 
     $unsafeCategory = $validateAndRepair->invoke(
         $controller,
@@ -1701,6 +1715,7 @@ namespace {
     \app\services\GeminiService::$generationFailure = null;
     Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
+    Yii::$app->params['nl2sqlCoordinatorEnabled'] = true;
     foreach ([
         [
             new \app\exceptions\ExploratorySqlValidationException(
@@ -1719,9 +1734,16 @@ namespace {
     ] as $unsafePublicCase) {
         \app\services\GeminiService::$generationFailure = $unsafePublicCase[0];
         \app\services\GeminiService::$generationCalls = [];
+        \app\services\GeminiService::$freshGenerationCalls = [];
+        \app\services\GeminiService::$freshGenerationResult = [
+            'sql' => 'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+            'mode' => 'exploratory',
+            'route' => 'exploratory',
+            'generationProvenance' => 'ai_built',
+        ];
         \app\services\GeminiService::$preflightRepairCalls = [];
         \app\services\SqlPreflightService::$calls = [];
-        \app\services\SqlPreflightService::$results = [];
+        \app\services\SqlPreflightService::$results = [[]];
         Yii::$app->request = new TestRequest([
             'prompt' => 'Unsafe fake-provider response.',
             'campus' => 'Smith College',
@@ -1732,18 +1754,29 @@ namespace {
         $unsafePublicController->reviewService = new CapturingAdministratorReviewService();
         $unsafePublicResponse = $unsafePublicController->actionNl();
 
-        repairAssertSame('unsafe_generated_sql', $unsafePublicResponse['errorType'] ?? null, $unsafePublicCase[1] . ' must retain its hard-failure type.');
+        repairAssertSame('ai_built', $unsafePublicResponse['generationProvenance'] ?? null, $unsafePublicCase[1] . ' must regenerate as AI-built SQL.');
+        repairAssertSame(false, isset($unsafePublicResponse['errorType']), $unsafePublicCase[1] . ' recovery must be a normal success.');
         repairAssertSame(1, count(\app\services\GeminiService::$generationCalls), $unsafePublicCase[1] . ' must cross the public generation boundary once.');
+        repairAssertSame(1, count(\app\services\GeminiService::$freshGenerationCalls), $unsafePublicCase[1] . ' must trigger one fresh AI generation.');
         repairAssertSame(0, count(\app\services\GeminiService::$preflightRepairCalls), $unsafePublicCase[1] . ' must not enter AI repair.');
-        repairAssertSame(0, count(\app\services\SqlPreflightService::$calls), $unsafePublicCase[1] . ' must stop before database preflight.');
-        repairAssertSame(
-            'Report Explorer could not safely run this report. Please retry.',
-            $unsafePublicResponse['message'] ?? null,
-            $unsafePublicCase[1] . ' must use concise Retry copy.'
-        );
-        repairAssertPublicHardFailure($unsafePublicResponse, $unsafePublicCase[1]);
+        repairAssertSame(1, count(\app\services\SqlPreflightService::$calls), $unsafePublicCase[1] . ' replacement must pass database preflight.');
     }
     \app\services\GeminiService::$generationFailure = null;
+
+    \app\services\GeminiService::$generationCalls = [];
+    \app\services\GeminiService::$freshGenerationCalls = [];
+    Yii::$app->request = new TestRequest([
+        'prompt' => 'Delete every inventory item.',
+        'campus' => 'Smith College',
+        'includeSuggestions' => false,
+    ]);
+    $blockedWriteController = new TestableFolioQueryController('folio-query', null);
+    $blockedWriteController->reviewService = new CapturingAdministratorReviewService();
+    $blockedWriteResponse = $blockedWriteController->actionNl();
+    repairAssertSame('request_blocked', $blockedWriteResponse['errorType'] ?? null, 'Explicit write intent must own the request-level block.');
+    repairAssertSame(0, count(\app\services\GeminiService::$generationCalls), 'Blocked write intent must not invoke initial generation.');
+    repairAssertSame(0, count(\app\services\GeminiService::$freshGenerationCalls), 'Blocked write intent must not invoke fresh AI generation.');
+    Yii::$app->params['nl2sqlCoordinatorEnabled'] = false;
 
     $publicPreflightHardStops = [
         [
@@ -1836,9 +1869,14 @@ namespace {
         'Ask must pass the raw question and consumed model-only generation context to post-preflight repair.'
     );
     repairAssertSame(
-        1,
-        preg_match('/unset\(\$generationTransport\)/', $controllerSource),
-        'Ask must consume the internal generation transport instead of serializing it into the final response.'
+        false,
+        strpos($controllerSource, 'buildUnsafeGeneratedSqlResponse'),
+        'The backend must not retain its retired unsafe response builder.'
+    );
+    repairAssertSame(
+        false,
+        strpos($controllerSource, 'isAskUnsafeGeneratedSqlFailure'),
+        'The backend must not retain its retired unsafe failure classifier.'
     );
 
     fwrite(STDOUT, "FolioQueryController exploratory repair test passed\n");

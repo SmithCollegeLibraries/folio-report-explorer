@@ -24,6 +24,7 @@ use app\services\SqlSelectStructureService;
 use app\services\AdministratorReviewService;
 use app\services\AskConfidenceClassificationService;
 use app\services\AskGenerationEvidenceService;
+use app\services\AskGenerationCoordinatorService;
 use app\services\AskResponseContractService;
 use app\services\AskUserExplanationService;
 use app\services\CatalogingReportCompilerService;
@@ -43,6 +44,8 @@ require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/../services/AdministratorReviewService.php';
 require_once __DIR__ . '/../services/AskConfidenceClassificationService.php';
 require_once __DIR__ . '/../services/AskGenerationEvidenceService.php';
+require_once __DIR__ . '/../services/AskRequestPolicyService.php';
+require_once __DIR__ . '/../services/AskGenerationCoordinatorService.php';
 require_once __DIR__ . '/../services/AskResponseContractService.php';
 require_once __DIR__ . '/../services/AskUserExplanationService.php';
 
@@ -453,7 +456,13 @@ class FolioQueryController extends Controller
         while (isset($result['sql'])) {
             $result['sql'] = SqlBuilderService::normalizeForExecution((string)$result['sql']);
             if (!$this->isSafeSelectNlSql((string)$result['sql'])) {
-                return $this->buildUnsafeGeneratedSqlResponse($result);
+                throw new \app\exceptions\ExploratorySqlValidationException(
+                    'safety',
+                    'non_select',
+                    (string)$result['sql'],
+                    true,
+                    'The generated candidate was not a single read-only SELECT statement.'
+                );
             }
 
             $semanticStatus = (string)($result['semanticValidation']['status'] ?? '');
@@ -889,21 +898,6 @@ class FolioQueryController extends Controller
         return in_array($category, $allowedCategories, true)
             ? $category
             : 'database_validation';
-    }
-
-    private function buildUnsafeGeneratedSqlResponse(array $result): array
-    {
-        $response = $this->buildAiSqlGenerationFailedResponse(
-            array_replace($result, ['repairAttempts' => 0])
-        );
-        $response['errorType'] = 'unsafe_generated_sql';
-        $response['message'] = 'Report Explorer could not safely run this report. Please retry.';
-        $response['route'] = 'unsafe_generated_sql';
-        $response['routeReason'] = 'unsafe_generated_sql';
-        $response['validationSummary']['status'] = 'rejected';
-        $response['_askEvidence']['validationStatus'] = 'rejected';
-        unset($response['sql']);
-        return $response;
     }
 
     /**
@@ -1970,31 +1964,129 @@ class FolioQueryController extends Controller
                 ? $this->buildFollowUpPrompt($prompt, $followUpContext)
                 : $prompt;
 
-            $generationTransport = null;
-            $result = GeminiService::generateSqlWithShadow(
-                $prompt,
-                $campus ?: null,
-                $userId,
-                $allowExploratory,
-                $effectivePrompt,
-                $generationTransport
-            );
-            $generationPrompt = is_array($generationTransport)
-                ? (string)($generationTransport['generationPrompt'] ?? $effectivePrompt)
-                : $effectivePrompt;
-            unset($generationTransport);
-            $initialSql = isset($result['sql']) ? (string)$result['sql'] : null;
-            if (!isset($result['dataSource'])) {
-                $result['dataSource'] = 'folio';
+            $generationPrompt = $effectivePrompt;
+            $initialSql = null;
+            $result = [];
+            $params = is_array(Yii::$app->params ?? null) ? Yii::$app->params : [];
+            $coordinatorEnabled = !array_key_exists('nl2sqlCoordinatorEnabled', $params)
+                || (bool)$params['nl2sqlCoordinatorEnabled'];
+
+            if ($coordinatorEnabled) {
+                $result = AskGenerationCoordinatorService::run(
+                    $prompt,
+                    function () use (
+                        $prompt,
+                        $campus,
+                        $userId,
+                        $allowExploratory,
+                        $effectivePrompt,
+                        &$generationPrompt,
+                        &$initialSql,
+                        &$result
+                    ): array {
+                        try {
+                            $generationTransport = null;
+                            $result = GeminiService::generateSqlWithShadow(
+                                $prompt,
+                                $campus ?: null,
+                                $userId,
+                                $allowExploratory,
+                                $effectivePrompt,
+                                $generationTransport
+                            );
+                            $generationPrompt = is_array($generationTransport)
+                                ? (string)($generationTransport['generationPrompt'] ?? $effectivePrompt)
+                                : $effectivePrompt;
+                            $initialSql = isset($result['sql']) ? (string)$result['sql'] : null;
+                            if (!isset($result['dataSource'])) {
+                                $result['dataSource'] = 'folio';
+                            }
+                            $result = $this->validateAndRepairNlResult(
+                                $result,
+                                $prompt,
+                                $campus ?: null,
+                                null,
+                                null,
+                                $generationPrompt
+                            );
+                            return $this->coordinatorOutcomeFromResult($result);
+                        } catch (\Throwable $exception) {
+                            return $this->coordinatorOutcomeFromFailure(
+                                $exception,
+                                $prompt,
+                                $campus ?: null,
+                                $result
+                            );
+                        }
+                    },
+                    function () use (
+                        $prompt,
+                        $campus,
+                        &$generationPrompt,
+                        &$result
+                    ): array {
+                        try {
+                            $evidence = is_array($result['_askEvidence'] ?? null)
+                                ? $result['_askEvidence']
+                                : [];
+                            $resolvedFilters = is_array($evidence['resolvedReferenceFilters'] ?? null)
+                                ? $evidence['resolvedReferenceFilters']
+                                : [];
+                            $result = GeminiService::generateFreshAiBuiltSql(
+                                $prompt,
+                                $generationPrompt,
+                                $campus ?: null,
+                                $resolvedFilters,
+                                'coordinator_continuation'
+                            );
+                            if (!isset($result['dataSource'])) {
+                                $result['dataSource'] = 'folio';
+                            }
+                            $result = $this->validateAndRepairNlResult(
+                                $result,
+                                $prompt,
+                                $campus ?: null,
+                                null,
+                                null,
+                                $generationPrompt
+                            );
+                            return $this->coordinatorOutcomeFromResult($result);
+                        } catch (\Throwable $exception) {
+                            return $this->coordinatorOutcomeFromFailure(
+                                $exception,
+                                $prompt,
+                                $campus ?: null,
+                                $result
+                            );
+                        }
+                    }
+                );
+            } else {
+                $generationTransport = null;
+                $result = GeminiService::generateSqlWithShadow(
+                    $prompt,
+                    $campus ?: null,
+                    $userId,
+                    $allowExploratory,
+                    $effectivePrompt,
+                    $generationTransport
+                );
+                $generationPrompt = is_array($generationTransport)
+                    ? (string)($generationTransport['generationPrompt'] ?? $effectivePrompt)
+                    : $effectivePrompt;
+                $initialSql = isset($result['sql']) ? (string)$result['sql'] : null;
+                if (!isset($result['dataSource'])) {
+                    $result['dataSource'] = 'folio';
+                }
+                $result = $this->validateAndRepairNlResult(
+                    $result,
+                    $prompt,
+                    $campus ?: null,
+                    null,
+                    null,
+                    $generationPrompt
+                );
             }
-            $result = $this->validateAndRepairNlResult(
-                $result,
-                $prompt,
-                $campus ?: null,
-                null,
-                null,
-                $generationPrompt
-            );
 
             if (!array_key_exists('suggestions', $result) && !empty($result['sql'])) {
                 $result['suggestions'] = [];
@@ -2105,6 +2197,121 @@ class FolioQueryController extends Controller
                 ]
             );
         }
+    }
+
+    private function coordinatorOutcomeFromResult(array $result): array
+    {
+        if (isset($result['sql'])) {
+            return ['state' => 'handled', 'result' => $result];
+        }
+
+        $errorType = trim((string)($result['errorType'] ?? ''));
+        if ($errorType === 'request_blocked') {
+            return ['state' => 'request_blocked', 'reason' => 'explicit_write_intent', 'result' => $result];
+        }
+        if (in_array($errorType, [
+            'ai_provider_failure',
+            'ai_timeout',
+            'postgres_connectivity',
+            'policy_blocked',
+            'database_cancelled',
+            'database_resource_limit',
+            'configured_resource_limit',
+        ], true)) {
+            return [
+                'state' => 'infrastructure_failure',
+                'reason' => $errorType,
+                'result' => $result,
+            ];
+        }
+        if ($errorType === 'sql_generation_failed') {
+            return [
+                'state' => 'candidate_rejected',
+                'reason' => (string)($result['routeReason'] ?? 'sql_repair_exhausted'),
+            ];
+        }
+
+        return [
+            'state' => 'not_handled',
+            'reason' => (string)($result['routeReason'] ?? 'initial_attempt_not_handled'),
+        ];
+    }
+
+    private function coordinatorOutcomeFromFailure(
+        \Throwable $error,
+        string $prompt,
+        $campus,
+        array $candidate = []
+    ): array {
+        $message = trim($error->getMessage());
+        if ($error instanceof \app\exceptions\PolicyViolationException
+            || $this->isAskSecurityPolicyFailure($message)
+        ) {
+            return [
+                'state' => 'infrastructure_failure',
+                'reason' => 'policy_blocked',
+                'result' => $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure($error, $prompt, $campus),
+                    $candidate
+                ),
+            ];
+        }
+        if ($error instanceof \app\exceptions\DatabaseQueryCancelledException) {
+            return [
+                'state' => 'infrastructure_failure',
+                'reason' => 'database_cancelled',
+                'result' => $this->attachTrustedAskEvidence(
+                    $this->buildAskContinuationFromFailure($error, $prompt, $campus),
+                    $candidate
+                ),
+            ];
+        }
+        if (GeminiService::isAiTimeoutMessage($message)) {
+            Yii::$app->response->statusCode = 504;
+            return [
+                'state' => 'infrastructure_failure',
+                'reason' => 'ai_timeout',
+                'result' => [
+                    'errorType' => 'ai_timeout',
+                    'error' => 'The AI request timed out. Your question is fine; the model or network took too long to respond. Please try again, or simplify the request if it keeps happening.',
+                    'route' => 'ai_timeout',
+                    'routeReason' => 'ai_provider_timeout',
+                ],
+            ];
+        }
+        if (GeminiService::isAiProviderFailureMessage($message)) {
+            return [
+                'state' => 'infrastructure_failure',
+                'reason' => 'ai_provider_failure',
+                'result' => $this->buildAiProviderFailureResponse($candidate),
+            ];
+        }
+        if ($this->isAskPostgresConnectivityFailure($message)) {
+            return [
+                'state' => 'infrastructure_failure',
+                'reason' => 'postgres_connectivity',
+                'result' => $this->buildAskPostgresConnectivityFailure(),
+            ];
+        }
+        if ($this->isAskPreflightResourceFailure($message)) {
+            return [
+                'state' => 'infrastructure_failure',
+                'reason' => 'database_resource_limit',
+                'result' => $this->buildDatabaseResourceLimitResponse($candidate),
+            ];
+        }
+
+        $candidateSql = trim((string)($candidate['sql'] ?? ''));
+        if ($error instanceof \app\exceptions\ExploratorySqlValidationException) {
+            $candidateSql = trim($error->getCandidateSql());
+        }
+        return [
+            'state' => 'candidate_rejected',
+            'reason' => $error instanceof \app\exceptions\ExploratorySqlValidationException
+                ? $error->getSafeCategory()
+                : 'generation_candidate_rejected',
+            'candidateSqlHash' => $candidateSql === '' ? null : hash('sha256', $candidateSql),
+        ];
     }
 
     private function resolveAskParentGenerationId(array $body, $followUpContext): ?string
@@ -2499,9 +2706,6 @@ class FolioQueryController extends Controller
             ];
             return $response;
         }
-        if ($this->isAskUnsafeGeneratedSqlFailure($error)) {
-            return $this->buildUnsafeGeneratedSqlResponse([]);
-        }
         // Prefer the typed policy violation; fall back to message matching for
         // policy errors that bubble up from elsewhere as plain exceptions.
         if ($error instanceof \app\exceptions\PolicyViolationException || $this->isAskSecurityPolicyFailure($message)) {
@@ -2592,26 +2796,6 @@ class FolioQueryController extends Controller
         return preg_match(
             '/\bSQLSTATE\[08[0-9A-Z]{3}\]|\bSQLSTATE\[HY000\].*(?:timeout expired|could not connect|connection refused|no connection|SSL SYSCALL|server closed the connection)|'
                 . '\b(?:timeout expired|could not connect to server|connection refused|connection does not exist|connection is closed|no connection to the server|no route to host|server closed the connection)\b/i',
-            $message
-        ) === 1;
-    }
-
-    private function isAskUnsafeGeneratedSqlFailure(\Throwable $error): bool
-    {
-        if ($error instanceof \app\exceptions\ExploratorySqlValidationException) {
-            return $error->getStage() === 'safety' && !$error->isRepairable();
-        }
-
-        if (!$error instanceof \InvalidArgumentException) {
-            return false;
-        }
-
-        $message = trim($error->getMessage());
-        return in_array($message, [
-            'Only SELECT queries are allowed.',
-            'Only a single SELECT statement is allowed.',
-        ], true) || preg_match(
-            '/^Query contains blocked keyword: [A-Z]+\. Only SELECT queries are allowed\.$/',
             $message
         ) === 1;
     }

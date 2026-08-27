@@ -549,6 +549,27 @@ class GeminiService
         return $result;
     }
 
+    /**
+     * Start directly in the AI-built lane after the coordinator rejects or
+     * cannot use the initial candidate. Canonical routing is intentionally not
+     * repeated here.
+     */
+    public static function generateFreshAiBuiltSql(
+        string $rawQuestion,
+        string $generationPrompt,
+        ?string $campus,
+        array $resolvedFilters = [],
+        string $reason = 'candidate_rejected'
+    ): array {
+        return self::generateAiBuiltLane(
+            $rawQuestion,
+            $generationPrompt,
+            $campus,
+            $reason,
+            $resolvedFilters
+        );
+    }
+
     private static function isRetryableAiBuiltExhaustion(array $result): bool
     {
         return !isset($result['sql'])

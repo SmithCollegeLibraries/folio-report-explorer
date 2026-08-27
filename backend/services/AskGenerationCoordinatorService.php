@@ -156,7 +156,7 @@ final class AskGenerationCoordinatorService
         string $reason,
         ?string $candidateSqlHash = null
     ): void {
-        if (!class_exists('Yii')) {
+        if (!class_exists('Yii') || !method_exists('Yii', 'info')) {
             return;
         }
         $payload = [

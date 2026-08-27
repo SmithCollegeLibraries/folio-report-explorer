@@ -63,6 +63,28 @@ evidenceAssertSame('rejected', $policyFailure['validationStatus'], 'Policy-block
 evidenceAssertSame(null, $policyFailure['generatedSql'], 'Policy-blocked responses must never persist executable SQL.');
 evidenceAssertSame(null, $policyFailure['sqlHash'], 'Policy-blocked responses must never persist an executable SQL hash.');
 
+$writeRequestBlocked = AskGenerationEvidenceService::build([
+    'errorType' => 'request_blocked',
+    'route' => 'request_blocked',
+    'routeReason' => 'explicit_write_intent',
+    '_askEvidence' => ['finalSql' => 'DELETE FROM inventory.item__t'],
+], ['prompt' => 'Delete every inventory item']);
+evidenceAssertSame('rejected', $writeRequestBlocked['validationStatus'], 'Request-policy blocks must persist as rejected non-executable boundaries.');
+evidenceAssertSame(null, $writeRequestBlocked['generatedSql'], 'Request-policy blocks must never persist executable SQL.');
+
+$internalCandidateRejected = AskGenerationEvidenceService::build([
+    'state' => 'candidate_rejected',
+    'reason' => 'non_select',
+    '_askEvidence' => [
+        'initialSql' => 'SELECT 1',
+        'finalSql' => 'DELETE FROM inventory.item__t',
+        'repairAttempts' => 1,
+    ],
+], ['prompt' => 'Count inventory items']);
+evidenceAssertSame('rejected', $internalCandidateRejected['validationStatus'], 'Internal candidate rejection must remain non-executable evidence.');
+evidenceAssertSame(null, $internalCandidateRejected['generatedSql'], 'Rejected candidate SQL must not be published as executable evidence.');
+evidenceAssertSame(1, $internalCandidateRejected['repairAttempts'], 'Candidate rejection should retain its regeneration count.');
+
 $ordinary = AskGenerationEvidenceService::build([
     'route' => 'exploratory_legacy_freeform',
     'routeReason' => 'unsupported_query_family',

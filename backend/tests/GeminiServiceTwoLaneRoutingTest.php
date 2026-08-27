@@ -488,34 +488,26 @@ SQL;
     Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 
     foreach ([
-        [
-            'DELETE FROM inventory.item__t',
-            ExploratorySqlValidationException::class,
-            'The AI response contains a non-SELECT SQL command: DELETE.',
-            'destructive SQL',
-        ],
-        [
-            'SELECT id FROM inventory.item__t; SELECT id FROM inventory.instance__t',
-            \InvalidArgumentException::class,
-            'Only a single SELECT statement is allowed.',
-            'multiple statements',
-        ],
+        ['DELETE FROM inventory.item__t', 'destructive SQL'],
+        ['SELECT id FROM inventory.item__t; SELECT id FROM inventory.instance__t', 'multiple statements'],
     ] as $unsafeCase) {
-        TestTransport::$responses = [twoLaneGeminiSql($unsafeCase[0])];
+        TestTransport::$responses = [
+            twoLaneGeminiSql($unsafeCase[0]),
+            twoLaneGeminiSql('SELECT COUNT(*) AS item_count FROM inventory.item__t'),
+        ];
         TestTransport::$requests = [];
-        try {
-            GeminiService::generateSqlWithShadow('Unsafe fake-provider response.', 'Smith College', null, true);
-            fwrite(STDERR, $unsafeCase[3] . " must remain a hard stop.\n");
-            exit(1);
-        } catch (\Throwable $exception) {
-            twoLaneAssertSame($unsafeCase[1], get_class($exception), $unsafeCase[3] . ' must retain the production exception type.');
-            twoLaneAssertSame($unsafeCase[2], $exception->getMessage(), $unsafeCase[3] . ' must expose the production safety-validator message to the controller boundary.');
-            if ($exception instanceof ExploratorySqlValidationException) {
-                twoLaneAssertSame('safety', $exception->getStage(), $unsafeCase[3] . ' must retain the safety stage.');
-                twoLaneAssertSame(false, $exception->isRepairable(), $unsafeCase[3] . ' must not enter automatic repair.');
-            }
-        }
-        twoLaneAssertSame(1, count(TestTransport::$requests), $unsafeCase[3] . ' must consume no repair request.');
+        $recoveredUnsafeCase = GeminiService::generateSqlWithShadow(
+            'Unsafe fake-provider response.',
+            'Smith College',
+            null,
+            true
+        );
+        twoLaneAssertSame(
+            'SELECT COUNT(*) AS item_count FROM inventory.item__t',
+            $recoveredUnsafeCase['sql'] ?? null,
+            $unsafeCase[1] . ' must be replaced by safe AI-built SQL.'
+        );
+        twoLaneAssertSame(2, count(TestTransport::$requests), $unsafeCase[1] . ' must consume one replacement request.');
     }
 
     TestTransport::$responses = [twoLaneGeminiSql('SELECT id FROM users.users__t')];
