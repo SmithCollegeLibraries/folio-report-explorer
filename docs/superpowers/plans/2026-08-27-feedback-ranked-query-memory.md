@@ -19,7 +19,8 @@
 - Existing rows without explicit provenance/feedback remain neutral and cannot become direct AI-built reuse candidates.
 - Inaccurate feedback suppresses the exact SQL fingerprint from direct reuse and AI-example selection immediately.
 - Another user's Accurate AI-built SQL may inform AI generation, but may not execute directly without administrator approval.
-- Schema fingerprint, data source, and authorized scope must match before direct reuse or example selection.
+- Direct reuse requires the strict prompt-scoped schema-context fingerprint, data source, and authorized scope to match.
+- AI-example selection requires the global schema-version fingerprint, data source, and authorized scope to match; prompt-context hashes are deliberately not compared across different questions.
 - Reused SQL repeats safety, table-policy, schema, authorization, and database-preflight checks. Failure is invisible to the user and continues to fresh generation.
 - Feedback and replacement endpoints accept identifiers, not client-authored SQL or provenance. The server loads trusted SQL and metadata.
 - Examples are server-owned context, bounded in count and bytes, and kept outside user instructions.
@@ -49,7 +50,8 @@ Extend `QueryFeedbackSchemaTest.php` to inspect migration 044 and `mysql/init.sq
 ```php
 $feedbackColumns = [
     'generation_id', 'query_job_id', 'generation_provenance',
-    'schema_fingerprint', 'scope_fingerprint', 'reuse_suppressed',
+    'direct_reuse_schema_fingerprint', 'schema_version_fingerprint',
+    'scope_fingerprint', 'reuse_suppressed',
     'admin_reuse_approved_at', 'admin_reuse_approved_by',
     'replacement_generation_id',
 ];
@@ -79,7 +81,8 @@ Use the repository's `information_schema`/prepared-ALTER convention so a partial
 generation_id CHAR(36) NULL,
 query_job_id CHAR(36) NULL,
 generation_provenance ENUM('verified_pattern','ai_built') NULL,
-schema_fingerprint CHAR(64) NULL,
+direct_reuse_schema_fingerprint CHAR(64) NULL,
+schema_version_fingerprint CHAR(64) NULL,
 scope_fingerprint CHAR(64) NULL,
 reuse_suppressed TINYINT(1) NOT NULL DEFAULT 0,
 admin_reuse_approved_at DATETIME NULL,
@@ -87,7 +90,7 @@ admin_reuse_approved_by INT NULL,
 replacement_generation_id CHAR(36) NULL
 ```
 
-Add indexes for `(prompt_fingerprint, data_source, result_accuracy)`, `generation_id`, `query_job_id`, `schema_fingerprint`, `scope_fingerprint`, and `reuse_suppressed`. Add nullable foreign keys to `ai_report_generations(id)`, `query_jobs(id)`, and `users(id)` for generation, job, replacement generation, approving administrator, and existing feedback user. Existing rows are compatible because all new references are nullable.
+Add indexes for `(prompt_fingerprint, data_source, result_accuracy)`, `generation_id`, `query_job_id`, `direct_reuse_schema_fingerprint`, `schema_version_fingerprint`, `scope_fingerprint`, and `reuse_suppressed`. Add nullable foreign keys to `ai_report_generations(id)`, `query_jobs(id)`, and `users(id)` for generation, job, replacement generation, approving administrator, and existing feedback user. Existing rows are compatible because all new references are nullable.
 
 Add non-negative integer counters to `ai_report_generations`:
 
@@ -126,8 +129,9 @@ git commit -m "feat: store query reuse trust evidence"
 - Modify: `backend/tests/PreviousSuccessfulQueryReuseServiceTest.php`
 
 **Interfaces:**
-- Produces `QueryMemoryService::schemaFingerprint(array $schemaMetadata): string`.
-- Produces `QueryMemoryService::currentSchemaFingerprint(string $prompt): string` from `FolioSchemaService::buildSchemaContext($prompt)` plus `FolioSchemaService::getMetadata()`.
+- Produces `QueryMemoryService::directReuseSchemaFingerprint(array $schemaMetadata): string` from global version plus prompt-scoped context hash.
+- Produces `QueryMemoryService::currentDirectReuseSchemaFingerprint(string $prompt): string` from `FolioSchemaService::buildSchemaContext($prompt)` plus `FolioSchemaService::getMetadata()`.
+- Produces `QueryMemoryService::schemaVersionFingerprint(array $schemaMetadata): string` from the global schema version only.
 - Produces `QueryMemoryService::scopeFingerprint(string $dataSource, array $authorizedScope): string`.
 - Produces `QueryMemoryService::findDirectReuse(array $request, array $candidates): ?array`.
 - Produces `QueryMemoryService::selectAiExamples(array $request, array $candidates, int $limit = 3, int $byteLimit = 12000): array`.
@@ -150,7 +154,7 @@ $cases = [
 ];
 ```
 
-Add rejection cases for stale schema, changed scope, changed data source, suppressed SQL hash, and nonmatching normalized question. Assert provenance remains unchanged in the returned candidate.
+Add rejection cases for a changed strict prompt-scoped schema-context fingerprint, changed scope, changed data source, suppressed SQL hash, and nonmatching normalized question. Assert provenance remains unchanged in the returned candidate.
 
 - [ ] **Step 2: Write the failing AI-example ranking matrix**
 
@@ -162,7 +166,7 @@ Assert this order among compatible nonsuppressed candidates:
 4. other-user Accurate AI-built;
 5. neutral/weak-positive AI-built.
 
-Assert Inaccurate, suppressed, stale-schema, unauthorized-scope, and unsafe candidates are absent. Assert at most three examples and at most 12,000 UTF-8 bytes of example payload.
+Use candidates from different questions with different prompt-context hashes but the same global schema-version fingerprint, and assert they remain eligible and rank correctly. Then change only the global schema version and assert those examples are excluded as stale. Also assert Inaccurate, suppressed, unauthorized-scope, and unsafe candidates are absent, with at most three examples and at most 12,000 UTF-8 bytes of example payload.
 
 - [ ] **Step 3: Run service tests and verify RED**
 
@@ -180,11 +184,18 @@ Expected: FAIL because trust is currently inferred from successful jobs and no q
 Canonicalize associative keys recursively before JSON encoding. Hash only server-owned values:
 
 ```php
-public static function schemaFingerprint(array $metadata): string
+public static function directReuseSchemaFingerprint(array $metadata): string
 {
     return hash('sha256', self::canonicalJson([
         'version' => $metadata['version'] ?? null,
         'contextHash' => $metadata['contextHash'] ?? null,
+    ]));
+}
+
+public static function schemaVersionFingerprint(array $metadata): string
+{
+    return hash('sha256', self::canonicalJson([
+        'version' => $metadata['version'] ?? null,
     ]));
 }
 
@@ -199,11 +210,11 @@ public static function scopeFingerprint(string $dataSource, array $scope): strin
 
 Scope comes from resolved/authorized server context, never directly from a client fingerprint.
 
-For persisted generations, read `provenance_json.schemaMetadata`. For the current request, calculate the prompt-scoped context hash with the same algorithm used by Gemini evidence. A missing legacy schema fingerprint makes every stored SQL candidate stale for direct reuse; it does not silently match. A Verified pattern can still succeed independently through ordinary current-schema canonical compilation after the reuse miss.
+For persisted generations, read `provenance_json.schemaMetadata` and persist both fingerprints. For direct reuse, calculate and compare the strict prompt-scoped fingerprint using the same context-hash algorithm as Gemini evidence. For AI examples, compare only `schema_version_fingerprint`; never compare prompt-context hashes across different questions. A missing legacy fingerprint makes the record stale for that use. A Verified pattern can still succeed independently through ordinary current-schema canonical compilation after a reuse miss.
 
 - [ ] **Step 5: Implement direct eligibility and example ranking**
 
-Return a `reuseTrust` value of exactly `verified_global`, `same_user_accurate`, or `administrator_approved` for direct reuse. Treat missing trust data as neutral. For examples, use explicit tier first, prompt similarity second, weak-signal count third, successful recency fourth, and stable ID as the final tie-breaker.
+Return a `reuseTrust` value of exactly `verified_global`, `same_user_accurate`, or `administrator_approved` for direct reuse. Treat missing trust data as neutral. For examples, require only the matching global schema-version fingerprint, then use explicit tier first, prompt similarity second, weak-signal count third, successful recency fourth, and stable ID as the final tie-breaker.
 
 Run `SqlBuilderService::validateSafety()` and table policy before any candidate can be returned by either method.
 
@@ -251,7 +262,7 @@ Cover:
 - other-user Accurate AI-built rejection;
 - administrator-approved cross-user AI-built reuse;
 - neutral and Inaccurate rejection;
-- stale schema/scope rejection;
+- changed strict prompt-scoped schema-context fingerprint/scope rejection;
 - SQL safety, table-policy, schema-validation, and preflight failure returning `match:null`.
 
 Assert every accepted response includes:
@@ -277,9 +288,9 @@ Expected: FAIL because the endpoint currently selects any strong completed NL jo
 
 - [ ] **Step 3: Load trusted server-side evidence**
 
-In `actionQueryReuseCandidate()`, obtain the current user, current schema fingerprint, normalized authorized scope, recent candidate jobs, linked `ai_report_generations`, and feedback rows by generation/job/SQL hash. Pass shaped records to `QueryMemoryService::findDirectReuse()`.
+In `actionQueryReuseCandidate()`, obtain the current user, current strict direct-reuse schema fingerprint, normalized authorized scope, recent candidate jobs, linked `ai_report_generations`, and feedback rows by generation/job/SQL hash. Pass shaped records to `QueryMemoryService::findDirectReuse()`.
 
-Do not accept `userId`, provenance, feedback status, approval, schema fingerprint, or scope fingerprint from the request body.
+Do not accept `userId`, provenance, feedback status, approval, either schema fingerprint, or scope fingerprint from the request body.
 
 - [ ] **Step 4: Repeat all executable gates**
 
@@ -351,13 +362,13 @@ Expected: FAIL because generation currently has no feedback-ranked examples.
 
 - [ ] **Step 3: Load and append examples only in the AI lane**
 
-Before `generateAiBuiltLane()` calls the provider, query `QueryMemoryService::selectAiExamples()` with current user, normalized question, data source, live schema fingerprint, and authorized scope. Serialize the bounded result separately from user input. Canonical compilation remains unaffected.
+Before `generateAiBuiltLane()` calls the provider, query `QueryMemoryService::selectAiExamples()` with current user, normalized question, data source, live global schema-version fingerprint, and authorized scope. Do not pass or compare the current prompt-context fingerprint in example selection. Serialize the bounded result separately from user input. Canonical compilation remains unaffected.
 
 If example lookup fails, log `query_memory_examples_unavailable` and generate without examples; do not fail the report request.
 
 - [ ] **Step 4: Preserve evidence without prompt leakage**
 
-Add `queryMemoryExamples` evidence containing candidate ID, SQL hash, rank tier, schema fingerprint, and scope fingerprint. Do not log/store another copy of raw SQL through telemetry.
+Add `queryMemoryExamples` evidence containing candidate ID, SQL hash, rank tier, global schema-version fingerprint, and scope fingerprint. Do not log/store the prompt-context fingerprint as an example-compatibility reason and do not log/store another copy of raw SQL through telemetry.
 
 - [ ] **Step 5: Run focused tests and verify GREEN**
 
@@ -391,7 +402,7 @@ git commit -m "feat: guide AI with trusted query examples"
 
 **Interfaces:**
 - Feedback request sends `generationId`, `queryJobId`, accuracy, and optional note.
-- Backend derives question, SQL, SQL hash, provenance, schema fingerprint, scope fingerprint, user ownership, route, and data source from linked server records.
+- Backend derives question, SQL, SQL hash, provenance, strict direct-reuse schema fingerprint, global schema-version fingerprint, scope fingerprint, user ownership, route, and data source from linked server records.
 - Response returns `feedbackId`, `resultAccuracy`, and `reuseSuppressed`.
 
 - [ ] **Step 1: Add failing ownership and derivation tests**
@@ -399,9 +410,9 @@ git commit -m "feat: guide AI with trusted query examples"
 Assert:
 
 - a user can rate only their own linked generation/job;
-- client-authored `generatedSql`, provenance, route, user ID, schema fingerprint, and scope fingerprint are ignored;
+- client-authored `generatedSql`, provenance, route, user ID, either schema fingerprint, and scope fingerprint are ignored;
 - Accurate AI-built becomes same-user eligible only after persistence;
-- Inaccurate sets `reuse_suppressed=1` for every matching exact SQL hash in the same schema/scope and clears any administrator approval on those rows;
+- Inaccurate sets `reuse_suppressed=1` for every matching exact SQL hash in the same global schema-version fingerprint and authorized scope, regardless of prompt-context fingerprint, and clears any administrator approval on those rows;
 - Unsure remains neutral;
 - feedback for Verified SQL does not alter Verified provenance or create an AI trust tier.
 
@@ -592,7 +603,7 @@ git commit -m "feat: rank query examples by weak interactions"
 
 - [ ] **Step 1: Add failing administrator policy tests**
 
-Assert non-admin 403, list filtering/pagination, missing feedback 404, Inaccurate/Unsure/Verified approval 409, stale-schema approval 409, successful approval storing reviewer/time, and revocation clearing both fields. After approval, assert cross-user direct reuse becomes eligible while provenance remains `ai_built`. Add an explicit audited administrator action to clear fingerprint suppression after review; clearing suppression alone does not approve or enable reuse.
+Assert non-admin 403, list filtering/pagination, missing feedback 404, Inaccurate/Unsure/Verified approval 409, stale strict/global schema approval 409, successful approval storing reviewer/time, and revocation clearing both fields. After approval, assert cross-user direct reuse becomes eligible while provenance remains `ai_built`. Add an explicit audited administrator action to clear fingerprint suppression after review; clearing suppression alone does not approve or enable reuse.
 
 - [ ] **Step 2: Run administrator tests and verify RED**
 
@@ -606,7 +617,7 @@ npm --prefix frontend test -- --run src/pages/ReportReviews.test.tsx
 
 - [ ] **Step 3: Implement approval in the existing review service**
 
-Add list and atomic update methods. Approval locks the feedback/generation row, rechecks eligibility and current schema fingerprint, and writes `admin_reuse_approved_at`/`admin_reuse_approved_by`. Revoke is always allowed for an existing row. Clearing suppression requires a separate explicit boolean action, clears every matching schema/scope/SQL fingerprint under the lock, and leaves approval empty until a later eligible approval. Record an administrator audit log with IDs and SQL hash only.
+Add list and atomic update methods. Approval locks the feedback/generation row, rechecks eligibility plus both the current strict prompt-scoped and global schema-version fingerprints, and writes `admin_reuse_approved_at`/`admin_reuse_approved_by`. Revoke is always allowed for an existing row. Clearing suppression requires a separate explicit boolean action, clears every matching global-schema-version/scope/SQL fingerprint under the lock, and leaves approval empty until a later eligible approval. Record an administrator audit log with IDs and SQL hash only.
 
 - [ ] **Step 4: Add a Query memory view to the administrator workspace**
 
@@ -701,13 +712,14 @@ Exercise one compatible question through:
 3. different user asks: example only, fresh AI result;
 4. administrator approves: different-user direct reuse;
 5. user marks exact SQL Inaccurate: immediate suppression for both reuse and examples;
-6. schema fingerprint changes: formerly eligible record is stale and normal generation continues.
+6. prompt-context fingerprint changes while global schema version stays fixed: direct reuse misses but the record remains eligible as an AI example;
+7. global schema version changes: the record is stale for both reuse and AI examples and normal generation continues.
 
 Assert provenance remains `ai_built` at every AI-originated stage.
 
 - [ ] **Step 2: Add telemetry redaction assertions**
 
-Require structured events for `reuse_selected`, `reuse_suppressed`, `reuse_stale`, `reuse_candidate_rejected`, `example_selected`, `feedback_recorded`, `weak_signal_recorded`, and `reuse_approval_changed`. Assert only IDs, hashes, tiers, normalized reasons, and counts are present.
+Require structured events for `reuse_selected`, `reuse_suppressed`, `reuse_stale`, `reuse_candidate_rejected`, `example_selected`, `feedback_recorded`, `weak_signal_recorded`, and `reuse_approval_changed`. Assert direct-reuse events identify the strict context fingerprint, example events identify the global schema-version fingerprint, and only IDs, hashes, tiers, normalized reasons, and counts are present.
 
 - [ ] **Step 3: Run acceptance and telemetry tests**
 
@@ -747,10 +759,10 @@ php -l backend/services/QueryMemoryService.php
 php -l backend/controllers/FolioQueryController.php
 php -l backend/services/GeminiService.php
 git diff --check
-rg -n "unsafe_generated_sql|generationProvenance.*verified_pattern|reuseTrust|reuse_suppressed" backend frontend/src
+rg -n "unsafe_generated_sql|generationProvenance.*verified_pattern|reuseTrust|reuse_suppressed|direct_reuse_schema_fingerprint|schema_version_fingerprint" backend frontend/src mysql
 ```
 
-Expected: legacy unsafe handling is frontend/rollback-only; provenance assignments are explicit; every direct reuse has a trust source; suppression checks precede reuse/example selection.
+Expected: legacy unsafe handling is frontend-only; provenance assignments are explicit; every direct reuse has a trust source; strict prompt-context matching is confined to direct reuse; global schema-version matching gates examples; suppression checks precede reuse/example selection.
 
 - [ ] **Step 7: Commit acceptance coverage**
 
@@ -776,7 +788,8 @@ git commit -m "test: verify feedback-ranked query memory"
 - Accurate AI-built SQL directly reuses only for the same user and compatible scope unless an administrator approves it.
 - Inaccurate feedback immediately suppresses the exact SQL from reuse and AI examples.
 - Neutral and weak-positive records never become directly reusable.
-- Stale schema or scope silently bypasses memory and continues generation.
+- A stale strict prompt-context fingerprint silently bypasses direct reuse while a matching global schema version still permits AI examples.
+- A stale global schema-version fingerprint excludes the record from both reuse and example selection.
 - Users can request different SQL from the results without rewriting the question.
 - Reused results show provenance, trust source, Edit SQL, and New AI SQL in the normal results view.
 - Existing authentication, authorization, protected-data, read-only transaction, timeout, cancellation, and resource protections remain intact.

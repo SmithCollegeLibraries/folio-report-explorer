@@ -104,7 +104,7 @@ final class AskRequestPolicyService
 }
 ```
 
-Keep the heuristic biased toward `read_only`; SQL enforcement remains authoritative.
+Keep the heuristic biased toward `read_only`; SQL enforcement remains authoritative. Do not broaden it during implementation to catch indirect wording such as `I need you to delete all rows`. That false negative is intentionally safer than blocking analytical language: any generated write still fails the token-aware SQL gate and read-only database boundary.
 
 - [ ] **Step 4: Run the policy test and verify GREEN**
 
@@ -150,6 +150,7 @@ foreach ([
     'WITH changed AS (DELETE FROM inventory.item__t RETURNING id) SELECT id FROM changed',
     'SELECT 1; DELETE FROM inventory.item__t',
     'UPDATE inventory.item__t SET barcode = NULL',
+    'EXECUTE prepared_report',
 ] as $unsafeSql) {
     assertThrowsSafety($unsafeSql);
 }
@@ -191,7 +192,7 @@ public static function assertSingleReadOnlyStatement(string $sql): void
     }
 
     $blocked = ['INSERT','UPDATE','DELETE','DROP','ALTER','TRUNCATE','CREATE',
-        'GRANT','REVOKE','MERGE','CALL','DO','COPY','VACUUM','ANALYZE'];
+        'GRANT','REVOKE','EXECUTE','COPY','MERGE','CALL','DO','VACUUM','ANALYZE'];
     foreach ($tokens as $token) {
         if (($token['kind'] ?? '') === 'string' || !empty($token['quoted'])) continue;
         $keyword = strtoupper((string)($token['value'] ?? ''));
@@ -711,6 +712,10 @@ rg -n "needsClarification|request_preserved|unresolved_named_term|legacy_recover
 ```
 
 Expected: every occurrence in the enabled coordinator path is either converted to AI context/`not_handled` or is an explicitly marked disabled rollback path. Protected-data, authorization, and configured resource failures remain separate typed policy/infrastructure responses.
+
+- [ ] **Step 6: Record the deliberate rollback contract change**
+
+In the implementation report, state that retiring backend `unsafe_generated_sql` also changes the disabled rollback orchestrator's exhausted terminal response to `sql_generation_failed`. List the rollback tests whose old unsafe-shape assertions were replaced so this is not misreported as incidental assertion weakening.
 
 ## Definition of Done
 

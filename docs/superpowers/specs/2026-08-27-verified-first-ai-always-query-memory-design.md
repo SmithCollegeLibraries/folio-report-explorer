@@ -155,13 +155,15 @@ Analytical uses of the same words do not count as write intent. Examples that re
 
 Uncertain intent continues through report generation in enforced read-only mode. The detector is biased toward `uncertain/read_only`; token-aware SQL enforcement and the database read-only transaction provide the actual write protection.
 
+That precision bias is deliberate. Indirect command phrasing such as “I need you to delete all rows” may remain `uncertain/read_only`; executors must not broaden the heuristic merely to improve recall. Any generated write is still rejected by token-aware SQL enforcement and the database read-only boundary.
+
 Existing authentication, authorization, and protected-data policy remain independent hard gates. They must return their own policy response, never a canonical or SQL-safety response.
 
 ### 2. Query-memory lookup
 
 Direct reuse eligibility is deliberately narrow:
 
-- Verified canonical SQL may be reused across authorized users when scope, schema fingerprint, and parameters are compatible.
+- Verified canonical SQL may be reused across authorized users when scope, the strict prompt-scoped schema-context fingerprint, and parameters are compatible.
 - AI-built SQL explicitly marked **Accurate** may be reused directly by the same user for the same normalized question and authorized scope.
 - AI-built SQL is not directly reused for another user unless an administrator approves that exact reusable record.
 - Administrator approval permits direct reuse but does not change provenance from **AI-built**.
@@ -209,7 +211,13 @@ Example ranking is:
 4. other explicit Accurate examples as generation context only;
 5. successfully executed, unreviewed examples as low-weight context.
 
-Inaccurate and stale-schema examples are excluded.
+Direct reuse and AI examples use different schema compatibility checks:
+
+- direct reuse requires the strict prompt-scoped schema-context fingerprint because it executes stored SQL without regeneration;
+- AI-example selection requires the global schema-version fingerprint only, so useful examples from different questions remain eligible;
+- an example is stale when its global schema version differs from the current global schema version.
+
+Inaccurate and globally stale-schema examples are excluded.
 
 ### 5. Token-aware SQL safety
 
@@ -272,7 +280,7 @@ Successful AI-built results display **Accurate**, **Inaccurate**, and **Unsure**
 
 ### Accurate
 
-- Records an explicit positive assessment tied to user, job, question fingerprint, SQL fingerprint, schema fingerprint, scope, and provenance.
+- Records an explicit positive assessment tied to user, job, question fingerprint, SQL fingerprint, strict direct-reuse schema fingerprint, global schema-version fingerprint, scope, and provenance.
 - Makes the record eligible for same-user direct reuse.
 - Makes it a stronger AI example for other users.
 - Does not relabel it Verified.
@@ -314,7 +322,7 @@ Record structured events at each coordinator boundary:
 - AI generation and fresh-generation counts;
 - candidate rejection stage and normalized reason;
 - blocked executable command, when present;
-- SQL hash and schema fingerprint;
+- SQL hash, strict direct-reuse schema fingerprint, and global schema-version fingerprint;
 - preflight and repair category;
 - final provenance;
 - feedback and example-ranking changes.
@@ -344,7 +352,8 @@ Extend the existing query-feedback and reuse records rather than creating an ind
 - user identifier;
 - normalized question fingerprint;
 - SQL fingerprint;
-- schema fingerprint/version;
+- strict prompt-scoped schema-context fingerprint for direct reuse;
+- global schema-version fingerprint for AI-example selection;
 - authorized campus and scope fingerprint;
 - provenance;
 - feedback status and note;
@@ -358,7 +367,7 @@ Database migrations must preserve existing feedback and reuse history. Existing 
 
 ## Rollout
 
-Implement behind one server-side coordinator flag, enabled by default after tests pass. The rollback path selects the previous orchestrator but does not change stored provenance or feedback.
+Implement behind one server-side coordinator flag, enabled by default after tests pass. The rollback path selects the previous orchestrator but does not change stored provenance or feedback. Retiring `unsafe_generated_sql` deliberately changes the disabled rollback orchestrator's terminal shape to `sql_generation_failed`; the implementation report must call out that contract change and the replacement of prior rollback assertions.
 
 Roll out in two implementation phases:
 
@@ -412,7 +421,7 @@ Tests cover every coordinator state transition:
 - imperative requests to insert, update, delete, or alter database state return `request_blocked` before generation.
 - `WITH changed AS (DELETE ... RETURNING ...) SELECT ...` is rejected.
 - multiple executable statements are rejected.
-- executable INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, CALL, DO, COPY, VACUUM, and ANALYZE commands are rejected.
+- executable INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, CREATE, GRANT, REVOKE, EXECUTE, COPY, MERGE, CALL, DO, VACUUM, and ANALYZE commands are rejected.
 - every regenerated candidate is validated again.
 
 ### Required prompt regressions
@@ -433,7 +442,8 @@ The vendor receipt-time regression specifically supplies an unsafe first AI cand
 - Administrator approval enables cross-user direct reuse without changing AI-built provenance.
 - Inaccurate immediately suppresses exact SQL reuse and example selection.
 - Neutral and weak-positive records are not directly reused.
-- stale schema fingerprints are not reused or supplied as examples.
+- stale strict prompt-scoped fingerprints are not directly reused.
+- examples from different prompt contexts remain eligible when their global schema-version fingerprint matches; examples from older global schema versions are excluded.
 - **Try different SQL** creates replacement lineage and excludes the rejected candidate.
 
 ### End-to-end UI regressions
