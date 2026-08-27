@@ -24,12 +24,6 @@ class SqlBuilderService
         'BETWEEN',
     ];
 
-    /** DDL/DML keywords that must never appear in user queries */
-    const BLOCKED_KEYWORDS = [
-        'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
-        'CREATE', 'GRANT', 'REVOKE', 'EXECUTE', 'COPY',
-    ];
-
     /** Aggregate functions allowed in SELECT clauses */
     const VALID_AGGREGATES = ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX'];
 
@@ -646,33 +640,7 @@ class SqlBuilderService
      */
     public static function validateSafety($sql)
     {
-        $trimmed = trim((string)$sql);
-        if ($trimmed === '') {
-            throw new \InvalidArgumentException('SQL cannot be empty.');
-        }
-
-        // Single statement only: allow optional trailing semicolon, reject inner semicolons.
-        $normalized = rtrim($trimmed, " \t\r\n;");
-        if (self::hasSemicolonOutsideLiteralsOrComments($normalized)) {
-            throw new \InvalidArgumentException(
-                'Only a single SELECT statement is allowed.'
-            );
-        }
-
-        $upper = strtoupper($normalized);
-
-        if (!preg_match('/^\s*SELECT\b/', $upper) && !preg_match('/^\s*WITH\b/', $upper)) {
-            throw new \InvalidArgumentException('Only SELECT queries are allowed.');
-        }
-
-        foreach (self::BLOCKED_KEYWORDS as $keyword) {
-            // Check for keyword as a whole word
-            if (preg_match('/\b' . $keyword . '\b/', $upper)) {
-                throw new \InvalidArgumentException(
-                    "Query contains blocked keyword: $keyword. Only SELECT queries are allowed."
-                );
-            }
-        }
+        SqlSelectStructureService::assertSingleReadOnlyStatement((string)$sql);
     }
 
     /**
@@ -867,81 +835,4 @@ class SqlBuilderService
         }
     }
 
-    /**
-     * Detect semicolons that are not inside strings/comments.
-     */
-    private static function hasSemicolonOutsideLiteralsOrComments($sql)
-    {
-        $len = strlen($sql);
-        $inSingle = false;
-        $inDouble = false;
-        $inLineComment = false;
-        $inBlockComment = false;
-
-        for ($i = 0; $i < $len; $i++) {
-            $ch = $sql[$i];
-            $next = ($i + 1 < $len) ? $sql[$i + 1] : '';
-
-            if ($inLineComment) {
-                if ($ch === "\n") {
-                    $inLineComment = false;
-                }
-                continue;
-            }
-
-            if ($inBlockComment) {
-                if ($ch === '*' && $next === '/') {
-                    $inBlockComment = false;
-                    $i++;
-                }
-                continue;
-            }
-
-            if ($inSingle) {
-                if ($ch === "'" && $next === "'") {
-                    $i++;
-                    continue;
-                }
-                if ($ch === "'") {
-                    $inSingle = false;
-                }
-                continue;
-            }
-
-            if ($inDouble) {
-                if ($ch === '"') {
-                    $inDouble = false;
-                }
-                continue;
-            }
-
-            if ($ch === '-' && $next === '-') {
-                $inLineComment = true;
-                $i++;
-                continue;
-            }
-
-            if ($ch === '/' && $next === '*') {
-                $inBlockComment = true;
-                $i++;
-                continue;
-            }
-
-            if ($ch === "'") {
-                $inSingle = true;
-                continue;
-            }
-
-            if ($ch === '"') {
-                $inDouble = true;
-                continue;
-            }
-
-            if ($ch === ';') {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

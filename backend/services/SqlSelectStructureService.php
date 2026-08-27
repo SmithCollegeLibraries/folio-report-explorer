@@ -221,6 +221,53 @@ class SqlSelectStructureService
         return $tokens;
     }
 
+    /**
+     * Require one read-only SELECT statement while ignoring words that appear
+     * only in string literals, comments, or quoted identifiers.
+     */
+    public static function assertSingleReadOnlyStatement(string $sql): void
+    {
+        $tokens = self::tokenizeForAnalysis($sql);
+        if ($tokens === []) {
+            throw new \InvalidArgumentException('SQL cannot be empty.');
+        }
+
+        $statementTerminators = [];
+        foreach ($tokens as $index => $token) {
+            if (($token['value'] ?? null) === ';') {
+                $statementTerminators[] = $index;
+            }
+        }
+        if (
+            count($statementTerminators) > 1
+            || ($statementTerminators !== [] && $statementTerminators[0] !== count($tokens) - 1)
+        ) {
+            throw new \InvalidArgumentException('Only a single SELECT statement is allowed.');
+        }
+
+        $first = self::upper($tokens[0]);
+        if (!in_array($first, ['SELECT', 'WITH'], true)) {
+            throw new \InvalidArgumentException('Only SELECT queries are allowed.');
+        }
+
+        $blocked = [
+            'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
+            'CREATE', 'GRANT', 'REVOKE', 'EXECUTE', 'COPY', 'MERGE',
+            'CALL', 'DO', 'VACUUM', 'ANALYZE',
+        ];
+        foreach ($tokens as $token) {
+            if (($token['kind'] ?? '') === 'string' || !empty($token['quoted'])) {
+                continue;
+            }
+            $keyword = self::upper($token);
+            if (in_array($keyword, $blocked, true)) {
+                throw new \InvalidArgumentException(
+                    "Query contains blocked keyword: {$keyword}. Only SELECT queries are allowed."
+                );
+            }
+        }
+    }
+
     private static function tokenize(string $sql): array
     {
         $tokens = [];

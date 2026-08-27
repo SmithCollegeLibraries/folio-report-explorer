@@ -52,6 +52,34 @@ function assertThrowsPolicy(string $sql): void
     exit(1);
 }
 
+function assertThrowsSafety(string $sql): void
+{
+    try {
+        SqlBuilderService::validateSafety($sql);
+    } catch (\InvalidArgumentException $exception) {
+        return;
+    }
+    fwrite(STDERR, "Expected SQL safety rejection: {$sql}\n");
+    exit(1);
+}
+
+foreach ([
+    "SELECT 'update' AS note",
+    'SELECT 1 AS "Create"',
+    'SELECT 1 /* DELETE FROM inventory.item__t */ AS value',
+] as $safeSql) {
+    SqlBuilderService::validateSafety($safeSql);
+}
+
+foreach ([
+    'WITH changed AS (DELETE FROM inventory.item__t RETURNING id) SELECT id FROM changed',
+    'SELECT 1; DELETE FROM inventory.item__t',
+    'UPDATE inventory.item__t SET barcode = NULL',
+    'EXECUTE prepared_report',
+] as $unsafeSql) {
+    assertThrowsSafety($unsafeSql);
+}
+
 // Harmless words inside SELECT values must not be confused with executable SQL.
 $safeSelectAccepted = true;
 try {
