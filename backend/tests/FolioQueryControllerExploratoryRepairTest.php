@@ -435,7 +435,7 @@ namespace {
     repairAssertSame('SELECT original_column FROM inventory.instance__t', $exhausted['_askEvidence']['initialSql'] ?? null, 'Controller exhaustion must retain trusted initial candidate evidence until finalization.');
     repairAssertSame('bundle-hash', $exhausted['_askEvidence']['referenceBundleMetadata']['hash'] ?? null, 'Controller exhaustion must retain trusted provenance until finalization.');
     repairAssertSame(
-        'Report Explorer could not safely run this report. Please retry.',
+        'Report Explorer could not build a valid report after retrying. Please retry.',
         $exhausted['message'] ?? null,
         'Exhaustion should use concise Retry-oriented copy.'
     );
@@ -556,7 +556,7 @@ namespace {
     repairAssertSame('sql_generation_failed', $semanticExhausted['errorType'] ?? null, 'Semantic repair exhaustion should use the same concise SQL-generation failure type.');
     repairAssertSame('generation_failed', $semanticExhausted['route'] ?? null, 'Semantic repair exhaustion must not use exploratory recovery.');
     repairAssertSame(
-        'Report Explorer could not safely run this report. Please retry.',
+        'Report Explorer could not build a valid report after retrying. Please retry.',
         $semanticExhausted['message'] ?? null,
         'Semantic repair exhaustion should use concise Retry-oriented copy.'
     );
@@ -1280,7 +1280,7 @@ namespace {
     repairAssertSame(false, isset($finalizedOrdinaryRecovery['failureCategory']), 'Ordinary database recovery must not expose validator category.');
     repairAssertSame(true, $finalizedOrdinaryRecovery['reviewRequired'] ?? null, 'Ordinary database recovery may expose only the designed review signal.');
     repairAssertSame(200, Yii::$app->response->statusCode, 'Ordinary database recovery must preserve its HTTP 200 status.');
-    repairAssertSame('Report Explorer could not safely run this report. Please retry.', $finalizedOrdinaryRecovery['message'] ?? null, 'Ordinary database exhaustion must use concise Retry-oriented copy.');
+    repairAssertSame('Report Explorer could not build a valid report after retrying. Please retry.', $finalizedOrdinaryRecovery['message'] ?? null, 'Ordinary database exhaustion must use concise Retry-oriented copy.');
 
     foreach (['connectivity', 'policy'] as $postGenerationOutcome) {
         Yii::$app->response->statusCode = 200;
@@ -1690,7 +1690,7 @@ namespace {
         if ($twoLaneEnabled) {
             repairAssertSame('sql_generation_failed', $genericFailureResponse['errorType'] ?? null, 'Enabled two-lane mode must convert an unclassified runtime exception to a typed terminal failure.');
             repairAssertSame('generation_failed', $genericFailureResponse['route'] ?? null, 'Enabled two-lane mode must not select rollback recovery for an unclassified runtime exception.');
-            repairAssertSame('Report Explorer could not safely run this report. Please retry.', $genericFailureResponse['message'] ?? null, 'Enabled generic failures must use concise Retry-only copy.');
+            repairAssertSame('Report Explorer could not build a valid report after retrying. Please retry.', $genericFailureResponse['message'] ?? null, 'Enabled generic failures must use concise Retry-only copy.');
             repairAssertPublicHardFailure($genericFailureResponse, 'enabled generic generation failure');
         } else {
             repairAssertSame(null, $genericFailureResponse['errorType'] ?? null, 'Rollback mode must retain the legacy untyped recovery response.');

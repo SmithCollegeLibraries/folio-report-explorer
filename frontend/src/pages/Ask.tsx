@@ -254,7 +254,11 @@ export function getAskTerminalFailureMessage(result: NlResponse | null | undefin
     return null;
   }
 
-  if (result?.errorType === 'sql_generation_failed' || result?.errorType === 'unsafe_generated_sql') {
+  if (result?.errorType === 'sql_generation_failed') {
+    return 'Report Explorer could not build a valid report after retrying. Please retry.';
+  }
+
+  if (result?.errorType === 'unsafe_generated_sql') {
     return 'Report Explorer could not safely run this report. Please retry.';
   }
 

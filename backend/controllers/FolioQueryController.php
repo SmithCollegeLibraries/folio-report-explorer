@@ -789,7 +789,7 @@ class FolioQueryController extends Controller
             : [];
         return [
             'errorType' => 'sql_generation_failed',
-            'message' => 'Report Explorer could not safely run this report. Please retry.',
+            'message' => 'Report Explorer could not build a valid report after retrying. Please retry.',
             'route' => 'generation_failed',
             'routeReason' => 'sql_repair_exhausted',
             'validationSummary' => [
@@ -2566,7 +2566,7 @@ class FolioQueryController extends Controller
     {
         return [
             'errorType' => 'sql_generation_failed',
-            'message' => 'Report Explorer could not safely run this report. Please retry.',
+            'message' => 'Report Explorer could not build a valid report after retrying. Please retry.',
             'route' => 'generation_failed',
             'routeReason' => 'ask_generation_failed',
             'validationSummary' => [

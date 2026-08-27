@@ -375,7 +375,7 @@ roiRegressionAssertSame(
     'Exhaustion should occur only after the original and fresh AI generation cycles each use their two repairs.'
 );
 roiRegressionAssertSame(
-    'Report Explorer could not safely run this report. Please retry.',
+    'Report Explorer could not build a valid report after retrying. Please retry.',
     $exhausted['message'] ?? null,
     'Exhaustion must use concise Retry copy.'
 );

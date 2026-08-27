@@ -978,7 +978,7 @@ repairAssertSame('sql_generation_failed', $exhausted['errorType'] ?? null, 'Exha
 repairAssertSame('generation_failed', $exhausted['route'] ?? null, 'Exhaustion must not use the exploratory recovery route.');
 repairAssertSame('sql_repair_exhausted', $exhausted['routeReason'] ?? null, 'Exhaustion should expose a stable repair-budget reason.');
 repairAssertSame(2, $exhausted['validationSummary']['repairAttempts'] ?? null, 'Exhaustion should consume exactly two repair attempts.');
-repairAssertSame('Report Explorer could not safely run this report. Please retry.', $exhausted['message'] ?? null, 'Exhaustion should use concise Retry-oriented copy.');
+repairAssertSame('Report Explorer could not build a valid report after retrying. Please retry.', $exhausted['message'] ?? null, 'Exhaustion should use concise Retry-oriented copy.');
 foreach (['recoveryContext', 'recoveryItems', 'attemptedPlan', 'suggestions', 'unmetRequirements', 'generationProvenance', 'provenanceLabel'] as $forbiddenField) {
     repairAssertSame(false, array_key_exists($forbiddenField, $exhausted), 'Exhaustion must omit recovery, correction, and provenance fields.');
 }

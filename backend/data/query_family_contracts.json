@@ -289,7 +289,9 @@
                     "location",
                     "age_basis",
                     "aggregation",
-                    "unit"
+                    "unit",
+                    "material_type",
+                    "grouping_dimension"
                 ],
                 "inferencePolicies": {
                     "location": "explicit_prompt_only"
@@ -298,7 +300,11 @@
             "outputs": {
                 "allowed": [
                     "average_age_years",
-                    "item_count"
+                    "item_count",
+                    "title_count",
+                    "average_publication_year",
+                    "oldest_publication_year",
+                    "newest_publication_year"
                 ],
                 "holdingsScoped": []
             },

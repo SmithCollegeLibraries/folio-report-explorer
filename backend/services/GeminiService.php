@@ -844,7 +844,7 @@ class GeminiService
             : [];
         return [
             'errorType' => 'sql_generation_failed',
-            'message' => 'Report Explorer could not safely run this report. Please retry.',
+            'message' => 'Report Explorer could not build a valid report after retrying. Please retry.',
             'route' => 'generation_failed',
             'routeReason' => 'sql_repair_exhausted',
             'validationSummary' => [
@@ -4976,6 +4976,23 @@ PROMPT;
             ];
         }
 
+        $publicationSummaryOutputs = self::extractCollectionAgePublicationSummaryOutputs($prompt);
+        if ($publicationSummaryOutputs !== []) {
+            $slots['requested_outputs'] = $publicationSummaryOutputs;
+            $slotProvenance['requested_outputs'] = 'prompt_repaired';
+        }
+
+        $materialType = self::extractCollectionAgeMaterialTypeScope($prompt);
+        if ($materialType !== '') {
+            $slots['material_type'] = $materialType;
+            $slotProvenance['material_type'] = 'prompt_explicit';
+        }
+
+        if (preg_match('/\bprimary\s+(?:lc\s+)?call[- ]number\s+class\b/i', $prompt) === 1) {
+            $slots['grouping_dimension'] = 'primary_call_number_class';
+            $slotProvenance['grouping_dimension'] = 'prompt_explicit';
+        }
+
         if (self::promptRequestsCollectionAgeItemCount($prompt)) {
             $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : [];
             $requestedOutputs[] = 'item_count';
@@ -5028,7 +5045,10 @@ PROMPT;
     private static function extractCollectionAgeLibraryScope(string $prompt): string
     {
         $namedCollectionScope = self::extractNamedCollectionAgeCollectionScope($prompt);
-        if (($namedCollectionScope['library'] ?? '') !== '') {
+        if (
+            ($namedCollectionScope['library'] ?? '') !== ''
+            && !self::isCollectionAgeMaterialTypeLabel((string)($namedCollectionScope['location'] ?? ''))
+        ) {
             return (string)$namedCollectionScope['library'];
         }
 
@@ -5066,7 +5086,10 @@ PROMPT;
         }
 
         $namedCollectionScope = self::extractNamedCollectionAgeCollectionScope($prompt);
-        if (($namedCollectionScope['location'] ?? '') !== '') {
+        if (
+            ($namedCollectionScope['location'] ?? '') !== ''
+            && !self::isCollectionAgeMaterialTypeLabel((string)$namedCollectionScope['location'])
+        ) {
             return (string)$namedCollectionScope['location'];
         }
 
@@ -5099,9 +5122,19 @@ PROMPT;
 
     private static function promptMentionsExplicitCollectionAgeLocationScope(string $prompt, string $libraryScope = ''): bool
     {
-        return preg_match('/\breference collection\b/i', $prompt) === 1
-            || self::extractNamedCollectionAgeCollectionScope($prompt) !== []
-            || self::extractExplicitCollectionAgeLocationScope($prompt, $libraryScope) !== '';
+        if (preg_match('/\breference collection\b/i', $prompt) === 1) {
+            return true;
+        }
+
+        $namedCollectionScope = self::extractNamedCollectionAgeCollectionScope($prompt);
+        if (
+            $namedCollectionScope !== []
+            && !self::isCollectionAgeMaterialTypeLabel((string)($namedCollectionScope['location'] ?? ''))
+        ) {
+            return true;
+        }
+
+        return self::extractExplicitCollectionAgeLocationScope($prompt, $libraryScope) !== '';
     }
 
     private static function extractNamedReferenceCollectionLocationScope(string $prompt): string
@@ -5211,7 +5244,7 @@ PROMPT;
                 $libraryScope
             );
 
-            if ($location !== '') {
+            if ($location !== '' && !self::isCollectionAgeMaterialTypeLabel($location)) {
                 return $location;
             }
         }
@@ -5222,6 +5255,35 @@ PROMPT;
     private static function promptRequestsCollectionAgeItemCount(string $prompt): bool
     {
         return preg_match('/\b(how many|number of|count of|total items?|item count)\b/i', $prompt) === 1;
+    }
+
+    private static function extractCollectionAgePublicationSummaryOutputs(string $prompt): array
+    {
+        $outputs = [];
+        foreach ([
+            'title_count' => '/\btitle\s+count\b/i',
+            'average_publication_year' => '/\b(?:average|avg)\s+publication\s+year\b/i',
+            'oldest_publication_year' => '/\boldest\s+publication\s+year\b/i',
+            'newest_publication_year' => '/\bnewest\s+publication\s+year\b/i',
+        ] as $output => $pattern) {
+            if (preg_match($pattern, $prompt) === 1) {
+                $outputs[] = $output;
+            }
+        }
+
+        sort($outputs, SORT_STRING);
+        return $outputs;
+    }
+
+    private static function extractCollectionAgeMaterialTypeScope(string $prompt): string
+    {
+        return preg_match('/\bbooks?\s+collection\b/i', $prompt) === 1 ? 'Book' : '';
+    }
+
+    private static function isCollectionAgeMaterialTypeLabel(string $value): bool
+    {
+        $normalized = strtolower(trim((string)preg_replace('/\s+collections?\s*$/i', '', $value)));
+        return in_array($normalized, ['book', 'books'], true);
     }
 
     private static function normalizeCollectionAgeLocationScope(string $value, string $libraryScope = ''): string

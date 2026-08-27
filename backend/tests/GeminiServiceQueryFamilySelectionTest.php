@@ -211,14 +211,14 @@ assertContainsText(
     'Collection-age family slot prompts should render the requested family key in the extraction contract.'
 );
 assertContainsText(
-    'Supported slots: ["campus","library","location","age_basis","aggregation","unit"]',
+    'Supported slots: ["campus","library","location","age_basis","aggregation","unit","material_type","grouping_dimension"]',
     $collectionAgeSlotPrompt,
     'Collection-age family slot prompts should expose the supported age-family slots to the model.'
 );
 assertContainsText(
-    'Allowed outputs: ["average_age_years","item_count"]',
+    'Allowed outputs: ["average_age_years","item_count","title_count","average_publication_year","oldest_publication_year","newest_publication_year"]',
     $collectionAgeSlotPrompt,
-    'Collection-age family slot prompts should expose both count and age metrics for combined collection summary prompts.'
+    'Collection-age family slot prompts should expose count, age, and publication-year metrics for collection summary prompts.'
 );
 assertContainsText(
     'Only set slots.location when the prompt explicitly names a collection or sub-location scope; if the prompt only names a library, omit slots.location.',

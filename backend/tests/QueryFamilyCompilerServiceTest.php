@@ -1024,6 +1024,65 @@ assertSameValue(
     'Collection-age SQL should preserve the zine collection location phrase as a contains match.'
 );
 
+$collectionAgeByLcClass = QueryFamilyCompilerService::compileToSql([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Neilson Library',
+        'material_type' => 'Book',
+        'grouping_dimension' => 'primary_call_number_class',
+        'requested_outputs' => [
+            'title_count',
+            'average_publication_year',
+            'oldest_publication_year',
+            'newest_publication_year',
+        ],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+$collectionAgeByLcClassSql = $collectionAgeByLcClass['sql'] ?? '';
+assertContainsText(
+    'JOIN inventory.material_type__t imt ON ii.material_type_id = imt.id',
+    $collectionAgeByLcClassSql,
+    'LC-class collection-age SQL should join material types so Book scope is enforced canonically.'
+);
+assertContainsText(
+    "COALESCE(NULLIF(TRIM(ii.effective_call_number_components__call_number), ''), NULLIF(TRIM(ih.call_number), ''))",
+    $collectionAgeByLcClassSql,
+    'LC-class collection-age SQL should use the effective item call number with a holdings fallback.'
+);
+assertContainsText(
+    'COUNT(*) AS title_count',
+    $collectionAgeByLcClassSql,
+    'LC-class collection-age SQL should count one collapsed bibliographic instance per title row.'
+);
+assertContainsText(
+    'ROUND(AVG(title_classes.publication_year), 1) AS average_publication_year',
+    $collectionAgeByLcClassSql,
+    'LC-class collection-age SQL should return a numeric average publication year.'
+);
+assertContainsText(
+    'MIN(title_classes.publication_year) AS oldest_publication_year',
+    $collectionAgeByLcClassSql,
+    'LC-class collection-age SQL should return the oldest publication year.'
+);
+assertContainsText(
+    'MAX(title_classes.publication_year) AS newest_publication_year',
+    $collectionAgeByLcClassSql,
+    'LC-class collection-age SQL should return the newest publication year.'
+);
+assertContainsText(
+    'GROUP BY title_classes.call_number_class',
+    $collectionAgeByLcClassSql,
+    'LC-class collection-age SQL should aggregate at primary call-number-class grain.'
+);
+assertSameValue(
+    'Book',
+    $collectionAgeByLcClass['params'][':p2'] ?? null,
+    'Book material scope should use an exact case-insensitive value without a wildcard that also matches E-Book.'
+);
+
 $trendCompiled = QueryFamilyCompilerService::compileToQueryDefinition([
     'familyKey' => 'circulation_trends_matrix',
     'slots' => [

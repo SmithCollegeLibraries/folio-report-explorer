@@ -117,7 +117,7 @@ class QueryFamilyCompilerService
         }
 
         if (
-            in_array($familyKey, ['inventory_contributor_campus_item_barcode', 'inventory_library_location_listing', 'circulation_top_items'], true)
+            in_array($familyKey, ['inventory_contributor_campus_item_barcode', 'inventory_library_location_listing', 'inventory_collection_age', 'circulation_top_items'], true)
             && (
                 !empty($slots['material_type'])
                 || (
@@ -216,6 +216,15 @@ class QueryFamilyCompilerService
             }
             if (!empty($slots['location'])) {
                 $filters[] = QueryFamilySlotService::buildSlotFilter('location', 'inventory_locations', 'name', $slots['location'], $slots['match_policy']);
+            }
+            if (!empty($slots['material_type'])) {
+                $filters[] = QueryFamilySlotService::buildSlotFilter(
+                    'material_type',
+                    'inventory_material_types',
+                    'name',
+                    $slots['material_type'],
+                    'exact_phrase'
+                );
             }
 
             return $filters;
@@ -326,7 +335,7 @@ class QueryFamilyCompilerService
         }
 
         if ($familyKey === 'inventory_collection_age') {
-            return self::buildCollectionAgeJoins($graph);
+            return self::buildCollectionAgeJoins($graph, $slots);
         }
 
         if ($familyKey === 'inventory_library_location_listing') {
@@ -403,7 +412,7 @@ class QueryFamilyCompilerService
         return $joins;
     }
 
-    private static function buildCollectionAgeJoins(array $graph): array
+    private static function buildCollectionAgeJoins(array $graph, array $slots): array
     {
         $joins = [];
         $joinSpecs = [
@@ -422,6 +431,15 @@ class QueryFamilyCompilerService
                 'from_column' => $spec[1],
                 'to_table' => $spec[2],
                 'to_column' => $spec[3],
+            ];
+        }
+
+        if (!empty($slots['material_type'])) {
+            $joins[] = [
+                'from_table' => 'inventory_items',
+                'from_column' => 'material_type_id',
+                'to_table' => 'inventory_material_types',
+                'to_column' => 'id',
             ];
         }
 
@@ -900,11 +918,28 @@ class QueryFamilyCompilerService
 
     private static function buildCollectionAgeSql(array $queryDef, array $slots): array
     {
+        $requestedOutputs = is_array($slots['requested_outputs'] ?? null)
+            ? $slots['requested_outputs']
+            : ['average_age_years'];
+        $publicationSummaryOutputs = array_intersect($requestedOutputs, [
+            'title_count',
+            'average_publication_year',
+            'oldest_publication_year',
+            'newest_publication_year',
+        ]);
+        $groupingDimension = trim((string)($slots['grouping_dimension'] ?? ''));
+        if ($publicationSummaryOutputs !== [] || $groupingDimension !== '') {
+            return self::buildCollectionPublicationYearByCallNumberClassSql(
+                $queryDef,
+                $slots,
+                $requestedOutputs
+            );
+        }
+
         $filters = self::indexFilters($queryDef['filters'] ?? []);
         $params = [];
         $scopeWhere = [];
         $parameterIndex = 0;
-        $requestedOutputs = is_array($slots['requested_outputs'] ?? null) ? $slots['requested_outputs'] : ['average_age_years'];
 
         foreach ([
             ['inventory_campuses', 'name', 'ic.name'],
@@ -960,6 +995,109 @@ class QueryFamilyCompilerService
         if (!in_array('item_count', $requestedOutputs, true) && in_array('average_age_years', $requestedOutputs, true)) {
             $sql .= "\nWHERE iip.publication__date_of_publication IS NOT NULL\n  AND iip.publication__date_of_publication ~ '^\\d{4}'";
         }
+
+        return [
+            'sql' => $sql,
+            'params' => $params,
+        ];
+    }
+
+    private static function buildCollectionPublicationYearByCallNumberClassSql(
+        array $queryDef,
+        array $slots,
+        array $requestedOutputs
+    ): array {
+        if ((string)($slots['grouping_dimension'] ?? '') !== 'primary_call_number_class') {
+            throw new \InvalidArgumentException(
+                'unsupported_collection_age_grouping: Publication-year summaries require primary_call_number_class grouping.'
+            );
+        }
+
+        $filters = self::indexFilters($queryDef['filters'] ?? []);
+        $params = [];
+        $scopeWhere = [];
+        $parameterIndex = 0;
+        foreach ([
+            ['inventory_campuses', 'name', 'ic.name'],
+            ['inventory_libraries', 'name', 'il.name'],
+            ['inventory_locations', 'name', 'ilo.name'],
+            ['inventory_material_types', 'name', 'imt.name'],
+        ] as $filterSpec) {
+            $key = self::filterKey($filterSpec[0], $filterSpec[1]);
+            if (!isset($filters[$key])) {
+                continue;
+            }
+
+            self::appendFilterPredicate(
+                $filters[$key]['op'] ?? '=',
+                $filterSpec[2],
+                $filters[$key]['value'] ?? null,
+                $scopeWhere,
+                $params,
+                $parameterIndex
+            );
+        }
+
+        if (!isset($filters[self::filterKey('inventory_material_types', 'name')])) {
+            throw new \InvalidArgumentException(
+                'missing_collection_age_material_type: Grouped collection-age summaries require an explicit material type.'
+            );
+        }
+
+        $selectExpressions = ['title_classes.call_number_class'];
+        foreach ($requestedOutputs as $outputField) {
+            switch ($outputField) {
+                case 'title_count':
+                    $selectExpressions[] = 'COUNT(*) AS title_count';
+                    break;
+                case 'average_publication_year':
+                    $selectExpressions[] = 'ROUND(AVG(title_classes.publication_year), 1) AS average_publication_year';
+                    break;
+                case 'oldest_publication_year':
+                    $selectExpressions[] = 'MIN(title_classes.publication_year) AS oldest_publication_year';
+                    break;
+                case 'newest_publication_year':
+                    $selectExpressions[] = 'MAX(title_classes.publication_year) AS newest_publication_year';
+                    break;
+            }
+        }
+        if (count($selectExpressions) === 1) {
+            throw new \InvalidArgumentException(
+                'unsupported_collection_age_output: Grouped collection-age summaries require a publication-year output.'
+            );
+        }
+
+        $callNumber = "UPPER(COALESCE(NULLIF(TRIM(ii.effective_call_number_components__call_number), ''), NULLIF(TRIM(ih.call_number), '')))";
+        $callNumberClass = self::buildPrimaryCallNumberClassSql('scoped_titles.call_number');
+        $publicationYear = 'CAST(SUBSTRING(iip.publication__date_of_publication FROM 1 FOR 4) AS INTEGER)';
+        $sql = "WITH scoped_titles AS MATERIALIZED (\n"
+            . "    SELECT iin.id AS instance_id,\n"
+            . "           {$callNumber} AS call_number,\n"
+            . "           {$publicationYear} AS publication_year\n"
+            . "    FROM inventory.item__t ii\n"
+            . "    JOIN inventory.holdings_record__t ih ON ii.holdings_record_id = ih.id\n"
+            . "    JOIN inventory.instance__t iin ON ih.instance_id = iin.id\n"
+            . "    JOIN inventory.instance__t__publication iip ON iip.id = iin.id\n"
+            . "    JOIN inventory.location__t ilo ON ii.effective_location_id = ilo.id\n"
+            . "    JOIN inventory.loclibrary__t il ON ilo.library_id = il.id\n"
+            . "    JOIN inventory.loccampus__t ic ON il.campus_id = ic.id\n"
+            . "    JOIN inventory.material_type__t imt ON ii.material_type_id = imt.id\n"
+            . "    WHERE " . implode("\n      AND ", $scopeWhere) . "\n"
+            . "      AND iip.publication__date_of_publication IS NOT NULL\n"
+            . "      AND iip.publication__date_of_publication ~ '^\\d{4}'\n"
+            . "),\n"
+            . "title_classes AS (\n"
+            . "    SELECT scoped_titles.instance_id,\n"
+            . "           {$callNumberClass} AS call_number_class,\n"
+            . "           MIN(scoped_titles.publication_year) AS publication_year\n"
+            . "    FROM scoped_titles\n"
+            . "    GROUP BY scoped_titles.instance_id, call_number_class\n"
+            . ")\n"
+            . "SELECT " . implode(",\n       ", $selectExpressions) . "\n"
+            . "FROM title_classes\n"
+            . "GROUP BY title_classes.call_number_class\n"
+            . "ORDER BY title_classes.call_number_class ASC\n"
+            . "LIMIT " . self::DEFAULT_LIMIT;
 
         return [
             'sql' => $sql,

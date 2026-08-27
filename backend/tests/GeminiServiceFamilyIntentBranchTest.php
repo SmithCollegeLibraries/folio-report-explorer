@@ -806,6 +806,55 @@ assertSameValue('Neilson Library', $collectionAgePayloadSeen['normalizedPayload'
 assertSameValue('Neilson Reference', $collectionAgePayloadSeen['normalizedPayload']['slots']['location'] ?? null, 'Collection-age prompts should recover the concrete Neilson Reference location scope from the prompt before validation.');
 assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgePayloadSeen['routeReason'] ?? null, 'Collection-age prompts should derive the checked-in collection-age route reason after recovery.');
 
+$collectionAgeLcPrompt = 'Show the age of the Book collection at Neilson Library by primary LC call-number class. Include title count, average publication year, oldest publication year, and newest publication year.';
+$collectionAgeLcPayloadSeen = null;
+$collectionAgeLcResult = $familyBranch->invoke(
+    null,
+    [
+        'familyKey' => 'inventory_collection_age',
+        'slots' => [
+            'campus' => 'Smith College',
+            'library' => 'Neilson Library',
+            'requested_outputs' => ['average_age_years'],
+            'match_policy' => 'case_insensitive_contains',
+        ],
+    ],
+    ['familyKey' => 'inventory_collection_age'],
+    $collectionAgeLcPrompt,
+    'Smith College',
+    [
+        'model' => 'test-model',
+        'promptVersion' => 'family_slot_prompt.v1',
+        'promptFingerprint' => 'collection-age-lc-class-fingerprint',
+        'finishReason' => 'STOP',
+        'attempts' => 1,
+        'elapsedMs' => 5,
+    ],
+    function (array $normalizedPayload, string $routeReason) use (&$collectionAgeLcPayloadSeen): array {
+        $collectionAgeLcPayloadSeen = [
+            'normalizedPayload' => $normalizedPayload,
+            'routeReason' => $routeReason,
+        ];
+
+        return [
+            'sql' => 'SELECT normalized_collection_age_lc_class_stub',
+            'route' => 'legacy_fallback',
+            'routeReason' => 'family_compiler_failed',
+        ];
+    }
+);
+
+assertSameValue('legacy_fallback', $collectionAgeLcResult['route'] ?? null, 'Rich collection-age prompts should remain eligible for deterministic family compilation.');
+assertSameValue('Neilson Library', $collectionAgeLcPayloadSeen['normalizedPayload']['slots']['library'] ?? null, 'Rich collection-age prompts should preserve the explicit Neilson Library scope.');
+assertSameValue('Book', $collectionAgeLcPayloadSeen['normalizedPayload']['slots']['material_type'] ?? null, 'Rich collection-age prompts should recover the explicit Book material type.');
+assertSameValue('primary_call_number_class', $collectionAgeLcPayloadSeen['normalizedPayload']['slots']['grouping_dimension'] ?? null, 'Rich collection-age prompts should normalize the requested primary LC call-number grouping.');
+assertSameValue(
+    ['average_publication_year', 'newest_publication_year', 'oldest_publication_year', 'title_count'],
+    $collectionAgeLcPayloadSeen['normalizedPayload']['slots']['requested_outputs'] ?? null,
+    'Rich collection-age prompts should replace the narrower model interpretation with every explicitly requested publication-year output.'
+);
+assertSameValue('family_contract_supported:inventory_collection_age', $collectionAgeLcPayloadSeen['routeReason'] ?? null, 'Rich collection-age prompts should stay on the verified collection-age route.');
+
 $trendPayloadSeen = null;
 $trendResult = $familyBranch->invoke(
     null,

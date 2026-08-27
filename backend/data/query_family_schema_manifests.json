@@ -129,6 +129,30 @@
                 { "fromTable": "inventory_items", "fromColumn": "effective_location_id", "toTable": "inventory_locations", "toColumn": "id" },
                 { "fromTable": "inventory_locations", "fromColumn": "library_id", "toTable": "inventory_libraries", "toColumn": "id" },
                 { "fromTable": "inventory_libraries", "fromColumn": "campus_id", "toTable": "inventory_campuses", "toColumn": "id" }
+            ],
+            "conditionalRequirements": [
+                {
+                    "slot": "grouping_dimension",
+                    "requestedOutputsAnyOf": [
+                        "title_count",
+                        "average_publication_year",
+                        "oldest_publication_year",
+                        "newest_publication_year"
+                    ],
+                    "requiredEntities": [
+                        "inventory_material_types"
+                    ],
+                    "requiredColumns": [
+                        { "table": "inventory_items", "column": "effective_call_number_components__call_number", "type": "text" },
+                        { "table": "inventory_items", "column": "material_type_id", "type": "uuid" },
+                        { "table": "inventory_holdings", "column": "call_number", "type": "text" },
+                        { "table": "inventory_material_types", "column": "id", "type": "uuid" },
+                        { "table": "inventory_material_types", "column": "name", "type": "text" }
+                    ],
+                    "requiredEdges": [
+                        { "fromTable": "inventory_items", "fromColumn": "material_type_id", "toTable": "inventory_material_types", "toColumn": "id" }
+                    ]
+                }
             ]
         },
         "inventory_contributor_campus_item_barcode": {

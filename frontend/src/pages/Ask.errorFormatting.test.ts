@@ -57,15 +57,19 @@ describe('Ask error formatting', () => {
     expect(AskPage.getAskResponseView?.(result)).toBe('success');
   });
 
-  it('formats a terminal no-SQL generation failure as one compact retry message', () => {
+  it('formats exhausted generation separately from a genuine SQL safety rejection', () => {
     const message = AskPage.getAskTerminalFailureMessage?.({
       errorType: 'sql_generation_failed',
       message: 'Do not expose this repair diagnostic.',
       recoveryItems: ['Do not ask for a correction.'],
     });
 
-    expect(message).toBe('Report Explorer could not safely run this report. Please retry.');
+    expect(message).toBe('Report Explorer could not build a valid report after retrying. Please retry.');
     expect(message).not.toMatch(/correction|clarification|refine|resolved/i);
+    expect(AskPage.getAskTerminalFailureMessage?.({
+      errorType: 'unsafe_generated_sql',
+      message: 'Do not expose this repair diagnostic.',
+    })).toBe('Report Explorer could not safely run this report. Please retry.');
     expect(AskPage.getAskResponseView?.({ errorType: 'sql_generation_failed' })).toBe('terminal_failure');
     expect(AskPage.getAskTerminalFailureAriaProps()).toEqual({
       role: 'alert',

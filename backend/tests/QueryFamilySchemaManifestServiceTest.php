@@ -229,4 +229,46 @@ assertThrowsRuntimeException(
     'Schema manifest validation should fail closed when a required deterministic join edge is absent.'
 );
 
+$productionArtifact = json_decode((string)file_get_contents(__DIR__ . '/../data/query_family_schema_manifests.json'), true);
+$productionGraph = json_decode((string)file_get_contents(__DIR__ . '/../data/canonical_query_graph.json'), true);
+$productionColumnData = json_decode((string)file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
+$productionSubtableData = json_decode((string)file_get_contents(__DIR__ . '/../data/subtable_cache.json'), true);
+$productionColumnsWithoutCallNumber = $productionColumnData['columns'] ?? [];
+$productionColumnsWithoutCallNumber['inventory.item__t'] = array_values(array_filter(
+    $productionColumnsWithoutCallNumber['inventory.item__t'] ?? [],
+    static function (array $column): bool {
+        return ($column['name'] ?? null) !== 'effective_call_number_components__call_number';
+    }
+));
+
+assertThrowsRuntimeException(
+    function () use (
+        $serviceClass,
+        $productionArtifact,
+        $productionGraph,
+        $productionColumnsWithoutCallNumber,
+        $productionSubtableData
+    ): void {
+        $serviceClass::validateFamilyReadyFromArtifacts(
+            'inventory_collection_age',
+            $productionArtifact,
+            $productionGraph,
+            $productionColumnsWithoutCallNumber,
+            $productionSubtableData['subtables'] ?? [],
+            [
+                'material_type' => 'Book',
+                'grouping_dimension' => 'primary_call_number_class',
+                'requested_outputs' => [
+                    'title_count',
+                    'average_publication_year',
+                    'oldest_publication_year',
+                    'newest_publication_year',
+                ],
+            ]
+        );
+    },
+    'schema_manifest_drift: Missing required column inventory_items.effective_call_number_components__call_number',
+    'Rich collection-age schema validation should fail closed when the call-number classification source is unavailable.'
+);
+
 fwrite(STDOUT, "QueryFamilySchemaManifestService test passed\n");
