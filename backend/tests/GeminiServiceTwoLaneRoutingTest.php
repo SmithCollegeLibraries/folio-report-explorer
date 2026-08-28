@@ -117,6 +117,30 @@ namespace app\services {
                 ];
             }
 
+            if ($prompt === 'Show the age of the Book collection at Neilson Library by primary LC call-number class. Include title count, average publication year, oldest publication year, and newest publication year.') {
+                return [
+                    'needsClarification' => false,
+                    'resolvedFilters' => [
+                        [
+                            'dimension' => 'library',
+                            'source_table' => 'inventory.loclibrary__t',
+                            'column' => 'name',
+                            'values' => ['SC Neilson Library'],
+                            'value_metadata' => [
+                                'SC Neilson Library' => ['campus_name' => 'Smith College'],
+                            ],
+                        ],
+                        [
+                            'dimension' => 'material_type',
+                            'source_table' => 'inventory.material_type__t',
+                            'column' => 'name',
+                            'values' => ['Book'],
+                        ],
+                    ],
+                    'guidanceLines' => [],
+                ];
+            }
+
             if ($prompt === 'Show annual checkout counts at Neilson Library for each of the last five completed calendar years.') {
                 return [
                     'needsClarification' => false,
@@ -373,6 +397,29 @@ namespace {
     twoLaneAssertContains("imt.name ILIKE 'book'", (string)$neilson['sql'], 'Neilson canonical SQL must preserve the normalized resolved book material type.');
     twoLaneAssertSame(false, strpos((string)$neilson['sql'], 'call_number_type__t') !== false, 'Neilson canonical SQL must not invent a call-number-type filter from the requested title output.');
     twoLaneAssertContains('Resolved library values: SC Neilson Library', json_encode(TestTransport::$requests[0]), 'Neilson resolved reference context must reach the family-intent request.');
+
+    $collectionAgePrompt = 'Show the age of the Book collection at Neilson Library by primary LC call-number class. Include title count, average publication year, oldest publication year, and newest publication year.';
+    TestTransport::$responses = [
+        twoLaneFamilyIntent('inventory_collection_age', [
+            'campus' => 'Smith College',
+            'library' => 'Neilson Library',
+            'material_type' => 'Book',
+            'grouping_dimension' => 'primary_call_number_class',
+            'requested_outputs' => [
+                'title_count',
+                'average_publication_year',
+                'oldest_publication_year',
+                'newest_publication_year',
+            ],
+        ]),
+    ];
+    TestTransport::$requests = [];
+    $collectionAge = GeminiService::generateSqlWithShadow($collectionAgePrompt, 'Smith College');
+    twoLaneAssertTrustedSuccess($collectionAge, 'verified_pattern', 'Neilson LC-class collection-age pattern');
+    twoLaneAssertSame(1, count(TestTransport::$requests), 'Neilson LC-class collection age should compile after one family-intent request without AI fallback.');
+    twoLaneAssertSame('builder_intent', $collectionAge['route'] ?? null, 'Neilson LC-class collection age should stay on the canonical builder lane.');
+    twoLaneAssertContains("il.name ILIKE 'SC Neilson Library'", (string)$collectionAge['sql'], 'Canonical collection-age SQL must use the resolved Neilson library value exactly.');
+    twoLaneAssertContains("imt.name ILIKE 'Book'", (string)$collectionAge['sql'], 'Canonical collection-age SQL must preserve the resolved Book material type.');
 
     $crossDomainPrompt = 'Compare annual circulation with acquisition spending by material type for the last three completed fiscal years.';
     $crossDomainSql = <<<'SQL'

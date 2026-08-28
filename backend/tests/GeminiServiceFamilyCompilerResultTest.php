@@ -266,6 +266,45 @@ assertContainsText(
     'Compiled collection-age SQL should preserve the four-digit publication-year validation guard.'
 );
 
+$lcClassAgeValidation = QueryFamilySlotService::validateFamilyPayload([
+    'familyKey' => 'inventory_collection_age',
+    'slots' => [
+        'campus' => 'Smith College',
+        'library' => 'Neilson Library',
+        'material_type' => 'Book',
+        'grouping_dimension' => 'primary_call_number_class',
+        'requested_outputs' => [
+            'title_count',
+            'average_publication_year',
+            'oldest_publication_year',
+            'newest_publication_year',
+        ],
+        'match_policy' => 'case_insensitive_contains',
+    ],
+]);
+
+if (empty($lcClassAgeValidation['valid'])) {
+    fwrite(STDERR, "LC-class collection-age test setup produced an invalid family payload.\n");
+    exit(1);
+}
+
+$lcClassAgeResult = $builder->invoke(
+    null,
+    $lcClassAgeValidation['normalizedPayload'],
+    'family_contract_supported:inventory_collection_age'
+);
+
+assertSameValue(
+    'builder_intent',
+    $lcClassAgeResult['route'] ?? null,
+    'The Neilson Book collection-age report should remain on the verified compiler route.'
+);
+assertContainsText(
+    'JOIN inventory.instance__t__publication iip ON iip.id = iin.id',
+    $lcClassAgeResult['sql'] ?? '',
+    'Publication-year summaries should accept the compiler\'s inner publication join because rows without a valid year are intentionally excluded.'
+);
+
 $trendValidation = QueryFamilySlotService::validateFamilyPayload([
     'familyKey' => 'circulation_trends_matrix',
     'slots' => [

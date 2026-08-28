@@ -1864,7 +1864,6 @@ PROMPT;
             $resolvedFilters
         );
         if ($familyResponse !== null) {
-            self::validateResolvedReferenceResult($familyResponse, $resolvedFilters);
             return $familyResponse;
         }
 
@@ -4265,7 +4264,8 @@ PROMPT;
         $routeReason = 'family_contract_supported:'
             . ($normalizedPayload['familyKey'] ?? $queryFamily['familyKey'] ?? '');
 
-        if ($familyResultBuilder === null) {
+        $usesTrustedFamilyCompiler = $familyResultBuilder === null;
+        if ($usesTrustedFamilyCompiler) {
             $familyResultBuilder = function (
                 array $normalizedPayload,
                 string $familyRouteReason,
@@ -4358,6 +4358,9 @@ PROMPT;
             'promptVersion' => $telemetryContext['promptVersion'] ?? null,
             'schemaMetadata' => self::schemaMetadata($telemetryContext),
         ]);
+        if ($usesTrustedFamilyCompiler) {
+            self::validateResolvedReferenceResult($compiledFamily, $resolvedFilters);
+        }
         unset($compiledFamily['queryDefinition']);
         return $compiledFamily;
     }
@@ -4740,7 +4743,7 @@ PROMPT;
     ): array {
         $familyKey = trim((string)($intent['familyKey'] ?? ''));
         if (
-            !in_array($familyKey, ['inventory_library_location_listing', 'circulation_top_items'], true)
+            !in_array($familyKey, ['inventory_collection_age', 'inventory_library_location_listing', 'circulation_top_items'], true)
             || !is_array($intent['slots'] ?? null)
         ) {
             return $intent;
@@ -6192,10 +6195,14 @@ PROMPT;
         if ($familyKey === 'inventory_collection_age') {
             $slots = is_array($normalizedPayload['slots'] ?? null) ? $normalizedPayload['slots'] : [];
             $queryTables = is_array($queryDef['tables'] ?? null) ? $queryDef['tables'] : [];
+            $hasPublicationJoin = preg_match(
+                '/\b(?:(?:LEFT(?:\s+OUTER)?|INNER)\s+)?JOIN\s+inventory\.instance__t__publication\b/i',
+                $sql
+            ) === 1;
 
             $hasPublicationYearAnchor = in_array('inventory_instance__t__publication', $queryTables, true)
                 && self::queryDefinitionHasJoin($queryDef, 'inventory_instances', 'inventory_instance__t__publication')
-                && stripos($sql, 'LEFT JOIN inventory.instance__t__publication') !== false
+                && $hasPublicationJoin
                 && stripos($sql, 'publication__date_of_publication') !== false
                 && stripos($sql, "publication__date_of_publication ~ '^\\d{4}'") !== false;
 
@@ -7179,7 +7186,107 @@ PROMPT;
             return;
         }
 
+        if (
+            ($result['route'] ?? null) === 'builder_intent'
+            && is_array($result['queryDefinition'] ?? null)
+        ) {
+            try {
+                self::validateResolvedReferenceQueryDefinition(
+                    $result['queryDefinition'],
+                    $resolvedFilters
+                );
+            } catch (\InvalidArgumentException $exception) {
+                throw self::resolvedReferenceMismatchException(
+                    (string)$result['sql'],
+                    $exception
+                );
+            }
+            return;
+        }
+
         self::validateResolvedReferenceSql((string)$result['sql'], $resolvedFilters);
+    }
+
+    private static function validateResolvedReferenceQueryDefinition(
+        array $queryDefinition,
+        array $resolvedFilters
+    ): void {
+        if ($resolvedFilters === []) {
+            return;
+        }
+
+        $graph = CanonicalQueryGraphService::loadArtifact();
+        $tableMap = is_array($graph['contractKeyToSqlTable'] ?? null)
+            ? $graph['contractKeyToSqlTable']
+            : [];
+        $filters = is_array($queryDefinition['filters'] ?? null)
+            ? $queryDefinition['filters']
+            : [];
+
+        foreach ($resolvedFilters as $resolvedFilter) {
+            if (!is_array($resolvedFilter)) {
+                throw new \InvalidArgumentException('Malformed resolved reference filter.');
+            }
+
+            $sourceTable = strtolower(trim((string)($resolvedFilter['source_table'] ?? '')));
+            $column = strtolower(trim((string)($resolvedFilter['column'] ?? '')));
+            $expectedValues = self::normalizedResolvedReferenceValues(
+                $resolvedFilter['values'] ?? null
+            );
+            if ($sourceTable === '' || $column === '' || $expectedValues === []) {
+                throw new \InvalidArgumentException('Malformed resolved reference filter.');
+            }
+
+            $actualValues = [];
+            foreach ($filters as $filter) {
+                if (!is_array($filter)) {
+                    continue;
+                }
+                $contractTable = trim((string)($filter['table'] ?? ''));
+                $physicalTable = strtolower(trim((string)($tableMap[$contractTable] ?? $contractTable)));
+                if (
+                    $physicalTable !== $sourceTable
+                    || strtolower(trim((string)($filter['column'] ?? ''))) !== $column
+                ) {
+                    continue;
+                }
+
+                $values = is_array($filter['value'] ?? null)
+                    ? $filter['value']
+                    : [$filter['value'] ?? null];
+                foreach ($values as $value) {
+                    if (!is_scalar($value) || strpos((string)$value, '%') !== false) {
+                        throw new \InvalidArgumentException('Resolved reference filters must use exact values.');
+                    }
+                    $actualValues[] = (string)$value;
+                }
+            }
+
+            if ($expectedValues !== self::normalizedResolvedReferenceValues($actualValues)) {
+                throw new \InvalidArgumentException('Resolved reference values were not preserved.');
+            }
+        }
+    }
+
+    private static function normalizedResolvedReferenceValues($values): array
+    {
+        if (!is_array($values)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($values as $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+            $value = strtolower(trim((string)$value));
+            if ($value !== '') {
+                $normalized[$value] = true;
+            }
+        }
+        $values = array_keys($normalized);
+        sort($values, SORT_STRING);
+        return $values;
     }
 
     private static function validateResolvedReferenceSql(
@@ -7189,26 +7296,33 @@ PROMPT;
         try {
             ResolvedReferenceSqlValidatorService::validate($sql, $resolvedFilters);
         } catch (\InvalidArgumentException $exception) {
-            throw new ExploratorySqlValidationException(
-                'semantic_validation',
-                'resolved_reference_filter_mismatch',
-                $sql,
-                true,
-                'The SQL candidate did not preserve the resolved library or material filters.',
-                $exception,
-                // Without a violation the repair prompt reports "None supplied"
-                // and the model has to guess what to change.
-                [[
-                    'key' => 'resolved_reference_filters',
-                    'category' => 'resolved_reference_filters',
-                    'label' => 'Library and material filters',
-                    'guidance' => 'Apply every resolved library, location, and material value exactly as supplied,'
-                        . ' in the top-level WHERE clause of a single SELECT statement.'
-                        . ' Do not use a WITH (CTE) clause, UNION, a subquery inside WHERE, OR, CASE, or a wildcard'
-                        . ' ILIKE pattern for those values; use LEFT JOIN with GROUP BY for counts instead.',
-                ]]
-            );
+            throw self::resolvedReferenceMismatchException($sql, $exception);
         }
+    }
+
+    private static function resolvedReferenceMismatchException(
+        string $sql,
+        \InvalidArgumentException $exception
+    ): ExploratorySqlValidationException {
+        return new ExploratorySqlValidationException(
+            'semantic_validation',
+            'resolved_reference_filter_mismatch',
+            $sql,
+            true,
+            'The SQL candidate did not preserve the resolved library or material filters.',
+            $exception,
+            // Without a violation the repair prompt reports "None supplied"
+            // and the model has to guess what to change.
+            [[
+                'key' => 'resolved_reference_filters',
+                'category' => 'resolved_reference_filters',
+                'label' => 'Library and material filters',
+                'guidance' => 'Apply every resolved library, location, and material value exactly as supplied,'
+                    . ' in the top-level WHERE clause of a single SELECT statement.'
+                    . ' Do not use a WITH (CTE) clause, UNION, a subquery inside WHERE, OR, CASE, or a wildcard'
+                    . ' ILIKE pattern for those values; use LEFT JOIN with GROUP BY for counts instead.',
+            ]]
+        );
     }
 
     private static function explicitReportValueValidation(string $sql, string $prompt): ?array
@@ -7235,17 +7349,10 @@ PROMPT;
             return $candidate;
         }
 
-        $hasExplicitFailure = self::explicitReportValueValidation(
+        if (self::explicitReportValueValidation(
             (string)$candidate['sql'],
             $originalQuestion
-        ) !== null;
-        $hasResolvedFilterFailure = false;
-        try {
-            self::validateResolvedReferenceSql((string)$candidate['sql'], $resolvedFilters);
-        } catch (ExploratorySqlValidationException $exception) {
-            $hasResolvedFilterFailure = true;
-        }
-        if (!$hasExplicitFailure && !$hasResolvedFilterFailure) {
+        ) === null) {
             return $candidate;
         }
 

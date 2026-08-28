@@ -20,7 +20,7 @@ final class ExplicitReportRequestService
     private const IDENTIFIER_VALUE_MARKERS = '(?:are|is|of|:|=)';
 
     private const OUTPUT_PATTERNS = [
-        'title' => '/\btitles?\b/i',
+        'title' => '/\btitles?\b(?!\s+count\b)/i',
         'barcode' => '/\bbarcodes?\b/i',
         'publication_date' => '/\b(?:publication|pub)\s*(?:date|dates)\b|\bpublication_date\b/i',
     ];
