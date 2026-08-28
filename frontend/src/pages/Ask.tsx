@@ -27,6 +27,29 @@ type AskRequest = {
   followUpContext?: FollowUpContext | null;
   allowExploratory?: boolean;
   parentGenerationId?: string | null;
+  queryMemorySignalTarget?: QueryMemoryTarget | null;
+};
+
+type QueryMemoryTarget = {
+  generationId: string;
+  queryJobId: string;
+};
+
+type QueryExecutionRequest = {
+  requestId: number;
+  sql: string;
+  dataSource?: 'folio' | 'local';
+  nlPrompt?: string;
+  options?: {
+    outputMode?: 'table' | 'file';
+    queryReuse?: {
+      candidateJobId: string;
+      edited: boolean;
+      score?: number;
+    };
+    resolvedContext?: Record<string, string>;
+    generationId?: string;
+  };
 };
 
 const CAMPUS_OPTIONS = [
@@ -582,6 +605,20 @@ export function buildQueryFeedbackInput(
   };
 }
 
+export function buildQueryMemorySignalTarget(
+  result: Pick<NlResponse, 'generationId'> | null | undefined,
+  queryJobId: string | null | undefined,
+): QueryMemoryTarget | null {
+  const generationId = result?.generationId?.trim();
+  const normalizedJobId = queryJobId?.trim();
+  if (!generationId || !normalizedJobId) return null;
+
+  return {
+    generationId,
+    queryJobId: normalizedJobId,
+  };
+}
+
 export function buildQueryReuseResolvedContext(selectedCampus: string): Record<string, string> {
   const campus = selectedCampus.trim();
   if (!campus || campus === 'All Colleges') {
@@ -654,6 +691,7 @@ export default function Ask() {
   const [followUpContext, setFollowUpContext] = useState<FollowUpContext | null>(null);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const executionRequestSequence = useRef(0);
   const [askProgressPhase, setAskProgressPhase] = useState<AskProgressPhase>('generating');
   const [history, setHistory] = useState<
     { prompt: string; result: NlResponse }[]
@@ -827,6 +865,7 @@ export default function Ask() {
   ) => {
     if (!result.sql) return;
     execMut.mutate({
+      requestId: ++executionRequestSequence.current,
       sql: result.sql,
       dataSource: result.dataSource || 'folio',
       nlPrompt: questionText,
@@ -843,27 +882,10 @@ export default function Ask() {
   };
 
   const execMut = useMutation({
-    mutationFn: ({
-      sql,
-      dataSource,
-      nlPrompt,
-      options,
-    }: {
-      sql: string;
-      dataSource?: 'folio' | 'local';
-      nlPrompt?: string;
-      options?: {
-        outputMode?: 'table' | 'file';
-        queryReuse?: {
-          candidateJobId: string;
-          edited: boolean;
-          score?: number;
-        };
-        resolvedContext?: Record<string, string>;
-        generationId?: string;
-      };
-    }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
+    mutationFn: ({ sql, dataSource, nlPrompt, options }: QueryExecutionRequest) =>
+      submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
     onSuccess: (data, variables) => {
+      if (variables.requestId !== executionRequestSequence.current) return;
       if (data.jobId) {
         setActiveJobId(data.jobId);
       }
@@ -874,7 +896,8 @@ export default function Ask() {
         recordMemorySignal('rerun', data.generationId, data.jobId);
       }
     },
-    onError: (error) => {
+    onError: (error, variables) => {
+      if (variables.requestId !== executionRequestSequence.current) return;
       toast.error(formatQuerySubmitError(error));
     },
   });
@@ -890,8 +913,12 @@ export default function Ask() {
         request.parentGenerationId ?? null,
     ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
-      if (request.followUpContext) {
-        recordMemorySignal('follow_up');
+      if (request.followUpContext && request.queryMemorySignalTarget) {
+        recordMemorySignal(
+          'follow_up',
+          request.queryMemorySignalTarget.generationId,
+          request.queryMemorySignalTarget.queryJobId,
+        );
       }
       const result = normalizeAskResultProvenance(data);
       setNlResult(result);
@@ -982,15 +1009,7 @@ export default function Ask() {
   });
 
   const feedbackMut = useMutation({
-    mutationFn: (resultAccuracy: 'accurate' | 'inaccurate' | 'unsure') => {
-      if (!nlResult) throw new Error('No generated query is available for feedback.');
-      return saveQueryFeedback(buildQueryFeedbackInput(
-        nlResult,
-        activeJobId || '',
-        resultAccuracy,
-        feedbackNote,
-      ));
-    },
+    mutationFn: (input: ReturnType<typeof buildQueryFeedbackInput>) => saveQueryFeedback(input),
     onSuccess: (data) => {
       setFeedbackResult(data);
       setFeedbackMessage(data.message);
@@ -1002,6 +1021,20 @@ export default function Ask() {
       toast.error(`Feedback was not saved: ${getApiErrorMessage(error)}`);
     },
   });
+
+  const handleResultFeedback = (resultAccuracy: 'accurate' | 'inaccurate' | 'unsure') => {
+    if (!nlResult) return;
+    try {
+      feedbackMut.mutate(buildQueryFeedbackInput(
+        nlResult,
+        activeJobId || '',
+        resultAccuracy,
+        feedbackNote,
+      ));
+    } catch (error) {
+      toast.error(`Feedback was not saved: ${getApiErrorMessage(error)}`);
+    }
+  };
 
   const replacementMut = useMutation({
     mutationFn: (feedbackId: number) => replaceQueryFeedback(
@@ -1043,6 +1076,9 @@ export default function Ask() {
       shouldExecute: true,
       followUpContext: context,
       parentGenerationId: context?.parentGenerationId ?? null,
+      queryMemorySignalTarget: context?.source === 'ask'
+        ? buildQueryMemorySignalTarget(nlResult, activeJobId)
+        : null,
     });
   };
 
@@ -1087,6 +1123,7 @@ export default function Ask() {
     setActiveJobId(null);
     setDetailTab('results');
     execMut.mutate({
+      requestId: ++executionRequestSequence.current,
       sql: reusedSql,
       dataSource: result.dataSource || 'folio',
       nlPrompt: requestedPrompt,
@@ -1148,6 +1185,7 @@ export default function Ask() {
     setCorrectionNotes('');
     setDetailTab('results');
     execMut.mutate({
+      requestId: ++executionRequestSequence.current,
       sql: editedSql,
       dataSource: editedResult.dataSource || 'folio',
       nlPrompt: reuse.requestedPrompt,
@@ -1197,14 +1235,7 @@ export default function Ask() {
       results?.columns || [],
     );
     setPrompt(suggestedPrompt);
-    setAskProgressPhase('generating');
-    askMut.mutate({
-      question: suggestedPrompt,
-      includeSuggestions: true,
-      shouldExecute: true,
-      followUpContext: context,
-      parentGenerationId: context?.parentGenerationId ?? null,
-    });
+    generateFreshSql(suggestedPrompt, context);
   };
 
   const handleStartCurrentFollowUp = () => {
@@ -2310,21 +2341,21 @@ export default function Ask() {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-gray-600">Were these results accurate?</span>
                         <button
-                          onClick={() => feedbackMut.mutate('accurate')}
+                          onClick={() => handleResultFeedback('accurate')}
                           disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-green-200 bg-white text-xs text-green-700 hover:bg-green-50 disabled:opacity-50"
                         >
                           Yes
                         </button>
                         <button
-                          onClick={() => feedbackMut.mutate('inaccurate')}
+                          onClick={() => handleResultFeedback('inaccurate')}
                           disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-red-200 bg-white text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
                         >
                           No
                         </button>
                         <button
-                          onClick={() => feedbackMut.mutate('unsure')}
+                          onClick={() => handleResultFeedback('unsure')}
                           disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-gray-200 bg-white text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-50"
                         >
@@ -2483,6 +2514,7 @@ export default function Ask() {
                         {!isRunning ? (
                           <button
                             onClick={() => nlResult.sql && execMut.mutate({
+                              requestId: ++executionRequestSequence.current,
                               sql: nlResult.sql,
                               dataSource: nlResult.dataSource || 'folio',
                               nlPrompt: history[0]?.prompt || prompt,

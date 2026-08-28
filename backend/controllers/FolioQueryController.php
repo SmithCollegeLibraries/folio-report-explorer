@@ -2585,6 +2585,19 @@ class FolioQueryController extends Controller
     {
         $result = AskResponseContractService::normalizeMode($result);
         $result = AskResponseContractService::normalizeGenerationProvenance($result);
+        if (
+            !array_key_exists('directReuseSchemaFingerprint', $context)
+            && trim((string)(Yii::$app->params['schemaPath'] ?? '')) !== ''
+        ) {
+            try {
+                $context['directReuseSchemaFingerprint'] = QueryMemoryService::currentDirectReuseSchemaFingerprint($prompt);
+            } catch (\Throwable $exception) {
+                Yii::warning(
+                    'Direct-reuse schema fingerprint unavailable: ' . get_class($exception),
+                    'query.memory'
+                );
+            }
+        }
         $evidence = AskGenerationEvidenceService::build($result, $context + ['prompt' => $prompt]);
         $classification = AskConfidenceClassificationService::classify($evidence);
         try {
@@ -3337,15 +3350,12 @@ class FolioQueryController extends Controller
         }
 
         $originalQuestion = trim((string)($generation['original_question'] ?? ''));
-        $generatedSql = trim((string)($generation['generated_sql'] ?? $job['sql_text'] ?? ''));
+        $generatedSql = trim((string)($job['sql_text'] ?? ''));
         if ($originalQuestion === '' || $generatedSql === '') {
             Yii::$app->response->statusCode = 409;
             return ['error' => 'The completed report is missing trusted generation evidence.'];
         }
-        $sqlHash = trim((string)($generation['sql_hash'] ?? $job['sql_hash'] ?? ''));
-        if ($sqlHash === '') {
-            $sqlHash = hash('sha256', SqlBuilderService::normalizeForExecution($generatedSql));
-        }
+        $sqlHash = QueryMemoryService::sqlFingerprint($generatedSql);
         $dataSource = $this->normalizeDataSource($job['data_source'] ?? 'folio');
         $provenance = $this->decodeQueryMemoryJson($generation['provenance_json'] ?? null);
         $generationProvenance = trim((string)($provenance['generationProvenance'] ?? ''));
@@ -3356,10 +3366,11 @@ class FolioQueryController extends Controller
             ? $provenance['schemaMetadata']
             : [];
         $schemaVersion = $schemaMetadata['version'] ?? $schemaMetadata['scraped_at'] ?? null;
-        $directFingerprint = $schemaVersion !== null
-            && trim((string)($schemaMetadata['contextHash'] ?? '')) !== ''
-            ? QueryMemoryService::directReuseSchemaFingerprint($schemaMetadata)
-            : null;
+        $directFingerprint = trim((string)($provenance['directReuseSchemaFingerprint'] ?? ''));
+        if ($directFingerprint === '' && $schemaVersion !== null) {
+            $directFingerprint = QueryMemoryService::currentDirectReuseSchemaFingerprint($originalQuestion);
+        }
+        $directFingerprint = $directFingerprint === '' ? null : $directFingerprint;
         $versionFingerprint = $schemaVersion !== null
             ? QueryMemoryService::schemaVersionFingerprint($schemaMetadata)
             : null;
@@ -3514,10 +3525,7 @@ class FolioQueryController extends Controller
 
         $question = trim((string)($generation['original_question'] ?? ''));
         $rejectedSql = trim((string)($feedback['generated_sql'] ?? $job['sql_text'] ?? ''));
-        $rejectedSqlHash = trim((string)($feedback['sql_hash'] ?? ''));
-        if ($rejectedSqlHash === '') {
-            $rejectedSqlHash = hash('sha256', SqlBuilderService::normalizeForExecution($rejectedSql));
-        }
+        $rejectedSqlHash = QueryMemoryService::sqlFingerprint($rejectedSql);
         if ($question === '' || $rejectedSql === '') {
             Yii::$app->response->statusCode = 409;
             return ['error' => 'The rejected report is missing trusted generation evidence.'];
@@ -3645,7 +3653,7 @@ class FolioQueryController extends Controller
         $sql = trim((string)($result['sql'] ?? ''));
         return $sql !== '' && hash_equals(
             $rejectedSqlHash,
-            hash('sha256', SqlBuilderService::normalizeForExecution($sql))
+            QueryMemoryService::sqlFingerprint($sql)
         );
     }
 

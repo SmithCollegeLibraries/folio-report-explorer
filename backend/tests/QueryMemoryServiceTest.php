@@ -32,6 +32,7 @@ function memoryCandidate(array $overrides = []): array
         'userId' => 17,
         'generationProvenance' => 'ai_built',
         'resultAccuracy' => 'accurate',
+        'accurateFeedbackUserIds' => [17],
         'adminReuseApprovedAt' => null,
         'directReuseSchemaFingerprint' => 'strict-schema-v1',
         'schemaVersionFingerprint' => 'global-schema-v1',
@@ -95,6 +96,7 @@ foreach ($trustCases as $index => $case) {
         'resultAccuracy' => $accuracy,
         'adminReuseApprovedAt' => $approved ? '2026-08-26 12:00:00' : null,
         'userId' => $candidateUser,
+        'accurateFeedbackUserIds' => $accuracy === 'accurate' ? [$candidateUser] : [],
     ]);
     $match = QueryMemoryService::findDirectReuse($request, [$candidate]);
     assertQueryMemory(($match !== null) === $eligible, "Direct reuse trust case {$index} eligibility was incorrect.");
@@ -142,6 +144,7 @@ $examples = QueryMemoryService::selectAiExamples($exampleRequest, [
         'generationProvenance' => 'ai_built',
         'resultAccuracy' => 'accurate',
         'userId' => 31,
+        'accurateFeedbackUserIds' => [31],
         'directReuseSchemaFingerprint' => 'different-prompt-context-b',
     ]),
     memoryCandidate([
@@ -150,6 +153,7 @@ $examples = QueryMemoryService::selectAiExamples($exampleRequest, [
         'generationProvenance' => 'ai_built',
         'resultAccuracy' => 'accurate',
         'userId' => 17,
+        'accurateFeedbackUserIds' => [17],
         'directReuseSchemaFingerprint' => 'different-prompt-context-c',
     ]),
     memoryCandidate([
@@ -158,6 +162,7 @@ $examples = QueryMemoryService::selectAiExamples($exampleRequest, [
         'generationProvenance' => 'ai_built',
         'resultAccuracy' => 'accurate',
         'userId' => 31,
+        'accurateFeedbackUserIds' => [31],
         'adminReuseApprovedAt' => '2026-08-26 12:00:00',
         'directReuseSchemaFingerprint' => 'different-prompt-context-d',
     ]),

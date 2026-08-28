@@ -500,7 +500,7 @@ reviewExpectException(DomainException::class, static function () use ($memorySer
 
 $suppressedHash = hash('sha256', 'SELECT suppressed');
 $suppressedIds = [];
-foreach ([44, 45] as $feedbackUserId) {
+foreach ([44 => 'inaccurate', 45 => 'accurate'] as $feedbackUserId => $accuracy) {
     $db->createCommand()->insert('ai_query_feedback', [
         'user_id' => $feedbackUserId,
         'generation_id' => $aiGeneration['generationId'],
@@ -509,7 +509,7 @@ foreach ([44, 45] as $feedbackUserId) {
         'generated_sql' => 'SELECT suppressed',
         'sql_hash' => $suppressedHash,
         'data_source' => 'folio',
-        'result_accuracy' => 'inaccurate',
+        'result_accuracy' => $accuracy,
         'generation_provenance' => 'ai_built',
         'direct_reuse_schema_fingerprint' => $currentStrictFingerprint,
         'schema_version_fingerprint' => $currentSchemaVersionFingerprint,
@@ -525,7 +525,32 @@ reviewAssert($cleared['clearedCount'] === 2, 'Clearing suppression should update
 $clearedRows = $db->createCommand('SELECT reuse_suppressed, admin_reuse_approved_at, admin_reuse_approved_by FROM ai_query_feedback WHERE sql_hash = :hash', [':hash' => $suppressedHash])->queryAll();
 foreach ($clearedRows as $clearedRow) {
     reviewAssert((int)$clearedRow['reuse_suppressed'] === 0, 'The explicit administrator action should clear suppression.');
-    reviewAssert($clearedRow['admin_reuse_approved_at'] === null && $clearedRow['admin_reuse_approved_by'] === null, 'Clearing suppression must leave approval empty.');
+    reviewAssert($clearedRow['admin_reuse_approved_at'] !== null && (int)$clearedRow['admin_reuse_approved_by'] === 101, 'Clearing suppression must preserve an existing administrator approval.');
 }
+$clearedAccurateReuse = app\services\QueryMemoryService::findDirectReuse([
+    'normalizedQuestion' => 'suppressed candidate',
+    'userId' => 999,
+    'dataSource' => 'folio',
+    'directReuseSchemaFingerprint' => $currentStrictFingerprint,
+    'scopeFingerprint' => $scopeFingerprint,
+], [[
+    'id' => 'cleared-accurate-candidate',
+    'normalizedQuestion' => 'suppressed candidate',
+    'userId' => 45,
+    'dataSource' => 'folio',
+    'sql' => 'SELECT suppressed',
+    'status' => 'completed',
+    'generationProvenance' => 'ai_built',
+    'resultAccuracy' => 'accurate',
+    'accurateFeedbackUserIds' => [45],
+    'adminReuseApprovedAt' => $clearedRows[1]['admin_reuse_approved_at'],
+    'directReuseSchemaFingerprint' => $currentStrictFingerprint,
+    'scopeFingerprint' => $scopeFingerprint,
+    'reuseSuppressed' => false,
+]]);
+reviewAssert(
+    ($clearedAccurateReuse['reuseTrust'] ?? null) === 'administrator_approved',
+    'Clearing a suppression cluster must make its still-approved Accurate candidate reusable again.'
+);
 
 fwrite(STDOUT, "Administrator review service test passed\n");

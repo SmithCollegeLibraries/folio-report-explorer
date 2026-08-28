@@ -109,26 +109,32 @@ function seedFeedbackTrustExecution(
     string $suffix,
     int $userId,
     string $provenance = 'ai_built',
-    string $sql = 'SELECT title FROM inventory.instance__t'
+    string $sql = 'SELECT title FROM inventory.instance__t',
+    ?string $executedSql = null,
+    bool $augmentedSchemaContext = false
 ): array {
     $question = "Trusted question {$suffix}";
     $jobId = "job-{$suffix}";
     $generationId = "generation-{$suffix}";
     $scope = ['campus' => 'Smith College'];
     $metadata = FolioSchemaService::getMetadata();
+    $schemaPrompt = $augmentedSchemaContext
+        ? $question . "\n\nReference resolver guidance:\n- library: Neilson Library"
+        : $question;
     $metadata['contextHash'] = substr(
-        hash('sha256', (string)FolioSchemaService::buildSchemaContext($question)),
+        hash('sha256', (string)FolioSchemaService::buildSchemaContext($schemaPrompt)),
         0,
         16
     );
+    $executedSql = $executedSql ?? $sql;
     Yii::$app->db->createCommand()->insert('query_jobs', [
         'id' => $jobId,
         'user_id' => $userId,
         'status' => 'completed',
         'source' => 'nl',
         'data_source' => 'folio',
-        'sql_text' => $sql,
-        'sql_hash' => hash('sha256', $sql),
+        'sql_text' => $executedSql,
+        'sql_hash' => hash('sha256', $executedSql),
         'metadata' => json_encode(['resolvedContext' => $scope]),
         'completed_at' => '2026-08-27 09:00:00',
     ])->execute();
@@ -148,7 +154,7 @@ function seedFeedbackTrustExecution(
         ]),
         'created_at' => '2026-08-27 08:59:00',
     ])->execute();
-    return compact('question', 'jobId', 'generationId', 'scope', 'metadata', 'sql');
+    return compact('question', 'jobId', 'generationId', 'scope', 'metadata', 'sql', 'executedSql');
 }
 
 function postFeedback(array $body): array
@@ -158,7 +164,15 @@ function postFeedback(array $body): array
     return (new FolioQueryController('folio-query', Yii::$app))->actionQueryFeedback();
 }
 
-$execution = seedFeedbackTrustExecution('owned', 17);
+$executionSql = 'SELECT title FROM inventory.instance__t';
+$execution = seedFeedbackTrustExecution(
+    'owned',
+    17,
+    'ai_built',
+    $executionSql,
+    $executionSql . "\nLIMIT 100",
+    true
+);
 $forgedSql = 'DELETE FROM inventory.item__t';
 $response = postFeedback([
     'generationId' => $execution['generationId'],
@@ -180,12 +194,16 @@ feedbackTrustAssert(($response['resultAccuracy'] ?? null) === 'accurate', 'Feedb
 feedbackTrustAssert(($response['reuseSuppressed'] ?? null) === false, 'Accurate feedback must not suppress reuse.');
 feedbackTrustAssert((int)$stored['user_id'] === 17, 'Feedback ownership must come from the authenticated user.');
 feedbackTrustAssert($stored['original_question'] === $execution['question'], 'The question must come from the stored generation.');
-feedbackTrustAssert($stored['generated_sql'] === $execution['sql'], 'Client-authored SQL must be ignored.');
+feedbackTrustAssert($stored['generated_sql'] === $execution['executedSql'], 'Feedback must bind to the SQL that actually produced the rated results.');
+feedbackTrustAssert(
+    $stored['sql_hash'] === hash('sha256', $execution['executedSql']),
+    'Feedback must fingerprint the normalized SQL that actually produced the rated results.'
+);
 feedbackTrustAssert($stored['generation_provenance'] === 'ai_built', 'Client-authored provenance must be ignored.');
 feedbackTrustAssert($stored['route'] === 'exploratory_legacy_freeform', 'Client-authored route must be ignored.');
 feedbackTrustAssert(
-    $stored['direct_reuse_schema_fingerprint'] === QueryMemoryService::directReuseSchemaFingerprint($execution['metadata']),
-    'The strict schema fingerprint must be derived from stored generation evidence.'
+    $stored['direct_reuse_schema_fingerprint'] === QueryMemoryService::currentDirectReuseSchemaFingerprint($execution['question']),
+    'The strict schema fingerprint must use the original question rather than augmented model guidance.'
 );
 feedbackTrustAssert(
     $stored['schema_version_fingerprint'] === QueryMemoryService::schemaVersionFingerprint($execution['metadata']),
@@ -204,11 +222,12 @@ $sameUserReuse = QueryMemoryService::findDirectReuse([
 ], [[
     'id' => $execution['generationId'],
     'question' => $execution['question'],
-    'sql' => $execution['sql'],
+    'sql' => $execution['executedSql'],
     'dataSource' => 'folio',
     'userId' => 17,
     'generationProvenance' => $stored['generation_provenance'],
     'resultAccuracy' => $stored['result_accuracy'],
+    'accurateFeedbackUserIds' => [17],
     'directReuseSchemaFingerprint' => $stored['direct_reuse_schema_fingerprint'],
     'scopeFingerprint' => $stored['scope_fingerprint'],
     'status' => 'completed',
@@ -228,15 +247,16 @@ feedbackTrustAssert(Yii::$app->response->statusCode === 403, 'A user must not ra
 feedbackTrustAssert(isset($forbidden['error']), 'Ownership rejection must return a safe error.');
 Yii::$app->user->setIdentity(new QueryFeedbackTrustIdentity(17));
 
-$bad = seedFeedbackTrustExecution('bad', 17);
+$badSql = 'SELECT title FROM inventory.instance__t';
+$bad = seedFeedbackTrustExecution('bad', 17, 'ai_built', $badSql, $badSql . "\nLIMIT 100");
 $badSchema = QueryMemoryService::schemaVersionFingerprint($bad['metadata']);
 $badScope = QueryMemoryService::scopeFingerprint('folio', $bad['scope']);
 $db->createCommand()->insert('ai_query_feedback', [
     'user_id' => 22,
     'original_question' => 'Different prompt and context',
     'prompt_fingerprint' => 'different-prompt',
-    'generated_sql' => $bad['sql'],
-    'sql_hash' => hash('sha256', $bad['sql']),
+    'generated_sql' => $bad['executedSql'],
+    'sql_hash' => hash('sha256', $bad['executedSql']),
     'data_source' => 'folio',
     'result_accuracy' => 'accurate',
     'generation_provenance' => 'ai_built',
@@ -253,7 +273,7 @@ $badResponse = postFeedback([
 ]);
 $suppressedRows = $db->createCommand(
     'SELECT reuse_suppressed, admin_reuse_approved_at FROM ai_query_feedback WHERE sql_hash = :sqlHash',
-    [':sqlHash' => hash('sha256', $bad['sql'])]
+    [':sqlHash' => hash('sha256', $bad['executedSql'])]
 )->queryAll();
 feedbackTrustAssert(($badResponse['reuseSuppressed'] ?? null) === true, 'Inaccurate feedback must report immediate suppression.');
 feedbackTrustAssert(count($suppressedRows) >= 2, 'The suppression test must cover the new row and an existing approval.');
