@@ -286,6 +286,7 @@ describe('Ask request lifecycle', () => {
     submitQuestion('Count inventory items');
 
     expect(await screen.findByRole('heading', { name: 'Reused previous query' })).toBeInTheDocument();
+    expect(screen.getByText('Reused a compatible Verified pattern.')).toBeInTheDocument();
     expect(screen.queryByText('Previous successful query found')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run SQL' })).not.toBeInTheDocument();
     await waitFor(() => {

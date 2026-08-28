@@ -1,23 +1,47 @@
 import { Pencil, Sparkles } from 'lucide-react';
+import type { GenerationProvenance, QueryReuseTrust } from '../types';
+
+const TRUST_COPY: Record<QueryReuseTrust, string> = {
+  verified_global: 'Reused a compatible Verified pattern.',
+  same_user_accurate: 'Reused AI-built SQL you previously marked Accurate.',
+  administrator_approved: 'Reused administrator-approved AI-built SQL.',
+};
 
 interface AskReuseNoticeProps {
+  generationProvenance?: GenerationProvenance;
+  provenanceLabel?: 'Verified pattern' | 'AI-built';
+  reuseTrust: QueryReuseTrust;
   onEditSql: () => void;
   onGenerateFresh: () => void;
 }
 
-export default function AskReuseNotice({ onEditSql, onGenerateFresh }: AskReuseNoticeProps) {
+export default function AskReuseNotice({
+  generationProvenance,
+  provenanceLabel,
+  reuseTrust,
+  onEditSql,
+  onGenerateFresh,
+}: AskReuseNoticeProps) {
+  const expectedLabel = generationProvenance === 'verified_pattern' ? 'Verified pattern' : 'AI-built';
+  const truthfulLabel = provenanceLabel === expectedLabel ? provenanceLabel : expectedLabel;
+
   return (
     <aside
       role="note"
       aria-labelledby="ask-reuse-notice-title"
       className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between"
     >
-      <div>
-        <h3 id="ask-reuse-notice-title" className="text-sm font-semibold text-slate-800">
-          Reused previous query
-        </h3>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 id="ask-reuse-notice-title" className="text-sm font-semibold text-slate-800">
+            Reused previous query
+          </h3>
+          <span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] font-semibold text-slate-600">
+            {truthfulLabel}
+          </span>
+        </div>
         <p className="mt-0.5 text-sm text-slate-600">
-          Report Explorer reran a previous successful query for this request.
+          {TRUST_COPY[reuseTrust]}
         </p>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">

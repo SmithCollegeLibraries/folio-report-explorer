@@ -2233,6 +2233,9 @@ export default function Ask() {
             />
             {nlResult.queryReuse && (
               <AskReuseNotice
+                generationProvenance={nlResult.generationProvenance}
+                provenanceLabel={nlResult.provenanceLabel}
+                reuseTrust={nlResult.queryReuse.reuseTrust}
                 onEditSql={handleEditReusedSql}
                 onGenerateFresh={handleGenerateFreshFromReuse}
               />

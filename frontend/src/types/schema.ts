@@ -341,6 +341,7 @@ export interface SemanticRequirementLabel {
 }
 
 export type GenerationProvenance = 'verified_pattern' | 'ai_built';
+export type QueryReuseTrust = 'verified_global' | 'same_user_accurate' | 'administrator_approved';
 
 export interface SemanticValidation {
   status: 'validated' | 'advisory';
@@ -351,7 +352,7 @@ export interface SemanticValidation {
 export interface NlQueryReuseMetadata {
   candidateJobId: string;
   sourceGenerationId: string;
-  reuseTrust: 'verified_global' | 'same_user_accurate' | 'administrator_approved';
+  reuseTrust: QueryReuseTrust;
   requestedPrompt: string;
   previousPrompt: string;
   completedAt: string | null;
@@ -969,7 +970,7 @@ export interface QueryReuseCandidate {
   generationProvenance?: GenerationProvenance;
   provenanceLabel?: 'Verified pattern' | 'AI-built';
   sourceGenerationId: string;
-  reuseTrust: 'verified_global' | 'same_user_accurate' | 'administrator_approved';
+  reuseTrust: QueryReuseTrust;
 }
 
 export interface QueryReuseCandidateRequest {
