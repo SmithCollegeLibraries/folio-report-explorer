@@ -168,6 +168,22 @@ describe('Ask request lifecycle', () => {
     expect(screen.queryByText(/needs clarification/i)).not.toBeInTheDocument();
   });
 
+  it('silently continues to fresh generation when reuse lookup fails', async () => {
+    apiMocks.fetchQueryReuseCandidate.mockRejectedValue(new Error('reuse lookup unavailable'));
+    apiMocks.askNl.mockResolvedValue({
+      sql: 'SELECT title FROM inventory.instance__t',
+      generationProvenance: 'ai_built',
+      provenanceLabel: 'AI-built',
+    });
+
+    renderAsk();
+    submitQuestion('Show titles');
+
+    expect(await screen.findByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
+    expect(apiMocks.askNl).toHaveBeenCalledTimes(1);
+    expect(toastMocks.error).not.toHaveBeenCalledWith(expect.stringContaining('previous successful queries'));
+  });
+
   it('renders successful AI-built reports with provenance only, without internal review details', async () => {
     apiMocks.askNl.mockResolvedValue({
       sql: 'SELECT title FROM inventory.instance__t',
@@ -253,6 +269,8 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
     });
 
@@ -283,6 +301,8 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
     });
     apiMocks.askNl.mockResolvedValue({
@@ -321,6 +341,8 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
     });
 
@@ -348,6 +370,8 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
     });
 

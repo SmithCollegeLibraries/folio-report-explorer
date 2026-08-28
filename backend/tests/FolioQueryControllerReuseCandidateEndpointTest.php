@@ -42,14 +42,32 @@ assertReuseEndpoint(
 );
 
 assertReuseEndpoint(
-    strpos($controllerSource, 'PreviousSuccessfulQueryReuseService::findStrongMatch(') !== false,
-    'actionQueryReuseCandidate should delegate matching to PreviousSuccessfulQueryReuseService.'
+    strpos($controllerSource, 'use app\\services\\QueryMemoryService;') !== false,
+    'FolioQueryController should import QueryMemoryService.'
 );
 
 assertReuseEndpoint(
-    strpos($controllerSource, 'SqlBuilderService::validateSafety($match[\'sql\'])') !== false
-        && strpos($controllerSource, 'SqlBuilderService::validateTablePolicy($match[\'sql\'])') !== false,
-    'actionQueryReuseCandidate should revalidate suggested SQL before returning it.'
+    strpos($controllerSource, 'PreviousSuccessfulQueryReuseService::findStrongMatches(') !== false
+        && strpos($controllerSource, 'QueryMemoryService::findDirectReuse(') !== false,
+    'actionQueryReuseCandidate should shape candidates and delegate trust to QueryMemoryService.'
+);
+
+assertReuseEndpoint(
+    strpos($controllerSource, 'QueryMemoryService::currentDirectReuseSchemaFingerprint(') !== false
+        && strpos($controllerSource, 'QueryMemoryService::scopeFingerprint(') !== false,
+    'Reuse compatibility fingerprints must be computed from current server-owned context.'
+);
+
+assertReuseEndpoint(
+    strpos($controllerSource, 'GeminiService::validateTableReferences(') !== false
+        && strpos($controllerSource, 'estimateQueryComplexity(') !== false,
+    'A trusted candidate must repeat live schema validation and database preflight.'
+);
+
+assertReuseEndpoint(
+    strpos($controllerSource, "'sourceGenerationId'") !== false
+        && strpos($controllerSource, "'reuseTrust'") !== false,
+    'Accepted reuse must return immutable server-owned lineage and trust.'
 );
 
 echo "FolioQueryControllerReuseCandidateEndpointTest passed\n";

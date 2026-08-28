@@ -613,6 +613,8 @@ export function buildReusedNlResult(
     provenanceLabel,
     queryReuse: {
       candidateJobId: reuseCandidate.jobId,
+      sourceGenerationId: reuseCandidate.sourceGenerationId,
+      reuseTrust: reuseCandidate.reuseTrust,
       requestedPrompt,
       previousPrompt: reuseCandidate.previousPrompt,
       completedAt: reuseCandidate.completedAt,
@@ -848,6 +850,9 @@ export default function Ask() {
       if (data.jobId) {
         setActiveJobId(data.jobId);
       }
+      if (data.generationId) {
+        setNlResult((current) => current ? { ...current, generationId: data.generationId } : current);
+      }
     },
     onError: (error) => {
       toast.error(formatQuerySubmitError(error));
@@ -1010,8 +1015,8 @@ export default function Ask() {
           handleRunReuseCandidate(reuse.match, q);
           return;
         }
-      } catch (error) {
-        toast.error(`Could not check previous successful queries: ${getApiErrorMessage(error)}`);
+      } catch {
+        // Query-memory lookup is opportunistic; ordinary generation continues.
       } finally {
         setReuseCheckPending(false);
       }

@@ -144,8 +144,27 @@ class PreviousSuccessfulQueryReuseService
         if (strcasecmp($jobDataSource, $dataSource) !== 0) {
             return false;
         }
+        if (!self::hasNoBoundParameters($job['params'] ?? null)) {
+            return false;
+        }
 
         return trim((string)($job['sql_text'] ?? '')) !== '';
+    }
+
+    private static function hasNoBoundParameters($params): bool
+    {
+        if ($params === null || $params === '') {
+            return true;
+        }
+        if (is_array($params)) {
+            return $params === [];
+        }
+        if (!is_string($params)) {
+            return false;
+        }
+
+        $decoded = json_decode($params, true);
+        return is_array($decoded) && $decoded === [];
     }
 
     private static function decodeMetadata($metadata): array

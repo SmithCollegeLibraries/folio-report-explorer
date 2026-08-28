@@ -8147,7 +8147,7 @@ PROMPT;
      * Handles both LDP1 names and MetaDB schema-qualified names.
      * @param string $sql
      */
-    private static function validateTableReferences($sql)
+    public static function validateTableReferences($sql)
     {
         $ldpTableNames = [];
         foreach (FolioSchemaService::getTableNames() as $tableName) {

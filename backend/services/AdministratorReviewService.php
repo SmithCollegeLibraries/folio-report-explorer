@@ -125,6 +125,101 @@ class AdministratorReviewService
     }
 
     /**
+     * Create execution lineage from a server-revalidated reusable generation.
+     * The source may belong to another user; the child always belongs to the
+     * current executor and retains immutable provenance unless SQL was edited.
+     */
+    public function createTrustedReuseChild(
+        string $sourceGenerationId,
+        int $userId,
+        string $question,
+        string $normalizedSql,
+        bool $edited,
+        string $reuseTrust
+    ): array {
+        if (!in_array($reuseTrust, ['verified_global', 'same_user_accurate', 'administrator_approved'], true)) {
+            throw new InvalidArgumentException('invalid_reuse_trust');
+        }
+
+        return $this->db->transaction(function () use (
+            $sourceGenerationId,
+            $userId,
+            $question,
+            $normalizedSql,
+            $edited,
+            $reuseTrust
+        ): array {
+            $source = AiReportGeneration::findOne(['id' => $sourceGenerationId]);
+            if ($source === null) {
+                throw new DomainException('reuse_source_generation_not_found');
+            }
+
+            $generationId = AiReportGeneration::generateUuid();
+            $now = gmdate('Y-m-d H:i:s');
+            $provenance = $this->decodeJsonObject($source->provenance_json);
+            if ($edited) {
+                $provenance['generationProvenance'] = 'ai_built';
+            }
+            $provenance['queryMemory'] = [
+                'reused' => true,
+                'sourceGenerationId' => (string)$source->id,
+                'reuseTrust' => $reuseTrust,
+                'edited' => $edited,
+            ];
+
+            $confidenceEvidence = $this->decodeJsonObject($source->confidence_evidence_json);
+            $confidenceEvidence['queryMemoryReuse'] = [
+                'sourceGenerationId' => (string)$source->id,
+                'reuseTrust' => $reuseTrust,
+                'edited' => $edited,
+            ];
+            $reviewReasons = $edited ? ['user_modified_sql'] : [];
+
+            $this->db->createCommand()->insert('ai_report_generations', [
+                'id' => $generationId,
+                'conversation_id' => (string)$source->conversation_id,
+                'parent_generation_id' => (string)$source->id,
+                'query_job_id' => null,
+                'user_id' => $userId,
+                'prompt_fingerprint' => substr(hash('sha256', $question), 0, 16),
+                'original_question' => $question,
+                'follow_up_context' => null,
+                'response_mode' => $source->response_mode,
+                'execution_mode' => $edited ? 'exploratory' : $source->execution_mode,
+                'route' => $source->route,
+                'route_reason' => $edited ? 'user_edited_sql' : 'query_reuse',
+                'validation_status' => 'validated',
+                'generated_sql' => $normalizedSql,
+                'sql_hash' => hash('sha256', $normalizedSql),
+                'assumptions_json' => $source->assumptions_json,
+                'user_notice_json' => $source->user_notice_json,
+                'confidence_evidence_json' => $this->encodeJson($confidenceEvidence),
+                'initial_structure_json' => $source->initial_structure_json,
+                'final_structure_json' => $source->final_structure_json,
+                'provenance_json' => $this->encodeJson($provenance),
+                'review_required' => $edited ? 1 : 0,
+                'review_reasons_json' => $this->encodeJson($reviewReasons),
+                'created_at' => $now,
+                'linked_at' => null,
+                'updated_at' => $now,
+            ])->execute();
+
+            $reviewId = $edited ? $this->insertReview($generationId) : null;
+            $generation = AiReportGeneration::findOne(['id' => $generationId]);
+            if ($generation === null) {
+                throw new RuntimeException('reuse_generation_not_found');
+            }
+            return [
+                'generationId' => $generationId,
+                'conversationId' => (string)$source->conversation_id,
+                'reviewId' => $reviewId,
+                'generation' => $generation,
+                'provenanceGeneration' => $edited ? $generation : $source,
+            ];
+        });
+    }
+
+    /**
      * Link a saved query job and copy only server-trusted Ask provenance into
      * its metadata.
      */

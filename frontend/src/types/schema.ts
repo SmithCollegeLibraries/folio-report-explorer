@@ -350,6 +350,8 @@ export interface SemanticValidation {
 
 export interface NlQueryReuseMetadata {
   candidateJobId: string;
+  sourceGenerationId: string;
+  reuseTrust: 'verified_global' | 'same_user_accurate' | 'administrator_approved';
   requestedPrompt: string;
   previousPrompt: string;
   completedAt: string | null;
@@ -594,6 +596,7 @@ export type JobStatus = 'pending' | 'pending_export' | 'running' | 'cancelling' 
 /** Response from POST /query/submit */
 export interface JobSubmitResponse {
   jobId: string;
+  generationId?: string;
   status: JobStatus;
   requiresConfirmation?: boolean;
   estimatedRows?: number;
@@ -928,6 +931,8 @@ export interface QueryReuseCandidate {
   completedAt: string | null;
   generationProvenance?: GenerationProvenance;
   provenanceLabel?: 'Verified pattern' | 'AI-built';
+  sourceGenerationId: string;
+  reuseTrust: 'verified_global' | 'same_user_accurate' | 'administrator_approved';
 }
 
 export interface QueryReuseCandidateRequest {

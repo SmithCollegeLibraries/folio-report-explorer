@@ -74,6 +74,25 @@ $jobs = [
         'row_count' => 1,
         'execution_time_ms' => 40,
     ],
+    [
+        'id' => 'parameterized-match',
+        'name' => 'How many items are in the Smith College collection?',
+        'status' => 'completed',
+        'source' => 'nl',
+        'data_source' => 'folio',
+        'sql_text' => 'SELECT COUNT(*) FROM inventory.item__t WHERE tenant_id = :tenant',
+        'params' => json_encode(['tenant' => 'smith']),
+        'metadata' => json_encode([
+            'originalPrompt' => 'How many items are in the Smith College collection?',
+            'resolvedContext' => ['campus' => 'Smith College', 'domain' => 'inventory'],
+            'askAiProvenance' => [
+                'provenance' => ['generationProvenance' => 'verified_pattern'],
+            ],
+        ]),
+        'completed_at' => '2026-06-05 09:00:00',
+        'row_count' => 1,
+        'execution_time_ms' => 20,
+    ],
 ];
 
 $match = PreviousSuccessfulQueryReuseService::findStrongMatch(
