@@ -117,6 +117,14 @@ final class AskGenerationEvidenceService
         if ($explicitReportRequest !== null) {
             $confidenceEvidence['explicitReportRequest'] = $explicitReportRequest;
         }
+        $queryMemoryExamples = self::queryMemoryExamples(
+            is_array($internalEvidence['queryMemoryExamples'] ?? null)
+                ? $internalEvidence['queryMemoryExamples']
+                : []
+        );
+        if ($queryMemoryExamples !== []) {
+            $confidenceEvidence['queryMemoryExamples'] = $queryMemoryExamples;
+        }
 
         $generationProvenance = (string) ($result['generationProvenance'] ?? '');
         if (
@@ -230,6 +238,32 @@ final class AskGenerationEvidenceService
             ),
             'policyBlocked' => $policyBlocked,
         ];
+    }
+
+    private static function queryMemoryExamples(array $examples): array
+    {
+        $normalized = [];
+        foreach (array_slice($examples, 0, 3) as $example) {
+            if (!is_array($example)) {
+                continue;
+            }
+            $id = self::nullableString($example['id'] ?? null);
+            $sqlHash = self::nullableString($example['sqlHash'] ?? null);
+            $rankTier = self::nullableString($example['rankTier'] ?? null);
+            $schemaFingerprint = self::nullableString($example['schemaVersionFingerprint'] ?? null);
+            $scopeFingerprint = self::nullableString($example['scopeFingerprint'] ?? null);
+            if ($id === null || $sqlHash === null || $rankTier === null) {
+                continue;
+            }
+            $normalized[] = [
+                'id' => $id,
+                'sqlHash' => $sqlHash,
+                'rankTier' => $rankTier,
+                'schemaVersionFingerprint' => $schemaFingerprint,
+                'scopeFingerprint' => $scopeFingerprint,
+            ];
+        }
+        return $normalized;
     }
 
     private static function validationStatus(

@@ -107,6 +107,39 @@ evidenceAssertSame(
     'Stable generation provenance must reach administrator and query-job metadata.'
 );
 
+$queryMemoryEvidence = AskGenerationEvidenceService::build([
+    'sql' => 'SELECT 1',
+    'mode' => 'exploratory',
+    'generationProvenance' => 'ai_built',
+    '_askEvidence' => [
+        'queryMemoryExamples' => [[
+            'id' => 'example-1',
+            'sqlHash' => hash('sha256', 'SELECT title FROM inventory.instance__t'),
+            'rankTier' => 'verified_pattern',
+            'schemaVersionFingerprint' => 'schema-v1',
+            'scopeFingerprint' => 'scope-smith',
+            'question' => 'This must not persist',
+            'sql' => 'SELECT title FROM inventory.instance__t',
+        ]],
+    ],
+], ['prompt' => 'Show one row']);
+evidenceAssertSame(
+    [[
+        'id' => 'example-1',
+        'sqlHash' => hash('sha256', 'SELECT title FROM inventory.instance__t'),
+        'rankTier' => 'verified_pattern',
+        'schemaVersionFingerprint' => 'schema-v1',
+        'scopeFingerprint' => 'scope-smith',
+    ]],
+    $queryMemoryEvidence['confidenceEvidence']['queryMemoryExamples'] ?? null,
+    'Generation evidence must retain only bounded query-memory identifiers, hashes, tier, schema version, and scope.'
+);
+evidenceAssertSame(
+    false,
+    strpos((string)json_encode($queryMemoryEvidence), 'This must not persist') !== false,
+    'Generation evidence must not persist example questions or raw SQL.'
+);
+
 $failedTwoLaneEvidence = AskGenerationEvidenceService::build([
     'route' => 'exploratory_recovery',
     'mode' => 'exploratory',

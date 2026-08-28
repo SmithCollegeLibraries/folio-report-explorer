@@ -2,8 +2,12 @@
 
 namespace app\services;
 
-require_once __DIR__ . '/FolioSchemaService.php';
-require_once __DIR__ . '/SqlBuilderService.php';
+if (!class_exists(FolioSchemaService::class, false)) {
+    require_once __DIR__ . '/FolioSchemaService.php';
+}
+if (!class_exists(SqlBuilderService::class, false)) {
+    require_once __DIR__ . '/SqlBuilderService.php';
+}
 
 /** Centralizes query-memory compatibility, explicit trust, and ranking. */
 class QueryMemoryService
@@ -43,6 +47,162 @@ class QueryMemoryService
             'dataSource' => strtolower(trim($dataSource)),
             'scope' => self::canonicalizeArray($authorizedScope, true),
         ]));
+    }
+
+    /**
+     * Select trusted examples from completed server-owned query records.
+     * Storage failures are intentionally allowed to bubble to the caller so
+     * generation can log the optional lookup failure and continue without examples.
+     */
+    public static function selectAiExamplesFromStorage(
+        array $request,
+        int $limit = 3,
+        int $byteLimit = 12000
+    ): array {
+        $dataSource = strtolower(trim((string)($request['dataSource'] ?? 'folio')));
+        $jobs = (new \yii\db\Query())
+            ->from('query_jobs')
+            ->where([
+                'status' => 'completed',
+                'source' => 'nl',
+                'data_source' => $dataSource,
+            ])
+            ->orderBy(['completed_at' => SORT_DESC, 'created_at' => SORT_DESC])
+            ->limit(250)
+            ->all(\Yii::$app->db);
+
+        $shapedCandidates = self::shapeCompletedJobs($jobs, $dataSource);
+        if ($shapedCandidates === []) {
+            return [];
+        }
+
+        $schemaMetadata = FolioSchemaService::getMetadata();
+        $schemaVersion = self::storedSchemaVersionFingerprint($schemaMetadata);
+        if ($schemaVersion === '') {
+            return [];
+        }
+
+        $request['dataSource'] = $dataSource;
+        $request['schemaVersionFingerprint'] = $schemaVersion;
+        $request['scopeFingerprint'] = self::scopeFingerprint(
+            $dataSource,
+            self::normalizeScope(is_array($request['authorizedScope'] ?? null) ? $request['authorizedScope'] : [])
+        );
+
+        return self::selectAiExamples(
+            $request,
+            self::hydrateCandidates($shapedCandidates, $jobs),
+            $limit,
+            $byteLimit
+        );
+    }
+
+    /** Hydrate job candidates with immutable generation and feedback evidence. */
+    public static function hydrateCandidates(array $shapedCandidates, array $jobs): array
+    {
+        $jobsById = [];
+        foreach ($jobs as $job) {
+            $jobId = trim((string)($job['id'] ?? ''));
+            if ($jobId !== '') {
+                $jobsById[$jobId] = $job;
+            }
+        }
+        $jobIds = array_values(array_unique(array_filter(array_map(
+            static function (array $candidate): string {
+                return trim((string)($candidate['jobId'] ?? ''));
+            },
+            $shapedCandidates
+        ))));
+        if ($jobIds === []) {
+            return [];
+        }
+
+        $generationRows = (new \yii\db\Query())
+            ->from('ai_report_generations')
+            ->where(['query_job_id' => $jobIds])
+            ->orderBy(['created_at' => SORT_DESC, 'id' => SORT_ASC])
+            ->all(\Yii::$app->db);
+        $generationByJob = [];
+        foreach ($generationRows as $generation) {
+            $jobId = trim((string)($generation['query_job_id'] ?? ''));
+            if ($jobId !== '' && !isset($generationByJob[$jobId])) {
+                $generationByJob[$jobId] = $generation;
+            }
+        }
+
+        [$feedbackByGeneration, $feedbackByJob, $feedbackBySqlHash] = self::feedbackIndexes(
+            $generationRows,
+            $jobIds
+        );
+        $hydrated = [];
+        foreach ($shapedCandidates as $candidate) {
+            $jobId = trim((string)($candidate['jobId'] ?? ''));
+            $generation = $generationByJob[$jobId] ?? null;
+            if (!is_array($generation)) {
+                continue;
+            }
+            $generationId = trim((string)($generation['id'] ?? ''));
+            $provenance = self::decodeObject($generation['provenance_json'] ?? null);
+            $schemaMetadata = is_array($provenance['schemaMetadata'] ?? null)
+                ? $provenance['schemaMetadata']
+                : [];
+            $generationProvenance = (string)($provenance['generationProvenance'] ?? '');
+            $job = $jobsById[$jobId] ?? [];
+            $jobMetadata = self::decodeObject($job['metadata'] ?? null);
+            $storedScope = is_array($jobMetadata['resolvedContext'] ?? null)
+                ? self::normalizeScope($jobMetadata['resolvedContext'])
+                : [];
+            $directFingerprint = self::storedDirectReuseSchemaFingerprint($schemaMetadata);
+            $versionFingerprint = self::storedSchemaVersionFingerprint($schemaMetadata);
+            $scopeFingerprint = self::scopeFingerprint(
+                (string)($candidate['dataSource'] ?? 'folio'),
+                $storedScope
+            );
+            $sqlHash = trim((string)($generation['sql_hash'] ?? $job['sql_hash'] ?? ''));
+            if ($sqlHash === '') {
+                $sqlHash = hash('sha256', (string)($candidate['sql'] ?? ''));
+            }
+            $feedbackRows = self::feedbackRowsForCandidate(
+                $generationId,
+                $jobId,
+                $sqlHash,
+                $versionFingerprint,
+                $scopeFingerprint,
+                $feedbackByGeneration,
+                $feedbackByJob,
+                $feedbackBySqlHash
+            );
+            $feedback = self::preferredFeedback($feedbackRows);
+            $hasExplicitFeedback = $feedback !== null;
+            $isVerified = $generationProvenance === 'verified_pattern';
+
+            $hydrated[] = array_merge($candidate, [
+                'id' => $generationId,
+                'sourceGenerationId' => $generationId,
+                'question' => (string)($generation['original_question'] ?? $candidate['question'] ?? ''),
+                'userId' => $generation['user_id'] ?? null,
+                'generationProvenance' => $generationProvenance,
+                'sqlHash' => $sqlHash,
+                'resultAccuracy' => $feedback['result_accuracy'] ?? null,
+                'adminReuseApprovedAt' => $feedback['admin_reuse_approved_at'] ?? null,
+                'reuseSuppressed' => $feedback === null ? false : !empty($feedback['reuse_suppressed']),
+                'directReuseSchemaFingerprint' => $isVerified || !$hasExplicitFeedback
+                    ? $directFingerprint
+                    : trim((string)($feedback['direct_reuse_schema_fingerprint'] ?? '')),
+                'schemaVersionFingerprint' => $isVerified || !$hasExplicitFeedback
+                    ? $versionFingerprint
+                    : trim((string)($feedback['schema_version_fingerprint'] ?? '')),
+                'scopeFingerprint' => $isVerified || !$hasExplicitFeedback
+                    ? $scopeFingerprint
+                    : trim((string)($feedback['scope_fingerprint'] ?? '')),
+                'savedCount' => (int)($generation['saved_count'] ?? 0),
+                'downloadedCount' => (int)($generation['downloaded_count'] ?? 0),
+                'rerunCount' => (int)($generation['rerun_count'] ?? 0),
+                'followUpCount' => (int)($generation['follow_up_count'] ?? 0),
+                'status' => 'completed',
+            ]);
+        }
+        return $hydrated;
     }
 
     public static function findDirectReuse(array $request, array $candidates): ?array
@@ -133,6 +293,197 @@ class QueryMemoryService
             $request['directReuseSchemaFingerprint'] ?? null,
             $candidate['directReuseSchemaFingerprint'] ?? null
         );
+    }
+
+    private static function shapeCompletedJobs(array $jobs, string $dataSource): array
+    {
+        $candidates = [];
+        foreach ($jobs as $job) {
+            if (!self::jobHasNoBoundParameters($job['params'] ?? null)) {
+                continue;
+            }
+            $sql = trim((string)($job['sql_text'] ?? ''));
+            if ($sql === '') {
+                continue;
+            }
+            $metadata = self::decodeObject($job['metadata'] ?? null);
+            $question = '';
+            foreach (['originalPrompt', 'nlPrompt', 'originalName'] as $key) {
+                $question = trim((string)($metadata[$key] ?? ''));
+                if ($question !== '') {
+                    break;
+                }
+            }
+            if ($question === '') {
+                $question = trim((string)($job['name'] ?? ''));
+            }
+            if ($question === '') {
+                continue;
+            }
+            $candidates[] = [
+                'jobId' => (string)($job['id'] ?? ''),
+                'question' => $question,
+                'sql' => $sql,
+                'dataSource' => (string)($job['data_source'] ?? $dataSource),
+                'completedAt' => $job['completed_at'] ?? $job['created_at'] ?? null,
+            ];
+        }
+        return $candidates;
+    }
+
+    private static function feedbackIndexes(array $generationRows, array $jobIds): array
+    {
+        $generationIds = array_values(array_filter(array_map(
+            static function (array $generation): string {
+                return trim((string)($generation['id'] ?? ''));
+            },
+            $generationRows
+        )));
+        $sqlHashes = array_values(array_unique(array_filter(array_map(
+            static function (array $generation): string {
+                return trim((string)($generation['sql_hash'] ?? ''));
+            },
+            $generationRows
+        ))));
+        if ($generationIds === [] && $jobIds === [] && $sqlHashes === []) {
+            return [[], [], []];
+        }
+
+        $feedbackRows = (new \yii\db\Query())
+            ->from('ai_query_feedback')
+            ->where(['or',
+                ['generation_id' => $generationIds],
+                ['query_job_id' => $jobIds],
+                ['sql_hash' => $sqlHashes],
+            ])
+            ->orderBy(['created_at' => SORT_DESC, 'id' => SORT_DESC])
+            ->all(\Yii::$app->db);
+        $byGeneration = [];
+        $byJob = [];
+        $bySqlHash = [];
+        foreach ($feedbackRows as $feedback) {
+            $generationId = trim((string)($feedback['generation_id'] ?? ''));
+            $jobId = trim((string)($feedback['query_job_id'] ?? ''));
+            $sqlHash = trim((string)($feedback['sql_hash'] ?? ''));
+            if ($generationId !== '') {
+                $byGeneration[$generationId][] = $feedback;
+            }
+            if ($jobId !== '') {
+                $byJob[$jobId][] = $feedback;
+            }
+            if ($sqlHash !== '') {
+                $bySqlHash[$sqlHash][] = $feedback;
+            }
+        }
+        return [$byGeneration, $byJob, $bySqlHash];
+    }
+
+    private static function feedbackRowsForCandidate(
+        string $generationId,
+        string $jobId,
+        string $sqlHash,
+        string $schemaVersionFingerprint,
+        string $scopeFingerprint,
+        array $feedbackByGeneration,
+        array $feedbackByJob,
+        array $feedbackBySqlHash
+    ): array {
+        $rows = array_merge(
+            $feedbackByGeneration[$generationId] ?? [],
+            $feedbackByJob[$jobId] ?? []
+        );
+        foreach ($feedbackBySqlHash[$sqlHash] ?? [] as $row) {
+            if (
+                trim((string)($row['schema_version_fingerprint'] ?? '')) === $schemaVersionFingerprint
+                && trim((string)($row['scope_fingerprint'] ?? '')) === $scopeFingerprint
+            ) {
+                $rows[] = $row;
+            }
+        }
+        $unique = [];
+        foreach ($rows as $row) {
+            if (is_array($row)) {
+                $key = isset($row['id']) ? 'id:' . (string)$row['id'] : hash('sha256', serialize($row));
+                $unique[$key] = $row;
+            }
+        }
+        return array_values($unique);
+    }
+
+    private static function preferredFeedback(array $rows): ?array
+    {
+        foreach ($rows as $row) {
+            $accuracy = strtolower(trim((string)($row['result_accuracy'] ?? '')));
+            if (!empty($row['reuse_suppressed']) || $accuracy === 'inaccurate') {
+                $row['reuse_suppressed'] = 1;
+                return $row;
+            }
+        }
+        $accurate = null;
+        $neutral = null;
+        foreach ($rows as $row) {
+            $accuracy = strtolower(trim((string)($row['result_accuracy'] ?? '')));
+            if ($accuracy === 'accurate' && !empty($row['admin_reuse_approved_at'])) {
+                return $row;
+            }
+            if ($accuracy === 'accurate' && $accurate === null) {
+                $accurate = $row;
+            } elseif ($neutral === null) {
+                $neutral = $row;
+            }
+        }
+        return $accurate ?? $neutral;
+    }
+
+    private static function storedDirectReuseSchemaFingerprint(array $metadata): string
+    {
+        $version = self::schemaVersion($metadata);
+        return $version === null || trim((string)($metadata['contextHash'] ?? '')) === ''
+            ? ''
+            : self::directReuseSchemaFingerprint($metadata);
+    }
+
+    private static function storedSchemaVersionFingerprint(array $metadata): string
+    {
+        return self::schemaVersion($metadata) === null ? '' : self::schemaVersionFingerprint($metadata);
+    }
+
+    private static function normalizeScope(array $scope): array
+    {
+        $normalized = [];
+        foreach ($scope as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+            $normalizedKey = trim((string)$key);
+            $normalizedValue = preg_replace('/\s+/', ' ', trim((string)$value));
+            if ($normalizedKey !== '' && $normalizedValue !== '') {
+                $normalized[$normalizedKey] = $normalizedValue;
+            }
+        }
+        ksort($normalized, SORT_STRING);
+        return $normalized;
+    }
+
+    private static function decodeObject($value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        $decoded = is_string($value) && trim($value) !== '' ? json_decode($value, true) : null;
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private static function jobHasNoBoundParameters($params): bool
+    {
+        if ($params === null || $params === '') {
+            return true;
+        }
+        if (is_array($params)) {
+            return $params === [];
+        }
+        $decoded = is_string($params) ? json_decode($params, true) : null;
+        return is_array($decoded) && $decoded === [];
     }
 
     private static function exampleCompatible(array $request, array $candidate): bool
