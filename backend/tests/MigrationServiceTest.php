@@ -209,6 +209,38 @@ class MigrationServiceRetryTestDatabase
     }
 }
 
+class QueryMemoryMigrationRecognitionSchema
+{
+    private $columnsByTable;
+
+    public function __construct(array $columnsByTable)
+    {
+        $this->columnsByTable = $columnsByTable;
+    }
+
+    public function getTableSchema(string $table, bool $refresh = false)
+    {
+        if (!isset($this->columnsByTable[$table])) {
+            return null;
+        }
+        $columns = [];
+        foreach ($this->columnsByTable[$table] as $column) {
+            $columns[$column] = new stdClass();
+        }
+        return (object)['columns' => $columns];
+    }
+}
+
+class QueryMemoryMigrationRecognitionDatabase
+{
+    public $schema;
+
+    public function __construct(array $columnsByTable)
+    {
+        $this->schema = new QueryMemoryMigrationRecognitionSchema($columnsByTable);
+    }
+}
+
 class MigrationServiceRetryTestCommand
 {
     private $database;
@@ -316,6 +348,37 @@ assertMigrationTrue(
     'Migration 039 must not look applied when the review table is absent.'
 );
 $retryDatabase->tables[] = 'ai_report_reviews';
+$feedbackTrustColumns = [
+    'generation_id', 'query_job_id', 'generation_provenance',
+    'direct_reuse_schema_fingerprint', 'schema_version_fingerprint',
+    'scope_fingerprint', 'reuse_suppressed', 'admin_reuse_approved_at',
+    'admin_reuse_approved_by', 'replacement_generation_id',
+];
+$generationSignalColumns = ['saved_count', 'downloaded_count', 'rerun_count', 'follow_up_count'];
+$completeQueryMemorySchema = new QueryMemoryMigrationRecognitionDatabase([
+    'ai_query_feedback' => $feedbackTrustColumns,
+    'ai_report_generations' => $generationSignalColumns,
+]);
+assertMigrationTrue(
+    $migrationAppearsApplied->invoke(null, $completeQueryMemorySchema, '044_query_feedback_reuse_trust.sql'),
+    'Migration 044 should be complete only when both feedback trust and generation signal columns exist.'
+);
+$missingSuppressionSchema = new QueryMemoryMigrationRecognitionDatabase([
+    'ai_query_feedback' => array_values(array_diff($feedbackTrustColumns, ['reuse_suppressed'])),
+    'ai_report_generations' => $generationSignalColumns,
+]);
+assertMigrationTrue(
+    !$migrationAppearsApplied->invoke(null, $missingSuppressionSchema, '044_query_feedback_reuse_trust.sql'),
+    'Migration 044 must not baseline a feedback table missing suppression state.'
+);
+$missingSignalSchema = new QueryMemoryMigrationRecognitionDatabase([
+    'ai_query_feedback' => $feedbackTrustColumns,
+    'ai_report_generations' => array_values(array_diff($generationSignalColumns, ['follow_up_count'])),
+]);
+assertMigrationTrue(
+    !$migrationAppearsApplied->invoke(null, $missingSignalSchema, '044_query_feedback_reuse_trust.sql'),
+    'Migration 044 must not baseline a generation table missing a weak-signal counter.'
+);
 $firstFailure = null;
 try {
     MigrationService::run($retryDatabase, $retryMigrationDir);

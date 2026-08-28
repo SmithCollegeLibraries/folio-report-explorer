@@ -2,19 +2,24 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
+  Ban,
   CheckCircle2,
   ChevronRight,
   ClipboardCheck,
   FileWarning,
+  Database,
   Loader2,
   RefreshCw,
   ShieldAlert,
 } from 'lucide-react';
 import {
   claimReportReview,
+  clearQueryMemorySuppression,
+  fetchQueryMemory,
   fetchReportReview,
   fetchReportReviews,
   updateReportReview,
+  updateQueryMemoryReuseApproval,
 } from '../api/client';
 import type {
   ReportReviewAdvisoryState,
@@ -23,6 +28,7 @@ import type {
   ReportReviewFilters,
   ReportReviewStatus,
   ReportReviewUpdate,
+  QueryMemoryStatus,
 } from '../types';
 import { fmtDate } from '../utils/format';
 
@@ -75,6 +81,107 @@ function JsonEvidence({ label, value }: { label: string; value: unknown }) {
   );
 }
 
+function QueryMemoryPanel() {
+  const queryClient = useQueryClient();
+  const [status, setStatus] = useState<QueryMemoryStatus>('all');
+  const [actionError, setActionError] = useState<string | null>(null);
+  const memory = useQuery({
+    queryKey: ['query-memory', status],
+    queryFn: () => fetchQueryMemory(status),
+  });
+  const approval = useMutation({
+    mutationFn: ({ id, approved }: { id: number; approved: boolean }) =>
+      updateQueryMemoryReuseApproval(id, approved),
+    onMutate: () => setActionError(null),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['query-memory'] }),
+    onError: (error) => setActionError(extractApiError(error, 'Unable to update reuse approval.')),
+  });
+  const suppression = useMutation({
+    mutationFn: (id: number) => clearQueryMemorySuppression(id),
+    onMutate: () => setActionError(null),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['query-memory'] }),
+    onError: (error) => setActionError(extractApiError(error, 'Unable to clear suppression.')),
+  });
+
+  const confirmApproval = (id: number, approved: boolean) => {
+    const message = approved
+      ? 'Approve this AI-built query for compatible cross-user reuse? Its provenance will remain AI-built.'
+      : 'Revoke cross-user reuse approval for this query?';
+    if (window.confirm(message)) approval.mutate({ id, approved });
+  };
+
+  const confirmSuppressionClear = (id: number) => {
+    if (window.confirm('Clear suppression for every exact SQL, schema-version, and scope match? This does not approve reuse.')) {
+      suppression.mutate(id);
+    }
+  };
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-200 bg-slate-50 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="flex items-center gap-2 font-semibold text-slate-900"><Database size={17} className="text-folio-600" /> Query memory</h2>
+          <p className="mt-1 text-sm text-slate-500">Review explicit feedback before AI-built SQL can be reused across users.</p>
+        </div>
+        <label className="text-sm font-medium text-slate-700">
+          Show
+          <select
+            aria-label="Query memory status"
+            value={status}
+            onChange={(event) => setStatus(event.target.value as QueryMemoryStatus)}
+            className="ml-2 rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm"
+          >
+            <option value="all">All decisions</option>
+            <option value="accurate">Accurate</option>
+            <option value="suppressed">Suppressed</option>
+            <option value="approved">Approved</option>
+          </select>
+        </label>
+      </div>
+      {actionError && <div role="alert" className="m-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{actionError}</div>}
+      {memory.isLoading ? (
+        <div className="flex justify-center py-16 text-folio-600"><Loader2 className="animate-spin" /></div>
+      ) : memory.isError ? (
+        <div className="m-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">Unable to load query memory.</div>
+      ) : memory.data?.items.length === 0 ? (
+        <div className="px-5 py-14 text-center text-sm text-slate-500">No query-memory records match this filter.</div>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          {memory.data?.items.map((item) => (
+            <article key={item.id} className="grid gap-4 px-5 py-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+              <div className="min-w-0">
+                <h3 className="font-semibold leading-6 text-slate-900">{item.question}</h3>
+                <div className="mt-2 flex flex-wrap gap-1.5 text-xs font-medium">
+                  <span className="rounded border border-sky-200 bg-sky-50 px-2 py-0.5 text-sky-800">AI-built</span>
+                  <span className={`rounded border px-2 py-0.5 ${item.resultAccuracy === 'accurate' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : item.resultAccuracy === 'inaccurate' ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>{item.resultAccuracy}</span>
+                  {item.reuseSuppressed && <span className="rounded border border-red-200 bg-red-50 px-2 py-0.5 text-red-700">suppressed</span>}
+                  {item.adminReuseApprovedAt && <span className="rounded border border-teal-200 bg-teal-50 px-2 py-0.5 text-teal-800">cross-user approved</span>}
+                </div>
+                <dl className="mt-3 grid gap-x-6 gap-y-2 text-xs text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
+                  <div><dt className="font-semibold text-slate-500">SQL hash</dt><dd className="truncate font-mono" title={item.sqlHash}>{item.sqlHash.slice(0, 16)}…</dd></div>
+                  <div><dt className="font-semibold text-slate-500">Strict schema</dt><dd>{item.strictSchemaCompatible ? 'Compatible' : 'Stale'}</dd></div>
+                  <div><dt className="font-semibold text-slate-500">Global schema</dt><dd>{item.globalSchemaCompatible ? 'Compatible' : 'Stale'}</dd></div>
+                  <div><dt className="font-semibold text-slate-500">Scope</dt><dd>{item.scopeCompatible ? 'Recorded' : 'Unavailable'}</dd></div>
+                </dl>
+              </div>
+              <div className="flex flex-wrap gap-2 lg:max-w-64 lg:justify-end">
+                {item.adminReuseApprovedAt ? (
+                  <button type="button" onClick={() => confirmApproval(item.id, false)} disabled={approval.isPending} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">Revoke reuse approval</button>
+                ) : item.approvalEligible ? (
+                  <button type="button" onClick={() => confirmApproval(item.id, true)} disabled={approval.isPending} className="rounded-md bg-folio-600 px-3 py-2 text-sm font-semibold text-white hover:bg-folio-700 disabled:opacity-60">Approve for cross-user reuse</button>
+                ) : null}
+                {item.reuseSuppressed && (
+                  <button type="button" onClick={() => confirmSuppressionClear(item.id)} disabled={suppression.isPending} className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60"><Ban size={14} /> Clear suppression after review</button>
+                )}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function ReportReviews() {
   const queryClient = useQueryClient();
   const [filters, setFilters] = useState<ReportReviewFilters>({ status: 'pending', disposition: '', limit: 25, offset: 0 });
@@ -85,6 +192,7 @@ export default function ReportReviews() {
   const [notes, setNotes] = useState('');
   const [supersededByJobId, setSupersededByJobId] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'reviews' | 'memory'>('reviews');
 
   const reviewList = useQuery({
     queryKey: ['report-reviews', filters],
@@ -193,6 +301,14 @@ export default function ReportReviews() {
           </button>
         </div>
       </div>
+
+      <div className="mb-4 inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1" role="tablist" aria-label="Administrator AI tools">
+        <button type="button" role="tab" aria-selected={activeTab === 'reviews'} onClick={() => setActiveTab('reviews')} className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${activeTab === 'reviews' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Report reviews</button>
+        <button type="button" role="tab" aria-selected={activeTab === 'memory'} onClick={() => setActiveTab('memory')} className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${activeTab === 'memory' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}>Query memory</button>
+      </div>
+
+      {activeTab === 'reviews' ? (
+        <>
 
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
         <label className="text-sm font-medium text-slate-700">
@@ -349,6 +465,10 @@ export default function ReportReviews() {
           )}
         </section>
       </div>
+        </>
+      ) : (
+        <QueryMemoryPanel />
+      )}
     </div>
   );
 }

@@ -19,6 +19,7 @@ require_once __DIR__ . '/ExploratorySemanticContractService.php';
 require_once __DIR__ . '/ExploratorySqlRepairService.php';
 require_once __DIR__ . '/ExploratorySqlSemanticValidatorService.php';
 require_once __DIR__ . '/ExplicitReportRequestService.php';
+require_once __DIR__ . '/QueryMemoryService.php';
 require_once __DIR__ . '/../exceptions/ExploratorySqlValidationException.php';
 require_once __DIR__ . '/../exceptions/CanonicalLaneFallbackException.php';
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
@@ -284,7 +285,11 @@ class GeminiService
                 (string)$effectivePrompt,
                 $campus,
                 'user_requested_exploratory_generation',
-                $resolvedFilters
+                $resolvedFilters,
+                [],
+                '',
+                '',
+                $userId
             );
 
             $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
@@ -309,7 +314,11 @@ class GeminiService
                 (string)$effectivePrompt,
                 $campus,
                 $exploratoryReason,
-                $resolvedFilters
+                $resolvedFilters,
+                [],
+                '',
+                '',
+                $userId
             );
 
             $primary = self::withInternalReferenceResolverGuidance($primary, $referenceResolution);
@@ -340,7 +349,8 @@ class GeminiService
                 $resolvedFilters,
                 $exception->getCandidateResult(),
                 'Canonical validation requires AI review.',
-                $exception->getFamilyKey()
+                $exception->getFamilyKey(),
+                $userId
             );
         } catch (ExploratorySqlValidationException $exception) {
             if (self::isHardCanonicalFailure($exception)) {
@@ -376,7 +386,8 @@ class GeminiService
                     $resolvedFilters,
                     $candidate,
                     'Canonical semantic validation requires AI review.',
-                    (string)($queryFamily['familyKey'] ?? '')
+                    (string)($queryFamily['familyKey'] ?? ''),
+                    $userId
                 );
             }
         } catch (\Exception $exception) {
@@ -392,7 +403,8 @@ class GeminiService
                 $resolvedFilters,
                 [],
                 '',
-                (string)($queryFamily['familyKey'] ?? '')
+                (string)($queryFamily['familyKey'] ?? ''),
+                $userId
             );
         }
 
@@ -406,7 +418,8 @@ class GeminiService
                 $resolvedFilters,
                 [],
                 '',
-                (string)($queryFamily['familyKey'] ?? '')
+                (string)($queryFamily['familyKey'] ?? ''),
+                $userId
             );
         }
 
@@ -486,7 +499,8 @@ class GeminiService
         array $resolvedFilters,
         array $seededCandidate = [],
         string $diagnostic = '',
-        string $familyKey = ''
+        string $familyKey = '',
+        ?int $userId = null
     ): array {
         self::logNlTelemetry('nl2sql.lane_transition', [
             'from' => self::aiBuiltSourceLane($reason),
@@ -499,7 +513,17 @@ class GeminiService
             'promptFingerprint' => self::fingerprintPrompt($rawQuestion),
         ]);
 
+        $queryMemoryExamples = self::loadQueryMemoryExamples(
+            $rawQuestion,
+            is_string($campus) ? $campus : null,
+            $userId
+        );
+        $queryMemoryEvidence = self::queryMemoryExampleEvidence($queryMemoryExamples);
+
         if (isset($seededCandidate['sql'])) {
+            $seededCandidate = self::withAskEvidence($seededCandidate, [
+                'queryMemoryExamples' => $queryMemoryExamples,
+            ]);
             $result = self::repairExploratorySqlAfterPreflight(
                 $rawQuestion,
                 $campus,
@@ -514,7 +538,8 @@ class GeminiService
                 $campus,
                 $reason,
                 $rawQuestion,
-                $resolvedFilters
+                $resolvedFilters,
+                $queryMemoryExamples
             );
         }
 
@@ -534,7 +559,8 @@ class GeminiService
                 $campus,
                 $reason,
                 $rawQuestion,
-                $resolvedFilters
+                $resolvedFilters,
+                $queryMemoryExamples
             );
             $result = self::withFreshGenerationEvidence($result, $previousEvidence);
         }
@@ -546,6 +572,9 @@ class GeminiService
                 AskResponseContractService::PROVENANCE_AI_BUILT
             );
         }
+        $result = self::withAskEvidence($result, [
+            'queryMemoryExamples' => $queryMemoryEvidence,
+        ]);
         return $result;
     }
 
@@ -559,14 +588,19 @@ class GeminiService
         string $generationPrompt,
         ?string $campus,
         array $resolvedFilters = [],
-        string $reason = 'candidate_rejected'
+        string $reason = 'candidate_rejected',
+        ?int $userId = null
     ): array {
         return self::generateAiBuiltLane(
             $rawQuestion,
             $generationPrompt,
             $campus,
             $reason,
-            $resolvedFilters
+            $resolvedFilters,
+            [],
+            '',
+            '',
+            $userId
         );
     }
 
@@ -621,7 +655,8 @@ class GeminiService
         $campus = null,
         string $reason = 'unsupported_query_family',
         ?string $rawQuestion = null,
-        array $resolvedFilters = []
+        array $resolvedFilters = [],
+        array $queryMemoryExamples = []
     ): array
     {
         $rawQuestion = $rawQuestion === null
@@ -652,14 +687,14 @@ class GeminiService
 
         try {
             $outcome = ExploratorySqlRepairService::run(
-                function (array $attemptContext) use ($generationPrompt, $campus, $attemptedPlan, $reason, $rawQuestion, $resolvedFilters): array {
+                function (array $attemptContext) use ($generationPrompt, $campus, $attemptedPlan, $reason, $rawQuestion, $resolvedFilters, $queryMemoryExamples): array {
                     return self::runExploratorySqlAttempt(
                         $attemptContext + [
                             'route' => 'exploratory_legacy_freeform',
                             'routeReason' => $reason,
                             'resolvedFilters' => $resolvedFilters,
                         ],
-                        function () use ($attemptContext, $generationPrompt, $campus, $attemptedPlan, $rawQuestion, $resolvedFilters): array {
+                        function () use ($attemptContext, $generationPrompt, $campus, $attemptedPlan, $rawQuestion, $resolvedFilters, $queryMemoryExamples): array {
                             if ((int)($attemptContext['repairNumber'] ?? 0) === 0) {
                                 $guidedPrompt = $generationPrompt;
                                 if ($attemptedPlan !== '') {
@@ -671,7 +706,8 @@ class GeminiService
                                     true,
                                     false,
                                     $rawQuestion,
-                                    $resolvedFilters
+                                    $resolvedFilters,
+                                    $queryMemoryExamples
                                 );
                             }
 
@@ -1426,7 +1462,8 @@ PROMPT;
         $forceLegacy = false,
         $forceIntent = false,
         $originalQuestion = null,
-        array $resolvedFilters = []
+        array $resolvedFilters = [],
+        array $queryMemoryExamples = []
     )
     {
         $originalQuestion = $originalQuestion === null
@@ -1526,7 +1563,8 @@ PROMPT;
       $organizationAcquisitionUnitGuidance = self::buildOrganizationAcquisitionUnitGuidance();
       $referenceNameMatchingGuidance = self::buildReferenceNameMatchingGuidance($resolvedFilters);
       $legacyPromptFamilyGuidance = self::buildLegacyPromptFamilyGuidance($originalQuestion, $campus);
-    $legacyPromptUserInput = self::buildLegacyPromptUserInput($prompt, $campus, $originalQuestion);
+      $legacyPromptUserInput = self::buildLegacyPromptUserInput($prompt, $campus, $originalQuestion);
+      $trustedQueryExamplesContext = self::buildTrustedQueryExamplesContext($queryMemoryExamples);
 
         $systemPrompt = <<<PROMPT
 You are a PostgreSQL query generator for a FOLIO library management system.
@@ -1616,6 +1654,9 @@ Return exactly one SQL statement in a ```sql code block, followed by a brief pla
 of what the query does and which tables/joins are used.
 Then add a final line exactly like: DATA SOURCE: folio OR DATA SOURCE: local
 PROMPT;
+        if ($trustedQueryExamplesContext !== '') {
+            $systemPrompt .= "\n\n" . $trustedQueryExamplesContext;
+        }
 
         $url = self::API_BASE . "/{$model}:generateContent?key={$apiKey}";
 
@@ -1698,6 +1739,7 @@ PROMPT;
             'modelName' => $model,
             'promptVersion' => self::LEGACY_PROMPT_VERSION,
             'schemaMetadata' => self::schemaMetadata($schemaTelemetry),
+            'queryMemoryExamples' => self::queryMemoryExampleEvidence($queryMemoryExamples),
         ]);
         return $parsed;
     }
@@ -2134,6 +2176,113 @@ GUIDANCE;
         }
 
         return implode("\n", $lines);
+    }
+
+    /** Serialize server-selected examples outside the user's instruction text. */
+    private static function buildTrustedQueryExamplesContext(array $examples): string
+    {
+        $lines = [];
+        foreach (array_slice($examples, 0, 3) as $index => $example) {
+            if (!is_array($example)) {
+                continue;
+            }
+            if (trim((string)($example['question'] ?? '')) === '' || trim((string)($example['sql'] ?? '')) === '') {
+                continue;
+            }
+            $provenance = trim((string)($example['generationProvenance'] ?? ''));
+            $feedback = $provenance === 'verified_pattern'
+                ? 'verified'
+                : trim((string)($example['resultAccuracy'] ?? 'neutral'));
+            if ($feedback === '') {
+                $feedback = 'neutral';
+            }
+            $question = json_encode(
+                (string)($example['question'] ?? ''),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG
+            );
+            $sql = json_encode(
+                (string)($example['sql'] ?? ''),
+                JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG
+            );
+            if ($question === false || $sql === false) {
+                continue;
+            }
+            $lines[] = sprintf(
+                "Example %d provenance=%s feedback=%s\nQuestion: %s\nSQL: %s",
+                $index + 1,
+                self::sanitizeTelemetryLabel($provenance, 'unknown'),
+                self::sanitizeTelemetryLabel($feedback, 'neutral'),
+                $question,
+                $sql
+            );
+        }
+        if ($lines === []) {
+            return '';
+        }
+
+        return "<trusted_query_examples>\n"
+            . "These are server-selected references only. Adapt them to the current user request; do not execute them directly.\n"
+            . implode("\n\n", $lines)
+            . "\n</trusted_query_examples>";
+    }
+
+    private static function loadQueryMemoryExamples(
+        string $question,
+        ?string $campus,
+        ?int $userId
+    ): array {
+        $authorizedScope = [];
+        $campus = trim((string)$campus);
+        if ($campus !== '' && strcasecmp($campus, 'All Colleges') !== 0) {
+            $authorizedScope['campus'] = $campus;
+        }
+
+        try {
+            return QueryMemoryService::selectAiExamplesFromStorage([
+                'question' => $question,
+                'dataSource' => 'folio',
+                'userId' => $userId ?? self::currentQueryMemoryUserId(),
+                'authorizedScope' => $authorizedScope,
+            ]);
+        } catch (\Throwable $exception) {
+            self::logNlTelemetry('query_memory_examples_unavailable', [
+                'promptFingerprint' => self::fingerprintPrompt($question),
+                'failureClass' => get_class($exception),
+            ], true);
+            return [];
+        }
+    }
+
+    private static function currentQueryMemoryUserId(): ?int
+    {
+        try {
+            $user = Yii::$app->user ?? null;
+            if ($user !== null && empty($user->isGuest) && $user->id !== null) {
+                return (int)$user->id;
+            }
+        } catch (\Throwable $exception) {
+            // Anonymous/test contexts simply receive no same-user ranking boost.
+        }
+        return null;
+    }
+
+    /** Strip example prompt/SQL before evidence persistence or telemetry. */
+    private static function queryMemoryExampleEvidence(array $examples): array
+    {
+        $evidence = [];
+        foreach (array_slice($examples, 0, 3) as $example) {
+            if (!is_array($example)) {
+                continue;
+            }
+            $evidence[] = [
+                'id' => trim((string)($example['id'] ?? '')),
+                'sqlHash' => trim((string)($example['sqlHash'] ?? '')),
+                'rankTier' => trim((string)($example['rankTier'] ?? '')),
+                'schemaVersionFingerprint' => trim((string)($example['schemaVersionFingerprint'] ?? '')),
+                'scopeFingerprint' => trim((string)($example['scopeFingerprint'] ?? '')),
+            ];
+        }
+        return $evidence;
     }
 
     private static function maybeRouteQueryFamilyIntentResponse(
@@ -6621,12 +6770,18 @@ PROMPT;
             'stage' => 'postgres_preflight',
         ]);
 
+        $queryMemoryExamples = self::loadQueryMemoryExamples(
+            $originalQuestion,
+            is_string($campus) ? $campus : null,
+            null
+        );
         $freshResult = self::generateExploratorySqlResponse(
             $generationPrompt,
             $campus,
             $reason,
             $originalQuestion,
-            $resolvedFilters
+            $resolvedFilters,
+            $queryMemoryExamples
         );
         if (isset($freshResult['sql'])) {
             $freshResult['mode'] = 'exploratory';
@@ -6636,6 +6791,9 @@ PROMPT;
             );
         }
 
+        $freshResult = self::withAskEvidence($freshResult, [
+            'queryMemoryExamples' => self::queryMemoryExampleEvidence($queryMemoryExamples),
+        ]);
         return self::withFreshGenerationEvidence($freshResult, $currentEvidence);
     }
 
@@ -6826,6 +6984,14 @@ Return the corrected query in one ```sql code block, followed by a concise expla
 Never include a second SQL statement, an alternate query, or a semicolon inside the SQL code block.
 PROMPT;
         $systemPrompt .= "\n\n" . self::buildOrganizationAcquisitionUnitGuidance();
+        $trustedExamples = self::buildTrustedQueryExamplesContext(
+            is_array($context['_askEvidence']['queryMemoryExamples'] ?? null)
+                ? $context['_askEvidence']['queryMemoryExamples']
+                : []
+        );
+        if ($trustedExamples !== '') {
+            $systemPrompt .= "\n\n" . $trustedExamples;
+        }
 
         $semanticGuidance = [];
         foreach (($context['safeViolations'] ?? []) as $violation) {
@@ -8147,7 +8313,7 @@ PROMPT;
      * Handles both LDP1 names and MetaDB schema-qualified names.
      * @param string $sql
      */
-    private static function validateTableReferences($sql)
+    public static function validateTableReferences($sql)
     {
         $ldpTableNames = [];
         foreach (FolioSchemaService::getTableNames() as $tableName) {

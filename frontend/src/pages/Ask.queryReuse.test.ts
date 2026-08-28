@@ -17,6 +17,8 @@ const verifiedCandidate: QueryReuseCandidate = {
   completedAt: '2026-08-26 12:00:00',
   generationProvenance: 'verified_pattern',
   provenanceLabel: 'Verified pattern',
+  sourceGenerationId: 'generation-verified',
+  reuseTrust: 'verified_global',
 };
 
 afterEach(cleanup);
@@ -74,6 +76,8 @@ describe('Ask query reuse helpers', () => {
 
     for (const testCase of cases) {
       const result = buildReusedNlResult(testCase.candidate, testCase.sql);
+      expect(result.queryReuse?.sourceGenerationId).toBe(testCase.candidate.sourceGenerationId);
+      expect(result.queryReuse?.reuseTrust).toBe(testCase.candidate.reuseTrust);
       render(createElement(AskTrustNotice, {
         generationProvenance: result.generationProvenance,
         provenanceLabel: result.provenanceLabel,

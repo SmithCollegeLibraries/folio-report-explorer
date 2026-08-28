@@ -85,8 +85,16 @@ $generateSqlParameters = array_map(function (ReflectionParameter $parameter): st
     return $parameter->getName();
 }, (new ReflectionMethod(GeminiService::class, 'generateSql'))->getParameters());
 assertGuardTrue(
-    $generateSqlParameters === ['prompt', 'campus', 'forceLegacy', 'forceIntent', 'originalQuestion', 'resolvedFilters'],
-    'generateSql must preserve Task 12 originalQuestion as the fifth argument and append resolvedFilters as the sixth.'
+    $generateSqlParameters === [
+        'prompt',
+        'campus',
+        'forceLegacy',
+        'forceIntent',
+        'originalQuestion',
+        'resolvedFilters',
+        'queryMemoryExamples',
+    ],
+    'generateSql must preserve existing argument ordering and append trusted query-memory examples last.'
 );
 
 $postPreflightParameters = array_map(function (ReflectionParameter $parameter): string {

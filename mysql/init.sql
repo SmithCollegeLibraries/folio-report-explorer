@@ -260,6 +260,16 @@ CREATE TABLE IF NOT EXISTS folio_reference_refresh_log (
 CREATE TABLE IF NOT EXISTS ai_query_feedback (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NULL,
+    generation_id CHAR(36) NULL,
+    query_job_id CHAR(36) NULL,
+    generation_provenance ENUM('verified_pattern','ai_built') NULL,
+    direct_reuse_schema_fingerprint CHAR(64) NULL,
+    schema_version_fingerprint CHAR(64) NULL,
+    scope_fingerprint CHAR(64) NULL,
+    reuse_suppressed TINYINT(1) NOT NULL DEFAULT 0,
+    admin_reuse_approved_at DATETIME NULL,
+    admin_reuse_approved_by INT NULL,
+    replacement_generation_id CHAR(36) NULL,
     original_question TEXT NOT NULL,
     prompt_fingerprint CHAR(16) NOT NULL,
     generated_sql MEDIUMTEXT NULL,
@@ -277,6 +287,13 @@ CREATE TABLE IF NOT EXISTS ai_query_feedback (
     INDEX idx_result_accuracy (result_accuracy),
     INDEX idx_user_id (user_id),
     INDEX idx_created_at (created_at),
+    INDEX idx_feedback_prompt_source_accuracy (prompt_fingerprint, data_source, result_accuracy),
+    INDEX idx_feedback_generation (generation_id),
+    INDEX idx_feedback_query_job (query_job_id),
+    INDEX idx_feedback_direct_schema (direct_reuse_schema_fingerprint),
+    INDEX idx_feedback_schema_version (schema_version_fingerprint),
+    INDEX idx_feedback_scope (scope_fingerprint),
+    INDEX idx_feedback_suppressed (reuse_suppressed),
     CONSTRAINT fk_query_feedback_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -304,6 +321,10 @@ CREATE TABLE IF NOT EXISTS ai_report_generations (
     provenance_json JSON NOT NULL,
     review_required TINYINT(1) NOT NULL DEFAULT 0,
     review_reasons_json JSON NOT NULL,
+    saved_count INT UNSIGNED NOT NULL DEFAULT 0,
+    downloaded_count INT UNSIGNED NOT NULL DEFAULT 0,
+    rerun_count INT UNSIGNED NOT NULL DEFAULT 0,
+    follow_up_count INT UNSIGNED NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     linked_at DATETIME NULL,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -316,6 +337,27 @@ CREATE TABLE IF NOT EXISTS ai_report_generations (
     CONSTRAINT fk_ai_report_generations_parent FOREIGN KEY (parent_generation_id) REFERENCES ai_report_generations(id) ON DELETE SET NULL,
     CONSTRAINT fk_ai_report_generations_job FOREIGN KEY (query_job_id) REFERENCES query_jobs(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+DELIMITER //
+DROP PROCEDURE IF EXISTS fre_add_query_feedback_reuse_trust_constraints//
+CREATE PROCEDURE fre_add_query_feedback_reuse_trust_constraints()
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_query_feedback' AND CONSTRAINT_NAME = 'fk_query_feedback_generation') THEN
+        ALTER TABLE ai_query_feedback ADD CONSTRAINT fk_query_feedback_generation FOREIGN KEY (generation_id) REFERENCES ai_report_generations(id) ON DELETE SET NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_query_feedback' AND CONSTRAINT_NAME = 'fk_query_feedback_job') THEN
+        ALTER TABLE ai_query_feedback ADD CONSTRAINT fk_query_feedback_job FOREIGN KEY (query_job_id) REFERENCES query_jobs(id) ON DELETE SET NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_query_feedback' AND CONSTRAINT_NAME = 'fk_query_feedback_approver') THEN
+        ALTER TABLE ai_query_feedback ADD CONSTRAINT fk_query_feedback_approver FOREIGN KEY (admin_reuse_approved_by) REFERENCES users(id) ON DELETE SET NULL;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = 'ai_query_feedback' AND CONSTRAINT_NAME = 'fk_query_feedback_replacement') THEN
+        ALTER TABLE ai_query_feedback ADD CONSTRAINT fk_query_feedback_replacement FOREIGN KEY (replacement_generation_id) REFERENCES ai_report_generations(id) ON DELETE SET NULL;
+    END IF;
+END//
+CALL fre_add_query_feedback_reuse_trust_constraints()//
+DROP PROCEDURE IF EXISTS fre_add_query_feedback_reuse_trust_constraints//
+DELIMITER ;
 
 CREATE TABLE IF NOT EXISTS ai_report_reviews (
     id CHAR(36) PRIMARY KEY,

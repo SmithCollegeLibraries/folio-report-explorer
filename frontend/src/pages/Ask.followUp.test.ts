@@ -44,8 +44,9 @@ describe('Ask follow-up context helpers', () => {
     });
   });
 
-  it('builds query feedback input with route and exploratory mode metadata', () => {
+  it('builds query feedback input from server linkage identifiers', () => {
     const result: NlResponse = {
+      generationId: 'generation-123',
       sql: 'SELECT 1',
       dataSource: 'folio',
       route: 'exploratory_builder_intent',
@@ -53,13 +54,9 @@ describe('Ask follow-up context helpers', () => {
       mode: 'exploratory',
     };
 
-    expect(buildQueryFeedbackInput('  Show vendor spend  ', result, 'inaccurate', '  Missing fund filter  ')).toEqual({
-      originalQuestion: 'Show vendor spend',
-      generatedSql: 'SELECT 1',
-      route: 'exploratory_builder_intent',
-      routeReason: 'user_approved_exploratory_generation',
-      mode: 'exploratory',
-      dataSource: 'folio',
+    expect(buildQueryFeedbackInput(result, 'job-123', 'inaccurate', '  Missing fund filter  ')).toEqual({
+      generationId: 'generation-123',
+      queryJobId: 'job-123',
       resultAccuracy: 'inaccurate',
       feedbackNote: 'Missing fund filter',
     });

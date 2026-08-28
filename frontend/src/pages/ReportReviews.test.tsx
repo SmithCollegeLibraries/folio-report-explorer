@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ProtectedRoute from '../components/ProtectedRoute';
-import type { ReportReviewDetail, ReportReviewSummary } from '../types';
+import type { QueryMemoryItem, ReportReviewDetail, ReportReviewSummary } from '../types';
 import ReportReviews from './ReportReviews';
 
 vi.mock('../api/client', () => ({
@@ -11,6 +11,9 @@ vi.mock('../api/client', () => ({
   fetchReportReview: vi.fn(),
   claimReportReview: vi.fn(),
   updateReportReview: vi.fn(),
+  fetchQueryMemory: vi.fn(),
+  updateQueryMemoryReuseApproval: vi.fn(),
+  clearQueryMemorySuppression: vi.fn(),
 }));
 
 vi.mock('../hooks/useAuth', () => ({
@@ -67,6 +70,26 @@ const reviewDetail: ReportReviewDetail = {
   linkedAt: '2026-07-20 09:02:00',
 };
 
+const queryMemoryItem: QueryMemoryItem = {
+  id: 91,
+  generationId: 'generation-memory',
+  queryJobId: 'job-memory',
+  question: 'Show circulation by location',
+  generationProvenance: 'ai_built',
+  resultAccuracy: 'accurate',
+  reuseSuppressed: false,
+  sqlHash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  dataSource: 'folio',
+  strictSchemaCompatible: true,
+  globalSchemaCompatible: true,
+  schemaCompatible: true,
+  scopeCompatible: true,
+  adminReuseApprovedAt: null,
+  adminReuseApprovedBy: null,
+  approvalEligible: true,
+  createdAt: '2026-08-27 12:00:00',
+};
+
 function renderReviews() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -97,12 +120,16 @@ afterEach(cleanup);
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  const { fetchReportReview, fetchReportReviews } = await import('../api/client');
+  const { fetchQueryMemory, fetchReportReview, fetchReportReviews } = await import('../api/client');
   vi.mocked(fetchReportReviews).mockResolvedValue({
     items: [pendingReview, laterReview],
     pagination: { limit: 25, offset: 0, total: 2 },
   });
   vi.mocked(fetchReportReview).mockResolvedValue(reviewDetail);
+  vi.mocked(fetchQueryMemory).mockResolvedValue({
+    items: [queryMemoryItem],
+    pagination: { limit: 25, offset: 0, total: 1 },
+  });
 });
 
 describe('ReportReviews', () => {
@@ -174,5 +201,46 @@ describe('ReportReviews', () => {
 
     expect(screen.getByRole('heading', { name: 'Access Denied' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'AI Report Review' })).not.toBeInTheDocument();
+  });
+
+  it('manages AI-built query memory separately without promoting it to Verified', async () => {
+    const { clearQueryMemorySuppression, updateQueryMemoryReuseApproval } = await import('../api/client');
+    vi.mocked(updateQueryMemoryReuseApproval).mockResolvedValue({
+      ...queryMemoryItem,
+      adminReuseApprovedAt: '2026-08-27 13:00:00',
+      adminReuseApprovedBy: 1,
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderReviews();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Query memory' }));
+    expect(await screen.findByText('Show circulation by location')).toBeInTheDocument();
+    expect(screen.getByText('AI-built')).toBeInTheDocument();
+    expect(screen.queryByText('Verified')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve for cross-user reuse' }));
+
+    await waitFor(() => expect(updateQueryMemoryReuseApproval).toHaveBeenCalledWith(91, true));
+    expect(window.confirm).toHaveBeenCalled();
+    expect(clearQueryMemorySuppression).not.toHaveBeenCalled();
+  });
+
+  it('keeps suppression clearing separate from reuse approval', async () => {
+    const { clearQueryMemorySuppression, fetchQueryMemory, updateQueryMemoryReuseApproval } = await import('../api/client');
+    vi.mocked(fetchQueryMemory).mockResolvedValue({
+      items: [{ ...queryMemoryItem, resultAccuracy: 'inaccurate', reuseSuppressed: true, approvalEligible: false }],
+      pagination: { limit: 25, offset: 0, total: 1 },
+    });
+    vi.mocked(clearQueryMemorySuppression).mockResolvedValue({
+      feedback: { ...queryMemoryItem, resultAccuracy: 'inaccurate', approvalEligible: false },
+      clearedCount: 1,
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderReviews();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Query memory' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear suppression after review' }));
+
+    await waitFor(() => expect(clearQueryMemorySuppression).toHaveBeenCalledWith(91));
+    expect(updateQueryMemoryReuseApproval).not.toHaveBeenCalled();
   });
 });

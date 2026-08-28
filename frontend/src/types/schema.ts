@@ -341,6 +341,7 @@ export interface SemanticRequirementLabel {
 }
 
 export type GenerationProvenance = 'verified_pattern' | 'ai_built';
+export type QueryReuseTrust = 'verified_global' | 'same_user_accurate' | 'administrator_approved';
 
 export interface SemanticValidation {
   status: 'validated' | 'advisory';
@@ -350,6 +351,8 @@ export interface SemanticValidation {
 
 export interface NlQueryReuseMetadata {
   candidateJobId: string;
+  sourceGenerationId: string;
+  reuseTrust: QueryReuseTrust;
   requestedPrompt: string;
   previousPrompt: string;
   completedAt: string | null;
@@ -375,6 +378,7 @@ export interface NlResponse {
   error?: string;
   generationId?: string;
   conversationId?: string;
+  parentGenerationId?: string;
   reviewRequired?: boolean;
   reviewNotice?: { title: string; message: string };
   sql?: string;
@@ -594,6 +598,7 @@ export type JobStatus = 'pending' | 'pending_export' | 'running' | 'cancelling' 
 /** Response from POST /query/submit */
 export interface JobSubmitResponse {
   jobId: string;
+  generationId?: string;
   status: JobStatus;
   requiresConfirmation?: boolean;
   estimatedRows?: number;
@@ -916,6 +921,42 @@ export interface ReportReviewUpdate {
   takeover?: boolean;
 }
 
+export type QueryMemoryStatus = 'all' | 'accurate' | 'suppressed' | 'approved';
+
+export interface QueryMemoryItem {
+  id: number;
+  generationId: string | null;
+  queryJobId: string | null;
+  question: string;
+  generationProvenance: 'ai_built';
+  resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
+  reuseSuppressed: boolean;
+  sqlHash: string;
+  dataSource: string;
+  strictSchemaCompatible: boolean;
+  globalSchemaCompatible: boolean;
+  schemaCompatible: boolean;
+  scopeCompatible: boolean;
+  adminReuseApprovedAt: string | null;
+  adminReuseApprovedBy: number | null;
+  approvalEligible: boolean;
+  createdAt: string;
+}
+
+export interface QueryMemoryListResponse {
+  items: QueryMemoryItem[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+  };
+}
+
+export interface QueryMemorySuppressionResponse {
+  feedback: QueryMemoryItem;
+  clearedCount: number;
+}
+
 export interface QueryReuseCandidate {
   jobId: string;
   previousPrompt: string;
@@ -928,6 +969,8 @@ export interface QueryReuseCandidate {
   completedAt: string | null;
   generationProvenance?: GenerationProvenance;
   provenanceLabel?: 'Verified pattern' | 'AI-built';
+  sourceGenerationId: string;
+  reuseTrust: QueryReuseTrust;
 }
 
 export interface QueryReuseCandidateRequest {
@@ -945,6 +988,19 @@ export interface QueryReuseDecisionInput {
   candidateJobId?: string;
   prompt?: string;
 }
+
+export interface QueryFeedbackResponse {
+  feedbackId: number;
+  resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
+  reuseSuppressed: boolean;
+  message: string;
+}
+
+export interface QueryFeedbackReplacementInput {
+  resolvedContext: Record<string, string>;
+}
+
+export type QueryMemorySignal = 'saved' | 'downloaded' | 'rerun' | 'follow_up';
 
 export interface IndexRecommendationEvidence {
   patternIds?: string[];

@@ -15,6 +15,7 @@ use app\services\DatabaseRetryService;
 use app\services\IndexRecommendationService;
 use app\services\Nl2sqlRuntimePreflightService;
 use app\services\PreviousSuccessfulQueryReuseService;
+use app\services\QueryMemoryService;
 use app\services\QueryJobCancellationService;
 use app\services\QueryHistoryDeletionService;
 use app\services\ReferenceCacheRefreshService;
@@ -128,6 +129,7 @@ class FolioQueryController extends Controller
                             'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
                             'admin-widget-create', 'admin-widget-update', 'admin-widget-delete',
                             'report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update',
+                            'query-memory-list', 'query-feedback-reuse-approval', 'query-feedback-suppression',
                         ],
                         'roles' => ['@'],
                         'matchCallback' => function ($rule, $action) {
@@ -140,6 +142,7 @@ class FolioQueryController extends Controller
                         'actions' => [
                             'report-review-list', 'report-review-detail',
                             'report-review-claim', 'report-review-update',
+                            'query-memory-list', 'query-feedback-reuse-approval', 'query-feedback-suppression',
                         ],
                         'roles' => ['@'],
                         'denyCallback' => function ($rule, $action) {
@@ -1396,8 +1399,60 @@ class FolioQueryController extends Controller
 
         $sql = SqlBuilderService::normalizeForExecution($sql);
 
+        $reuseRequest = $body['queryReuse'] ?? $body['query_reuse'] ?? null;
+        $reuseCandidateJobId = is_array($reuseRequest)
+            ? trim((string)($reuseRequest['candidateJobId'] ?? $reuseRequest['candidate_job_id'] ?? ''))
+            : '';
         $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
-        if ((string)$source === 'nl' && $generationId !== '') {
+        if ((string)$source === 'nl' && $reuseCandidateJobId !== '') {
+            $userId = $this->getCurrentUserId();
+            if ($userId === null) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => 'This reusable query is not available for execution.'];
+            }
+            $reuseJobs = QueryJob::find()
+                ->where([
+                    'id' => $reuseCandidateJobId,
+                    'status' => 'completed',
+                    'source' => 'nl',
+                    'data_source' => $dataSource,
+                ])
+                ->asArray()
+                ->all();
+            $rawReuseScope = $body['resolvedContext'] ?? $body['resolved_context'] ?? [];
+            $reuseScope = $this->normalizeQueryMemoryScope(
+                is_array($rawReuseScope) ? $rawReuseScope : []
+            );
+            try {
+                $trustedReuse = $this->findTrustedQueryReuseCandidate(
+                    trim((string)($body['name'] ?? '')),
+                    $dataSource,
+                    $reuseScope,
+                    $reuseJobs,
+                    false
+                );
+            } catch (\Throwable $exception) {
+                $trustedReuse = null;
+            }
+            if ($trustedReuse === null || (string)$trustedReuse['jobId'] !== $reuseCandidateJobId) {
+                Yii::$app->response->statusCode = 409;
+                return ['error' => 'This reusable query is no longer available.'];
+            }
+
+            $trustedSql = SqlBuilderService::normalizeForExecution(
+                GeminiService::normalizeGeneratedSql((string)$trustedReuse['sql'])
+            );
+            $administratorReviewService = $this->administratorReviewService();
+            $executionGenerationRequest = [
+                'type' => 'reuse',
+                'sourceGenerationId' => (string)$trustedReuse['sourceGenerationId'],
+                'reuseTrust' => (string)$trustedReuse['reuseTrust'],
+                'userId' => $userId,
+                'question' => trim((string)($body['name'] ?? '')),
+                'normalizedSql' => $sql,
+                'edited' => trim($trustedSql) !== trim($sql),
+            ];
+        } elseif ((string)$source === 'nl' && $generationId !== '') {
             $userId = $this->getCurrentUserId();
             if ($userId === null) {
                 Yii::$app->response->statusCode = 403;
@@ -1414,6 +1469,7 @@ class FolioQueryController extends Controller
                 return ['error' => 'This generated query is not available for execution.'];
             }
             $executionGenerationRequest = [
+                'type' => 'generation',
                 'generationId' => $generationId,
                 'userId' => $userId,
                 'normalizedSql' => $sql,
@@ -1488,12 +1544,14 @@ class FolioQueryController extends Controller
             }
         }
         $jobSaveErrors = [];
+        $executionGenerationId = null;
         try {
             QueryJob::getDb()->transaction(function () use (
                 $job,
                 $executionGenerationRequest,
                 $administratorReviewService,
-                &$jobSaveErrors
+                &$jobSaveErrors,
+                &$executionGenerationId
             ): void {
                 if (!$job->save()) {
                     $jobSaveErrors = $job->errors;
@@ -1504,17 +1562,35 @@ class FolioQueryController extends Controller
                     $executionGenerationRequest !== null
                     && $administratorReviewService !== null
                 ) {
-                    $executionGeneration = $administratorReviewService
-                        ->resolveExecutionGeneration(
-                            $executionGenerationRequest['generationId'],
+                    if (($executionGenerationRequest['type'] ?? null) === 'reuse') {
+                        $reuseGeneration = $administratorReviewService->createTrustedReuseChild(
+                            $executionGenerationRequest['sourceGenerationId'],
                             $executionGenerationRequest['userId'],
-                            $executionGenerationRequest['normalizedSql']
+                            $executionGenerationRequest['question'],
+                            $executionGenerationRequest['normalizedSql'],
+                            $executionGenerationRequest['edited'],
+                            $executionGenerationRequest['reuseTrust']
                         );
+                        $administratorReviewService->linkExecutionGeneration(
+                            $reuseGeneration['generation'],
+                            (string)$job->id,
+                            $reuseGeneration['provenanceGeneration']
+                        );
+                        $executionGenerationId = (string)$reuseGeneration['generationId'];
+                        return;
+                    }
+
+                    $executionGeneration = $administratorReviewService->resolveExecutionGeneration(
+                        $executionGenerationRequest['generationId'],
+                        $executionGenerationRequest['userId'],
+                        $executionGenerationRequest['normalizedSql']
+                    );
                     $administratorReviewService->linkExecutionGeneration(
                         $executionGeneration['generation'],
                         (string)$job->id,
                         $executionGeneration['provenanceGeneration']
                     );
+                    $executionGenerationId = (string)$executionGeneration['generation']->id;
                 }
             });
         } catch (\DomainException $exception) {
@@ -1535,7 +1611,11 @@ class FolioQueryController extends Controller
         }
 
         Yii::$app->response->statusCode = 202;
-        return $job->toStatusArray();
+        $response = $job->toStatusArray();
+        if ($executionGenerationId !== null) {
+            $response['generationId'] = $executionGenerationId;
+        }
+        return $response;
     }
 
     /**
@@ -1552,10 +1632,10 @@ class FolioQueryController extends Controller
         }
 
         $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
-        $resolvedContext = $body['resolvedContext'] ?? $body['resolved_context'] ?? [];
-        if (!is_array($resolvedContext)) {
-            $resolvedContext = [];
-        }
+        $rawResolvedContext = $body['resolvedContext'] ?? $body['resolved_context'] ?? [];
+        $resolvedContext = $this->normalizeQueryMemoryScope(
+            is_array($rawResolvedContext) ? $rawResolvedContext : []
+        );
 
         $jobs = QueryJob::find()
             ->where(['status' => 'completed', 'source' => 'nl'])
@@ -1565,19 +1645,122 @@ class FolioQueryController extends Controller
             ->asArray()
             ->all();
 
-        $match = PreviousSuccessfulQueryReuseService::findStrongMatch($prompt, $dataSource, $resolvedContext, $jobs);
+        try {
+            $match = $this->findTrustedQueryReuseCandidate(
+                $prompt,
+                $dataSource,
+                $resolvedContext,
+                $jobs,
+                true
+            );
+        } catch (\Throwable $exception) {
+            Yii::warning(
+                'Query-memory lookup unavailable: ' . get_class($exception),
+                'query.memory'
+            );
+            return ['match' => null];
+        }
         if ($match === null) {
             return ['match' => null];
         }
 
-        try {
-            SqlBuilderService::validateSafety($match['sql']);
-            SqlBuilderService::validateTablePolicy($match['sql']);
-        } catch (\InvalidArgumentException $e) {
-            return ['match' => null];
+        return ['match' => $this->publicQueryReuseCandidate($match)];
+    }
+
+    private function findTrustedQueryReuseCandidate(
+        string $prompt,
+        string $dataSource,
+        array $authorizedScope,
+        array $jobs,
+        bool $preflight
+    ): ?array {
+        $shapedCandidates = PreviousSuccessfulQueryReuseService::findStrongMatches(
+            $prompt,
+            $dataSource,
+            $authorizedScope,
+            $jobs
+        );
+        if ($shapedCandidates === []) {
+            return null;
         }
 
-        return ['match' => $match];
+        $candidates = QueryMemoryService::hydrateCandidates($shapedCandidates, $jobs);
+        $request = [
+            'question' => $prompt,
+            'dataSource' => $dataSource,
+            'userId' => $this->getCurrentUserId(),
+            'directReuseSchemaFingerprint' => QueryMemoryService::currentDirectReuseSchemaFingerprint($prompt),
+            'scopeFingerprint' => QueryMemoryService::scopeFingerprint($dataSource, $authorizedScope),
+        ];
+        $match = QueryMemoryService::findDirectReuse($request, $candidates);
+        if ($match === null) {
+            return null;
+        }
+
+        try {
+            GeminiService::validateTableReferences($match['sql']);
+            if ($preflight && $dataSource === 'folio') {
+                $estimate = $this->estimateQueryComplexity($match['sql'], $dataSource, []);
+                if (is_array($estimate) && isset($estimate['error'])) {
+                    QueryMemoryService::recordCandidateRejected(
+                        $match,
+                        'preflight_failed',
+                        'preflight'
+                    );
+                    return null;
+                }
+            }
+        } catch (\Throwable $exception) {
+            QueryMemoryService::recordCandidateRejected(
+                $match,
+                'schema_validation_failed',
+                'validation'
+            );
+            Yii::warning(
+                'Query-memory candidate rejected: ' . get_class($exception),
+                'query.memory'
+            );
+            return null;
+        }
+
+        return $match;
+    }
+
+    private function normalizeQueryMemoryScope(array $scope): array
+    {
+        $normalized = [];
+        foreach ($scope as $key => $value) {
+            if (!is_scalar($value)) {
+                continue;
+            }
+            $normalizedKey = trim((string)$key);
+            $normalizedValue = preg_replace('/\s+/', ' ', trim((string)$value));
+            if ($normalizedKey !== '' && $normalizedValue !== '') {
+                $normalized[$normalizedKey] = $normalizedValue;
+            }
+        }
+        ksort($normalized, SORT_STRING);
+        return $normalized;
+    }
+
+    private function publicQueryReuseCandidate(array $match): array
+    {
+        $provenance = (string)($match['generationProvenance'] ?? '');
+        return [
+            'jobId' => (string)($match['jobId'] ?? ''),
+            'previousPrompt' => (string)($match['previousPrompt'] ?? $match['question'] ?? ''),
+            'sql' => (string)($match['sql'] ?? ''),
+            'dataSource' => (string)($match['dataSource'] ?? 'folio'),
+            'score' => (int)($match['score'] ?? 0),
+            'matchReasons' => array_values($match['matchReasons'] ?? []),
+            'rowCount' => isset($match['rowCount']) ? (int)$match['rowCount'] : null,
+            'executionTimeMs' => isset($match['executionTimeMs']) ? (int)$match['executionTimeMs'] : null,
+            'completedAt' => $match['completedAt'] ?? null,
+            'generationProvenance' => $provenance,
+            'provenanceLabel' => $provenance === 'verified_pattern' ? 'Verified pattern' : 'AI-built',
+            'sourceGenerationId' => (string)($match['sourceGenerationId'] ?? ''),
+            'reuseTrust' => (string)($match['reuseTrust'] ?? ''),
+        ];
     }
 
     /**
@@ -1598,7 +1781,9 @@ class FolioQueryController extends Controller
             'timestamp' => gmdate('c'),
             'decision' => $decision,
             'candidateJobId' => trim((string)($body['candidateJobId'] ?? $body['candidate_job_id'] ?? '')) ?: null,
-            'prompt' => trim((string)($body['prompt'] ?? '')) ?: null,
+            'promptFingerprint' => trim((string)($body['prompt'] ?? '')) === ''
+                ? null
+                : $this->fingerprintPrompt((string)$body['prompt']),
             'edited' => $decision === 'edited',
         ];
 
@@ -1608,6 +1793,68 @@ class FolioQueryController extends Controller
         );
 
         return ['ok' => true];
+    }
+
+    /** Record a weak interaction signal without changing query trust. */
+    public function actionQueryMemorySignal()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
+        $queryJobId = trim((string)($body['queryJobId'] ?? $body['query_job_id'] ?? ''));
+        $signal = strtolower(trim((string)($body['signal'] ?? '')));
+        $columns = [
+            'saved' => 'saved_count',
+            'downloaded' => 'downloaded_count',
+            'rerun' => 'rerun_count',
+            'follow_up' => 'follow_up_count',
+        ];
+        if ($generationId === '' || $queryJobId === '' || !isset($columns[$signal])) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'generationId, queryJobId, and a valid signal are required.'];
+        }
+
+        $userId = $this->getCurrentUserId();
+        $db = Yii::$app->db;
+        $generation = (new \yii\db\Query())
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->one($db);
+        $job = (new \yii\db\Query())
+            ->from('query_jobs')
+            ->where(['id' => $queryJobId])
+            ->one($db);
+        if (!is_array($generation) || !is_array($job)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'The report could not be found.'];
+        }
+        if (
+            $userId === null
+            || (int)($generation['user_id'] ?? 0) !== $userId
+            || (int)($job['user_id'] ?? 0) !== $userId
+            || trim((string)($generation['query_job_id'] ?? '')) !== $queryJobId
+            || !in_array(($job['status'] ?? null), ['pending', 'pending_export', 'running', 'completed'], true)
+            || ($job['source'] ?? null) !== 'nl'
+        ) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'This report is not available for interaction signals.'];
+        }
+
+        $column = $columns[$signal];
+        $db->createCommand()->update('ai_report_generations', [
+            $column => new \yii\db\Expression("[[{$column}]] + 1"),
+        ], [
+            'id' => $generationId,
+            'query_job_id' => $queryJobId,
+            'user_id' => $userId,
+        ])->execute();
+        $count = (int)(new \yii\db\Query())
+            ->select($column)
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->scalar($db);
+        QueryMemoryService::recordWeakSignal($generationId, $queryJobId, $signal, $count);
+
+        return ['ok' => true, 'signal' => $signal, 'count' => $count];
     }
 
     /**
@@ -2022,6 +2269,7 @@ class FolioQueryController extends Controller
                     function () use (
                         $prompt,
                         $campus,
+                        $userId,
                         &$generationPrompt,
                         &$result
                     ): array {
@@ -2037,7 +2285,8 @@ class FolioQueryController extends Controller
                                 $generationPrompt,
                                 $campus ?: null,
                                 $resolvedFilters,
-                                'coordinator_continuation'
+                                'coordinator_continuation',
+                                $userId
                             );
                             if (!isset($result['dataSource'])) {
                                 $result['dataSource'] = 'folio';
@@ -2579,6 +2828,75 @@ class FolioQueryController extends Controller
         return $this->actionReportReviewDetail((string)$id);
     }
 
+    /** GET /api/admin/query-memory */
+    public function actionQueryMemoryList()
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        return $this->administratorReviewService()->listQueryMemory([
+            'status' => Yii::$app->request->get('status', 'all'),
+            'limit' => Yii::$app->request->get('limit', 25),
+            'offset' => Yii::$app->request->get('offset', 0),
+        ]);
+    }
+
+    /** PATCH /api/admin/query-feedback/<id>/reuse-approval */
+    public function actionQueryFeedbackReuseApproval($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->getBodyParams();
+        if (!is_array($body) || !array_key_exists('approved', $body) || !is_bool($body['approved'])) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'approved must be a boolean'];
+        }
+
+        try {
+            return $this->administratorReviewService()->setQueryFeedbackReuseApproval(
+                (int)$id,
+                $body['approved'],
+                (int)$this->getCurrentUserId()
+            );
+        } catch (\DomainException $exception) {
+            if ($exception->getMessage() === 'query_feedback_not_found') {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => 'Query feedback not found'];
+            }
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Query feedback is not eligible for reuse approval'];
+        }
+    }
+
+    /** PATCH /api/admin/query-feedback/<id>/suppression */
+    public function actionQueryFeedbackSuppression($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->getBodyParams();
+        if (!is_array($body) || !array_key_exists('suppressed', $body) || $body['suppressed'] !== false) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'suppressed must be false'];
+        }
+
+        try {
+            return $this->administratorReviewService()->clearQueryFeedbackSuppression(
+                (int)$id,
+                (int)$this->getCurrentUserId()
+            );
+        } catch (\DomainException $exception) {
+            if ($exception->getMessage() === 'query_feedback_not_found') {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => 'Query feedback not found'];
+            }
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Query feedback suppression cannot be cleared'];
+        }
+    }
+
     private function invalidReportReviewUpdate(string $message): array
     {
         Yii::$app->response->statusCode = 422;
@@ -2980,45 +3298,355 @@ class FolioQueryController extends Controller
     public function actionQueryFeedback()
     {
         $body = Yii::$app->request->getBodyParams();
-
-        $originalQuestion = trim((string)($body['originalQuestion'] ?? ''));
+        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
+        $queryJobId = trim((string)($body['queryJobId'] ?? $body['query_job_id'] ?? ''));
         $resultAccuracy = strtolower(trim((string)($body['resultAccuracy'] ?? '')));
-        if ($originalQuestion === '') {
+        if ($generationId === '' || $queryJobId === '') {
             Yii::$app->response->statusCode = 422;
-            return ['error' => 'originalQuestion is required.'];
+            return ['error' => 'generationId and queryJobId are required.'];
         }
         if (!in_array($resultAccuracy, ['accurate', 'inaccurate', 'unsure'], true)) {
             Yii::$app->response->statusCode = 422;
             return ['error' => 'resultAccuracy must be accurate, inaccurate, or unsure.'];
         }
 
-        $generatedSql = trim((string)($body['generatedSql'] ?? ''));
-        $sqlHash = $generatedSql !== ''
-            ? hash('sha256', $this->normalizeSqlForTelemetry($generatedSql))
-            : null;
-        $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
-
         $db = Yii::$app->db;
-        $db->createCommand()->insert('ai_query_feedback', [
-            'user_id' => $this->getCurrentUserId(),
-            'original_question' => $originalQuestion,
-            'prompt_fingerprint' => $this->fingerprintPrompt($originalQuestion),
-            'generated_sql' => $generatedSql !== '' ? $generatedSql : null,
-            'sql_hash' => $sqlHash,
-            'route' => trim((string)($body['route'] ?? '')) ?: null,
-            'route_reason' => trim((string)($body['routeReason'] ?? '')) ?: null,
-            'mode' => trim((string)($body['mode'] ?? '')) ?: null,
-            'data_source' => $dataSource,
-            'result_accuracy' => $resultAccuracy,
-            'feedback_note' => trim((string)($body['feedbackNote'] ?? '')) ?: null,
-        ])->execute();
+        $generation = (new \yii\db\Query())
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->one($db);
+        $job = (new \yii\db\Query())
+            ->from('query_jobs')
+            ->where(['id' => $queryJobId])
+            ->one($db);
+        if (!is_array($generation) || !is_array($job)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'The completed report could not be found.'];
+        }
+
+        $userId = $this->getCurrentUserId();
+        $owned = $userId !== null
+            && (int)($generation['user_id'] ?? 0) === $userId
+            && (int)($job['user_id'] ?? 0) === $userId;
+        $linked = trim((string)($generation['query_job_id'] ?? '')) === $queryJobId;
+        $completedNlJob = ($job['status'] ?? null) === 'completed'
+            && ($job['source'] ?? null) === 'nl';
+        if (!$owned || !$linked || !$completedNlJob) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Feedback is only available for your completed report.'];
+        }
+
+        $originalQuestion = trim((string)($generation['original_question'] ?? ''));
+        $generatedSql = trim((string)($generation['generated_sql'] ?? $job['sql_text'] ?? ''));
+        if ($originalQuestion === '' || $generatedSql === '') {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'The completed report is missing trusted generation evidence.'];
+        }
+        $sqlHash = trim((string)($generation['sql_hash'] ?? $job['sql_hash'] ?? ''));
+        if ($sqlHash === '') {
+            $sqlHash = hash('sha256', SqlBuilderService::normalizeForExecution($generatedSql));
+        }
+        $dataSource = $this->normalizeDataSource($job['data_source'] ?? 'folio');
+        $provenance = $this->decodeQueryMemoryJson($generation['provenance_json'] ?? null);
+        $generationProvenance = trim((string)($provenance['generationProvenance'] ?? ''));
+        if (!in_array($generationProvenance, ['verified_pattern', 'ai_built'], true)) {
+            $generationProvenance = null;
+        }
+        $schemaMetadata = is_array($provenance['schemaMetadata'] ?? null)
+            ? $provenance['schemaMetadata']
+            : [];
+        $schemaVersion = $schemaMetadata['version'] ?? $schemaMetadata['scraped_at'] ?? null;
+        $directFingerprint = $schemaVersion !== null
+            && trim((string)($schemaMetadata['contextHash'] ?? '')) !== ''
+            ? QueryMemoryService::directReuseSchemaFingerprint($schemaMetadata)
+            : null;
+        $versionFingerprint = $schemaVersion !== null
+            ? QueryMemoryService::schemaVersionFingerprint($schemaMetadata)
+            : null;
+        $jobMetadata = $this->decodeQueryMemoryJson($job['metadata'] ?? null);
+        $authorizedScope = $this->normalizeQueryMemoryScope(
+            is_array($jobMetadata['resolvedContext'] ?? null) ? $jobMetadata['resolvedContext'] : []
+        );
+        $scopeFingerprint = QueryMemoryService::scopeFingerprint($dataSource, $authorizedScope);
+        $feedbackId = null;
+
+        $db->transaction(function () use (
+            $db,
+            $userId,
+            $generationId,
+            $queryJobId,
+            $originalQuestion,
+            $generatedSql,
+            $sqlHash,
+            $generation,
+            $dataSource,
+            $resultAccuracy,
+            $body,
+            $generationProvenance,
+            $directFingerprint,
+            $versionFingerprint,
+            $scopeFingerprint,
+            &$feedbackId
+        ): void {
+            $db->createCommand()->insert('ai_query_feedback', [
+                'user_id' => $userId,
+                'generation_id' => $generationId,
+                'query_job_id' => $queryJobId,
+                'original_question' => $originalQuestion,
+                'prompt_fingerprint' => $this->fingerprintPrompt($originalQuestion),
+                'generated_sql' => $generatedSql,
+                'sql_hash' => $sqlHash,
+                'route' => trim((string)($generation['route'] ?? '')) ?: null,
+                'route_reason' => trim((string)($generation['route_reason'] ?? '')) ?: null,
+                'mode' => trim((string)($generation['response_mode'] ?? '')) ?: null,
+                'data_source' => $dataSource,
+                'result_accuracy' => $resultAccuracy,
+                'feedback_note' => trim((string)($body['feedbackNote'] ?? '')) ?: null,
+                'generation_provenance' => $generationProvenance,
+                'direct_reuse_schema_fingerprint' => $directFingerprint,
+                'schema_version_fingerprint' => $versionFingerprint,
+                'scope_fingerprint' => $scopeFingerprint,
+                'reuse_suppressed' => $resultAccuracy === 'inaccurate' ? 1 : 0,
+            ])->execute();
+            $feedbackId = (int)$db->getLastInsertID();
+
+            if ($resultAccuracy === 'inaccurate') {
+                $db->createCommand()->update('ai_query_feedback', [
+                    'reuse_suppressed' => 1,
+                    'admin_reuse_approved_at' => null,
+                    'admin_reuse_approved_by' => null,
+                ], [
+                    'sql_hash' => $sqlHash,
+                    'schema_version_fingerprint' => $versionFingerprint,
+                    'scope_fingerprint' => $scopeFingerprint,
+                ])->execute();
+            }
+        });
+
+        QueryMemoryService::recordFeedback([
+            'feedbackId' => $feedbackId,
+            'generationId' => $generationId,
+            'queryJobId' => $queryJobId,
+            'sqlHash' => $sqlHash,
+            'resultAccuracy' => $resultAccuracy,
+            'schemaVersionFingerprint' => $versionFingerprint,
+            'scopeFingerprint' => $scopeFingerprint,
+        ]);
 
         return [
-            'id' => (int)$db->getLastInsertID(),
-            'message' => 'Query feedback saved.',
-            'promptFingerprint' => $this->fingerprintPrompt($originalQuestion),
-            'sqlHash' => $sqlHash,
+            'feedbackId' => $feedbackId,
+            'resultAccuracy' => $resultAccuracy,
+            'reuseSuppressed' => $resultAccuracy === 'inaccurate',
+            'message' => 'Feedback saved.',
         ];
+    }
+
+    private function decodeQueryMemoryJson($value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        $decoded = is_string($value) && trim($value) !== '' ? json_decode($value, true) : null;
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * POST /api/query-feedback/<id>/replacement — generate fresh AI SQL for
+     * one owned, suppressed Inaccurate result without revisiting canonical routing.
+     */
+    public function actionQueryFeedbackReplacement($id)
+    {
+        $feedbackId = (int)$id;
+        $db = Yii::$app->db;
+        $feedback = (new \yii\db\Query())
+            ->from('ai_query_feedback')
+            ->where(['id' => $feedbackId])
+            ->one($db);
+        if (!is_array($feedback)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Feedback not found.'];
+        }
+
+        $generationId = trim((string)($feedback['generation_id'] ?? ''));
+        $queryJobId = trim((string)($feedback['query_job_id'] ?? ''));
+        $generation = (new \yii\db\Query())
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->one($db);
+        $job = (new \yii\db\Query())
+            ->from('query_jobs')
+            ->where(['id' => $queryJobId])
+            ->one($db);
+        if (!is_array($generation) || !is_array($job)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'The rejected report could not be found.'];
+        }
+
+        $userId = $this->getCurrentUserId();
+        if (
+            $userId === null
+            || (int)($feedback['user_id'] ?? 0) !== $userId
+            || (int)($generation['user_id'] ?? 0) !== $userId
+            || (int)($job['user_id'] ?? 0) !== $userId
+            || trim((string)($generation['query_job_id'] ?? '')) !== $queryJobId
+        ) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'This feedback is not available for replacement.'];
+        }
+        if (
+            strtolower(trim((string)($feedback['result_accuracy'] ?? ''))) !== 'inaccurate'
+            || empty($feedback['reuse_suppressed'])
+        ) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Replacement SQL is available only for an Inaccurate result.'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $authorizedScope = $this->normalizeQueryMemoryScope(
+            is_array($body['resolvedContext'] ?? null) ? $body['resolvedContext'] : []
+        );
+        $dataSource = $this->normalizeDataSource($feedback['data_source'] ?? $job['data_source'] ?? 'folio');
+        $scopeFingerprint = QueryMemoryService::scopeFingerprint($dataSource, $authorizedScope);
+        if (!hash_equals(trim((string)($feedback['scope_fingerprint'] ?? '')), $scopeFingerprint)) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'The current report scope does not match the rejected report.'];
+        }
+
+        $question = trim((string)($generation['original_question'] ?? ''));
+        $rejectedSql = trim((string)($feedback['generated_sql'] ?? $job['sql_text'] ?? ''));
+        $rejectedSqlHash = trim((string)($feedback['sql_hash'] ?? ''));
+        if ($rejectedSqlHash === '') {
+            $rejectedSqlHash = hash('sha256', SqlBuilderService::normalizeForExecution($rejectedSql));
+        }
+        if ($question === '' || $rejectedSql === '') {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'The rejected report is missing trusted generation evidence.'];
+        }
+
+        $generationPrompt = $this->buildQueryReplacementPrompt(
+            $question,
+            $rejectedSql,
+            $rejectedSqlHash,
+            trim((string)($feedback['feedback_note'] ?? ''))
+        );
+        $campus = trim((string)($authorizedScope['campus'] ?? '')) ?: null;
+        $result = AskGenerationCoordinatorService::run(
+            $question,
+            static function () use ($rejectedSqlHash): array {
+                return [
+                    'state' => 'candidate_rejected',
+                    'reason' => 'user_rejected_sql',
+                    'candidateSqlHash' => $rejectedSqlHash,
+                ];
+            },
+            function () use (
+                $question,
+                $generationPrompt,
+                $campus,
+                $userId,
+                $rejectedSqlHash
+            ): array {
+                for ($attempt = 0; $attempt < 2; $attempt++) {
+                    try {
+                        $candidate = $this->generateReplacementAiSql(
+                            $question,
+                            $generationPrompt,
+                            $campus,
+                            $userId
+                        );
+                        $candidate = AskResponseContractService::withGenerationProvenance(
+                            $candidate,
+                            AskResponseContractService::PROVENANCE_AI_BUILT
+                        );
+                        if ($this->queryReplacementMatchesRejected($candidate, $rejectedSqlHash)) {
+                            continue;
+                        }
+                        $candidate = $this->validateAndRepairNlResult(
+                            $candidate,
+                            $question,
+                            $campus,
+                            null,
+                            null,
+                            $generationPrompt
+                        );
+                        if ($this->queryReplacementMatchesRejected($candidate, $rejectedSqlHash)) {
+                            continue;
+                        }
+                        return $this->coordinatorOutcomeFromResult($candidate);
+                    } catch (\Throwable $exception) {
+                        return $this->coordinatorOutcomeFromFailure(
+                            $exception,
+                            $question,
+                            $campus,
+                            []
+                        );
+                    }
+                }
+                return [
+                    'state' => 'candidate_rejected',
+                    'reason' => 'rejected_sql_repeated',
+                    'candidateSqlHash' => $rejectedSqlHash,
+                ];
+            }
+        );
+
+        $result = $this->finalizeAskResponse($result, $question, $userId, [
+            'campus' => $campus,
+            'parentGenerationId' => $generationId,
+            'finalSql' => $result['sql'] ?? null,
+        ]);
+        $result['parentGenerationId'] = $generationId;
+        $replacementGenerationId = trim((string)($result['generationId'] ?? ''));
+        if (isset($result['sql']) && $replacementGenerationId !== '') {
+            $db->createCommand()->update('ai_query_feedback', [
+                'replacement_generation_id' => $replacementGenerationId,
+            ], ['id' => $feedbackId])->execute();
+        }
+        return $result;
+    }
+
+    protected function generateReplacementAiSql(
+        string $question,
+        string $generationPrompt,
+        ?string $campus,
+        ?int $userId
+    ): array {
+        return GeminiService::generateFreshAiBuiltSql(
+            $question,
+            $generationPrompt,
+            $campus,
+            [],
+            'feedback_replacement',
+            $userId
+        );
+    }
+
+    private function buildQueryReplacementPrompt(
+        string $question,
+        string $rejectedSql,
+        string $rejectedSqlHash,
+        string $feedbackNote
+    ): string {
+        $context = json_encode([
+            'rejectedSqlHash' => $rejectedSqlHash,
+            'rejectedSql' => $rejectedSql,
+            'feedbackNote' => $feedbackNote === '' ? null : $feedbackNote,
+            'instruction' => 'Generate materially different SQL that addresses the feedback while preserving the original reporting request.',
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
+
+        return $question
+            . "\n\n<server_rejected_query_context>\n"
+            . ($context === false ? '{}' : $context)
+            . "\n</server_rejected_query_context>";
+    }
+
+    private function queryReplacementMatchesRejected(array $result, string $rejectedSqlHash): bool
+    {
+        $sql = trim((string)($result['sql'] ?? ''));
+        return $sql !== '' && hash_equals(
+            $rejectedSqlHash,
+            hash('sha256', SqlBuilderService::normalizeForExecution($sql))
+        );
     }
 
     /**

@@ -360,6 +360,24 @@ class MigrationService
                 return self::marcMissingTagReportAppearsComplete($db);
             case '043_cataloging_marc_field_finder.sql':
                 return self::catalogingMarcFieldFinderAppearsComplete($db);
+            case '044_query_feedback_reuse_trust.sql':
+                return self::hasColumns($db, 'ai_query_feedback', [
+                    'generation_id',
+                    'query_job_id',
+                    'generation_provenance',
+                    'direct_reuse_schema_fingerprint',
+                    'schema_version_fingerprint',
+                    'scope_fingerprint',
+                    'reuse_suppressed',
+                    'admin_reuse_approved_at',
+                    'admin_reuse_approved_by',
+                    'replacement_generation_id',
+                ]) && self::hasColumns($db, 'ai_report_generations', [
+                    'saved_count',
+                    'downloaded_count',
+                    'rerun_count',
+                    'follow_up_count',
+                ]);
         }
 
         return false;

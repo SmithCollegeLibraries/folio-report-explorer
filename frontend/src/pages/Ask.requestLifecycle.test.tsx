@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   submitQuery: vi.fn(),
   fetchQueryReuseCandidate: vi.fn(),
   recordQueryReuseDecision: vi.fn(),
+  recordQueryMemorySignal: vi.fn(),
 }));
 
 const toastMocks = vi.hoisted(() => ({
@@ -31,7 +32,9 @@ vi.mock('../api/client', () => ({
   downloadExportCsv: vi.fn(),
   saveClarificationResolution: vi.fn(),
   saveQueryFeedback: vi.fn(),
+  replaceQueryFeedback: vi.fn(),
   recordQueryReuseDecision: apiMocks.recordQueryReuseDecision,
+  recordQueryMemorySignal: apiMocks.recordQueryMemorySignal,
 }));
 
 vi.mock('../hooks/useAuth', () => ({
@@ -104,6 +107,7 @@ beforeEach(() => {
   apiMocks.fetchQueryReuseCandidate.mockResolvedValue({ match: null });
   apiMocks.submitQuery.mockResolvedValue({ jobId: 'job-success' });
   apiMocks.recordQueryReuseDecision.mockResolvedValue(undefined);
+  apiMocks.recordQueryMemorySignal.mockResolvedValue({ ok: true, signal: 'rerun', count: 1 });
 });
 
 afterEach(() => {
@@ -166,6 +170,22 @@ describe('Ask request lifecycle', () => {
 
     expect(screen.queryByText(/when the request is clear/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/needs clarification/i)).not.toBeInTheDocument();
+  });
+
+  it('silently continues to fresh generation when reuse lookup fails', async () => {
+    apiMocks.fetchQueryReuseCandidate.mockRejectedValue(new Error('reuse lookup unavailable'));
+    apiMocks.askNl.mockResolvedValue({
+      sql: 'SELECT title FROM inventory.instance__t',
+      generationProvenance: 'ai_built',
+      provenanceLabel: 'AI-built',
+    });
+
+    renderAsk();
+    submitQuestion('Show titles');
+
+    expect(await screen.findByRole('heading', { name: 'AI-built' })).toBeInTheDocument();
+    expect(apiMocks.askNl).toHaveBeenCalledTimes(1);
+    expect(toastMocks.error).not.toHaveBeenCalledWith(expect.stringContaining('previous successful queries'));
   });
 
   it('renders successful AI-built reports with provenance only, without internal review details', async () => {
@@ -253,18 +273,32 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
+    });
+    apiMocks.submitQuery.mockResolvedValueOnce({
+      jobId: 'job-reused',
+      generationId: 'generation-reused',
     });
 
     renderAsk();
     submitQuestion('Count inventory items');
 
     expect(await screen.findByRole('heading', { name: 'Reused previous query' })).toBeInTheDocument();
+    expect(screen.getByText('Reused a compatible Verified pattern.')).toBeInTheDocument();
     expect(screen.queryByText('Previous successful query found')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Run SQL' })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(apiMocks.submitQuery).toHaveBeenCalledTimes(1);
       expect(apiMocks.submitQuery.mock.calls[0][0]).toBe(reusedSql);
+    });
+    await waitFor(() => {
+      expect(apiMocks.recordQueryMemorySignal).toHaveBeenCalledWith({
+        generationId: 'generation-reused',
+        queryJobId: 'job-reused',
+        signal: 'rerun',
+      });
     });
   });
 
@@ -283,6 +317,8 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
     });
     apiMocks.askNl.mockResolvedValue({
@@ -321,6 +357,8 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
     });
 
@@ -348,6 +386,8 @@ describe('Ask request lifecycle', () => {
         completedAt: '2026-08-26 12:00:00',
         generationProvenance: 'verified_pattern',
         provenanceLabel: 'Verified pattern',
+        sourceGenerationId: 'generation-previous',
+        reuseTrust: 'verified_global',
       },
     });
 

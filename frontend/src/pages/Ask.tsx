@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as R
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision, recordQueryMemorySignal } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
@@ -12,7 +12,7 @@ import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel
 import AskTrustNotice from '../components/AskTrustNotice';
 import AskReuseNotice from '../components/AskReuseNotice';
 import { useToast } from '../components/ToastProvider';
-import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
+import type { FollowUpContext, NlResponse, QueryFeedbackResponse, QueryMemorySignal, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
 import {
   Send, Play, Copy, Sparkles, RotateCcw, Square, Loader2,
@@ -564,18 +564,19 @@ export function buildHistoryFollowUpContext(jobId: string): FollowUpContext {
 }
 
 export function buildQueryFeedbackInput(
-  originalQuestion: string,
   result: NlResponse,
+  queryJobId: string,
   resultAccuracy: 'accurate' | 'inaccurate' | 'unsure',
   feedbackNote = '',
 ) {
+  const generationId = result.generationId?.trim();
+  const normalizedJobId = queryJobId.trim();
+  if (!generationId || !normalizedJobId) {
+    throw new Error('Feedback requires a linked generated report and completed query job.');
+  }
   return {
-    originalQuestion: originalQuestion.trim(),
-    generatedSql: result.sql || null,
-    route: result.route || null,
-    routeReason: result.routeReason || null,
-    mode: result.mode || null,
-    dataSource: result.dataSource || 'folio',
+    generationId,
+    queryJobId: normalizedJobId,
     resultAccuracy,
     feedbackNote: feedbackNote.trim() || null,
   };
@@ -588,6 +589,12 @@ export function buildQueryReuseResolvedContext(selectedCampus: string): Record<s
   }
 
   return { campus };
+}
+
+export function buildQueryReplacementInput(selectedCampus: string) {
+  return {
+    resolvedContext: buildQueryReuseResolvedContext(selectedCampus),
+  };
 }
 
 export function buildReusedNlResult(
@@ -613,6 +620,8 @@ export function buildReusedNlResult(
     provenanceLabel,
     queryReuse: {
       candidateJobId: reuseCandidate.jobId,
+      sourceGenerationId: reuseCandidate.sourceGenerationId,
+      reuseTrust: reuseCandidate.reuseTrust,
       requestedPrompt,
       previousPrompt: reuseCandidate.previousPrompt,
       completedAt: reuseCandidate.completedAt,
@@ -670,6 +679,7 @@ export default function Ask() {
   const [lastSavedId, setLastSavedId] = useState<number | null>(null);
   const [feedbackNote, setFeedbackNote] = useState('');
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [feedbackResult, setFeedbackResult] = useState<QueryFeedbackResponse | null>(null);
 
   // Campus scope state — initialised from localStorage, synced with auth user preference
   const [selectedCampus, setSelectedCampus] = useState<string>(
@@ -802,6 +812,15 @@ export default function Ask() {
 
   const campusForRequest = selectedCampus === 'All Colleges' ? null : selectedCampus;
 
+  const recordMemorySignal = (
+    signal: QueryMemorySignal,
+    generationId = nlResult?.generationId,
+    queryJobId = activeJobId,
+  ) => {
+    if (!generationId || !queryJobId) return;
+    recordQueryMemorySignal({ generationId, queryJobId, signal }).catch(() => {});
+  };
+
   const runGeneratedQuery = (
     result: NlResponse,
     questionText: string,
@@ -844,9 +863,15 @@ export default function Ask() {
         generationId?: string;
       };
     }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
       if (data.jobId) {
         setActiveJobId(data.jobId);
+      }
+      if (data.generationId) {
+        setNlResult((current) => current ? { ...current, generationId: data.generationId } : current);
+      }
+      if (variables.options?.queryReuse && data.generationId && data.jobId) {
+        recordMemorySignal('rerun', data.generationId, data.jobId);
       }
     },
     onError: (error) => {
@@ -863,8 +888,11 @@ export default function Ask() {
         request.followUpContext ?? null,
         request.allowExploratory ?? false,
         request.parentGenerationId ?? null,
-      ),
+    ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
+      if (request.followUpContext) {
+        recordMemorySignal('follow_up');
+      }
       const result = normalizeAskResultProvenance(data);
       setNlResult(result);
       resetJob();
@@ -873,6 +901,7 @@ export default function Ask() {
       setLastSavedId(null);
       setFeedbackNote('');
       setFeedbackMessage(null);
+      setFeedbackResult(null);
       setCorrecting(false);
       setClarificationFreeText('');
       setBatchClarificationChoices({});
@@ -922,6 +951,7 @@ export default function Ask() {
       setSaveDesc('');
       setLastSavedId(data.id);
       setSaveSuccess(`Saved as "${data.name}"`);
+      recordMemorySignal('saved');
       setTimeout(() => setSaveSuccess(null), 4000);
     },
   });
@@ -955,20 +985,47 @@ export default function Ask() {
     mutationFn: (resultAccuracy: 'accurate' | 'inaccurate' | 'unsure') => {
       if (!nlResult) throw new Error('No generated query is available for feedback.');
       return saveQueryFeedback(buildQueryFeedbackInput(
-        history[0]?.prompt || prompt,
         nlResult,
+        activeJobId || '',
         resultAccuracy,
         feedbackNote,
       ));
     },
-    onSuccess: () => {
-      setFeedbackMessage('Feedback saved');
+    onSuccess: (data) => {
+      setFeedbackResult(data);
+      setFeedbackMessage(data.message);
       setFeedbackNote('');
       toast.success('Feedback saved');
       setTimeout(() => setFeedbackMessage(null), 4000);
     },
     onError: (error) => {
       toast.error(`Feedback was not saved: ${getApiErrorMessage(error)}`);
+    },
+  });
+
+  const replacementMut = useMutation({
+    mutationFn: (feedbackId: number) => replaceQueryFeedback(
+      feedbackId,
+      buildQueryReplacementInput(selectedCampus),
+    ),
+    onMutate: () => {
+      setAskProgressPhase('generating');
+    },
+    onSuccess: (data) => {
+      const result = normalizeAskResultProvenance(data);
+      const question = history[0]?.prompt || prompt.trim();
+      setNlResult(result);
+      resetJob();
+      setActiveJobId(null);
+      setFeedbackNote('');
+      setFeedbackMessage(null);
+      setFeedbackResult(null);
+      setDetailTab('results');
+      prependHistory(question, result);
+      runGeneratedQuery(result, question);
+    },
+    onError: (error) => {
+      toast.error(`Different SQL could not be generated: ${getApiErrorMessage(error)}`);
     },
   });
 
@@ -1010,8 +1067,8 @@ export default function Ask() {
           handleRunReuseCandidate(reuse.match, q);
           return;
         }
-      } catch (error) {
-        toast.error(`Could not check previous successful queries: ${getApiErrorMessage(error)}`);
+      } catch {
+        // Query-memory lookup is opportunistic; ordinary generation continues.
       } finally {
         setReuseCheckPending(false);
       }
@@ -1115,6 +1172,12 @@ export default function Ask() {
     if (nlResult?.sql) {
       navigator.clipboard.writeText(nlResult.sql);
     }
+  };
+
+  const handleDownloadExport = async () => {
+    if (!activeJobId) return;
+    await downloadExportCsv(activeJobId);
+    recordMemorySignal('downloaded');
   };
 
   const handleUseSuggestion = (suggestedPrompt: string) => {
@@ -2170,6 +2233,9 @@ export default function Ask() {
             />
             {nlResult.queryReuse && (
               <AskReuseNotice
+                generationProvenance={nlResult.generationProvenance}
+                provenanceLabel={nlResult.provenanceLabel}
+                reuseTrust={nlResult.queryReuse.reuseTrust}
                 onEditSql={handleEditReusedSql}
                 onGenerateFresh={handleGenerateFreshFromReuse}
               />
@@ -2245,21 +2311,21 @@ export default function Ask() {
                         <span className="text-xs font-medium text-gray-600">Were these results accurate?</span>
                         <button
                           onClick={() => feedbackMut.mutate('accurate')}
-                          disabled={feedbackMut.isPending}
+                          disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-green-200 bg-white text-xs text-green-700 hover:bg-green-50 disabled:opacity-50"
                         >
                           Yes
                         </button>
                         <button
                           onClick={() => feedbackMut.mutate('inaccurate')}
-                          disabled={feedbackMut.isPending}
+                          disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-red-200 bg-white text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
                         >
                           No
                         </button>
                         <button
                           onClick={() => feedbackMut.mutate('unsure')}
-                          disabled={feedbackMut.isPending}
+                          disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-gray-200 bg-white text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-50"
                         >
                           Unsure
@@ -2272,6 +2338,19 @@ export default function Ask() {
                         />
                         {feedbackMessage && (
                           <span className="text-xs text-green-700">{feedbackMessage}</span>
+                        )}
+                        {feedbackResult?.reuseSuppressed && (
+                          <>
+                            <span className="text-xs text-gray-600">This exact SQL will not be reused.</span>
+                            <button
+                              onClick={() => replacementMut.mutate(feedbackResult.feedbackId)}
+                              disabled={replacementMut.isPending}
+                              className="inline-flex items-center gap-1 rounded border border-folio-200 bg-white px-2.5 py-1 text-xs font-medium text-folio-700 hover:bg-folio-50 disabled:opacity-50"
+                            >
+                              {replacementMut.isPending && <Loader2 size={12} className="animate-spin" />}
+                              {replacementMut.isPending ? 'Generating different SQL…' : 'Try different SQL'}
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -2286,7 +2365,7 @@ export default function Ask() {
                           </div>
                           {results.downloadUrl && activeJobId && (
                             <button
-                              onClick={() => downloadExportCsv(activeJobId)}
+                              onClick={handleDownloadExport}
                               className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
                             >
                               Download full CSV

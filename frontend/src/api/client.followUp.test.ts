@@ -87,32 +87,54 @@ describe('API client follow-up context', () => {
     });
   });
 
-  it('saves query feedback with route and mode context', async () => {
+  it('saves query feedback with server-owned linkage identifiers', async () => {
     const { saveQueryFeedback } = await import('./client');
     post.mockResolvedValueOnce({
-      data: { id: 1, message: 'saved', promptFingerprint: 'abc123', sqlHash: 'def456' },
+      data: { feedbackId: 1, resultAccuracy: 'accurate', reuseSuppressed: false, message: 'saved' },
     });
 
     await saveQueryFeedback({
-      originalQuestion: 'show vendor spend',
-      generatedSql: 'SELECT 1',
-      route: 'exploratory_builder_intent',
-      routeReason: 'user_approved_exploratory_generation',
-      mode: 'exploratory',
-      dataSource: 'folio',
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
       resultAccuracy: 'accurate',
       feedbackNote: 'Looks right',
     });
 
     expect(post).toHaveBeenCalledWith('/query-feedback', {
-      originalQuestion: 'show vendor spend',
-      generatedSql: 'SELECT 1',
-      route: 'exploratory_builder_intent',
-      routeReason: 'user_approved_exploratory_generation',
-      mode: 'exploratory',
-      dataSource: 'folio',
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
       resultAccuracy: 'accurate',
       feedbackNote: 'Looks right',
+    });
+  });
+
+  it('requests replacement SQL by feedback id and current scope only', async () => {
+    const { replaceQueryFeedback } = await import('./client');
+    post.mockResolvedValueOnce({
+      data: { sql: 'SELECT 2', generationProvenance: 'ai_built' },
+    });
+
+    await replaceQueryFeedback(42, { resolvedContext: { campus: 'Smith College' } });
+
+    expect(post).toHaveBeenCalledWith('/query-feedback/42/replacement', {
+      resolvedContext: { campus: 'Smith College' },
+    });
+  });
+
+  it('records a query-memory signal using linked identifiers', async () => {
+    const { recordQueryMemorySignal } = await import('./client');
+    post.mockResolvedValueOnce({ data: { ok: true, signal: 'saved', count: 1 } });
+
+    await recordQueryMemorySignal({
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
+      signal: 'saved',
+    });
+
+    expect(post).toHaveBeenCalledWith('/query/memory-signal', {
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
+      signal: 'saved',
     });
   });
 

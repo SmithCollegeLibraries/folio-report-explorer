@@ -33,6 +33,9 @@ import type {
   HistorySuggestionsResponse,
   QueryReuseCandidateRequest,
   QueryReuseCandidateResponse,
+  QueryFeedbackResponse,
+  QueryFeedbackReplacementInput,
+  QueryMemorySignal,
   QueryReuseDecisionInput,
   IndexRecommendationResponse,
   DashboardResponse,
@@ -49,6 +52,10 @@ import type {
   ReportReviewListResponse,
   ReportReviewDetail,
   ReportReviewUpdate,
+  QueryMemoryItem,
+  QueryMemoryListResponse,
+  QueryMemoryStatus,
+  QueryMemorySuppressionResponse,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -246,16 +253,29 @@ export async function askNl(
 }
 
 export async function saveQueryFeedback(input: {
-  originalQuestion: string;
-  generatedSql?: string | null;
-  route?: string | null;
-  routeReason?: string | null;
-  mode?: string | null;
-  dataSource?: 'folio' | 'local' | null;
+  generationId: string;
+  queryJobId: string;
   resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
   feedbackNote?: string | null;
-}): Promise<{ id: number; message: string; promptFingerprint: string; sqlHash: string | null }> {
+}): Promise<QueryFeedbackResponse> {
   const { data } = await api.post('/query-feedback', input);
+  return data;
+}
+
+export async function replaceQueryFeedback(
+  feedbackId: number,
+  input: QueryFeedbackReplacementInput,
+): Promise<NlResponse> {
+  const { data } = await api.post(`/query-feedback/${feedbackId}/replacement`, input);
+  return data;
+}
+
+export async function recordQueryMemorySignal(input: {
+  generationId: string;
+  queryJobId: string;
+  signal: QueryMemorySignal;
+}): Promise<{ ok: boolean; signal: QueryMemorySignal; count: number }> {
+  const { data } = await api.post('/query/memory-signal', input);
   return data;
 }
 
@@ -814,3 +834,19 @@ export const claimReportReview = async (id: string): Promise<ReportReviewDetail>
 
 export const updateReportReview = async (id: string, input: ReportReviewUpdate): Promise<ReportReviewDetail> =>
   (await api.patch(`/admin/report-reviews/${id}`, input)).data;
+
+export const fetchQueryMemory = async (
+  status: QueryMemoryStatus = 'all',
+  limit = 25,
+  offset = 0,
+): Promise<QueryMemoryListResponse> =>
+  (await api.get('/admin/query-memory', { params: { status, limit, offset } })).data;
+
+export const updateQueryMemoryReuseApproval = async (
+  id: number,
+  approved: boolean,
+): Promise<QueryMemoryItem> =>
+  (await api.patch(`/admin/query-feedback/${id}/reuse-approval`, { approved })).data;
+
+export const clearQueryMemorySuppression = async (id: number): Promise<QueryMemorySuppressionResponse> =>
+  (await api.patch(`/admin/query-feedback/${id}/suppression`, { suppressed: false })).data;

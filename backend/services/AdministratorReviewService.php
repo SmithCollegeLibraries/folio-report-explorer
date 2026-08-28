@@ -20,9 +20,30 @@ class AdministratorReviewService
     /** @var Connection */
     private $db;
 
-    public function __construct(?Connection $db = null)
-    {
+    /** @var callable */
+    private $directReuseFingerprint;
+
+    /** @var callable */
+    private $schemaVersionFingerprint;
+
+    /** @var array<string,string> */
+    private $directFingerprintCache = [];
+
+    /** @var string|null */
+    private $currentSchemaFingerprintCache;
+
+    public function __construct(
+        ?Connection $db = null,
+        ?callable $directReuseFingerprint = null,
+        ?callable $schemaVersionFingerprint = null
+    ) {
         $this->db = $db ?: Yii::$app->db;
+        $this->directReuseFingerprint = $directReuseFingerprint ?: static function (string $question): string {
+            return QueryMemoryService::currentDirectReuseSchemaFingerprint($question);
+        };
+        $this->schemaVersionFingerprint = $schemaVersionFingerprint ?: static function (): string {
+            return QueryMemoryService::currentSchemaVersionFingerprint();
+        };
     }
 
     /**
@@ -122,6 +143,101 @@ class AdministratorReviewService
             'provenanceGeneration' => $editedGeneration,
             'edited' => true,
         ];
+    }
+
+    /**
+     * Create execution lineage from a server-revalidated reusable generation.
+     * The source may belong to another user; the child always belongs to the
+     * current executor and retains immutable provenance unless SQL was edited.
+     */
+    public function createTrustedReuseChild(
+        string $sourceGenerationId,
+        int $userId,
+        string $question,
+        string $normalizedSql,
+        bool $edited,
+        string $reuseTrust
+    ): array {
+        if (!in_array($reuseTrust, ['verified_global', 'same_user_accurate', 'administrator_approved'], true)) {
+            throw new InvalidArgumentException('invalid_reuse_trust');
+        }
+
+        return $this->db->transaction(function () use (
+            $sourceGenerationId,
+            $userId,
+            $question,
+            $normalizedSql,
+            $edited,
+            $reuseTrust
+        ): array {
+            $source = AiReportGeneration::findOne(['id' => $sourceGenerationId]);
+            if ($source === null) {
+                throw new DomainException('reuse_source_generation_not_found');
+            }
+
+            $generationId = AiReportGeneration::generateUuid();
+            $now = gmdate('Y-m-d H:i:s');
+            $provenance = $this->decodeJsonObject($source->provenance_json);
+            if ($edited) {
+                $provenance['generationProvenance'] = 'ai_built';
+            }
+            $provenance['queryMemory'] = [
+                'reused' => true,
+                'sourceGenerationId' => (string)$source->id,
+                'reuseTrust' => $reuseTrust,
+                'edited' => $edited,
+            ];
+
+            $confidenceEvidence = $this->decodeJsonObject($source->confidence_evidence_json);
+            $confidenceEvidence['queryMemoryReuse'] = [
+                'sourceGenerationId' => (string)$source->id,
+                'reuseTrust' => $reuseTrust,
+                'edited' => $edited,
+            ];
+            $reviewReasons = $edited ? ['user_modified_sql'] : [];
+
+            $this->db->createCommand()->insert('ai_report_generations', [
+                'id' => $generationId,
+                'conversation_id' => (string)$source->conversation_id,
+                'parent_generation_id' => (string)$source->id,
+                'query_job_id' => null,
+                'user_id' => $userId,
+                'prompt_fingerprint' => substr(hash('sha256', $question), 0, 16),
+                'original_question' => $question,
+                'follow_up_context' => null,
+                'response_mode' => $source->response_mode,
+                'execution_mode' => $edited ? 'exploratory' : $source->execution_mode,
+                'route' => $source->route,
+                'route_reason' => $edited ? 'user_edited_sql' : 'query_reuse',
+                'validation_status' => 'validated',
+                'generated_sql' => $normalizedSql,
+                'sql_hash' => hash('sha256', $normalizedSql),
+                'assumptions_json' => $source->assumptions_json,
+                'user_notice_json' => $source->user_notice_json,
+                'confidence_evidence_json' => $this->encodeJson($confidenceEvidence),
+                'initial_structure_json' => $source->initial_structure_json,
+                'final_structure_json' => $source->final_structure_json,
+                'provenance_json' => $this->encodeJson($provenance),
+                'review_required' => $edited ? 1 : 0,
+                'review_reasons_json' => $this->encodeJson($reviewReasons),
+                'created_at' => $now,
+                'linked_at' => null,
+                'updated_at' => $now,
+            ])->execute();
+
+            $reviewId = $edited ? $this->insertReview($generationId) : null;
+            $generation = AiReportGeneration::findOne(['id' => $generationId]);
+            if ($generation === null) {
+                throw new RuntimeException('reuse_generation_not_found');
+            }
+            return [
+                'generationId' => $generationId,
+                'conversationId' => (string)$source->conversation_id,
+                'reviewId' => $reviewId,
+                'generation' => $generation,
+                'provenanceGeneration' => $edited ? $generation : $source,
+            ];
+        });
     }
 
     /**
@@ -248,6 +364,129 @@ class AdministratorReviewService
             null,
             $takeover
         );
+    }
+
+    /**
+     * List AI-built feedback that has an explicit trust decision or suppression.
+     * Raw SQL and feedback notes intentionally remain outside this summary.
+     */
+    public function listQueryMemory(array $filters = []): array
+    {
+        $status = strtolower(trim((string)($filters['status'] ?? 'all')));
+        if (!in_array($status, ['all', 'accurate', 'suppressed', 'approved'], true)) {
+            $status = 'all';
+        }
+        $limit = max(1, min(100, (int)($filters['limit'] ?? 25)));
+        $offset = max(0, (int)($filters['offset'] ?? 0));
+
+        $query = (new \yii\db\Query())
+            ->from(['f' => 'ai_query_feedback'])
+            ->leftJoin(['g' => 'ai_report_generations'], 'g.id = f.generation_id')
+            ->where(['f.generation_provenance' => 'ai_built']);
+        if ($status === 'accurate') {
+            $query->andWhere(['f.result_accuracy' => 'accurate']);
+        } elseif ($status === 'suppressed') {
+            $query->andWhere(['f.reuse_suppressed' => 1]);
+        } elseif ($status === 'approved') {
+            $query->andWhere(['not', ['f.admin_reuse_approved_at' => null]]);
+        } else {
+            $query->andWhere(['or',
+                ['f.result_accuracy' => 'accurate'],
+                ['f.reuse_suppressed' => 1],
+                ['not', ['f.admin_reuse_approved_at' => null]],
+            ]);
+        }
+
+        $total = (int)(clone $query)->count('*', $this->db);
+        $rows = $query
+            ->select([
+                'f.*',
+                'generation_provenance_json' => 'g.provenance_json',
+            ])
+            ->orderBy(['f.created_at' => SORT_DESC, 'f.id' => SORT_DESC])
+            ->limit($limit)
+            ->offset($offset)
+            ->all($this->db);
+
+        return [
+            'items' => array_map([$this, 'mapQueryMemoryFeedback'], $rows),
+            'pagination' => [
+                'limit' => $limit,
+                'offset' => $offset,
+                'total' => $total,
+            ],
+        ];
+    }
+
+    /** Atomically approve or revoke cross-user reuse without changing provenance. */
+    public function setQueryFeedbackReuseApproval(
+        int $feedbackId,
+        bool $approved,
+        int $administratorId
+    ): array {
+        return $this->db->transaction(function () use ($feedbackId, $approved, $administratorId): array {
+            $row = $this->lockedQueryMemoryFeedback($feedbackId);
+            if (!$approved) {
+                $this->db->createCommand()->update('ai_query_feedback', [
+                    'admin_reuse_approved_at' => null,
+                    'admin_reuse_approved_by' => null,
+                ], ['id' => $feedbackId])->execute();
+                $updated = $this->queryMemoryFeedback($feedbackId);
+                $this->logQueryMemoryAdministration('reuse_approval_changed', $updated, $administratorId, [
+                    'approved' => false,
+                ]);
+                return $this->mapQueryMemoryFeedback($updated);
+            }
+
+            if (!$this->queryMemoryApprovalEligible($row)) {
+                throw new DomainException('query_feedback_not_approvable');
+            }
+
+            $now = gmdate('Y-m-d H:i:s');
+            $this->db->createCommand()->update('ai_query_feedback', [
+                'admin_reuse_approved_at' => $now,
+                'admin_reuse_approved_by' => $administratorId,
+            ], ['id' => $feedbackId])->execute();
+            $updated = $this->queryMemoryFeedback($feedbackId);
+            $this->logQueryMemoryAdministration('reuse_approval_changed', $updated, $administratorId, [
+                'approved' => true,
+            ]);
+            return $this->mapQueryMemoryFeedback($updated);
+        });
+    }
+
+    /** Clear one exact SQL/global-schema/scope suppression cluster after review. */
+    public function clearQueryFeedbackSuppression(int $feedbackId, int $administratorId): array
+    {
+        return $this->db->transaction(function () use ($feedbackId, $administratorId): array {
+            $row = $this->lockedQueryMemoryFeedback($feedbackId);
+            if (empty($row['reuse_suppressed'])) {
+                throw new DomainException('query_feedback_not_suppressed');
+            }
+            $match = [
+                'sql_hash' => trim((string)($row['sql_hash'] ?? '')),
+                'schema_version_fingerprint' => trim((string)($row['schema_version_fingerprint'] ?? '')),
+                'scope_fingerprint' => trim((string)($row['scope_fingerprint'] ?? '')),
+            ];
+            if (in_array('', $match, true)) {
+                throw new DomainException('query_feedback_suppression_not_clearable');
+            }
+
+            $clearedCount = $this->db->createCommand()->update('ai_query_feedback', [
+                'reuse_suppressed' => 0,
+                'admin_reuse_approved_at' => null,
+                'admin_reuse_approved_by' => null,
+            ], $match)->execute();
+            $updated = $this->queryMemoryFeedback($feedbackId);
+            $this->logQueryMemoryAdministration('reuse_suppression_cleared', $updated, $administratorId, [
+                'clearedCount' => $clearedCount,
+            ]);
+
+            return [
+                'feedback' => $this->mapQueryMemoryFeedback($updated),
+                'clearedCount' => $clearedCount,
+            ];
+        });
     }
 
     private function complete(
@@ -636,6 +875,155 @@ class AdministratorReviewService
             throw new RuntimeException('review_not_found');
         }
         return $row;
+    }
+
+    private function lockedQueryMemoryFeedback(int $feedbackId): array
+    {
+        // Reserve the row before reading eligibility so the decision and update
+        // cannot race with feedback suppression or another administrator.
+        $this->db->createCommand(
+            'UPDATE ai_query_feedback SET id=id WHERE id = :id',
+            [':id' => $feedbackId]
+        )->execute();
+        $row = $this->queryMemoryFeedback($feedbackId);
+        $generationId = trim((string)($row['generation_id'] ?? ''));
+        if ($generationId !== '') {
+            $this->lockGenerationRow($generationId);
+            $row = $this->queryMemoryFeedback($feedbackId);
+        }
+        return $row;
+    }
+
+    private function queryMemoryFeedback(int $feedbackId): array
+    {
+        $row = (new \yii\db\Query())
+            ->from(['f' => 'ai_query_feedback'])
+            ->leftJoin(['g' => 'ai_report_generations'], 'g.id = f.generation_id')
+            ->select([
+                'f.*',
+                'generation_provenance_json' => 'g.provenance_json',
+            ])
+            ->where(['f.id' => $feedbackId])
+            ->one($this->db);
+        if ($row === false) {
+            throw new DomainException('query_feedback_not_found');
+        }
+        return $row;
+    }
+
+    private function queryMemoryApprovalEligible(array $row): bool
+    {
+        if (
+            strtolower(trim((string)($row['generation_provenance'] ?? ''))) !== 'ai_built'
+            || strtolower(trim((string)($row['result_accuracy'] ?? ''))) !== 'accurate'
+            || !empty($row['reuse_suppressed'])
+            || trim((string)($row['scope_fingerprint'] ?? '')) === ''
+        ) {
+            return false;
+        }
+
+        $generationProvenance = $this->decodeJsonObject($row['generation_provenance_json'] ?? null);
+        $immutableProvenance = strtolower(trim((string)($generationProvenance['generationProvenance'] ?? '')));
+        if ($immutableProvenance !== '' && $immutableProvenance !== 'ai_built') {
+            return false;
+        }
+
+        $question = (string)($row['original_question'] ?? '');
+        $currentDirect = $this->currentDirectFingerprint($question);
+        $currentVersion = $this->currentSchemaFingerprint();
+        return $this->fingerprintsEqual($currentDirect, $row['direct_reuse_schema_fingerprint'] ?? null)
+            && $this->fingerprintsEqual($currentVersion, $row['schema_version_fingerprint'] ?? null);
+    }
+
+    private function mapQueryMemoryFeedback(array $row): array
+    {
+        $currentDirect = $this->currentDirectFingerprint((string)($row['original_question'] ?? ''));
+        $currentVersion = $this->currentSchemaFingerprint();
+        $strictCompatible = $this->fingerprintsEqual(
+            $currentDirect,
+            $row['direct_reuse_schema_fingerprint'] ?? null
+        );
+        $versionCompatible = $this->fingerprintsEqual(
+            $currentVersion,
+            $row['schema_version_fingerprint'] ?? null
+        );
+        $scopeCompatible = trim((string)($row['scope_fingerprint'] ?? '')) !== '';
+
+        return [
+            'id' => (int)$row['id'],
+            'generationId' => $row['generation_id'] === null ? null : (string)$row['generation_id'],
+            'queryJobId' => $row['query_job_id'] === null ? null : (string)$row['query_job_id'],
+            'question' => (string)$row['original_question'],
+            'generationProvenance' => (string)($row['generation_provenance'] ?? ''),
+            'resultAccuracy' => (string)$row['result_accuracy'],
+            'reuseSuppressed' => !empty($row['reuse_suppressed']),
+            'sqlHash' => (string)$row['sql_hash'],
+            'dataSource' => (string)$row['data_source'],
+            'strictSchemaCompatible' => $strictCompatible,
+            'globalSchemaCompatible' => $versionCompatible,
+            'schemaCompatible' => $strictCompatible && $versionCompatible,
+            'scopeCompatible' => $scopeCompatible,
+            'adminReuseApprovedAt' => $row['admin_reuse_approved_at'] === null
+                ? null
+                : (string)$row['admin_reuse_approved_at'],
+            'adminReuseApprovedBy' => $row['admin_reuse_approved_by'] === null
+                ? null
+                : (int)$row['admin_reuse_approved_by'],
+            'approvalEligible' => $this->queryMemoryApprovalEligible($row),
+            'createdAt' => (string)$row['created_at'],
+        ];
+    }
+
+    private function fingerprintsEqual(string $current, $stored): bool
+    {
+        $stored = trim((string)$stored);
+        return $current !== '' && $stored !== '' && hash_equals($current, $stored);
+    }
+
+    private function currentDirectFingerprint(string $question): string
+    {
+        if (!array_key_exists($question, $this->directFingerprintCache)) {
+            $this->directFingerprintCache[$question] = (string)call_user_func(
+                $this->directReuseFingerprint,
+                $question
+            );
+        }
+        return $this->directFingerprintCache[$question];
+    }
+
+    private function currentSchemaFingerprint(): string
+    {
+        if ($this->currentSchemaFingerprintCache === null) {
+            $this->currentSchemaFingerprintCache = (string)call_user_func($this->schemaVersionFingerprint);
+        }
+        return $this->currentSchemaFingerprintCache;
+    }
+
+    private function logQueryMemoryAdministration(
+        string $event,
+        array $row,
+        int $administratorId,
+        array $details
+    ): void {
+        if ($event === 'reuse_approval_changed') {
+            QueryMemoryService::recordApprovalChanged(
+                (int)$row['id'],
+                $row['generation_id'] === null ? null : (string)$row['generation_id'],
+                $row['query_job_id'] === null ? null : (string)$row['query_job_id'],
+                (string)($row['sql_hash'] ?? ''),
+                !empty($details['approved']),
+                $administratorId
+            );
+            return;
+        }
+        QueryMemoryService::recordSuppressionCleared(
+            (int)$row['id'],
+            $row['generation_id'] === null ? null : (string)$row['generation_id'],
+            $row['query_job_id'] === null ? null : (string)$row['query_job_id'],
+            (string)($row['sql_hash'] ?? ''),
+            (int)($details['clearedCount'] ?? 0),
+            $administratorId
+        );
     }
 
     private function deleteGenerationsByIds(array $generationIds): int

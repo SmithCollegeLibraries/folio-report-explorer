@@ -54,6 +54,7 @@ $config = [
                 'POST nl' => 'folio-query/nl',
                 'POST clarifications/resolve' => 'folio-query/clarification-resolve',
                 'POST query-feedback' => 'folio-query/query-feedback',
+                'POST query-feedback/<id:\\d+>/replacement' => 'folio-query/query-feedback-replacement',
                 'GET campuses' => 'folio-query/campus-list',
                 'PATCH user/campus' => 'folio-query/campus-save',
 
@@ -64,6 +65,7 @@ $config = [
                 'GET query/export/<id:[\w-]+>' => 'folio-query/query-export',
                 'POST query/reuse-candidate' => 'folio-query/query-reuse-candidate',
                 'POST query/reuse-decision' => 'folio-query/query-reuse-decision',
+                'POST query/memory-signal' => 'folio-query/query-memory-signal',
                 'GET query/jobs' => 'folio-query/query-list',
 
                 // Saved queries
@@ -130,6 +132,9 @@ $config = [
                 'GET admin/report-reviews/<id:[\w-]+>' => 'folio-query/report-review-detail',
                 'POST admin/report-reviews/<id:[\w-]+>/claim' => 'folio-query/report-review-claim',
                 'PATCH admin/report-reviews/<id:[\w-]+>' => 'folio-query/report-review-update',
+                'GET admin/query-memory' => 'folio-query/query-memory-list',
+                'PATCH admin/query-feedback/<id:\d+>/reuse-approval' => 'folio-query/query-feedback-reuse-approval',
+                'PATCH admin/query-feedback/<id:\d+>/suppression' => 'folio-query/query-feedback-suppression',
 
                 // Health check
                 'GET health' => 'folio-query/health',
