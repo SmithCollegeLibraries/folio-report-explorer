@@ -108,6 +108,19 @@ describe('API client follow-up context', () => {
     });
   });
 
+  it('requests replacement SQL by feedback id and current scope only', async () => {
+    const { replaceQueryFeedback } = await import('./client');
+    post.mockResolvedValueOnce({
+      data: { sql: 'SELECT 2', generationProvenance: 'ai_built' },
+    });
+
+    await replaceQueryFeedback(42, { resolvedContext: { campus: 'Smith College' } });
+
+    expect(post).toHaveBeenCalledWith('/query-feedback/42/replacement', {
+      resolvedContext: { campus: 'Smith College' },
+    });
+  });
+
   it('checks for a previous successful query reuse candidate', async () => {
     const { fetchQueryReuseCandidate } = await import('./client');
     post.mockResolvedValueOnce({

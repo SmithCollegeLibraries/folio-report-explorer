@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as R
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
@@ -591,6 +591,12 @@ export function buildQueryReuseResolvedContext(selectedCampus: string): Record<s
   return { campus };
 }
 
+export function buildQueryReplacementInput(selectedCampus: string) {
+  return {
+    resolvedContext: buildQueryReuseResolvedContext(selectedCampus),
+  };
+}
+
 export function buildReusedNlResult(
   reuseCandidate: QueryReuseCandidate,
   sql: string,
@@ -978,6 +984,32 @@ export default function Ask() {
     },
     onError: (error) => {
       toast.error(`Feedback was not saved: ${getApiErrorMessage(error)}`);
+    },
+  });
+
+  const replacementMut = useMutation({
+    mutationFn: (feedbackId: number) => replaceQueryFeedback(
+      feedbackId,
+      buildQueryReplacementInput(selectedCampus),
+    ),
+    onMutate: () => {
+      setAskProgressPhase('generating');
+    },
+    onSuccess: (data) => {
+      const result = normalizeAskResultProvenance(data);
+      const question = history[0]?.prompt || prompt.trim();
+      setNlResult(result);
+      resetJob();
+      setActiveJobId(null);
+      setFeedbackNote('');
+      setFeedbackMessage(null);
+      setFeedbackResult(null);
+      setDetailTab('results');
+      prependHistory(question, result);
+      runGeneratedQuery(result, question);
+    },
+    onError: (error) => {
+      toast.error(`Different SQL could not be generated: ${getApiErrorMessage(error)}`);
     },
   });
 
@@ -2283,7 +2315,17 @@ export default function Ask() {
                           <span className="text-xs text-green-700">{feedbackMessage}</span>
                         )}
                         {feedbackResult?.reuseSuppressed && (
-                          <span className="text-xs text-gray-600">This exact SQL will not be reused.</span>
+                          <>
+                            <span className="text-xs text-gray-600">This exact SQL will not be reused.</span>
+                            <button
+                              onClick={() => replacementMut.mutate(feedbackResult.feedbackId)}
+                              disabled={replacementMut.isPending}
+                              className="inline-flex items-center gap-1 rounded border border-folio-200 bg-white px-2.5 py-1 text-xs font-medium text-folio-700 hover:bg-folio-50 disabled:opacity-50"
+                            >
+                              {replacementMut.isPending && <Loader2 size={12} className="animate-spin" />}
+                              {replacementMut.isPending ? 'Generating different SQL…' : 'Try different SQL'}
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>

@@ -3192,14 +3192,14 @@ class FolioQueryController extends Controller
         }
 
         $originalQuestion = trim((string)($generation['original_question'] ?? ''));
-        $generatedSql = trim((string)($job['sql_text'] ?? $generation['generated_sql'] ?? ''));
+        $generatedSql = trim((string)($generation['generated_sql'] ?? $job['sql_text'] ?? ''));
         if ($originalQuestion === '' || $generatedSql === '') {
             Yii::$app->response->statusCode = 409;
             return ['error' => 'The completed report is missing trusted generation evidence.'];
         }
-        $sqlHash = trim((string)($job['sql_hash'] ?? $generation['sql_hash'] ?? ''));
+        $sqlHash = trim((string)($generation['sql_hash'] ?? $job['sql_hash'] ?? ''));
         if ($sqlHash === '') {
-            $sqlHash = hash('sha256', $this->normalizeSqlForTelemetry($generatedSql));
+            $sqlHash = hash('sha256', SqlBuilderService::normalizeForExecution($generatedSql));
         }
         $dataSource = $this->normalizeDataSource($job['data_source'] ?? 'folio');
         $provenance = $this->decodeQueryMemoryJson($generation['provenance_json'] ?? null);
@@ -3293,6 +3293,205 @@ class FolioQueryController extends Controller
         }
         $decoded = is_string($value) && trim($value) !== '' ? json_decode($value, true) : null;
         return is_array($decoded) ? $decoded : [];
+    }
+
+    /**
+     * POST /api/query-feedback/<id>/replacement — generate fresh AI SQL for
+     * one owned, suppressed Inaccurate result without revisiting canonical routing.
+     */
+    public function actionQueryFeedbackReplacement($id)
+    {
+        $feedbackId = (int)$id;
+        $db = Yii::$app->db;
+        $feedback = (new \yii\db\Query())
+            ->from('ai_query_feedback')
+            ->where(['id' => $feedbackId])
+            ->one($db);
+        if (!is_array($feedback)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Feedback not found.'];
+        }
+
+        $generationId = trim((string)($feedback['generation_id'] ?? ''));
+        $queryJobId = trim((string)($feedback['query_job_id'] ?? ''));
+        $generation = (new \yii\db\Query())
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->one($db);
+        $job = (new \yii\db\Query())
+            ->from('query_jobs')
+            ->where(['id' => $queryJobId])
+            ->one($db);
+        if (!is_array($generation) || !is_array($job)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'The rejected report could not be found.'];
+        }
+
+        $userId = $this->getCurrentUserId();
+        if (
+            $userId === null
+            || (int)($feedback['user_id'] ?? 0) !== $userId
+            || (int)($generation['user_id'] ?? 0) !== $userId
+            || (int)($job['user_id'] ?? 0) !== $userId
+            || trim((string)($generation['query_job_id'] ?? '')) !== $queryJobId
+        ) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'This feedback is not available for replacement.'];
+        }
+        if (
+            strtolower(trim((string)($feedback['result_accuracy'] ?? ''))) !== 'inaccurate'
+            || empty($feedback['reuse_suppressed'])
+        ) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Replacement SQL is available only for an Inaccurate result.'];
+        }
+
+        $body = Yii::$app->request->getBodyParams();
+        $authorizedScope = $this->normalizeQueryMemoryScope(
+            is_array($body['resolvedContext'] ?? null) ? $body['resolvedContext'] : []
+        );
+        $dataSource = $this->normalizeDataSource($feedback['data_source'] ?? $job['data_source'] ?? 'folio');
+        $scopeFingerprint = QueryMemoryService::scopeFingerprint($dataSource, $authorizedScope);
+        if (!hash_equals(trim((string)($feedback['scope_fingerprint'] ?? '')), $scopeFingerprint)) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'The current report scope does not match the rejected report.'];
+        }
+
+        $question = trim((string)($generation['original_question'] ?? ''));
+        $rejectedSql = trim((string)($feedback['generated_sql'] ?? $job['sql_text'] ?? ''));
+        $rejectedSqlHash = trim((string)($feedback['sql_hash'] ?? ''));
+        if ($rejectedSqlHash === '') {
+            $rejectedSqlHash = hash('sha256', SqlBuilderService::normalizeForExecution($rejectedSql));
+        }
+        if ($question === '' || $rejectedSql === '') {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'The rejected report is missing trusted generation evidence.'];
+        }
+
+        $generationPrompt = $this->buildQueryReplacementPrompt(
+            $question,
+            $rejectedSql,
+            $rejectedSqlHash,
+            trim((string)($feedback['feedback_note'] ?? ''))
+        );
+        $campus = trim((string)($authorizedScope['campus'] ?? '')) ?: null;
+        $result = AskGenerationCoordinatorService::run(
+            $question,
+            static function () use ($rejectedSqlHash): array {
+                return [
+                    'state' => 'candidate_rejected',
+                    'reason' => 'user_rejected_sql',
+                    'candidateSqlHash' => $rejectedSqlHash,
+                ];
+            },
+            function () use (
+                $question,
+                $generationPrompt,
+                $campus,
+                $userId,
+                $rejectedSqlHash
+            ): array {
+                for ($attempt = 0; $attempt < 2; $attempt++) {
+                    try {
+                        $candidate = $this->generateReplacementAiSql(
+                            $question,
+                            $generationPrompt,
+                            $campus,
+                            $userId
+                        );
+                        $candidate = AskResponseContractService::withGenerationProvenance(
+                            $candidate,
+                            AskResponseContractService::PROVENANCE_AI_BUILT
+                        );
+                        if ($this->queryReplacementMatchesRejected($candidate, $rejectedSqlHash)) {
+                            continue;
+                        }
+                        $candidate = $this->validateAndRepairNlResult(
+                            $candidate,
+                            $question,
+                            $campus,
+                            null,
+                            null,
+                            $generationPrompt
+                        );
+                        if ($this->queryReplacementMatchesRejected($candidate, $rejectedSqlHash)) {
+                            continue;
+                        }
+                        return $this->coordinatorOutcomeFromResult($candidate);
+                    } catch (\Throwable $exception) {
+                        return $this->coordinatorOutcomeFromFailure(
+                            $exception,
+                            $question,
+                            $campus,
+                            []
+                        );
+                    }
+                }
+                return [
+                    'state' => 'candidate_rejected',
+                    'reason' => 'rejected_sql_repeated',
+                    'candidateSqlHash' => $rejectedSqlHash,
+                ];
+            }
+        );
+
+        $result = $this->finalizeAskResponse($result, $question, $userId, [
+            'campus' => $campus,
+            'parentGenerationId' => $generationId,
+            'finalSql' => $result['sql'] ?? null,
+        ]);
+        $result['parentGenerationId'] = $generationId;
+        $replacementGenerationId = trim((string)($result['generationId'] ?? ''));
+        if (isset($result['sql']) && $replacementGenerationId !== '') {
+            $db->createCommand()->update('ai_query_feedback', [
+                'replacement_generation_id' => $replacementGenerationId,
+            ], ['id' => $feedbackId])->execute();
+        }
+        return $result;
+    }
+
+    protected function generateReplacementAiSql(
+        string $question,
+        string $generationPrompt,
+        ?string $campus,
+        ?int $userId
+    ): array {
+        return GeminiService::generateFreshAiBuiltSql(
+            $question,
+            $generationPrompt,
+            $campus,
+            [],
+            'feedback_replacement',
+            $userId
+        );
+    }
+
+    private function buildQueryReplacementPrompt(
+        string $question,
+        string $rejectedSql,
+        string $rejectedSqlHash,
+        string $feedbackNote
+    ): string {
+        $context = json_encode([
+            'rejectedSqlHash' => $rejectedSqlHash,
+            'rejectedSql' => $rejectedSql,
+            'feedbackNote' => $feedbackNote === '' ? null : $feedbackNote,
+            'instruction' => 'Generate materially different SQL that addresses the feedback while preserving the original reporting request.',
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
+
+        return $question
+            . "\n\n<server_rejected_query_context>\n"
+            . ($context === false ? '{}' : $context)
+            . "\n</server_rejected_query_context>";
+    }
+
+    private function queryReplacementMatchesRejected(array $result, string $rejectedSqlHash): bool
+    {
+        $sql = trim((string)($result['sql'] ?? ''));
+        return $sql !== '' && hash_equals(
+            $rejectedSqlHash,
+            hash('sha256', SqlBuilderService::normalizeForExecution($sql))
+        );
     }
 
     /**

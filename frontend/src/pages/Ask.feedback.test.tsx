@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildQueryFeedbackInput } from './Ask';
+import { buildQueryFeedbackInput, buildQueryReplacementInput } from './Ask';
 import type { NlResponse } from '../types/schema';
 
 describe('Ask trusted query feedback input', () => {
@@ -25,5 +25,12 @@ describe('Ask trusted query feedback input', () => {
   it('rejects feedback before both the generated report and completed job are linked', () => {
     expect(() => buildQueryFeedbackInput({} as NlResponse, 'job-1', 'accurate')).toThrow();
     expect(() => buildQueryFeedbackInput({ generationId: 'generation-1' } as NlResponse, '', 'accurate')).toThrow();
+  });
+
+  it('builds replacement requests from current scope only', () => {
+    expect(buildQueryReplacementInput('Smith College')).toEqual({
+      resolvedContext: { campus: 'Smith College' },
+    });
+    expect(buildQueryReplacementInput('All Colleges')).toEqual({ resolvedContext: {} });
   });
 });

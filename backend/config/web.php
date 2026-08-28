@@ -54,6 +54,7 @@ $config = [
                 'POST nl' => 'folio-query/nl',
                 'POST clarifications/resolve' => 'folio-query/clarification-resolve',
                 'POST query-feedback' => 'folio-query/query-feedback',
+                'POST query-feedback/<id:\\d+>/replacement' => 'folio-query/query-feedback-replacement',
                 'GET campuses' => 'folio-query/campus-list',
                 'PATCH user/campus' => 'folio-query/campus-save',
 

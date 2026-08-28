@@ -377,6 +377,7 @@ export interface NlResponse {
   error?: string;
   generationId?: string;
   conversationId?: string;
+  parentGenerationId?: string;
   reviewRequired?: boolean;
   reviewNotice?: { title: string; message: string };
   sql?: string;
@@ -956,6 +957,10 @@ export interface QueryFeedbackResponse {
   resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
   reuseSuppressed: boolean;
   message: string;
+}
+
+export interface QueryFeedbackReplacementInput {
+  resolvedContext: Record<string, string>;
 }
 
 export interface IndexRecommendationEvidence {

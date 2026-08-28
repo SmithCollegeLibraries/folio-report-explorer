@@ -34,6 +34,7 @@ import type {
   QueryReuseCandidateRequest,
   QueryReuseCandidateResponse,
   QueryFeedbackResponse,
+  QueryFeedbackReplacementInput,
   QueryReuseDecisionInput,
   IndexRecommendationResponse,
   DashboardResponse,
@@ -253,6 +254,14 @@ export async function saveQueryFeedback(input: {
   feedbackNote?: string | null;
 }): Promise<QueryFeedbackResponse> {
   const { data } = await api.post('/query-feedback', input);
+  return data;
+}
+
+export async function replaceQueryFeedback(
+  feedbackId: number,
+  input: QueryFeedbackReplacementInput,
+): Promise<NlResponse> {
+  const { data } = await api.post(`/query-feedback/${feedbackId}/replacement`, input);
   return data;
 }
 

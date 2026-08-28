@@ -99,6 +99,7 @@ if (preg_match('/\breuse_suppressed\b[^,;\n]*DEFAULT\s+0\b/i', $reuseTrustMigrat
 }
 
 assertContainsText("'POST query-feedback' => 'folio-query/query-feedback'", $webConfig, 'Query feedback endpoint should be routed.');
+assertContainsText("'POST query-feedback/<id:\\\\d+>/replacement' => 'folio-query/query-feedback-replacement'", $webConfig, 'Query feedback replacement endpoint should be routed.');
 assertContainsText('function actionQueryFeedback()', $controller, 'Query feedback action should exist.');
 assertContainsText('ai_query_feedback', $controller, 'Query feedback action should persist feedback rows.');
 assertContainsText('prompt_fingerprint', $controller, 'Query feedback action should compute prompt fingerprints server-side.');
