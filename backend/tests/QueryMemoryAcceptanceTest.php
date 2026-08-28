@@ -34,6 +34,7 @@ $candidate = [
     'userId' => 17,
     'generationProvenance' => 'ai_built',
     'resultAccuracy' => null,
+    'accurateFeedbackUserIds' => [],
     'adminReuseApprovedAt' => null,
     'directReuseSchemaFingerprint' => 'strict-v1',
     'schemaVersionFingerprint' => 'global-v1',
@@ -45,6 +46,7 @@ $candidate = [
 acceptanceAssert(QueryMemoryService::findDirectReuse($request, [$candidate]) === null, 'A neutral AI completion must not be directly reused.');
 
 $candidate['resultAccuracy'] = 'accurate';
+$candidate['accurateFeedbackUserIds'] = [17];
 $sameUser = QueryMemoryService::findDirectReuse($request, [$candidate]);
 acceptanceAssert(($sameUser['reuseTrust'] ?? null) === 'same_user_accurate', 'Accurate feedback should enable compatible same-user direct reuse.');
 acceptanceAssert(($sameUser['generationProvenance'] ?? null) === 'ai_built', 'Same-user reuse must retain AI-built provenance.');

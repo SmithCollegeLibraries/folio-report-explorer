@@ -100,11 +100,19 @@ $twoLaneEvidence = AskGenerationEvidenceService::build([
     'mode' => 'exploratory',
     'generationProvenance' => 'ai_built',
     'provenanceLabel' => 'AI-built',
-], ['prompt' => 'Show one row']);
+], [
+    'prompt' => 'Show one row',
+    'directReuseSchemaFingerprint' => 'raw-question-schema-fingerprint',
+]);
 evidenceAssertSame(
     'ai_built',
     $twoLaneEvidence['provenance']['generationProvenance'] ?? null,
     'Stable generation provenance must reach administrator and query-job metadata.'
+);
+evidenceAssertSame(
+    'raw-question-schema-fingerprint',
+    $twoLaneEvidence['provenance']['directReuseSchemaFingerprint'] ?? null,
+    'Generation provenance must retain the strict fingerprint derived from the original user question.'
 );
 
 $queryMemoryEvidence = AskGenerationEvidenceService::build([
@@ -293,6 +301,7 @@ evidenceAssertSame(
         'promptVersion' => null,
         'referenceBundleMetadata' => null,
         'schemaMetadata' => null,
+        'directReuseSchemaFingerprint' => null,
         'semanticContractVersion' => null,
         'generationProvenance' => null,
     ],

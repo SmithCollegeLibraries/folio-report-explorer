@@ -123,6 +123,7 @@ SQL)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_query_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     generation_id VARCHAR(36),
     query_job_id VARCHAR(36),
     sql_hash VARCHAR(64),
@@ -338,6 +339,7 @@ function seedAiEndpointCandidate(
     ]);
     if ($accuracy !== null) {
         $db->createCommand()->insert('ai_query_feedback', [
+            'user_id' => $userId,
             'generation_id' => $generation['generationId'],
             'query_job_id' => $jobId,
             'sql_hash' => hash('sha256', $sql),
@@ -386,10 +388,56 @@ $db->createCommand()->insert('ai_query_feedback', [
     'created_at' => '2026-08-26 12:05:00',
 ])->execute();
 queryMemoryReuseAssert((invokeReuseEndpoint($sameUserPrompt)['match'] ?? null) === null, 'Exact SQL-hash suppression in the same schema and scope must reject reuse even when attached elsewhere.');
+$db->createCommand()->update('ai_query_feedback', [
+    'reuse_suppressed' => 0,
+], [
+    'sql_hash' => $sameUserFeedback['sql_hash'],
+    'schema_version_fingerprint' => $sameUserFeedback['schema_version_fingerprint'],
+    'scope_fingerprint' => $sameUserFeedback['scope_fingerprint'],
+])->execute();
+queryMemoryReuseAssert(
+    (invokeReuseEndpoint($sameUserPrompt)['match']['reuseTrust'] ?? null) === 'same_user_accurate',
+    'After an administrator clears the cluster suppression, the user\'s Accurate candidate must become reusable again.'
+);
 
 $otherUserPrompt = 'Show ACRL categories for other-user memory';
 seedAiEndpointCandidate($service, $db, 'other', $otherUserPrompt, 22, 'accurate');
 queryMemoryReuseAssert((invokeReuseEndpoint($otherUserPrompt)['match'] ?? null) === null, 'Other-user Accurate AI-built SQL must not be directly reused without approval.');
+
+$foreignFeedbackPrompt = 'Show ACRL categories for foreign feedback memory';
+$foreignFeedbackSql = 'SELECT category AS category_foreign_feedback FROM acrl_statistics';
+$foreignFeedbackSource = seedAiEndpointCandidate(
+    $service,
+    $db,
+    'foreign-feedback',
+    $foreignFeedbackPrompt,
+    17,
+    null,
+    false,
+    ['sql' => $foreignFeedbackSql]
+);
+$foreignFeedbackGeneration = $db->createCommand(
+    'SELECT provenance_json FROM ai_report_generations WHERE id = :generationId',
+    [':generationId' => $foreignFeedbackSource['generationId']]
+)->queryScalar();
+$foreignFeedbackSchema = json_decode((string)$foreignFeedbackGeneration, true)['schemaMetadata'];
+$db->createCommand()->insert('ai_query_feedback', [
+    'user_id' => 22,
+    'generation_id' => null,
+    'query_job_id' => null,
+    'sql_hash' => hash('sha256', $foreignFeedbackSql),
+    'result_accuracy' => 'accurate',
+    'direct_reuse_schema_fingerprint' => QueryMemoryService::directReuseSchemaFingerprint($foreignFeedbackSchema),
+    'schema_version_fingerprint' => QueryMemoryService::schemaVersionFingerprint($foreignFeedbackSchema),
+    'scope_fingerprint' => QueryMemoryService::scopeFingerprint('local', ['campus' => 'Smith College']),
+    'reuse_suppressed' => 0,
+    'admin_reuse_approved_at' => null,
+    'created_at' => '2026-08-26 12:06:00',
+])->execute();
+queryMemoryReuseAssert(
+    (invokeReuseEndpoint($foreignFeedbackPrompt)['match'] ?? null) === null,
+    'Another user\'s Accurate feedback for the same SQL must not satisfy the same-user trust gate.'
+);
 
 $approvedPrompt = 'Show ACRL categories for approved memory';
 seedAiEndpointCandidate($service, $db, 'admin', $approvedPrompt, 22, 'accurate', true);

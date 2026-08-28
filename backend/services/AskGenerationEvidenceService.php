@@ -3,6 +3,9 @@
 namespace app\services;
 
 require_once __DIR__ . '/ExploratorySqlAnalysisService.php';
+if (!class_exists(QueryMemoryService::class, false)) {
+    require_once __DIR__ . '/QueryMemoryService.php';
+}
 
 /**
  * Builds server-trusted Ask evidence before the ordinary response is sanitized.
@@ -162,6 +165,9 @@ final class AskGenerationEvidenceService
                     ?? $requestContext['schemaMetadata']
                     ?? null
             ),
+            'directReuseSchemaFingerprint' => self::nullableString(
+                $requestContext['directReuseSchemaFingerprint'] ?? null
+            ),
             'semanticContractVersion' => self::nullableScalar(
                 $semanticValidation['contractVersion']
                     ?? $semanticContract['contractVersion']
@@ -210,7 +216,7 @@ final class AskGenerationEvidenceService
             ),
             'validationStatus' => $validationStatus,
             'generatedSql' => $generatedSql,
-            'sqlHash' => $generatedSql === null ? null : hash('sha256', $generatedSql),
+            'sqlHash' => $generatedSql === null ? null : QueryMemoryService::sqlFingerprint($generatedSql),
             'assumptions' => $assumptions,
             'userNotice' => self::userNotice($result),
             'confidenceEvidence' => $confidenceEvidence,

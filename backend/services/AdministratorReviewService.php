@@ -79,7 +79,7 @@ class AdministratorReviewService
                 'validation_status' => $this->nullableString($context, 'validationStatus'),
                 'generated_sql' => $generatedSql,
                 'sql_hash' => $this->nullableString($context, 'sqlHash')
-                    ?? ($generatedSql === null ? null : hash('sha256', $generatedSql)),
+                    ?? ($generatedSql === null ? null : QueryMemoryService::sqlFingerprint($generatedSql)),
                 'assumptions_json' => $this->nullableJson($context, 'assumptions'),
                 'user_notice_json' => $this->nullableJson($context, 'userNotice'),
                 'confidence_evidence_json' => $this->requiredJson($context, 'confidenceEvidence', []),
@@ -128,7 +128,7 @@ class AdministratorReviewService
         $sourceGeneration = $this->executionSourceGeneration($generation, $userId);
 
         $storedHash = (string)$sourceGeneration->sql_hash;
-        $submittedHash = hash('sha256', $normalizedSql);
+        $submittedHash = QueryMemoryService::sqlFingerprint($normalizedSql);
         if ($storedHash !== '' && hash_equals($storedHash, $submittedHash)) {
             return [
                 'generation' => $this->createExecutionChild($sourceGeneration, $normalizedSql),
@@ -211,7 +211,7 @@ class AdministratorReviewService
                 'route_reason' => $edited ? 'user_edited_sql' : 'query_reuse',
                 'validation_status' => 'validated',
                 'generated_sql' => $normalizedSql,
-                'sql_hash' => hash('sha256', $normalizedSql),
+                'sql_hash' => QueryMemoryService::sqlFingerprint($normalizedSql),
                 'assumptions_json' => $source->assumptions_json,
                 'user_notice_json' => $source->user_notice_json,
                 'confidence_evidence_json' => $this->encodeJson($confidenceEvidence),
@@ -474,8 +474,6 @@ class AdministratorReviewService
 
             $clearedCount = $this->db->createCommand()->update('ai_query_feedback', [
                 'reuse_suppressed' => 0,
-                'admin_reuse_approved_at' => null,
-                'admin_reuse_approved_by' => null,
             ], $match)->execute();
             $updated = $this->queryMemoryFeedback($feedbackId);
             $this->logQueryMemoryAdministration('reuse_suppression_cleared', $updated, $administratorId, [
@@ -771,7 +769,7 @@ class AdministratorReviewService
             'routeReason' => 'query_execution',
             'validationStatus' => $parent->validation_status,
             'generatedSql' => $normalizedSql,
-            'sqlHash' => hash('sha256', $normalizedSql),
+            'sqlHash' => QueryMemoryService::sqlFingerprint($normalizedSql),
             'assumptions' => $this->decodeNullableJson($parent->assumptions_json),
             'userNotice' => $this->decodeNullableJson($parent->user_notice_json),
             'confidenceEvidence' => $this->decodeJsonObject($parent->confidence_evidence_json),
@@ -803,7 +801,7 @@ class AdministratorReviewService
             'routeReason' => 'user_edited_sql',
             'validationStatus' => 'validated',
             'generatedSql' => $normalizedSql,
-            'sqlHash' => hash('sha256', $normalizedSql),
+            'sqlHash' => QueryMemoryService::sqlFingerprint($normalizedSql),
             'assumptions' => $this->decodeNullableJson($parent->assumptions_json),
             'userNotice' => $this->decodeNullableJson($parent->user_notice_json),
             'confidenceEvidence' => $this->decodeJsonObject($parent->confidence_evidence_json),

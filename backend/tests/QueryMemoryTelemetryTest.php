@@ -35,6 +35,7 @@ $baseCandidate = [
     'userId' => 17,
     'generationProvenance' => 'ai_built',
     'resultAccuracy' => 'accurate',
+    'accurateFeedbackUserIds' => [17],
     'directReuseSchemaFingerprint' => 'strict-current',
     'schemaVersionFingerprint' => 'global-current',
     'scopeFingerprint' => 'scope-current',

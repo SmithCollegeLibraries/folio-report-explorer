@@ -107,7 +107,7 @@ $db->createCommand()->insert('ai_report_generations', [
     'user_id' => 17,
     'original_question' => $question,
     'generated_sql' => $rejectedSql,
-    'sql_hash' => hash('sha256', $rejectedSql),
+    'sql_hash' => hash('sha256', $rejectedSql . ' legacy-mismatch'),
     'provenance_json' => json_encode(['generationProvenance' => 'ai_built']),
 ])->execute();
 $db->createCommand()->insert('ai_query_feedback', [
@@ -115,7 +115,7 @@ $db->createCommand()->insert('ai_query_feedback', [
     'generation_id' => 'generation-rejected',
     'query_job_id' => 'job-rejected',
     'generated_sql' => $rejectedSql,
-    'sql_hash' => hash('sha256', $rejectedSql),
+    'sql_hash' => hash('sha256', $rejectedSql . ' legacy-mismatch'),
     'result_accuracy' => 'inaccurate',
     'feedback_note' => 'The vendor grouping was wrong.',
     'data_source' => 'local',

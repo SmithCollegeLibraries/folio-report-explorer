@@ -123,6 +123,11 @@ class QueryMemoryService
         ]));
     }
 
+    public static function sqlFingerprint(string $sql): string
+    {
+        return hash('sha256', $sql);
+    }
+
     public static function currentDirectReuseSchemaFingerprint(string $prompt): string
     {
         $context = FolioSchemaService::buildSchemaContext($prompt);
@@ -232,9 +237,16 @@ class QueryMemoryService
             }
         }
 
+        $candidateSqlHashes = array_values(array_unique(array_map(
+            static function (array $candidate): string {
+                return self::sqlFingerprint((string)($candidate['sql'] ?? ''));
+            },
+            $shapedCandidates
+        )));
         [$feedbackByGeneration, $feedbackByJob, $feedbackBySqlHash] = self::feedbackIndexes(
             $generationRows,
-            $jobIds
+            $jobIds,
+            $candidateSqlHashes
         );
         $hydrated = [];
         foreach ($shapedCandidates as $candidate) {
@@ -254,16 +266,16 @@ class QueryMemoryService
             $storedScope = is_array($jobMetadata['resolvedContext'] ?? null)
                 ? self::normalizeScope($jobMetadata['resolvedContext'])
                 : [];
-            $directFingerprint = self::storedDirectReuseSchemaFingerprint($schemaMetadata);
+            $directFingerprint = trim((string)($provenance['directReuseSchemaFingerprint'] ?? ''));
+            if ($directFingerprint === '') {
+                $directFingerprint = self::storedDirectReuseSchemaFingerprint($schemaMetadata);
+            }
             $versionFingerprint = self::storedSchemaVersionFingerprint($schemaMetadata);
             $scopeFingerprint = self::scopeFingerprint(
                 (string)($candidate['dataSource'] ?? 'folio'),
                 $storedScope
             );
-            $sqlHash = trim((string)($generation['sql_hash'] ?? $job['sql_hash'] ?? ''));
-            if ($sqlHash === '') {
-                $sqlHash = hash('sha256', (string)($candidate['sql'] ?? ''));
-            }
+            $sqlHash = self::sqlFingerprint((string)($candidate['sql'] ?? ''));
             $feedbackRows = self::feedbackRowsForCandidate(
                 $generationId,
                 $jobId,
@@ -275,6 +287,7 @@ class QueryMemoryService
                 $feedbackBySqlHash
             );
             $feedback = self::preferredFeedback($feedbackRows);
+            $accurateFeedbackUserIds = self::accurateFeedbackUserIds($feedbackRows);
             $hasExplicitFeedback = $feedback !== null;
             $isVerified = $generationProvenance === 'verified_pattern';
 
@@ -286,6 +299,7 @@ class QueryMemoryService
                 'generationProvenance' => $generationProvenance,
                 'sqlHash' => $sqlHash,
                 'resultAccuracy' => $feedback['result_accuracy'] ?? null,
+                'accurateFeedbackUserIds' => $accurateFeedbackUserIds,
                 'adminReuseApprovedAt' => $feedback['admin_reuse_approved_at'] ?? null,
                 'reuseSuppressed' => $feedback === null ? false : !empty($feedback['reuse_suppressed']),
                 'directReuseSchemaFingerprint' => $isVerified || !$hasExplicitFeedback
@@ -464,7 +478,11 @@ class QueryMemoryService
         return $candidates;
     }
 
-    private static function feedbackIndexes(array $generationRows, array $jobIds): array
+    private static function feedbackIndexes(
+        array $generationRows,
+        array $jobIds,
+        array $candidateSqlHashes = []
+    ): array
     {
         $generationIds = array_values(array_filter(array_map(
             static function (array $generation): string {
@@ -472,12 +490,12 @@ class QueryMemoryService
             },
             $generationRows
         )));
-        $sqlHashes = array_values(array_unique(array_filter(array_map(
+        $sqlHashes = array_values(array_unique(array_merge($candidateSqlHashes, array_filter(array_map(
             static function (array $generation): string {
                 return trim((string)($generation['sql_hash'] ?? ''));
             },
             $generationRows
-        ))));
+        )))));
         if ($generationIds === [] && $jobIds === [] && $sqlHashes === []) {
             return [[], [], []];
         }
@@ -546,8 +564,7 @@ class QueryMemoryService
     private static function preferredFeedback(array $rows): ?array
     {
         foreach ($rows as $row) {
-            $accuracy = strtolower(trim((string)($row['result_accuracy'] ?? '')));
-            if (!empty($row['reuse_suppressed']) || $accuracy === 'inaccurate') {
+            if (!empty($row['reuse_suppressed'])) {
                 $row['reuse_suppressed'] = 1;
                 return $row;
             }
@@ -566,6 +583,22 @@ class QueryMemoryService
             }
         }
         return $accurate ?? $neutral;
+    }
+
+    private static function accurateFeedbackUserIds(array $rows): array
+    {
+        $userIds = [];
+        foreach ($rows as $row) {
+            if (strtolower(trim((string)($row['result_accuracy'] ?? ''))) !== 'accurate') {
+                continue;
+            }
+            $userId = self::normalizedUserId($row['user_id'] ?? null);
+            if ($userId !== null) {
+                $userIds[$userId] = $userId;
+            }
+        }
+        ksort($userIds, SORT_NUMERIC);
+        return array_values($userIds);
     }
 
     private static function storedDirectReuseSchemaFingerprint(array $metadata): string
@@ -680,8 +713,8 @@ class QueryMemoryService
             return 'administrator_approved';
         }
         $requestUserId = self::normalizedUserId($request['userId'] ?? null);
-        $candidateUserId = self::normalizedUserId($candidate['userId'] ?? null);
-        return $requestUserId !== null && $requestUserId === $candidateUserId
+        return $requestUserId !== null
+            && in_array($requestUserId, self::candidateAccurateFeedbackUserIds($candidate), true)
             ? 'same_user_accurate'
             : null;
     }
@@ -702,8 +735,10 @@ class QueryMemoryService
         }
         if ($accuracy === 'accurate') {
             $requestUserId = self::normalizedUserId($request['userId'] ?? null);
-            $candidateUserId = self::normalizedUserId($candidate['userId'] ?? null);
-            if ($requestUserId !== null && $requestUserId === $candidateUserId) {
+            if (
+                $requestUserId !== null
+                && in_array($requestUserId, self::candidateAccurateFeedbackUserIds($candidate), true)
+            ) {
                 return ['rank' => self::TIER_SAME_USER_ACCURATE, 'name' => 'same_user_accurate'];
             }
             return ['rank' => self::TIER_OTHER_USER_ACCURATE, 'name' => 'other_user_accurate'];
@@ -712,6 +747,19 @@ class QueryMemoryService
             return ['rank' => self::TIER_NEUTRAL, 'name' => 'neutral_success'];
         }
         return null;
+    }
+
+    private static function candidateAccurateFeedbackUserIds(array $candidate): array
+    {
+        $userIds = is_array($candidate['accurateFeedbackUserIds'] ?? null)
+            ? $candidate['accurateFeedbackUserIds']
+            : [];
+        return array_values(array_filter(array_map(
+            [self::class, 'normalizedUserId'],
+            $userIds
+        ), static function ($userId): bool {
+            return $userId !== null;
+        }));
     }
 
     private static function candidateSqlIsAllowed(string $sql): bool
