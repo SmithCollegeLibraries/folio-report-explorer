@@ -11,6 +11,7 @@ require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
 use app\controllers\FolioQueryController;
 use app\models\DummyIdentity;
 use app\models\User;
+use app\services\QueryMemoryService;
 use yii\web\Application;
 
 $temporaryRoot = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'controller-report-review-' . bin2hex(random_bytes(8));
@@ -47,6 +48,8 @@ new Application([
         'folioDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
     ],
 ]);
+Yii::$app->params['schemaPath'] = __DIR__ . '/../data/folio_schema.json';
+Yii::$app->params['derivedPath'] = __DIR__ . '/../data/folio_derived_tables.json';
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE users (
@@ -114,6 +117,34 @@ CREATE TABLE ai_report_reviews (
     resolved_at DATETIME NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
+)
+SQL)->execute();
+
+Yii::$app->db->createCommand(<<<'SQL'
+CREATE TABLE ai_query_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    generation_id VARCHAR(36) NULL,
+    query_job_id VARCHAR(36) NULL,
+    original_question TEXT NOT NULL,
+    prompt_fingerprint VARCHAR(16) NOT NULL,
+    generated_sql TEXT NOT NULL,
+    sql_hash VARCHAR(64) NOT NULL,
+    route VARCHAR(128) NULL,
+    route_reason VARCHAR(255) NULL,
+    mode VARCHAR(32) NULL,
+    data_source VARCHAR(20) NOT NULL,
+    result_accuracy VARCHAR(20) NOT NULL,
+    feedback_note TEXT NULL,
+    generation_provenance VARCHAR(32) NULL,
+    direct_reuse_schema_fingerprint VARCHAR(64) NULL,
+    schema_version_fingerprint VARCHAR(64) NULL,
+    scope_fingerprint VARCHAR(64) NULL,
+    reuse_suppressed INTEGER NOT NULL DEFAULT 0,
+    admin_reuse_approved_at DATETIME NULL,
+    admin_reuse_approved_by INTEGER NULL,
+    replacement_generation_id VARCHAR(36) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
 SQL)->execute();
 
@@ -220,7 +251,10 @@ $resolved = reviewControllerSeed(3, '2026-07-21 07:00:00', 'resolved', 'acceptab
 
 $controllerBehaviors = (new FolioQueryController('folio-query', Yii::$app))->behaviors();
 $accessRules = $controllerBehaviors['access']['rules'] ?? [];
-$reviewActions = ['report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update'];
+$reviewActions = [
+    'report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update',
+    'query-memory-list', 'query-feedback-reuse-approval', 'query-feedback-suppression',
+];
 $adminRuleActions = $accessRules[0]['actions'] ?? [];
 foreach ($reviewActions as $reviewAction) {
     reviewControllerAssert(in_array($reviewAction, $adminRuleActions, true), $reviewAction . ' must be registered in the framework administrator rule.');
@@ -249,6 +283,9 @@ $forbiddenCalls = [
     ['actionReportReviewDetail', [$oldestPending]],
     ['actionReportReviewClaim', [$oldestPending]],
     ['actionReportReviewUpdate', [$oldestPending], [], ['status' => 'resolved', 'disposition' => 'acceptable']],
+    ['actionQueryMemoryList'],
+    ['actionQueryFeedbackReuseApproval', [1], [], ['approved' => true]],
+    ['actionQueryFeedbackSuppression', [1], [], ['suppressed' => false]],
 ];
 foreach ($forbiddenCalls as $call) {
     $response = reviewControllerInvoke($call[0], $call[1] ?? [], $call[2] ?? [], $call[3] ?? []);
@@ -363,12 +400,82 @@ $dismissed = reviewControllerInvoke('actionReportReviewUpdate', [$dismissReview]
 ]);
 reviewControllerAssert(Yii::$app->response->statusCode === 200 && ($dismissed['status'] ?? null) === 'dismissed', 'A claimed review should support validated dismissal.');
 
+$memoryGenerationId = '10000000-0000-4000-8000-000000000099';
+$memoryQuestion = 'Show annual circulation at Neilson Library';
+$memorySql = 'SELECT 99';
+Yii::$app->db->createCommand()->insert('ai_report_generations', [
+    'id' => $memoryGenerationId,
+    'conversation_id' => '30000000-0000-4000-8000-000000000099',
+    'user_id' => 7,
+    'prompt_fingerprint' => 'memory-feedback',
+    'original_question' => $memoryQuestion,
+    'generated_sql' => $memorySql,
+    'sql_hash' => hash('sha256', $memorySql),
+    'confidence_evidence_json' => '{}',
+    'provenance_json' => json_encode(['generationProvenance' => 'ai_built']),
+    'review_required' => 0,
+    'review_reasons_json' => '[]',
+    'created_at' => '2026-08-27 12:00:00',
+    'updated_at' => '2026-08-27 12:00:00',
+])->execute();
+$memoryStrict = QueryMemoryService::currentDirectReuseSchemaFingerprint($memoryQuestion);
+$memoryGlobal = QueryMemoryService::currentSchemaVersionFingerprint();
+$memoryScope = QueryMemoryService::scopeFingerprint('folio', []);
+Yii::$app->db->createCommand()->insert('ai_query_feedback', [
+    'user_id' => 7,
+    'generation_id' => $memoryGenerationId,
+    'original_question' => $memoryQuestion,
+    'prompt_fingerprint' => 'memory-feedback',
+    'generated_sql' => $memorySql,
+    'sql_hash' => hash('sha256', $memorySql),
+    'data_source' => 'folio',
+    'result_accuracy' => 'accurate',
+    'generation_provenance' => 'ai_built',
+    'direct_reuse_schema_fingerprint' => $memoryStrict,
+    'schema_version_fingerprint' => $memoryGlobal,
+    'scope_fingerprint' => $memoryScope,
+])->execute();
+$memoryFeedbackId = (int)Yii::$app->db->getLastInsertID();
+
+$memoryPage = reviewControllerInvoke('actionQueryMemoryList', [], ['status' => 'accurate', 'limit' => 1]);
+reviewControllerAssert(Yii::$app->response->statusCode === 200 && ($memoryPage['pagination']['total'] ?? null) === 1, 'An administrator should list Accurate query memory independently of the report-review queue.');
+reviewControllerAssert(!array_key_exists('generatedSql', $memoryPage['items'][0]), 'The administrator query-memory list should not return raw SQL.');
+$approvedMemory = reviewControllerInvoke('actionQueryFeedbackReuseApproval', [$memoryFeedbackId], [], ['approved' => true]);
+reviewControllerAssert(Yii::$app->response->statusCode === 200 && ($approvedMemory['adminReuseApprovedBy'] ?? null) === 1, 'An eligible AI-built record should support administrator approval.');
+reviewControllerAssert(($approvedMemory['generationProvenance'] ?? null) === 'ai_built', 'Administrator approval must retain AI-built provenance.');
+$revokedMemory = reviewControllerInvoke('actionQueryFeedbackReuseApproval', [$memoryFeedbackId], [], ['approved' => false]);
+reviewControllerAssert(
+    Yii::$app->response->statusCode === 200
+        && array_key_exists('adminReuseApprovedAt', $revokedMemory)
+        && $revokedMemory['adminReuseApprovedAt'] === null,
+    'An administrator should be able to revoke existing approval.'
+);
+$missingMemory = reviewControllerInvoke('actionQueryFeedbackReuseApproval', [999999], [], ['approved' => true]);
+reviewControllerAssert(Yii::$app->response->statusCode === 404 && ($missingMemory['error'] ?? null) === 'Query feedback not found', 'Missing query feedback should return HTTP 404.');
+$invalidApproval = reviewControllerInvoke('actionQueryFeedbackReuseApproval', [$memoryFeedbackId], [], ['approved' => 'yes']);
+reviewControllerAssert(Yii::$app->response->statusCode === 422, 'Reuse approval should require an explicit boolean.');
+
+Yii::$app->db->createCommand()->update('ai_query_feedback', [
+    'result_accuracy' => 'inaccurate',
+    'reuse_suppressed' => 1,
+], ['id' => $memoryFeedbackId])->execute();
+$approvalConflict = reviewControllerInvoke('actionQueryFeedbackReuseApproval', [$memoryFeedbackId], [], ['approved' => true]);
+reviewControllerAssert(Yii::$app->response->statusCode === 409, 'Inaccurate feedback must not be administrator-approved for reuse.');
+$invalidSuppression = reviewControllerInvoke('actionQueryFeedbackSuppression', [$memoryFeedbackId], [], ['suppressed' => true]);
+reviewControllerAssert(Yii::$app->response->statusCode === 422, 'The administrator endpoint must never create suppression.');
+$clearedSuppression = reviewControllerInvoke('actionQueryFeedbackSuppression', [$memoryFeedbackId], [], ['suppressed' => false]);
+reviewControllerAssert(Yii::$app->response->statusCode === 200 && ($clearedSuppression['clearedCount'] ?? null) === 1, 'An administrator should explicitly clear an existing suppression cluster.');
+reviewControllerAssert(Yii::$app->db->createCommand('SELECT admin_reuse_approved_at FROM ai_query_feedback WHERE id = :id', [':id' => $memoryFeedbackId])->queryScalar() === null, 'Clearing suppression must not approve reuse.');
+
 $webConfig = file_get_contents(__DIR__ . '/../config/web.php');
 foreach ([
     "'GET admin/report-reviews' => 'folio-query/report-review-list'",
     "'GET admin/report-reviews/<id:[\\w-]+>' => 'folio-query/report-review-detail'",
     "'POST admin/report-reviews/<id:[\\w-]+>/claim' => 'folio-query/report-review-claim'",
     "'PATCH admin/report-reviews/<id:[\\w-]+>' => 'folio-query/report-review-update'",
+    "'GET admin/query-memory' => 'folio-query/query-memory-list'",
+    "'PATCH admin/query-feedback/<id:\\d+>/reuse-approval' => 'folio-query/query-feedback-reuse-approval'",
+    "'PATCH admin/query-feedback/<id:\\d+>/suppression' => 'folio-query/query-feedback-suppression'",
 ] as $route) {
     reviewControllerAssert(strpos($webConfig, $route) !== false, 'Missing administrator report review route: ' . $route);
 }

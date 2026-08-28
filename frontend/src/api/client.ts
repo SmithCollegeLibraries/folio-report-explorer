@@ -52,6 +52,10 @@ import type {
   ReportReviewListResponse,
   ReportReviewDetail,
   ReportReviewUpdate,
+  QueryMemoryItem,
+  QueryMemoryListResponse,
+  QueryMemoryStatus,
+  QueryMemorySuppressionResponse,
 } from '../types';
 import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 
@@ -830,3 +834,19 @@ export const claimReportReview = async (id: string): Promise<ReportReviewDetail>
 
 export const updateReportReview = async (id: string, input: ReportReviewUpdate): Promise<ReportReviewDetail> =>
   (await api.patch(`/admin/report-reviews/${id}`, input)).data;
+
+export const fetchQueryMemory = async (
+  status: QueryMemoryStatus = 'all',
+  limit = 25,
+  offset = 0,
+): Promise<QueryMemoryListResponse> =>
+  (await api.get('/admin/query-memory', { params: { status, limit, offset } })).data;
+
+export const updateQueryMemoryReuseApproval = async (
+  id: number,
+  approved: boolean,
+): Promise<QueryMemoryItem> =>
+  (await api.patch(`/admin/query-feedback/${id}/reuse-approval`, { approved })).data;
+
+export const clearQueryMemorySuppression = async (id: number): Promise<QueryMemorySuppressionResponse> =>
+  (await api.patch(`/admin/query-feedback/${id}/suppression`, { suppressed: false })).data;

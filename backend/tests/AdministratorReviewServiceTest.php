@@ -107,6 +107,33 @@ CREATE TABLE ai_report_reviews (
     FOREIGN KEY (generation_id) REFERENCES ai_report_generations(id) ON DELETE CASCADE
 )
 SQL)->execute();
+$db->createCommand(<<<'SQL'
+CREATE TABLE ai_query_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    generation_id VARCHAR(36) NULL,
+    query_job_id VARCHAR(36) NULL,
+    original_question TEXT NOT NULL,
+    prompt_fingerprint VARCHAR(16) NOT NULL,
+    generated_sql TEXT NOT NULL,
+    sql_hash VARCHAR(64) NOT NULL,
+    route VARCHAR(128) NULL,
+    route_reason VARCHAR(255) NULL,
+    mode VARCHAR(32) NULL,
+    data_source VARCHAR(20) NOT NULL,
+    result_accuracy VARCHAR(20) NOT NULL,
+    feedback_note TEXT NULL,
+    generation_provenance VARCHAR(32) NULL,
+    direct_reuse_schema_fingerprint VARCHAR(64) NULL,
+    schema_version_fingerprint VARCHAR(64) NULL,
+    scope_fingerprint VARCHAR(64) NULL,
+    reuse_suppressed INTEGER NOT NULL DEFAULT 0,
+    admin_reuse_approved_at DATETIME NULL,
+    admin_reuse_approved_by INTEGER NULL,
+    replacement_generation_id VARCHAR(36) NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+SQL)->execute();
 
 function reviewAssert($condition, $message)
 {
@@ -360,5 +387,145 @@ reviewAssert($userPurged === 1, 'User purge should report deleted generation rec
 reviewAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id = :id', [':id' => $userGeneration['generationId']])->queryScalar() === 0, 'User purge must delete raw generation content.');
 reviewAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_reviews WHERE generation_id = :id', [':id' => $userGeneration['generationId']])->queryScalar() === 0, 'User purge must delete administrator notes.');
 reviewAssert((int)$db->createCommand('SELECT COUNT(*) FROM ai_report_generations WHERE id = :id', [':id' => $otherGeneration['generationId']])->queryScalar() === 1, 'User purge must preserve other users.');
+
+$currentStrictFingerprint = str_repeat('a', 64);
+$currentSchemaVersionFingerprint = str_repeat('b', 64);
+$scopeFingerprint = str_repeat('c', 64);
+$memoryService = new AdministratorReviewService(
+    $db,
+    static function (string $question) use ($currentStrictFingerprint): string {
+        return $currentStrictFingerprint;
+    },
+    static function () use ($currentSchemaVersionFingerprint): string {
+        return $currentSchemaVersionFingerprint;
+    }
+);
+$aiGeneration = $memoryService->recordGeneration(generationContext([
+    'userId' => 44,
+    'originalQuestion' => 'Show annual circulation by location',
+    'generatedSql' => 'SELECT location, COUNT(*) FROM circulation GROUP BY location',
+    'provenance' => [
+        'generationProvenance' => 'ai_built',
+        'schemaMetadata' => ['version' => 'v1', 'contextHash' => 'context'],
+    ],
+]));
+$db->createCommand()->insert('ai_query_feedback', [
+    'user_id' => 44,
+    'generation_id' => $aiGeneration['generationId'],
+    'original_question' => 'Show annual circulation by location',
+    'prompt_fingerprint' => 'feedback-prompt',
+    'generated_sql' => 'SELECT location, COUNT(*) FROM circulation GROUP BY location',
+    'sql_hash' => hash('sha256', 'SELECT location, COUNT(*) FROM circulation GROUP BY location'),
+    'data_source' => 'folio',
+    'result_accuracy' => 'accurate',
+    'generation_provenance' => 'ai_built',
+    'direct_reuse_schema_fingerprint' => $currentStrictFingerprint,
+    'schema_version_fingerprint' => $currentSchemaVersionFingerprint,
+    'scope_fingerprint' => $scopeFingerprint,
+    'reuse_suppressed' => 0,
+])->execute();
+$accurateFeedbackId = (int)$db->getLastInsertID();
+
+$memoryPage = $memoryService->listQueryMemory(['status' => 'accurate', 'limit' => 1, 'offset' => 0]);
+reviewAssert($memoryPage['pagination']['total'] === 1, 'The administrator memory list should filter Accurate AI-built feedback independently of report reviews.');
+reviewAssert($memoryPage['items'][0]['id'] === $accurateFeedbackId, 'The administrator memory list should return the expected feedback row.');
+reviewAssert(!array_key_exists('generatedSql', $memoryPage['items'][0]), 'The query-memory list must expose a SQL hash, not raw SQL.');
+reviewAssert($memoryPage['items'][0]['schemaCompatible'] === true, 'The list should report live strict and global schema compatibility.');
+
+$approved = $memoryService->setQueryFeedbackReuseApproval($accurateFeedbackId, true, 101);
+reviewAssert($approved['adminReuseApprovedBy'] === 101, 'Approval should record the reviewing administrator.');
+reviewAssert($approved['adminReuseApprovedAt'] !== null, 'Approval should record its timestamp.');
+reviewAssert($approved['generationProvenance'] === 'ai_built', 'Approval must not promote AI-built provenance to Verified.');
+
+$crossUserReuse = app\services\QueryMemoryService::findDirectReuse([
+    'normalizedQuestion' => 'show annual circulation by location',
+    'userId' => 999,
+    'dataSource' => 'folio',
+    'directReuseSchemaFingerprint' => $currentStrictFingerprint,
+    'scopeFingerprint' => $scopeFingerprint,
+], [[
+    'id' => $aiGeneration['generationId'],
+    'normalizedQuestion' => 'show annual circulation by location',
+    'userId' => 44,
+    'dataSource' => 'folio',
+    'sql' => 'SELECT 1',
+    'status' => 'completed',
+    'generationProvenance' => 'ai_built',
+    'resultAccuracy' => 'accurate',
+    'adminReuseApprovedAt' => $approved['adminReuseApprovedAt'],
+    'directReuseSchemaFingerprint' => $currentStrictFingerprint,
+    'scopeFingerprint' => $scopeFingerprint,
+]]);
+reviewAssert(($crossUserReuse['reuseTrust'] ?? null) === 'administrator_approved', 'An approved AI-built record should become directly reusable across users without changing provenance.');
+
+$revoked = $memoryService->setQueryFeedbackReuseApproval($accurateFeedbackId, false, 101);
+reviewAssert($revoked['adminReuseApprovedAt'] === null && $revoked['adminReuseApprovedBy'] === null, 'Revocation should always clear both approval fields.');
+
+foreach ([
+    ['accuracy' => 'inaccurate', 'provenance' => 'ai_built', 'strict' => $currentStrictFingerprint, 'global' => $currentSchemaVersionFingerprint, 'suppressed' => 1],
+    ['accuracy' => 'unsure', 'provenance' => 'ai_built', 'strict' => $currentStrictFingerprint, 'global' => $currentSchemaVersionFingerprint, 'suppressed' => 0],
+    ['accuracy' => 'accurate', 'provenance' => 'verified_pattern', 'strict' => $currentStrictFingerprint, 'global' => $currentSchemaVersionFingerprint, 'suppressed' => 0],
+    ['accuracy' => 'accurate', 'provenance' => 'ai_built', 'strict' => str_repeat('d', 64), 'global' => $currentSchemaVersionFingerprint, 'suppressed' => 0],
+    ['accuracy' => 'accurate', 'provenance' => 'ai_built', 'strict' => $currentStrictFingerprint, 'global' => str_repeat('e', 64), 'suppressed' => 0],
+] as $index => $invalid) {
+    $provenance = $invalid['provenance'];
+    $invalidGeneration = $memoryService->recordGeneration(generationContext([
+        'originalQuestion' => 'Invalid memory candidate ' . $index,
+        'provenance' => ['generationProvenance' => $provenance],
+    ]));
+    $db->createCommand()->insert('ai_query_feedback', [
+        'user_id' => 7,
+        'generation_id' => $invalidGeneration['generationId'],
+        'original_question' => 'Invalid memory candidate ' . $index,
+        'prompt_fingerprint' => 'invalid-' . $index,
+        'generated_sql' => 'SELECT ' . ($index + 10),
+        'sql_hash' => hash('sha256', 'SELECT ' . ($index + 10)),
+        'data_source' => 'folio',
+        'result_accuracy' => $invalid['accuracy'],
+        'generation_provenance' => $provenance,
+        'direct_reuse_schema_fingerprint' => $invalid['strict'],
+        'schema_version_fingerprint' => $invalid['global'],
+        'scope_fingerprint' => $scopeFingerprint,
+        'reuse_suppressed' => $invalid['suppressed'],
+    ])->execute();
+    $invalidFeedbackId = (int)$db->getLastInsertID();
+    reviewExpectException(DomainException::class, static function () use ($memoryService, $invalidFeedbackId): void {
+        $memoryService->setQueryFeedbackReuseApproval($invalidFeedbackId, true, 101);
+    }, 'Approval must reject non-Accurate, suppressed, Verified, or stale feedback.');
+}
+
+reviewExpectException(DomainException::class, static function () use ($memoryService): void {
+    $memoryService->setQueryFeedbackReuseApproval(999999, true, 101);
+}, 'Approval must distinguish a missing feedback record.');
+
+$suppressedHash = hash('sha256', 'SELECT suppressed');
+$suppressedIds = [];
+foreach ([44, 45] as $feedbackUserId) {
+    $db->createCommand()->insert('ai_query_feedback', [
+        'user_id' => $feedbackUserId,
+        'generation_id' => $aiGeneration['generationId'],
+        'original_question' => 'Suppressed candidate',
+        'prompt_fingerprint' => 'suppressed',
+        'generated_sql' => 'SELECT suppressed',
+        'sql_hash' => $suppressedHash,
+        'data_source' => 'folio',
+        'result_accuracy' => 'inaccurate',
+        'generation_provenance' => 'ai_built',
+        'direct_reuse_schema_fingerprint' => $currentStrictFingerprint,
+        'schema_version_fingerprint' => $currentSchemaVersionFingerprint,
+        'scope_fingerprint' => $scopeFingerprint,
+        'reuse_suppressed' => 1,
+        'admin_reuse_approved_at' => '2026-08-27 12:00:00',
+        'admin_reuse_approved_by' => 101,
+    ])->execute();
+    $suppressedIds[] = (int)$db->getLastInsertID();
+}
+$cleared = $memoryService->clearQueryFeedbackSuppression($suppressedIds[0], 101);
+reviewAssert($cleared['clearedCount'] === 2, 'Clearing suppression should update every exact SQL/global-schema/scope match atomically.');
+$clearedRows = $db->createCommand('SELECT reuse_suppressed, admin_reuse_approved_at, admin_reuse_approved_by FROM ai_query_feedback WHERE sql_hash = :hash', [':hash' => $suppressedHash])->queryAll();
+foreach ($clearedRows as $clearedRow) {
+    reviewAssert((int)$clearedRow['reuse_suppressed'] === 0, 'The explicit administrator action should clear suppression.');
+    reviewAssert($clearedRow['admin_reuse_approved_at'] === null && $clearedRow['admin_reuse_approved_by'] === null, 'Clearing suppression must leave approval empty.');
+}
 
 fwrite(STDOUT, "Administrator review service test passed\n");

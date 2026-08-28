@@ -129,6 +129,7 @@ class FolioQueryController extends Controller
                             'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
                             'admin-widget-create', 'admin-widget-update', 'admin-widget-delete',
                             'report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update',
+                            'query-memory-list', 'query-feedback-reuse-approval', 'query-feedback-suppression',
                         ],
                         'roles' => ['@'],
                         'matchCallback' => function ($rule, $action) {
@@ -141,6 +142,7 @@ class FolioQueryController extends Controller
                         'actions' => [
                             'report-review-list', 'report-review-detail',
                             'report-review-claim', 'report-review-update',
+                            'query-memory-list', 'query-feedback-reuse-approval', 'query-feedback-suppression',
                         ],
                         'roles' => ['@'],
                         'denyCallback' => function ($rule, $action) {
@@ -2817,6 +2819,75 @@ class FolioQueryController extends Controller
         }
 
         return $this->actionReportReviewDetail((string)$id);
+    }
+
+    /** GET /api/admin/query-memory */
+    public function actionQueryMemoryList()
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        return $this->administratorReviewService()->listQueryMemory([
+            'status' => Yii::$app->request->get('status', 'all'),
+            'limit' => Yii::$app->request->get('limit', 25),
+            'offset' => Yii::$app->request->get('offset', 0),
+        ]);
+    }
+
+    /** PATCH /api/admin/query-feedback/<id>/reuse-approval */
+    public function actionQueryFeedbackReuseApproval($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->getBodyParams();
+        if (!is_array($body) || !array_key_exists('approved', $body) || !is_bool($body['approved'])) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'approved must be a boolean'];
+        }
+
+        try {
+            return $this->administratorReviewService()->setQueryFeedbackReuseApproval(
+                (int)$id,
+                $body['approved'],
+                (int)$this->getCurrentUserId()
+            );
+        } catch (\DomainException $exception) {
+            if ($exception->getMessage() === 'query_feedback_not_found') {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => 'Query feedback not found'];
+            }
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Query feedback is not eligible for reuse approval'];
+        }
+    }
+
+    /** PATCH /api/admin/query-feedback/<id>/suppression */
+    public function actionQueryFeedbackSuppression($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->getBodyParams();
+        if (!is_array($body) || !array_key_exists('suppressed', $body) || $body['suppressed'] !== false) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'suppressed must be false'];
+        }
+
+        try {
+            return $this->administratorReviewService()->clearQueryFeedbackSuppression(
+                (int)$id,
+                (int)$this->getCurrentUserId()
+            );
+        } catch (\DomainException $exception) {
+            if ($exception->getMessage() === 'query_feedback_not_found') {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => 'Query feedback not found'];
+            }
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'Query feedback suppression cannot be cleared'];
+        }
     }
 
     private function invalidReportReviewUpdate(string $message): array

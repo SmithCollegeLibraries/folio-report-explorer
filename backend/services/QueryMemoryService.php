@@ -41,6 +41,11 @@ class QueryMemoryService
         ]));
     }
 
+    public static function currentSchemaVersionFingerprint(): string
+    {
+        return self::storedSchemaVersionFingerprint(FolioSchemaService::getMetadata());
+    }
+
     public static function scopeFingerprint(string $dataSource, array $authorizedScope): string
     {
         return hash('sha256', self::canonicalJson([

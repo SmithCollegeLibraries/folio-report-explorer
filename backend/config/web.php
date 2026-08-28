@@ -132,6 +132,9 @@ $config = [
                 'GET admin/report-reviews/<id:[\w-]+>' => 'folio-query/report-review-detail',
                 'POST admin/report-reviews/<id:[\w-]+>/claim' => 'folio-query/report-review-claim',
                 'PATCH admin/report-reviews/<id:[\w-]+>' => 'folio-query/report-review-update',
+                'GET admin/query-memory' => 'folio-query/query-memory-list',
+                'PATCH admin/query-feedback/<id:\d+>/reuse-approval' => 'folio-query/query-feedback-reuse-approval',
+                'PATCH admin/query-feedback/<id:\d+>/suppression' => 'folio-query/query-feedback-suppression',
 
                 // Health check
                 'GET health' => 'folio-query/health',

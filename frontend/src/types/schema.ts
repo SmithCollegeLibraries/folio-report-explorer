@@ -920,6 +920,42 @@ export interface ReportReviewUpdate {
   takeover?: boolean;
 }
 
+export type QueryMemoryStatus = 'all' | 'accurate' | 'suppressed' | 'approved';
+
+export interface QueryMemoryItem {
+  id: number;
+  generationId: string | null;
+  queryJobId: string | null;
+  question: string;
+  generationProvenance: 'ai_built';
+  resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
+  reuseSuppressed: boolean;
+  sqlHash: string;
+  dataSource: string;
+  strictSchemaCompatible: boolean;
+  globalSchemaCompatible: boolean;
+  schemaCompatible: boolean;
+  scopeCompatible: boolean;
+  adminReuseApprovedAt: string | null;
+  adminReuseApprovedBy: number | null;
+  approvalEligible: boolean;
+  createdAt: string;
+}
+
+export interface QueryMemoryListResponse {
+  items: QueryMemoryItem[];
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+  };
+}
+
+export interface QueryMemorySuppressionResponse {
+  feedback: QueryMemoryItem;
+  clearedCount: number;
+}
+
 export interface QueryReuseCandidate {
   jobId: string;
   previousPrompt: string;
