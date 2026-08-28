@@ -158,7 +158,7 @@ class MigrationService
             }
 
             $started = microtime(true);
-            self::executeSqlFile($db, $file['path']);
+            self::executeMigrationFile($db, $file);
             self::recordApplied($db, $file, (int)round((microtime(true) - $started) * 1000));
             $result['applied'][] = $file['filename'];
         }
@@ -210,6 +210,77 @@ class MigrationService
         }
 
         return $statements;
+    }
+
+    private static function executeMigrationFile($db, array $file): void
+    {
+        if (($file['filename'] ?? '') === '044_query_feedback_reuse_trust.sql') {
+            self::executeInformationSchemaGuardedAlters($db, (string)$file['path']);
+            return;
+        }
+
+        self::executeSqlFile($db, (string)$file['path']);
+    }
+
+    /**
+     * Execute the guarded ALTER statements without creating a stored routine.
+     * Production migration users have ALTER TABLE but intentionally lack
+     * CREATE/ALTER ROUTINE privileges.
+     */
+    private static function executeInformationSchemaGuardedAlters($db, string $path): void
+    {
+        $sql = (string)file_get_contents($path);
+        $pattern = '/IF\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+information_schema\.'
+            . '(COLUMNS|STATISTICS|TABLE_CONSTRAINTS)\s+WHERE\s+'
+            . '(TABLE_SCHEMA|CONSTRAINT_SCHEMA)\s*=\s*DATABASE\(\)\s+'
+            . "AND\s+TABLE_NAME\s*=\s*'([A-Za-z0-9_]+)'\s+AND\s+"
+            . "(COLUMN_NAME|INDEX_NAME|CONSTRAINT_NAME)\s*=\s*'([A-Za-z0-9_]+)'\s*\)\s*THEN\s*"
+            . '(ALTER\s+TABLE\s+.*?;)\s*END\s+IF\s*;/is';
+        preg_match_all($pattern, $sql, $matches, PREG_SET_ORDER);
+
+        $guardCount = substr_count($sql, 'IF NOT EXISTS (SELECT 1 FROM information_schema.');
+        if ($guardCount === 0 || count($matches) !== $guardCount) {
+            throw new \RuntimeException('Guarded ALTER migration contains an unsupported schema guard.');
+        }
+
+        $expectedFields = [
+            'COLUMNS' => ['TABLE_SCHEMA', 'COLUMN_NAME'],
+            'STATISTICS' => ['TABLE_SCHEMA', 'INDEX_NAME'],
+            'TABLE_CONSTRAINTS' => ['CONSTRAINT_SCHEMA', 'CONSTRAINT_NAME'],
+        ];
+        foreach ($matches as $match) {
+            $collection = strtoupper((string)$match[1]);
+            $schemaField = strtoupper((string)$match[2]);
+            $field = strtoupper((string)$match[4]);
+            if (($expectedFields[$collection] ?? null) !== [$schemaField, $field]) {
+                throw new \RuntimeException('Guarded ALTER migration uses an incompatible schema object field.');
+            }
+            if (!self::informationSchemaObjectExists(
+                $db,
+                $collection,
+                $schemaField,
+                $field,
+                (string)$match[3],
+                (string)$match[5]
+            )) {
+                self::executeRawStatement($db, rtrim(trim((string)$match[6]), ';'));
+            }
+        }
+    }
+
+    private static function informationSchemaObjectExists(
+        $db,
+        string $collection,
+        string $schemaField,
+        string $field,
+        string $table,
+        string $object
+    ): bool {
+        return (int)$db->createCommand(
+            "SELECT COUNT(*) FROM information_schema.{$collection}"
+                . " WHERE {$schemaField} = DATABASE() AND TABLE_NAME = :table AND {$field} = :object",
+            [':table' => $table, ':object' => $object]
+        )->queryScalar() > 0;
     }
 
     private static function executeSqlFile($db, string $path): void
