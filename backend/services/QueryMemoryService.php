@@ -18,6 +18,103 @@ class QueryMemoryService
     private const TIER_OTHER_USER_ACCURATE = 2;
     private const TIER_NEUTRAL = 1;
 
+    /** @var callable|null Optional observer used by focused telemetry tests. */
+    private static $telemetrySink;
+
+    private const TELEMETRY_FIELDS = [
+        'candidateId', 'generationId', 'jobId', 'feedbackId', 'sqlHash',
+        'reuseTrust', 'tier', 'reason', 'stage', 'count', 'signal', 'approved',
+        'administratorId', 'directReuseSchemaFingerprint', 'schemaVersionFingerprint',
+        'scopeFingerprint', 'resultAccuracy', 'clearedCount',
+    ];
+
+    public static function setTelemetrySink(?callable $sink): void
+    {
+        self::$telemetrySink = $sink;
+    }
+
+    public static function recordCandidateRejected(array $candidate, string $reason, string $stage): void
+    {
+        self::emitTelemetry('reuse_candidate_rejected', array_merge(
+            self::candidateTelemetry($candidate),
+            [
+                'reason' => $reason,
+                'stage' => $stage,
+                'directReuseSchemaFingerprint' => $candidate['directReuseSchemaFingerprint'] ?? null,
+                'schemaVersionFingerprint' => $candidate['schemaVersionFingerprint'] ?? null,
+                'scopeFingerprint' => $candidate['scopeFingerprint'] ?? null,
+            ]
+        ));
+    }
+
+    public static function recordFeedback(array $feedback): void
+    {
+        $payload = [
+            'feedbackId' => $feedback['feedbackId'] ?? null,
+            'generationId' => $feedback['generationId'] ?? null,
+            'jobId' => $feedback['queryJobId'] ?? $feedback['jobId'] ?? null,
+            'sqlHash' => $feedback['sqlHash'] ?? null,
+            'resultAccuracy' => $feedback['resultAccuracy'] ?? null,
+            'schemaVersionFingerprint' => $feedback['schemaVersionFingerprint'] ?? null,
+            'scopeFingerprint' => $feedback['scopeFingerprint'] ?? null,
+        ];
+        self::emitTelemetry('feedback_recorded', $payload);
+        if (strtolower(trim((string)($payload['resultAccuracy'] ?? ''))) === 'inaccurate') {
+            $payload['reason'] = 'inaccurate_feedback';
+            self::emitTelemetry('reuse_suppressed', $payload);
+        }
+    }
+
+    public static function recordWeakSignal(
+        string $generationId,
+        string $jobId,
+        string $signal,
+        int $count
+    ): void {
+        self::emitTelemetry('weak_signal_recorded', [
+            'generationId' => $generationId,
+            'jobId' => $jobId,
+            'signal' => $signal,
+            'count' => $count,
+        ]);
+    }
+
+    public static function recordApprovalChanged(
+        int $feedbackId,
+        ?string $generationId,
+        ?string $jobId,
+        string $sqlHash,
+        bool $approved,
+        int $administratorId
+    ): void {
+        self::emitTelemetry('reuse_approval_changed', [
+            'feedbackId' => $feedbackId,
+            'generationId' => $generationId,
+            'jobId' => $jobId,
+            'sqlHash' => $sqlHash,
+            'approved' => $approved,
+            'administratorId' => $administratorId,
+        ]);
+    }
+
+    public static function recordSuppressionCleared(
+        int $feedbackId,
+        ?string $generationId,
+        ?string $jobId,
+        string $sqlHash,
+        int $clearedCount,
+        int $administratorId
+    ): void {
+        self::emitTelemetry('reuse_suppression_cleared', [
+            'feedbackId' => $feedbackId,
+            'generationId' => $generationId,
+            'jobId' => $jobId,
+            'sqlHash' => $sqlHash,
+            'clearedCount' => $clearedCount,
+            'administratorId' => $administratorId,
+        ]);
+    }
+
     public static function directReuseSchemaFingerprint(array $schemaMetadata): string
     {
         return hash('sha256', self::canonicalJson([
@@ -214,7 +311,28 @@ class QueryMemoryService
     {
         $eligible = [];
         foreach ($candidates as $candidate) {
-            if (!is_array($candidate) || !self::directlyCompatible($request, $candidate)) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+            $baseRejection = self::baseRejectionReason($request, $candidate);
+            if ($baseRejection !== null) {
+                self::recordBaseRejection($request, $candidate, $baseRejection, 'direct');
+                continue;
+            }
+            $requestQuestion = self::normalizeQuestion((string)($request['question'] ?? $request['normalizedQuestion'] ?? ''));
+            $candidateQuestion = self::normalizeQuestion((string)($candidate['question'] ?? $candidate['normalizedQuestion'] ?? ''));
+            if ($requestQuestion === '' || $requestQuestion !== $candidateQuestion) {
+                continue;
+            }
+            if (!self::fingerprintsMatch(
+                $request['directReuseSchemaFingerprint'] ?? null,
+                $candidate['directReuseSchemaFingerprint'] ?? null
+            )) {
+                self::emitTelemetry('reuse_stale', array_merge(self::candidateTelemetry($candidate), [
+                    'reason' => 'strict_schema_mismatch',
+                    'directReuseSchemaFingerprint' => $request['directReuseSchemaFingerprint'] ?? null,
+                    'scopeFingerprint' => $request['scopeFingerprint'] ?? null,
+                ]));
                 continue;
             }
             $trust = self::directReuseTrust($request, $candidate);
@@ -233,6 +351,11 @@ class QueryMemoryService
         usort($eligible, [self::class, 'compareDirectCandidates']);
         $match = $eligible[0];
         unset($match['_memoryTier'], $match['_memoryCompletedAt']);
+        self::emitTelemetry('reuse_selected', array_merge(self::candidateTelemetry($match), [
+            'reuseTrust' => $match['reuseTrust'] ?? null,
+            'directReuseSchemaFingerprint' => $request['directReuseSchemaFingerprint'] ?? null,
+            'scopeFingerprint' => $request['scopeFingerprint'] ?? null,
+        ]));
         return $match;
     }
 
@@ -248,7 +371,23 @@ class QueryMemoryService
 
         $ranked = [];
         foreach ($candidates as $candidate) {
-            if (!is_array($candidate) || !self::exampleCompatible($request, $candidate)) {
+            if (!is_array($candidate)) {
+                continue;
+            }
+            $baseRejection = self::baseRejectionReason($request, $candidate);
+            if ($baseRejection !== null) {
+                self::recordBaseRejection($request, $candidate, $baseRejection, 'example');
+                continue;
+            }
+            if (!self::fingerprintsMatch(
+                $request['schemaVersionFingerprint'] ?? null,
+                $candidate['schemaVersionFingerprint'] ?? null
+            )) {
+                self::emitTelemetry('reuse_stale', array_merge(self::candidateTelemetry($candidate), [
+                    'reason' => 'global_schema_mismatch',
+                    'schemaVersionFingerprint' => $request['schemaVersionFingerprint'] ?? null,
+                    'scopeFingerprint' => $request['scopeFingerprint'] ?? null,
+                ]));
                 continue;
             }
             $tier = self::exampleTier($request, $candidate);
@@ -280,24 +419,13 @@ class QueryMemoryService
                 continue;
             }
             $selected = $trial;
+            self::emitTelemetry('example_selected', array_merge(self::candidateTelemetry($candidate), [
+                'tier' => $candidate['_memoryTierName'] ?? null,
+                'schemaVersionFingerprint' => $request['schemaVersionFingerprint'] ?? null,
+                'scopeFingerprint' => $request['scopeFingerprint'] ?? null,
+            ]));
         }
         return $selected;
-    }
-
-    private static function directlyCompatible(array $request, array $candidate): bool
-    {
-        if (!self::baseCompatible($request, $candidate)) {
-            return false;
-        }
-        $requestQuestion = self::normalizeQuestion((string)($request['question'] ?? $request['normalizedQuestion'] ?? ''));
-        $candidateQuestion = self::normalizeQuestion((string)($candidate['question'] ?? $candidate['normalizedQuestion'] ?? ''));
-        if ($requestQuestion === '' || $requestQuestion !== $candidateQuestion) {
-            return false;
-        }
-        return self::fingerprintsMatch(
-            $request['directReuseSchemaFingerprint'] ?? null,
-            $candidate['directReuseSchemaFingerprint'] ?? null
-        );
     }
 
     private static function shapeCompletedJobs(array $jobs, string $dataSource): array
@@ -491,36 +619,49 @@ class QueryMemoryService
         return is_array($decoded) && $decoded === [];
     }
 
-    private static function exampleCompatible(array $request, array $candidate): bool
+    private static function baseRejectionReason(array $request, array $candidate): ?string
     {
-        return self::baseCompatible($request, $candidate)
-            && self::fingerprintsMatch(
-                $request['schemaVersionFingerprint'] ?? null,
-                $candidate['schemaVersionFingerprint'] ?? null
-            );
-    }
-
-    private static function baseCompatible(array $request, array $candidate): bool
-    {
-        if (!empty($candidate['reuseSuppressed'])) {
-            return false;
-        }
-        if (strtolower(trim((string)($candidate['resultAccuracy'] ?? ''))) === 'inaccurate') {
-            return false;
+        if (
+            !empty($candidate['reuseSuppressed'])
+            || strtolower(trim((string)($candidate['resultAccuracy'] ?? ''))) === 'inaccurate'
+        ) {
+            return 'suppressed';
         }
         if (isset($candidate['status']) && strtolower(trim((string)$candidate['status'])) !== 'completed') {
-            return false;
+            return 'incomplete';
         }
         if (strcasecmp(
             trim((string)($request['dataSource'] ?? '')),
             trim((string)($candidate['dataSource'] ?? ''))
         ) !== 0) {
-            return false;
+            return 'data_source_mismatch';
         }
         if (!self::fingerprintsMatch($request['scopeFingerprint'] ?? null, $candidate['scopeFingerprint'] ?? null)) {
-            return false;
+            return 'scope_mismatch';
         }
-        return self::candidateSqlIsAllowed((string)($candidate['sql'] ?? $candidate['generatedSql'] ?? ''));
+        if (!self::candidateSqlIsAllowed((string)($candidate['sql'] ?? $candidate['generatedSql'] ?? ''))) {
+            return 'candidate_policy_failed';
+        }
+        return null;
+    }
+
+    private static function recordBaseRejection(
+        array $request,
+        array $candidate,
+        string $reason,
+        string $stage
+    ): void {
+        if ($reason === 'suppressed') {
+            $fingerprints = $stage === 'direct'
+                ? ['directReuseSchemaFingerprint' => $request['directReuseSchemaFingerprint'] ?? null]
+                : ['schemaVersionFingerprint' => $request['schemaVersionFingerprint'] ?? null];
+            self::emitTelemetry('reuse_suppressed', array_merge(self::candidateTelemetry($candidate), $fingerprints, [
+                'reason' => 'explicit_suppression',
+                'scopeFingerprint' => $request['scopeFingerprint'] ?? null,
+            ]));
+        } elseif ($reason === 'candidate_policy_failed') {
+            self::recordCandidateRejected($candidate, $reason, $stage);
+        }
     }
 
     private static function directReuseTrust(array $request, array $candidate): ?string
@@ -680,6 +821,55 @@ class QueryMemoryService
         $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized);
         $normalized = preg_replace('/\b(the|a|an|please|show|me|tell)\b/u', ' ', (string)$normalized);
         return (string)preg_replace('/\s+/u', ' ', trim((string)$normalized));
+    }
+
+    private static function candidateTelemetry(array $candidate): array
+    {
+        return [
+            'candidateId' => self::stableId($candidate),
+            'generationId' => $candidate['generationId'] ?? $candidate['sourceGenerationId'] ?? null,
+            'jobId' => $candidate['jobId'] ?? null,
+            'sqlHash' => $candidate['sqlHash'] ?? null,
+        ];
+    }
+
+    private static function emitTelemetry(string $event, array $payload): void
+    {
+        $record = ['event' => self::normalizeTelemetryLabel($event, 'query_memory_event')];
+        foreach (self::TELEMETRY_FIELDS as $field) {
+            if (!array_key_exists($field, $payload) || $payload[$field] === null || $payload[$field] === '') {
+                continue;
+            }
+            $value = $payload[$field];
+            if (in_array($field, ['reason', 'stage', 'signal', 'reuseTrust', 'tier', 'resultAccuracy'], true)) {
+                $value = self::normalizeTelemetryLabel((string)$value, 'unknown');
+            } elseif ($field === 'approved') {
+                $value = (bool)$value;
+            } elseif (in_array($field, ['count', 'feedbackId', 'administratorId', 'clearedCount'], true)) {
+                $value = (int)$value;
+            } else {
+                $value = (string)$value;
+            }
+            $record[$field] = $value;
+        }
+
+        if (is_callable(self::$telemetrySink)) {
+            call_user_func(self::$telemetrySink, $record);
+        }
+        if (class_exists('\\Yii', false) && \Yii::$app !== null) {
+            \Yii::info(
+                'Query-memory telemetry: ' . json_encode($record, JSON_UNESCAPED_SLASHES),
+                'query.memory'
+            );
+        }
+    }
+
+    private static function normalizeTelemetryLabel(string $value, string $fallback): string
+    {
+        $normalized = strtolower(trim($value));
+        $normalized = preg_replace('/[^a-z0-9_]+/', '_', $normalized);
+        $normalized = trim((string)$normalized, '_');
+        return $normalized === '' ? $fallback : substr($normalized, 0, 80);
     }
 
     private static function canonicalJson(array $value): string

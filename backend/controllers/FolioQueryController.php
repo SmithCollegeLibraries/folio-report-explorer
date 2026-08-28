@@ -1702,10 +1702,20 @@ class FolioQueryController extends Controller
             if ($preflight && $dataSource === 'folio') {
                 $estimate = $this->estimateQueryComplexity($match['sql'], $dataSource, []);
                 if (is_array($estimate) && isset($estimate['error'])) {
+                    QueryMemoryService::recordCandidateRejected(
+                        $match,
+                        'preflight_failed',
+                        'preflight'
+                    );
                     return null;
                 }
             }
         } catch (\Throwable $exception) {
+            QueryMemoryService::recordCandidateRejected(
+                $match,
+                'schema_validation_failed',
+                'validation'
+            );
             Yii::warning(
                 'Query-memory candidate rejected: ' . get_class($exception),
                 'query.memory'
@@ -1771,7 +1781,9 @@ class FolioQueryController extends Controller
             'timestamp' => gmdate('c'),
             'decision' => $decision,
             'candidateJobId' => trim((string)($body['candidateJobId'] ?? $body['candidate_job_id'] ?? '')) ?: null,
-            'prompt' => trim((string)($body['prompt'] ?? '')) ?: null,
+            'promptFingerprint' => trim((string)($body['prompt'] ?? '')) === ''
+                ? null
+                : $this->fingerprintPrompt((string)$body['prompt']),
             'edited' => $decision === 'edited',
         ];
 
@@ -1840,12 +1852,7 @@ class FolioQueryController extends Controller
             ->from('ai_report_generations')
             ->where(['id' => $generationId])
             ->scalar($db);
-        Yii::info('Query memory signal: ' . json_encode([
-            'generationId' => $generationId,
-            'queryJobId' => $queryJobId,
-            'signal' => $signal,
-            'count' => $count,
-        ]), 'query.memory');
+        QueryMemoryService::recordWeakSignal($generationId, $queryJobId, $signal, $count);
 
         return ['ok' => true, 'signal' => $signal, 'count' => $count];
     }
@@ -3415,6 +3422,16 @@ class FolioQueryController extends Controller
                 ])->execute();
             }
         });
+
+        QueryMemoryService::recordFeedback([
+            'feedbackId' => $feedbackId,
+            'generationId' => $generationId,
+            'queryJobId' => $queryJobId,
+            'sqlHash' => $sqlHash,
+            'resultAccuracy' => $resultAccuracy,
+            'schemaVersionFingerprint' => $versionFingerprint,
+            'scopeFingerprint' => $scopeFingerprint,
+        ]);
 
         return [
             'feedbackId' => $feedbackId,

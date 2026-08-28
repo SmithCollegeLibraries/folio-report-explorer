@@ -1005,14 +1005,25 @@ class AdministratorReviewService
         int $administratorId,
         array $details
     ): void {
-        Yii::info(array_merge([
-            'event' => $event,
-            'feedbackId' => (int)$row['id'],
-            'generationId' => $row['generation_id'] ?? null,
-            'queryJobId' => $row['query_job_id'] ?? null,
-            'sqlHash' => $row['sql_hash'] ?? null,
-            'administratorId' => $administratorId,
-        ], $details), 'query_memory');
+        if ($event === 'reuse_approval_changed') {
+            QueryMemoryService::recordApprovalChanged(
+                (int)$row['id'],
+                $row['generation_id'] === null ? null : (string)$row['generation_id'],
+                $row['query_job_id'] === null ? null : (string)$row['query_job_id'],
+                (string)($row['sql_hash'] ?? ''),
+                !empty($details['approved']),
+                $administratorId
+            );
+            return;
+        }
+        QueryMemoryService::recordSuppressionCleared(
+            (int)$row['id'],
+            $row['generation_id'] === null ? null : (string)$row['generation_id'],
+            $row['query_job_id'] === null ? null : (string)$row['query_job_id'],
+            (string)($row['sql_hash'] ?? ''),
+            (int)($details['clearedCount'] ?? 0),
+            $administratorId
+        );
     }
 
     private function deleteGenerationsByIds(array $generationIds): int
