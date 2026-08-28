@@ -33,6 +33,7 @@ import type {
   HistorySuggestionsResponse,
   QueryReuseCandidateRequest,
   QueryReuseCandidateResponse,
+  QueryFeedbackResponse,
   QueryReuseDecisionInput,
   IndexRecommendationResponse,
   DashboardResponse,
@@ -246,15 +247,11 @@ export async function askNl(
 }
 
 export async function saveQueryFeedback(input: {
-  originalQuestion: string;
-  generatedSql?: string | null;
-  route?: string | null;
-  routeReason?: string | null;
-  mode?: string | null;
-  dataSource?: 'folio' | 'local' | null;
+  generationId: string;
+  queryJobId: string;
   resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
   feedbackNote?: string | null;
-}): Promise<{ id: number; message: string; promptFingerprint: string; sqlHash: string | null }> {
+}): Promise<QueryFeedbackResponse> {
   const { data } = await api.post('/query-feedback', input);
   return data;
 }

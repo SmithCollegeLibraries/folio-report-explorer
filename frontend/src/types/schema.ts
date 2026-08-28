@@ -951,6 +951,13 @@ export interface QueryReuseDecisionInput {
   prompt?: string;
 }
 
+export interface QueryFeedbackResponse {
+  feedbackId: number;
+  resultAccuracy: 'accurate' | 'inaccurate' | 'unsure';
+  reuseSuppressed: boolean;
+  message: string;
+}
+
 export interface IndexRecommendationEvidence {
   patternIds?: string[];
   estimatedImpact?: 'high' | 'medium' | 'low';

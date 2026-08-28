@@ -3153,45 +3153,146 @@ class FolioQueryController extends Controller
     public function actionQueryFeedback()
     {
         $body = Yii::$app->request->getBodyParams();
-
-        $originalQuestion = trim((string)($body['originalQuestion'] ?? ''));
+        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
+        $queryJobId = trim((string)($body['queryJobId'] ?? $body['query_job_id'] ?? ''));
         $resultAccuracy = strtolower(trim((string)($body['resultAccuracy'] ?? '')));
-        if ($originalQuestion === '') {
+        if ($generationId === '' || $queryJobId === '') {
             Yii::$app->response->statusCode = 422;
-            return ['error' => 'originalQuestion is required.'];
+            return ['error' => 'generationId and queryJobId are required.'];
         }
         if (!in_array($resultAccuracy, ['accurate', 'inaccurate', 'unsure'], true)) {
             Yii::$app->response->statusCode = 422;
             return ['error' => 'resultAccuracy must be accurate, inaccurate, or unsure.'];
         }
 
-        $generatedSql = trim((string)($body['generatedSql'] ?? ''));
-        $sqlHash = $generatedSql !== ''
-            ? hash('sha256', $this->normalizeSqlForTelemetry($generatedSql))
-            : null;
-        $dataSource = $this->normalizeDataSource($body['dataSource'] ?? $body['data_source'] ?? 'folio');
-
         $db = Yii::$app->db;
-        $db->createCommand()->insert('ai_query_feedback', [
-            'user_id' => $this->getCurrentUserId(),
-            'original_question' => $originalQuestion,
-            'prompt_fingerprint' => $this->fingerprintPrompt($originalQuestion),
-            'generated_sql' => $generatedSql !== '' ? $generatedSql : null,
-            'sql_hash' => $sqlHash,
-            'route' => trim((string)($body['route'] ?? '')) ?: null,
-            'route_reason' => trim((string)($body['routeReason'] ?? '')) ?: null,
-            'mode' => trim((string)($body['mode'] ?? '')) ?: null,
-            'data_source' => $dataSource,
-            'result_accuracy' => $resultAccuracy,
-            'feedback_note' => trim((string)($body['feedbackNote'] ?? '')) ?: null,
-        ])->execute();
+        $generation = (new \yii\db\Query())
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->one($db);
+        $job = (new \yii\db\Query())
+            ->from('query_jobs')
+            ->where(['id' => $queryJobId])
+            ->one($db);
+        if (!is_array($generation) || !is_array($job)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'The completed report could not be found.'];
+        }
+
+        $userId = $this->getCurrentUserId();
+        $owned = $userId !== null
+            && (int)($generation['user_id'] ?? 0) === $userId
+            && (int)($job['user_id'] ?? 0) === $userId;
+        $linked = trim((string)($generation['query_job_id'] ?? '')) === $queryJobId;
+        $completedNlJob = ($job['status'] ?? null) === 'completed'
+            && ($job['source'] ?? null) === 'nl';
+        if (!$owned || !$linked || !$completedNlJob) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Feedback is only available for your completed report.'];
+        }
+
+        $originalQuestion = trim((string)($generation['original_question'] ?? ''));
+        $generatedSql = trim((string)($job['sql_text'] ?? $generation['generated_sql'] ?? ''));
+        if ($originalQuestion === '' || $generatedSql === '') {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => 'The completed report is missing trusted generation evidence.'];
+        }
+        $sqlHash = trim((string)($job['sql_hash'] ?? $generation['sql_hash'] ?? ''));
+        if ($sqlHash === '') {
+            $sqlHash = hash('sha256', $this->normalizeSqlForTelemetry($generatedSql));
+        }
+        $dataSource = $this->normalizeDataSource($job['data_source'] ?? 'folio');
+        $provenance = $this->decodeQueryMemoryJson($generation['provenance_json'] ?? null);
+        $generationProvenance = trim((string)($provenance['generationProvenance'] ?? ''));
+        if (!in_array($generationProvenance, ['verified_pattern', 'ai_built'], true)) {
+            $generationProvenance = null;
+        }
+        $schemaMetadata = is_array($provenance['schemaMetadata'] ?? null)
+            ? $provenance['schemaMetadata']
+            : [];
+        $schemaVersion = $schemaMetadata['version'] ?? $schemaMetadata['scraped_at'] ?? null;
+        $directFingerprint = $schemaVersion !== null
+            && trim((string)($schemaMetadata['contextHash'] ?? '')) !== ''
+            ? QueryMemoryService::directReuseSchemaFingerprint($schemaMetadata)
+            : null;
+        $versionFingerprint = $schemaVersion !== null
+            ? QueryMemoryService::schemaVersionFingerprint($schemaMetadata)
+            : null;
+        $jobMetadata = $this->decodeQueryMemoryJson($job['metadata'] ?? null);
+        $authorizedScope = $this->normalizeQueryMemoryScope(
+            is_array($jobMetadata['resolvedContext'] ?? null) ? $jobMetadata['resolvedContext'] : []
+        );
+        $scopeFingerprint = QueryMemoryService::scopeFingerprint($dataSource, $authorizedScope);
+        $feedbackId = null;
+
+        $db->transaction(function () use (
+            $db,
+            $userId,
+            $generationId,
+            $queryJobId,
+            $originalQuestion,
+            $generatedSql,
+            $sqlHash,
+            $generation,
+            $dataSource,
+            $resultAccuracy,
+            $body,
+            $generationProvenance,
+            $directFingerprint,
+            $versionFingerprint,
+            $scopeFingerprint,
+            &$feedbackId
+        ): void {
+            $db->createCommand()->insert('ai_query_feedback', [
+                'user_id' => $userId,
+                'generation_id' => $generationId,
+                'query_job_id' => $queryJobId,
+                'original_question' => $originalQuestion,
+                'prompt_fingerprint' => $this->fingerprintPrompt($originalQuestion),
+                'generated_sql' => $generatedSql,
+                'sql_hash' => $sqlHash,
+                'route' => trim((string)($generation['route'] ?? '')) ?: null,
+                'route_reason' => trim((string)($generation['route_reason'] ?? '')) ?: null,
+                'mode' => trim((string)($generation['response_mode'] ?? '')) ?: null,
+                'data_source' => $dataSource,
+                'result_accuracy' => $resultAccuracy,
+                'feedback_note' => trim((string)($body['feedbackNote'] ?? '')) ?: null,
+                'generation_provenance' => $generationProvenance,
+                'direct_reuse_schema_fingerprint' => $directFingerprint,
+                'schema_version_fingerprint' => $versionFingerprint,
+                'scope_fingerprint' => $scopeFingerprint,
+                'reuse_suppressed' => $resultAccuracy === 'inaccurate' ? 1 : 0,
+            ])->execute();
+            $feedbackId = (int)$db->getLastInsertID();
+
+            if ($resultAccuracy === 'inaccurate') {
+                $db->createCommand()->update('ai_query_feedback', [
+                    'reuse_suppressed' => 1,
+                    'admin_reuse_approved_at' => null,
+                    'admin_reuse_approved_by' => null,
+                ], [
+                    'sql_hash' => $sqlHash,
+                    'schema_version_fingerprint' => $versionFingerprint,
+                    'scope_fingerprint' => $scopeFingerprint,
+                ])->execute();
+            }
+        });
 
         return [
-            'id' => (int)$db->getLastInsertID(),
-            'message' => 'Query feedback saved.',
-            'promptFingerprint' => $this->fingerprintPrompt($originalQuestion),
-            'sqlHash' => $sqlHash,
+            'feedbackId' => $feedbackId,
+            'resultAccuracy' => $resultAccuracy,
+            'reuseSuppressed' => $resultAccuracy === 'inaccurate',
+            'message' => 'Feedback saved.',
         ];
+    }
+
+    private function decodeQueryMemoryJson($value): array
+    {
+        if (is_array($value)) {
+            return $value;
+        }
+        $decoded = is_string($value) && trim($value) !== '' ? json_decode($value, true) : null;
+        return is_array($decoded) ? $decoded : [];
     }
 
     /**

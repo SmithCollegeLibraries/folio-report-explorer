@@ -87,30 +87,22 @@ describe('API client follow-up context', () => {
     });
   });
 
-  it('saves query feedback with route and mode context', async () => {
+  it('saves query feedback with server-owned linkage identifiers', async () => {
     const { saveQueryFeedback } = await import('./client');
     post.mockResolvedValueOnce({
-      data: { id: 1, message: 'saved', promptFingerprint: 'abc123', sqlHash: 'def456' },
+      data: { feedbackId: 1, resultAccuracy: 'accurate', reuseSuppressed: false, message: 'saved' },
     });
 
     await saveQueryFeedback({
-      originalQuestion: 'show vendor spend',
-      generatedSql: 'SELECT 1',
-      route: 'exploratory_builder_intent',
-      routeReason: 'user_approved_exploratory_generation',
-      mode: 'exploratory',
-      dataSource: 'folio',
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
       resultAccuracy: 'accurate',
       feedbackNote: 'Looks right',
     });
 
     expect(post).toHaveBeenCalledWith('/query-feedback', {
-      originalQuestion: 'show vendor spend',
-      generatedSql: 'SELECT 1',
-      route: 'exploratory_builder_intent',
-      routeReason: 'user_approved_exploratory_generation',
-      mode: 'exploratory',
-      dataSource: 'folio',
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
       resultAccuracy: 'accurate',
       feedbackNote: 'Looks right',
     });

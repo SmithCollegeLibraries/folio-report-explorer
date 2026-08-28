@@ -12,7 +12,7 @@ import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel
 import AskTrustNotice from '../components/AskTrustNotice';
 import AskReuseNotice from '../components/AskReuseNotice';
 import { useToast } from '../components/ToastProvider';
-import type { FollowUpContext, NlResponse, QueryReuseCandidate } from '../types';
+import type { FollowUpContext, NlResponse, QueryFeedbackResponse, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
 import {
   Send, Play, Copy, Sparkles, RotateCcw, Square, Loader2,
@@ -564,18 +564,19 @@ export function buildHistoryFollowUpContext(jobId: string): FollowUpContext {
 }
 
 export function buildQueryFeedbackInput(
-  originalQuestion: string,
   result: NlResponse,
+  queryJobId: string,
   resultAccuracy: 'accurate' | 'inaccurate' | 'unsure',
   feedbackNote = '',
 ) {
+  const generationId = result.generationId?.trim();
+  const normalizedJobId = queryJobId.trim();
+  if (!generationId || !normalizedJobId) {
+    throw new Error('Feedback requires a linked generated report and completed query job.');
+  }
   return {
-    originalQuestion: originalQuestion.trim(),
-    generatedSql: result.sql || null,
-    route: result.route || null,
-    routeReason: result.routeReason || null,
-    mode: result.mode || null,
-    dataSource: result.dataSource || 'folio',
+    generationId,
+    queryJobId: normalizedJobId,
     resultAccuracy,
     feedbackNote: feedbackNote.trim() || null,
   };
@@ -672,6 +673,7 @@ export default function Ask() {
   const [lastSavedId, setLastSavedId] = useState<number | null>(null);
   const [feedbackNote, setFeedbackNote] = useState('');
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [feedbackResult, setFeedbackResult] = useState<QueryFeedbackResponse | null>(null);
 
   // Campus scope state — initialised from localStorage, synced with auth user preference
   const [selectedCampus, setSelectedCampus] = useState<string>(
@@ -878,6 +880,7 @@ export default function Ask() {
       setLastSavedId(null);
       setFeedbackNote('');
       setFeedbackMessage(null);
+      setFeedbackResult(null);
       setCorrecting(false);
       setClarificationFreeText('');
       setBatchClarificationChoices({});
@@ -960,14 +963,15 @@ export default function Ask() {
     mutationFn: (resultAccuracy: 'accurate' | 'inaccurate' | 'unsure') => {
       if (!nlResult) throw new Error('No generated query is available for feedback.');
       return saveQueryFeedback(buildQueryFeedbackInput(
-        history[0]?.prompt || prompt,
         nlResult,
+        activeJobId || '',
         resultAccuracy,
         feedbackNote,
       ));
     },
-    onSuccess: () => {
-      setFeedbackMessage('Feedback saved');
+    onSuccess: (data) => {
+      setFeedbackResult(data);
+      setFeedbackMessage(data.message);
       setFeedbackNote('');
       toast.success('Feedback saved');
       setTimeout(() => setFeedbackMessage(null), 4000);
@@ -2250,21 +2254,21 @@ export default function Ask() {
                         <span className="text-xs font-medium text-gray-600">Were these results accurate?</span>
                         <button
                           onClick={() => feedbackMut.mutate('accurate')}
-                          disabled={feedbackMut.isPending}
+                          disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-green-200 bg-white text-xs text-green-700 hover:bg-green-50 disabled:opacity-50"
                         >
                           Yes
                         </button>
                         <button
                           onClick={() => feedbackMut.mutate('inaccurate')}
-                          disabled={feedbackMut.isPending}
+                          disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-red-200 bg-white text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
                         >
                           No
                         </button>
                         <button
                           onClick={() => feedbackMut.mutate('unsure')}
-                          disabled={feedbackMut.isPending}
+                          disabled={feedbackMut.isPending || !activeJobId || !nlResult.generationId}
                           className="px-2.5 py-1 rounded border border-gray-200 bg-white text-xs text-gray-600 hover:bg-gray-100 disabled:opacity-50"
                         >
                           Unsure
@@ -2277,6 +2281,9 @@ export default function Ask() {
                         />
                         {feedbackMessage && (
                           <span className="text-xs text-green-700">{feedbackMessage}</span>
+                        )}
+                        {feedbackResult?.reuseSuppressed && (
+                          <span className="text-xs text-gray-600">This exact SQL will not be reused.</span>
                         )}
                       </div>
                     </div>
