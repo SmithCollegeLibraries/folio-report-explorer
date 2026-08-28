@@ -35,6 +35,7 @@ import type {
   QueryReuseCandidateResponse,
   QueryFeedbackResponse,
   QueryFeedbackReplacementInput,
+  QueryMemorySignal,
   QueryReuseDecisionInput,
   IndexRecommendationResponse,
   DashboardResponse,
@@ -262,6 +263,15 @@ export async function replaceQueryFeedback(
   input: QueryFeedbackReplacementInput,
 ): Promise<NlResponse> {
   const { data } = await api.post(`/query-feedback/${feedbackId}/replacement`, input);
+  return data;
+}
+
+export async function recordQueryMemorySignal(input: {
+  generationId: string;
+  queryJobId: string;
+  signal: QueryMemorySignal;
+}): Promise<{ ok: boolean; signal: QueryMemorySignal; count: number }> {
+  const { data } = await api.post('/query/memory-signal', input);
   return data;
 }
 

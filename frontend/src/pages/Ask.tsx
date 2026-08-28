@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as R
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision, recordQueryMemorySignal } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
@@ -12,7 +12,7 @@ import { ExploratoryRecoveryPanel } from '../components/ExploratoryRecoveryPanel
 import AskTrustNotice from '../components/AskTrustNotice';
 import AskReuseNotice from '../components/AskReuseNotice';
 import { useToast } from '../components/ToastProvider';
-import type { FollowUpContext, NlResponse, QueryFeedbackResponse, QueryReuseCandidate } from '../types';
+import type { FollowUpContext, NlResponse, QueryFeedbackResponse, QueryMemorySignal, QueryReuseCandidate } from '../types';
 import type { ClarificationItem, ClarificationOption, ResolverTraceEntry } from '../types/schema';
 import {
   Send, Play, Copy, Sparkles, RotateCcw, Square, Loader2,
@@ -812,6 +812,15 @@ export default function Ask() {
 
   const campusForRequest = selectedCampus === 'All Colleges' ? null : selectedCampus;
 
+  const recordMemorySignal = (
+    signal: QueryMemorySignal,
+    generationId = nlResult?.generationId,
+    queryJobId = activeJobId,
+  ) => {
+    if (!generationId || !queryJobId) return;
+    recordQueryMemorySignal({ generationId, queryJobId, signal }).catch(() => {});
+  };
+
   const runGeneratedQuery = (
     result: NlResponse,
     questionText: string,
@@ -854,12 +863,15 @@ export default function Ask() {
         generationId?: string;
       };
     }) => submitQuery(sql, {}, 'nl', nlPrompt || prompt.trim() || undefined, dataSource || 'folio', options),
-    onSuccess: (data) => {
+    onSuccess: (data, variables) => {
       if (data.jobId) {
         setActiveJobId(data.jobId);
       }
       if (data.generationId) {
         setNlResult((current) => current ? { ...current, generationId: data.generationId } : current);
+      }
+      if (variables.options?.queryReuse && data.generationId && data.jobId) {
+        recordMemorySignal('rerun', data.generationId, data.jobId);
       }
     },
     onError: (error) => {
@@ -876,8 +888,11 @@ export default function Ask() {
         request.followUpContext ?? null,
         request.allowExploratory ?? false,
         request.parentGenerationId ?? null,
-      ),
+    ),
     onSuccess: (data: NlResponse, request: AskRequest) => {
+      if (request.followUpContext) {
+        recordMemorySignal('follow_up');
+      }
       const result = normalizeAskResultProvenance(data);
       setNlResult(result);
       resetJob();
@@ -936,6 +951,7 @@ export default function Ask() {
       setSaveDesc('');
       setLastSavedId(data.id);
       setSaveSuccess(`Saved as "${data.name}"`);
+      recordMemorySignal('saved');
       setTimeout(() => setSaveSuccess(null), 4000);
     },
   });
@@ -1156,6 +1172,12 @@ export default function Ask() {
     if (nlResult?.sql) {
       navigator.clipboard.writeText(nlResult.sql);
     }
+  };
+
+  const handleDownloadExport = async () => {
+    if (!activeJobId) return;
+    await downloadExportCsv(activeJobId);
+    recordMemorySignal('downloaded');
   };
 
   const handleUseSuggestion = (suggestedPrompt: string) => {
@@ -2340,7 +2362,7 @@ export default function Ask() {
                           </div>
                           {results.downloadUrl && activeJobId && (
                             <button
-                              onClick={() => downloadExportCsv(activeJobId)}
+                              onClick={handleDownloadExport}
                               className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
                             >
                               Download full CSV

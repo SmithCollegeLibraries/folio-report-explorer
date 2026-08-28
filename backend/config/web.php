@@ -65,6 +65,7 @@ $config = [
                 'GET query/export/<id:[\w-]+>' => 'folio-query/query-export',
                 'POST query/reuse-candidate' => 'folio-query/query-reuse-candidate',
                 'POST query/reuse-decision' => 'folio-query/query-reuse-decision',
+                'POST query/memory-signal' => 'folio-query/query-memory-signal',
                 'GET query/jobs' => 'folio-query/query-list',
 
                 // Saved queries

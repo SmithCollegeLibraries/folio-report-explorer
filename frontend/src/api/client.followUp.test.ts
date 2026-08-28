@@ -121,6 +121,23 @@ describe('API client follow-up context', () => {
     });
   });
 
+  it('records a query-memory signal using linked identifiers', async () => {
+    const { recordQueryMemorySignal } = await import('./client');
+    post.mockResolvedValueOnce({ data: { ok: true, signal: 'saved', count: 1 } });
+
+    await recordQueryMemorySignal({
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
+      signal: 'saved',
+    });
+
+    expect(post).toHaveBeenCalledWith('/query/memory-signal', {
+      generationId: 'generation-1',
+      queryJobId: 'job-1',
+      signal: 'saved',
+    });
+  });
+
   it('checks for a previous successful query reuse candidate', async () => {
     const { fetchQueryReuseCandidate } = await import('./client');
     post.mockResolvedValueOnce({

@@ -963,6 +963,8 @@ export interface QueryFeedbackReplacementInput {
   resolvedContext: Record<string, string>;
 }
 
+export type QueryMemorySignal = 'saved' | 'downloaded' | 'rerun' | 'follow_up';
+
 export interface IndexRecommendationEvidence {
   patternIds?: string[];
   estimatedImpact?: 'high' | 'medium' | 'low';

@@ -215,6 +215,24 @@ $excludedExamples = QueryMemoryService::selectAiExamples($exampleRequest, [
 ]);
 assertQueryMemory($excludedExamples === [], 'Stale, suppressed, inaccurate, unauthorized, and unsafe examples must be absent.');
 
+$weakOnlyCandidate = memoryCandidate([
+    'id' => 'weak-only',
+    'resultAccuracy' => null,
+    'savedCount' => 100,
+    'downloadedCount' => 100,
+    'rerunCount' => 100,
+    'followUpCount' => 100,
+]);
+assertQueryMemory(
+    QueryMemoryService::findDirectReuse($directRequest, [$weakOnlyCandidate]) === null,
+    'Even very high weak-interaction counters must never enable direct AI-built reuse.'
+);
+$weakExamples = QueryMemoryService::selectAiExamples($exampleRequest, [$weakOnlyCandidate]);
+assertQueryMemory(
+    ($weakExamples[0]['rankTier'] ?? null) === 'neutral_success',
+    'Weak interactions may rank an otherwise compatible AI-built result only in the neutral example tier.'
+);
+
 $limitedExamples = QueryMemoryService::selectAiExamples($exampleRequest, [
     memoryCandidate(['id' => 'one', 'generationProvenance' => 'verified_pattern', 'question' => str_repeat('a', 80)]),
     memoryCandidate(['id' => 'two', 'generationProvenance' => 'verified_pattern', 'question' => str_repeat('b', 80)]),

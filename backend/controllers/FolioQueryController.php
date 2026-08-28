@@ -1781,6 +1781,73 @@ class FolioQueryController extends Controller
         return ['ok' => true];
     }
 
+    /** Record a weak interaction signal without changing query trust. */
+    public function actionQueryMemorySignal()
+    {
+        $body = Yii::$app->request->getBodyParams();
+        $generationId = trim((string)($body['generationId'] ?? $body['generation_id'] ?? ''));
+        $queryJobId = trim((string)($body['queryJobId'] ?? $body['query_job_id'] ?? ''));
+        $signal = strtolower(trim((string)($body['signal'] ?? '')));
+        $columns = [
+            'saved' => 'saved_count',
+            'downloaded' => 'downloaded_count',
+            'rerun' => 'rerun_count',
+            'follow_up' => 'follow_up_count',
+        ];
+        if ($generationId === '' || $queryJobId === '' || !isset($columns[$signal])) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'generationId, queryJobId, and a valid signal are required.'];
+        }
+
+        $userId = $this->getCurrentUserId();
+        $db = Yii::$app->db;
+        $generation = (new \yii\db\Query())
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->one($db);
+        $job = (new \yii\db\Query())
+            ->from('query_jobs')
+            ->where(['id' => $queryJobId])
+            ->one($db);
+        if (!is_array($generation) || !is_array($job)) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'The report could not be found.'];
+        }
+        if (
+            $userId === null
+            || (int)($generation['user_id'] ?? 0) !== $userId
+            || (int)($job['user_id'] ?? 0) !== $userId
+            || trim((string)($generation['query_job_id'] ?? '')) !== $queryJobId
+            || !in_array(($job['status'] ?? null), ['pending', 'pending_export', 'running', 'completed'], true)
+            || ($job['source'] ?? null) !== 'nl'
+        ) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'This report is not available for interaction signals.'];
+        }
+
+        $column = $columns[$signal];
+        $db->createCommand()->update('ai_report_generations', [
+            $column => new \yii\db\Expression("[[{$column}]] + 1"),
+        ], [
+            'id' => $generationId,
+            'query_job_id' => $queryJobId,
+            'user_id' => $userId,
+        ])->execute();
+        $count = (int)(new \yii\db\Query())
+            ->select($column)
+            ->from('ai_report_generations')
+            ->where(['id' => $generationId])
+            ->scalar($db);
+        Yii::info('Query memory signal: ' . json_encode([
+            'generationId' => $generationId,
+            'queryJobId' => $queryJobId,
+            'signal' => $signal,
+            'count' => $count,
+        ]), 'query.memory');
+
+        return ['ok' => true, 'signal' => $signal, 'count' => $count];
+    }
+
     /**
      * Preserve full NL prompts while keeping query_jobs.name safe for older VARCHAR(255) installs.
      *

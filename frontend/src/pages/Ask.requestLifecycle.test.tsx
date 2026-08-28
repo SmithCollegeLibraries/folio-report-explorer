@@ -9,6 +9,7 @@ const apiMocks = vi.hoisted(() => ({
   submitQuery: vi.fn(),
   fetchQueryReuseCandidate: vi.fn(),
   recordQueryReuseDecision: vi.fn(),
+  recordQueryMemorySignal: vi.fn(),
 }));
 
 const toastMocks = vi.hoisted(() => ({
@@ -31,7 +32,9 @@ vi.mock('../api/client', () => ({
   downloadExportCsv: vi.fn(),
   saveClarificationResolution: vi.fn(),
   saveQueryFeedback: vi.fn(),
+  replaceQueryFeedback: vi.fn(),
   recordQueryReuseDecision: apiMocks.recordQueryReuseDecision,
+  recordQueryMemorySignal: apiMocks.recordQueryMemorySignal,
 }));
 
 vi.mock('../hooks/useAuth', () => ({
@@ -104,6 +107,7 @@ beforeEach(() => {
   apiMocks.fetchQueryReuseCandidate.mockResolvedValue({ match: null });
   apiMocks.submitQuery.mockResolvedValue({ jobId: 'job-success' });
   apiMocks.recordQueryReuseDecision.mockResolvedValue(undefined);
+  apiMocks.recordQueryMemorySignal.mockResolvedValue({ ok: true, signal: 'rerun', count: 1 });
 });
 
 afterEach(() => {
@@ -273,6 +277,10 @@ describe('Ask request lifecycle', () => {
         reuseTrust: 'verified_global',
       },
     });
+    apiMocks.submitQuery.mockResolvedValueOnce({
+      jobId: 'job-reused',
+      generationId: 'generation-reused',
+    });
 
     renderAsk();
     submitQuestion('Count inventory items');
@@ -283,6 +291,13 @@ describe('Ask request lifecycle', () => {
     await waitFor(() => {
       expect(apiMocks.submitQuery).toHaveBeenCalledTimes(1);
       expect(apiMocks.submitQuery.mock.calls[0][0]).toBe(reusedSql);
+    });
+    await waitFor(() => {
+      expect(apiMocks.recordQueryMemorySignal).toHaveBeenCalledWith({
+        generationId: 'generation-reused',
+        queryJobId: 'job-reused',
+        signal: 'rerun',
+      });
     });
   });
 
