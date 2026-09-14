@@ -8,6 +8,7 @@ use app\exceptions\CanonicalLaneFallbackException;
 use app\exceptions\DatabaseQueryCancelledException;
 use app\exceptions\ExploratorySqlValidationException;
 
+require_once __DIR__ . '/CatalogingQueryGuidanceService.php';
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/AskResponseContractService.php';
 require_once __DIR__ . '/ReferenceJsonBundleService.php';
@@ -1560,6 +1561,12 @@ PROMPT;
   Organization and interface reference-data listings do not require an artificial purchase-order campus path. When the user explicitly requests organization acquisition-unit scope, use the organization acquisition-unit bridge.";
         }
 
+        if (CatalogingQueryGuidanceService::matches((string)$originalQuestion)) {
+            $campusRule = "17. CAMPUS SCOPE: Use independent bibliographic ownership for instances without holdings. Honor an explicitly requested institution or All colleges; otherwise use the selected home campus. Never require holdings to establish this scope."
+                . "\nSelected home campus: " . (string)$campus
+                . "\n" . CatalogingQueryGuidanceService::buildPromptGuidance((string)$originalQuestion);
+        }
+
       $organizationAcquisitionUnitGuidance = self::buildOrganizationAcquisitionUnitGuidance();
       $referenceNameMatchingGuidance = self::buildReferenceNameMatchingGuidance($resolvedFilters);
       $legacyPromptFamilyGuidance = self::buildLegacyPromptFamilyGuidance($originalQuestion, $campus);
@@ -3034,7 +3041,8 @@ GUIDANCE;
      */
     private static function promptRequiresLegacyFreeform($prompt)
     {
-        return self::promptMentionsMarcConstraint($prompt);
+        return self::promptMentionsMarcConstraint($prompt)
+            || CatalogingQueryGuidanceService::matches((string)$prompt);
     }
 
     /**

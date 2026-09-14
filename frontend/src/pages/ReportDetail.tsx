@@ -331,13 +331,21 @@ export default function ReportDetail() {
                         />
                       ) : (
                         report.parameters.map((parameter) => (
-                          <ParamInput
-                            key={parameter.name}
-                            param={parameter}
-                            value={paramValues[parameter.name] || ''}
-                            options={report.selectOptions?.[parameter.name]}
-                            onChange={(value) => updateParamValue(parameter.name, value)}
-                          />
+                          <div key={parameter.name}>
+                            <ParamInput
+                              param={parameter}
+                              value={paramValues[parameter.name] || ''}
+                              options={report.selectOptions?.[parameter.name]}
+                              error={serverFieldErrors[parameter.name]}
+                              errorId={`report-error-${parameter.name}`}
+                              onChange={(value) => updateParamValue(parameter.name, value)}
+                            />
+                            {serverFieldErrors[parameter.name] && parameter.type !== 'multiselect' && (
+                              <p id={`report-error-${parameter.name}`} role="alert" className="mt-1 text-xs text-red-600">
+                                {serverFieldErrors[parameter.name]}
+                              </p>
+                            )}
+                          </div>
                         ))
                       )}
                     </div>

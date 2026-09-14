@@ -4,6 +4,7 @@ namespace app\services;
 
 require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
 require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
+require_once __DIR__ . '/CatalogingHoldingslessReportService.php';
 
 class MigrationService
 {
@@ -337,7 +338,8 @@ class MigrationService
 
         return self::budgetYearFundReportPaymentDistributionsAppearComplete($db)
             && self::marcMissingTagReportAppearsComplete($db)
-            && self::catalogingMarcFieldFinderAppearsComplete($db);
+            && self::catalogingMarcFieldFinderAppearsComplete($db)
+            && self::holdingslessReportAppearsComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -431,6 +433,10 @@ class MigrationService
                 return self::marcMissingTagReportAppearsComplete($db);
             case '043_cataloging_marc_field_finder.sql':
                 return self::catalogingMarcFieldFinderAppearsComplete($db);
+            case '045_cataloging_instances_without_holdings.sql':
+            case '046_cataloging_holdingsless_marker_patterns.sql':
+            case '047_cataloging_holdingsless_exclusion_match.sql':
+                return self::holdingslessReportAppearsComplete($db);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [
                     'generation_id',
@@ -472,6 +478,16 @@ class MigrationService
                 CatalogingMarcMissingTagReportService::isCanonicalSeedDefinition($definition)
                 || ($allowLegacy && CatalogingMarcMissingTagReportService::isLegacySeedDefinition($definition))
             );
+    }
+
+    private static function holdingslessReportAppearsComplete($db): bool
+    {
+        $definition = $db->createCommand(
+            'SELECT slug, name, category, sql_template, parameters, data_source, execution_config, default_limit, is_active, created_by'
+                . ' FROM report_templates WHERE slug = :slug LIMIT 1',
+            [':slug' => CatalogingHoldingslessReportService::REPORT_SLUG]
+        )->queryOne();
+        return is_array($definition) && CatalogingHoldingslessReportService::isCanonicalSeedDefinition($definition);
     }
 
     private static function catalogingMarcFieldFinderAppearsComplete($db): bool

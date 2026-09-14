@@ -4,6 +4,7 @@ namespace app\services;
 
 use Yii;
 
+require_once __DIR__ . '/CatalogingQueryGuidanceService.php';
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/ReferenceJsonBundleService.php';
 
@@ -2297,6 +2298,9 @@ class FolioSchemaService
         bool $recordsHasExternalIdColumn,
         bool $recordsHasInstanceIdColumn
     ): array {
+        if (CatalogingQueryGuidanceService::matches($prompt)) {
+            return []; // The independent ownership guidance replaces positive holdings scoping.
+        }
         $marcFieldRequest = self::extractPromptMarcFieldRequest($prompt);
         if ($marcFieldRequest === null) {
             return [];
@@ -2546,6 +2550,11 @@ class FolioSchemaService
             if (!$recordsHasStateColumn && $recordsHasDeletedColumn) {
                 $lines[] = "folio_source_record.records__t has no state column in this environment. Use COALESCE(deleted, false) = false when you need current, non-deleted source records.";
             }
+        }
+
+        $catalogingGuidance = CatalogingQueryGuidanceService::buildPromptGuidance((string)$prompt);
+        if ($catalogingGuidance !== '') {
+            $lines[] = $catalogingGuidance;
         }
 
         foreach (ClarificationService::buildPromptGuidance((string)$prompt) as $line) {

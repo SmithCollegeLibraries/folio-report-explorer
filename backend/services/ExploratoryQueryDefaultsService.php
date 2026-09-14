@@ -2,6 +2,8 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/CatalogingQueryGuidanceService.php';
+
 class ExploratoryQueryDefaultsService
 {
     private const ARTIFACT_VERSION = 1;
@@ -11,6 +13,9 @@ class ExploratoryQueryDefaultsService
      */
     public static function resolve(string $prompt): array
     {
+        if (CatalogingQueryGuidanceService::matches($prompt)) {
+            return CatalogingQueryGuidanceService::assumptions($prompt);
+        }
         $normalized = self::normalize($prompt);
         if (!self::isCrossDomainRoiPrompt($normalized)) {
             return [];
@@ -90,7 +95,6 @@ class ExploratoryQueryDefaultsService
             return '';
         }
 
-        $artifact = self::loadArtifact();
         $lines = ['DOCUMENTED INTERPRETATIONS'];
 
         foreach ($assumptions as $assumption) {
@@ -104,8 +108,13 @@ class ExploratoryQueryDefaultsService
             );
         }
 
+        if (in_array('holdings_absence', array_column($assumptions, 'key'), true)) {
+            return implode("\n", $lines);
+        }
+
         $lines[] = '';
         $lines[] = 'ROI PLAN GUIDANCE';
+        $artifact = self::loadArtifact();
         foreach ($artifact['roiPlanGuidance'] as $guidance) {
             $lines[] = '- ' . $guidance;
         }

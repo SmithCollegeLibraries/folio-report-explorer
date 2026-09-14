@@ -286,3 +286,8 @@ foreach ([
 }
 
 fwrite(STDOUT, "GeminiService legacy prompt guidance test passed\n");
+
+$requiresFreeform = new ReflectionMethod(GeminiService::class, 'promptRequiresLegacyFreeform');
+if (PHP_VERSION_ID < 80500) { $requiresFreeform->setAccessible(true); }
+assertSameValue(true, $requiresFreeform->invoke(null, 'Find Amherst instances without holdings'), 'Holding-less queries need the SQL route supporting anti-joins and independent ownership.');
+assertSameValue(false, $requiresFreeform->invoke(null, 'List holdings without items'), 'Do not reroute unrelated missing-item reports.');

@@ -6,6 +6,7 @@ use app\models\ReportTemplate;
 
 require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
 require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
+require_once __DIR__ . '/CatalogingHoldingslessReportService.php';
 
 /**
  * Dispatches governed cataloging report templates to their reviewed compiler.
@@ -18,7 +19,8 @@ final class CatalogingReportCompilerService
     public static function supports(ReportTemplate $report): bool
     {
         return CatalogingMarcMissingTagReportService::supports($report)
-            || CatalogingMarcFieldFinderService::supports($report);
+            || CatalogingMarcFieldFinderService::supports($report)
+            || CatalogingHoldingslessReportService::supports($report);
     }
 
     /**
@@ -31,6 +33,10 @@ final class CatalogingReportCompilerService
         }
         if (CatalogingMarcFieldFinderService::supports($report)) {
             return CatalogingMarcFieldFinderService::build($report, $inputs, $folioDb);
+        }
+
+        if (CatalogingHoldingslessReportService::supports($report)) {
+            return CatalogingHoldingslessReportService::build($report, $inputs, $folioDb);
         }
 
         throw new \InvalidArgumentException('Unsupported cataloging report template.');

@@ -536,3 +536,39 @@ describe('Reports', () => {
     await waitFor(() => expect(runReport).toHaveBeenCalledWith(9, expect.objectContaining({ marcTag: '035' }), { outputMode: 'table' }));
   });
 });
+
+it('runs the holdings-less report with independent ownership and shows prefix errors', async () => {
+  const { getReport, runReport } = await import('../api/client');
+  vi.mocked(runReport).mockReset();
+  const detail: ReportTemplate = {
+    ...buildFinderDetail(45), slug: 'instances-without-holdings', name: 'Instances Without Holdings — Cataloging Review',
+    parameters: [
+      { name: 'ownershipCode', type: 'select', label: 'Institution / bibliographic ownership', required: true, default: 'all', resolvedDefault: 'all' },
+      { name: 'suppressionMode', type: 'select', label: 'Suppression', required: true, default: 'exclude_both', resolvedDefault: 'exclude_both' },
+      { name: 'excluded035Prefixes', type: 'text', label: 'Exclude 035$a markers / patterns (optional)', required: false, default: '', resolvedDefault: '' },
+      { name: 'exclusionMatch', type: 'select', label: '035$a exclusion rule', required: true, default: 'any', resolvedDefault: 'any' },
+    ],
+    selectOptions: {
+      ownershipCode: [{ value: 'all', label: 'All colleges' }, { value: 'AM', label: 'Amherst College — AM' }],
+      suppressionMode: [{ value: 'exclude_both', label: 'Exclude both suppression flags' }, { value: 'all', label: 'Include all' }],
+      exclusionMatch: [{ value: 'any', label: 'Exclude if any pattern matches' }, { value: 'all', label: 'Exclude only if all patterns match' }],
+    },
+  };
+  vi.mocked(getReport).mockResolvedValue(detail);
+  vi.mocked(runReport).mockRejectedValueOnce({ isAxiosError: true, response: { data: {
+    error: 'Report parameters are invalid.', fieldErrors: { excluded035Prefixes: 'Enter up to 20 nonempty prefixes without control characters.' },
+  } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/reports/45']}><Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes></MemoryRouter></QueryClientProvider>);
+  expect(await screen.findByLabelText(/Institution \/ bibliographic ownership/)).toHaveValue('all');
+  expect(screen.getByLabelText(/Suppression/)).toHaveValue('exclude_both');
+  expect(screen.getByLabelText(/035\$a exclusion rule/)).toHaveValue('any');
+  expect(screen.queryByLabelText(/^Locations/)).not.toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText(/Institution \/ bibliographic ownership/), { target: { value: 'AM' } });
+  fireEvent.change(screen.getByLabelText(/Exclude 035/), { target: { value: 'a,,b' } });
+  fireEvent.change(screen.getByLabelText(/035\$a exclusion rule/), { target: { value: 'all' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Run Report' }));
+  await waitFor(() => expect(runReport).toHaveBeenCalledWith(45, { ownershipCode: 'AM', suppressionMode: 'exclude_both', excluded035Prefixes: 'a,,b', exclusionMatch: 'all' }, { outputMode: 'table' }));
+  expect(await screen.findByText('Enter up to 20 nonempty prefixes without control characters.')).toBeInTheDocument();
+  expect(screen.getByLabelText(/Exclude 035/)).toHaveAttribute('aria-invalid', 'true');
+});

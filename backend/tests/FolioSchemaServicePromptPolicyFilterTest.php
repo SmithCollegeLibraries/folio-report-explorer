@@ -374,3 +374,10 @@ assertContainsText(
 );
 
 fwrite(STDOUT, "FolioSchemaService prompt policy filter test passed\n");
+
+$holdinglessContext = FolioSchemaService::buildSchemaContext(
+    'Find Amherst instances without holdings and without a 035$a starting (SMHASLKR), excluding discovery suppression only.'
+);
+assertContainsText('Instances Without Holdings: Cataloging Rules', $holdinglessContext, 'Holding-less guidance must reach actual schema context.');
+assertContainsText("Amherst 'AM'", $holdinglessContext, 'Ownership and campus codes must remain distinct.');
+assertFalseValue(strpos($holdinglessContext, 'scope inventory.instance__t first with holdings/location predicates') !== false, 'Do not inject contradictory positive holdings scope for holding-less requests.');
