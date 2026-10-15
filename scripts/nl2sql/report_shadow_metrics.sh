@@ -3,13 +3,13 @@ set -euo pipefail
 
 # Build a daily NL2SQL-008 shadow-mode metrics report from app telemetry logs.
 # Usage:
-#   ./planning/baseline/report_nl2sql_shadow_metrics.sh [YYYY-MM-DD] [LOG_FILE]
+#   ./scripts/nl2sql/report_shadow_metrics.sh [YYYY-MM-DD] [LOG_FILE] [REPORT_DIR]
 # Example:
-#   ./planning/baseline/report_nl2sql_shadow_metrics.sh 2026-04-06
+#   ./scripts/nl2sql/report_shadow_metrics.sh 2026-04-06
 
 DATE_FILTER="${1:-$(date +%Y-%m-%d)}"
 LOG_FILE="${2:-backend/runtime/logs/app.log}"
-OUT_DIR="planning/baseline/reports"
+OUT_DIR="${3:-${SHADOW_REPORT_DIR:-backend/runtime/reports}}"
 OUT_FILE="${OUT_DIR}/${DATE_FILTER}_nl2sql-008-shadow-metrics.md"
 
 if [[ ! -f "${LOG_FILE}" ]]; then

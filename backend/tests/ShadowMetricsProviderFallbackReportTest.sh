@@ -4,11 +4,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DATE_FILTER="2026-05-12"
 LOG_FILE="$(mktemp)"
-REPORT_FILE="${REPO_ROOT}/planning/baseline/reports/${DATE_FILTER}_nl2sql-008-shadow-metrics.md"
+REPORT_DIR="$(mktemp -d)"
+REPORT_FILE="${REPORT_DIR}/${DATE_FILTER}_nl2sql-008-shadow-metrics.md"
 
 cleanup() {
   rm -f "${LOG_FILE}"
-  rm -f "${REPORT_FILE}"
+  rm -rf "${REPORT_DIR}"
 }
 trap cleanup EXIT
 
@@ -18,7 +19,7 @@ cat > "${LOG_FILE}" <<'EOF'
 2026-05-12 18:54:05 [192.168.65.1][-][-][warning][nl2sql.provider_fallback] Gemini quota exhausted — falling back to OpenAI for this request.
 EOF
 
-bash "${REPO_ROOT}/planning/baseline/report_nl2sql_shadow_metrics.sh" "${DATE_FILTER}" "${LOG_FILE}" >/dev/null
+bash "${REPO_ROOT}/scripts/nl2sql/report_shadow_metrics.sh" "${DATE_FILTER}" "${LOG_FILE}" "${REPORT_DIR}" >/dev/null
 
 if ! grep -Fq -- "- Provider fallback warning count: 2" "${REPORT_FILE}"; then
   echo "Expected structured and legacy provider fallback events to both contribute to the total fallback count." >&2
