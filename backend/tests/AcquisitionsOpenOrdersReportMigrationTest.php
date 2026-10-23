@@ -28,16 +28,20 @@ $db = new class($definition) {
 $recognize = new ReflectionMethod(app\services\MigrationService::class, 'migrationAppearsApplied');
 if (PHP_VERSION_ID < 80500) { $recognize->setAccessible(true); }
 acquisitionsMigrationAssert($recognize->invoke(null, $db, '048_quarterly_open_orders_report.sql'), 'Recognize migration 048 when its canonical report is installed.');
-$appearsComplete = new ReflectionMethod(app\services\MigrationService::class, 'acquisitionsOpenOrdersReportAppearsComplete');
-if (PHP_VERSION_ID < 80500) { $appearsComplete->setAccessible(true); }
-acquisitionsMigrationAssert($appearsComplete->invoke(null, $db), 'Expose the report-specific completeness check for migration baselining.');
+acquisitionsMigrationAssert(
+    app\services\CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db),
+    'Recognize the canonical report through the shared migration helper.'
+);
 
 $db->definition['sql_template'] = 'SELECT 1';
 acquisitionsMigrationAssert(!$recognize->invoke(null, $db, '048_quarterly_open_orders_report.sql'), 'Reject an installed report whose SQL has drifted.');
-acquisitionsMigrationAssert(!$appearsComplete->invoke(null, $db), 'A drifted report is not complete for migration baselining.');
+acquisitionsMigrationAssert(
+    !app\services\CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db),
+    'The shared migration helper must reject report drift.'
+);
 
 $files = app\services\MigrationService::discoverMigrationFiles();
 $last = end($files);
-acquisitionsMigrationAssert($last['filename'] === '048_quarterly_open_orders_report.sql', 'Migration 048 is the newest migration.');
+acquisitionsMigrationAssert($last['filename'] === '049_acquisitions_invoice_status_report.sql', 'Migration 049 is the newest migration.');
 
 echo "Acquisitions open-orders migration recognition checks passed\n";
