@@ -1,5 +1,11 @@
 <?php
 require_once __DIR__ . '/support/AcquisitionsMissingUnitReportFixture.php';
+require_once __DIR__ . '/support/AcquisitionsOpenOrdersReportFixture.php';
+require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
+require_once __DIR__ . '/../services/CatalogingReportCompilerService.php';
+
+use app\models\ReportTemplate;
+use app\services\CatalogingReportCompilerService;
 
 function acquisitionsMissingUnitSqlFail(string $message): void
 {
@@ -21,10 +27,44 @@ if (!in_array('sqlite', PDO::getAvailableDrivers(), true)) {
 }
 
 $seed = acquisitionsMissingUnitReportSeed();
-$sql = str_replace('BTRIM(', 'TRIM(', $seed['sql_template']);
-$sql = str_replace("STRING_AGG(fund_codes.fund_code, '; ' ORDER BY fund_codes.fund_code)", "GROUP_CONCAT(fund_codes.fund_code, '; ')", $sql);
-$sql = str_replace("po.po_number ~ '^[0-9]+$'", "po.po_number REGEXP '^[0-9]+$'", $sql);
-$sql = str_replace('report.created_date DESC NULLS LAST', '(report.created_date IS NULL), report.created_date DESC', $sql);
+$report = new ReportTemplate();
+foreach ($seed as $key => $value) {
+    $report->$key = $value;
+}
+$folioDb = new class {
+    public $missingTable = null;
+    public function createCommand(string $sql, array $params = [])
+    {
+        return new class($this, $params) {
+            private $db;
+            private $params;
+            public function __construct($db, array $params) { $this->db = $db; $this->params = $params; }
+            public function queryOne(): array
+            {
+                $row = [];
+                foreach ($this->params as $key => $table) {
+                    preg_match('/\\A:requiredTable(\\d+)\\z/', $key, $matches);
+                    $row['required_table_' . ($matches[1] ?? '')] = $table === $this->db->missingTable ? null : $table;
+                }
+                return $row;
+            }
+        };
+    }
+};
+$compile = function (array $overrides = []) use ($report, $folioDb): array {
+    return CatalogingReportCompilerService::build($report, $overrides, $folioDb);
+};
+
+$adaptSql = function (string $sql): string {
+    $sql = str_replace('BTRIM(', 'TRIM(', $sql);
+    $sql = str_replace("STRING_AGG(fund_codes.fund_code, '; ' ORDER BY fund_codes.fund_code)", "GROUP_CONCAT(fund_codes.fund_code, '; ')", $sql);
+    $sql = str_replace("po.po_number ~ '^[0-9]+$'", "po.po_number REGEXP '^[0-9]+$'", $sql);
+    $sql = str_replace('report.created_date DESC NULLS LAST', '(report.created_date IS NULL), report.created_date DESC', $sql);
+    $sql = str_replace('CAST(:createdStartDate AS date)', 'date(:createdStartDate)', $sql);
+    $sql = str_replace('CAST(:createdEndDate AS date)', 'date(:createdEndDate)', $sql);
+    $sql = str_replace('CAST(po.metadata__created_date AS date)', 'date(po.metadata__created_date)', $sql);
+    return $sql;
+};
 
 $pdo = new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
 $regexp = function ($pattern, $value): int {
@@ -94,7 +134,14 @@ foreach ([
     $funds->execute($fund);
 }
 
-$rows = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+$run = function (array $overrides = []) use ($compile, $adaptSql, $pdo): array {
+    $compiled = $compile($overrides);
+    $statement = $pdo->prepare($adaptSql($compiled['sql']));
+    $statement->execute($compiled['params']);
+    return $statement->fetchAll(PDO::FETCH_ASSOC);
+};
+
+$rows = $run();
 $columns = ['PO Number', 'Number Pattern', 'Likely Smith', 'Workflow Status', 'Order Type', 'Vendor Name', 'Vendor Code', 'Date Ordered', 'Created Date', 'Number of PO Lines', 'Fund Codes', 'PO UUID'];
 acquisitionsMissingUnitSqlSame($columns, array_keys($rows[0]), 'Report columns must follow the ticket order and append the export UUID.');
 
@@ -127,5 +174,13 @@ acquisitionsMissingUnitSqlSame(['ACBP', 'SCBPA'], $fundCodes, 'Fund codes should
 
 $orderedNumbers = array_column($rows, 'PO Number');
 acquisitionsMissingUnitSqlSame(['12345', '67890', '54321', 'sc200', 'SC100', '99999'], $orderedNumbers, 'Order likely-Smith records first, then newest created date.');
+$pending = $run(['workflowStatuses' => 'Pending']);
+acquisitionsMissingUnitSqlSame(['12345'], array_column($pending, 'PO Number'), 'Filter missing-unit orders by workflow status.');
+$ongoing = $run(['orderTypes' => 'Ongoing']);
+acquisitionsMissingUnitSqlSame(['67890'], array_column($ongoing, 'PO Number'), 'Filter missing-unit orders by order type.');
+$createdRange = $run(['createdStartDate' => '2025-03-12', 'createdEndDate' => '2025-04-12']);
+acquisitionsMissingUnitSqlSame(['12345', 'sc200'], array_column($createdRange, 'PO Number'), 'Apply inclusive created-date start and end filters.');
+$createdOnEndDate = $run(['createdStartDate' => '2025-04-12', 'createdEndDate' => '2025-04-12']);
+acquisitionsMissingUnitSqlSame(['12345'], array_column($createdOnEndDate, 'PO Number'), 'Include orders created on the end date.');
 
 echo "PASS: Missing-acquisitions-unit SQLite SQL semantics tests\n";

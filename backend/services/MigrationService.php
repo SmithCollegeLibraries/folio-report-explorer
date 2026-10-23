@@ -440,7 +440,7 @@ class MigrationService
             case '048_quarterly_open_orders_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db);
             case '049_acquisitions_invoice_status_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db);
             case '050_orders_missing_acquisitions_unit.sql': return CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);
-            case '051_budget_year_expense_class_report.sql': return CatalogingReportMigrationRecognitionService::budgetYearExpenseClassReportAppearsComplete($db);
+            case '051_budget_year_expense_class_report.sql': case '053_acquisitions_feedback_report_filters.sql': return CatalogingReportMigrationRecognitionService::migrationDefinitionAppearsComplete($db, $filename);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [
                     'generation_id',

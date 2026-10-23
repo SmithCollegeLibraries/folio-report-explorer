@@ -8,6 +8,7 @@ require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
 require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
 require_once __DIR__ . '/CatalogingHoldingslessReportService.php';
 require_once __DIR__ . '/AcquisitionsOpenOrdersReportService.php';
+require_once __DIR__ . '/AcquisitionsMissingUnitReportService.php';
 require_once __DIR__ . '/AcquisitionsInvoiceStatusReportService.php';
 require_once __DIR__ . '/BudgetYearExpenseClassReportService.php';
 
@@ -25,6 +26,7 @@ final class CatalogingReportCompilerService
             || CatalogingMarcFieldFinderService::supports($report)
             || CatalogingHoldingslessReportService::supports($report)
             || AcquisitionsOpenOrdersReportService::supports($report)
+            || AcquisitionsMissingUnitReportService::supports($report)
             || AcquisitionsInvoiceStatusReportService::supports($report)
             || BudgetYearExpenseClassReportService::supports($report);
     }
@@ -46,6 +48,9 @@ final class CatalogingReportCompilerService
         }
         if (AcquisitionsOpenOrdersReportService::supports($report)) {
             return AcquisitionsOpenOrdersReportService::build($report, $inputs, $folioDb);
+        }
+        if (AcquisitionsMissingUnitReportService::supports($report)) {
+            return AcquisitionsMissingUnitReportService::build($report, $inputs, $folioDb);
         }
         if (AcquisitionsInvoiceStatusReportService::supports($report)) {
             return AcquisitionsInvoiceStatusReportService::build($report, $inputs, $folioDb);

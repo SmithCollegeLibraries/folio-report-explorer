@@ -4,6 +4,7 @@ namespace app\services;
 
 require_once __DIR__ . '/CatalogingHoldingslessReportService.php';
 require_once __DIR__ . '/AcquisitionsOpenOrdersReportService.php';
+require_once __DIR__ . '/AcquisitionsMissingUnitReportService.php';
 require_once __DIR__ . '/AcquisitionsInvoiceStatusReportService.php';
 require_once __DIR__ . '/AcquisitionsMissingUnitReportMigrationService.php';
 require_once __DIR__ . '/BudgetYearExpenseClassReportService.php';
@@ -56,16 +57,42 @@ final class CatalogingReportMigrationRecognitionService
     public static function reportsAppearComplete($db): bool
     {
         return self::holdingslessReportAppearsComplete($db)
-            && self::acquisitionsOpenOrdersReportAppearsComplete($db)
             && self::acquisitionsInvoiceStatusReportAppearsComplete($db)
-            && self::ordersMissingAcqUnitReportAppearsComplete($db)
+            && self::acquisitionsFeedbackReportsAppearComplete($db)
             && self::budgetYearExpenseClassReportAppearsComplete($db);
+    }
+
+    public static function migrationDefinitionAppearsComplete($db, string $filename): bool
+    {
+        if ($filename === '051_budget_year_expense_class_report.sql') {
+            return self::budgetYearExpenseClassReportAppearsComplete($db);
+        }
+        if ($filename === '053_acquisitions_feedback_report_filters.sql') {
+            return self::acquisitionsFeedbackReportsAppearComplete($db);
+        }
+        return false;
+    }
+
+    public static function acquisitionsFeedbackReportsAppearComplete($db): bool
+    {
+        return self::acquisitionsOpenOrdersReportAppearsComplete($db)
+            && self::ordersMissingAcqUnitReportAppearsComplete($db)
+            && self::polReportIsInactive($db);
+    }
+
+    private static function polReportIsInactive($db): bool
+    {
+        $report = $db->createCommand(
+            'SELECT is_active FROM report_templates WHERE id = 11 AND slug = :slug LIMIT 1',
+            [':slug' => 'pol-report']
+        )->queryOne();
+        return is_array($report) && array_key_exists('is_active', $report) && (int) $report['is_active'] === 0;
     }
 
     private static function canonicalReportAppearsComplete($db, string $serviceClass): bool
     {
         $definition = $db->createCommand(
-            'SELECT slug, name, category, sql_template, parameters, data_source, execution_config, composite_config, default_limit, is_active, created_by'
+            'SELECT slug, name, description, help_text, category, sql_template, parameters, data_source, execution_config, composite_config, default_limit, is_active, created_by'
                 . ' FROM report_templates WHERE slug = :slug LIMIT 1',
             [':slug' => $serviceClass::REPORT_SLUG]
         )->queryOne();

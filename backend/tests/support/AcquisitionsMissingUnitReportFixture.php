@@ -2,15 +2,18 @@
 
 function acquisitionsMissingUnitReportSeed(): array
 {
-    $migrationPath = __DIR__ . '/../../../mysql/migrations/050_orders_missing_acquisitions_unit.sql';
+    $migrationPath = __DIR__ . '/../../../mysql/migrations/053_acquisitions_feedback_report_filters.sql';
     if (!is_file($migrationPath)) {
-        throw new RuntimeException('Migration 050 has not seeded the missing-acquisitions-unit report.');
+        throw new RuntimeException('Migration 053 has not seeded the missing-acquisitions-unit report.');
     }
 
     $migration = (string) file_get_contents($migrationPath);
-    $values = acquisitionsMissingUnitReportSqlValues($migration);
+    $slugPosition = strpos($migration, "'orders-missing-acquisitions-unit'");
+    $valuesPosition = $slugPosition === false ? false : strrpos(substr($migration, 0, $slugPosition), 'VALUES');
+    $reportMigration = $valuesPosition === false ? '' : substr($migration, $valuesPosition);
+    $values = acquisitionsMissingUnitReportSqlValues($reportMigration);
     if (count($values) !== 12 || $values[0] !== 'orders-missing-acquisitions-unit') {
-        throw new RuntimeException('Could not parse the missing-acquisitions-unit report seed.');
+        throw new RuntimeException('Could not parse the migration-053 missing-acquisitions-unit report seed.');
     }
 
     return [

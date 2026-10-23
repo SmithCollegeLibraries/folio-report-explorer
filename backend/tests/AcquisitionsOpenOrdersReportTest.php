@@ -2,10 +2,13 @@
 require_once __DIR__ . '/support/AcquisitionsOpenOrdersReportFixture.php';
 require_once __DIR__ . '/../services/CatalogingReportCompilerService.php';
 require_once __DIR__ . '/../services/ReportExecutionContractService.php';
+require_once __DIR__ . '/../services/SqlBuilderService.php';
+require_once __DIR__ . '/../services/FolioSchemaService.php';
 
 use app\models\ReportTemplate;
 use app\services\CatalogingReportCompilerService;
 use app\services\ReportExecutionContractService;
+use app\services\SqlBuilderService;
 
 function acquisitionsOpenOrdersAssert($condition, string $message): void
 {
@@ -45,20 +48,29 @@ acquisitionsOpenOrdersAssert($defaults['params'][':startDate'] === $expectedStar
 acquisitionsOpenOrdersAssert($defaults['params'][':endDate'] === $today->format('Y-m-d'), 'Default end date to today.');
 acquisitionsOpenOrdersAssert($defaults['params'][':orderFormat'] === 'All', 'Default order format to all formats.');
 acquisitionsOpenOrdersAssert($defaults['params'][':reEncumber'] === 'Any', 'Default re-encumber to any value.');
+acquisitionsOpenOrdersAssert(strpos($defaults['sql'], '/*__') === false, 'Compile the default status filters before execution.');
+acquisitionsOpenOrdersAssert(strpos($defaults['sql'], 'AND (TRUE)') !== false, 'Default all status selections leave the existing inclusion rule unchanged.');
+acquisitionsOpenOrdersAssert(strpos($defaults['sql'], 'il.workflow_status AS "PO status"') !== false, 'Include the purchase-order workflow status column.');
 acquisitionsOpenOrdersAssert(count($db->queries) === 2, 'Probe the schema in one lookup and validate the selected unit in one lookup.');
 
 $chosen = $compile([
     'acqUnit' => 'SC', 'startDate' => '2025-07-01', 'endDate' => '2026-06-30',
     'orderFormat' => 'Electronic Resource', 'reEncumber' => 'Off',
+    'receiptStatuses' => 'Fully Received', 'paymentStatuses' => 'Awaiting Payment',
 ]);
 acquisitionsOpenOrdersAssert($chosen['params'] === [
     ':acqUnit' => 'SC', ':startDate' => '2025-07-01', ':endDate' => '2026-06-30',
     ':orderFormat' => 'Electronic Resource', ':reEncumber' => 'Off',
+    ':receiptStatus0' => 'Fully Received', ':paymentStatus0' => 'Awaiting Payment',
 ], 'Bind every report filter as a parameter.');
 acquisitionsOpenOrdersAssert(strpos($chosen['sql'], "'SC'") === false, 'Do not interpolate the selected acquisitions unit.');
+acquisitionsOpenOrdersAssert(strpos($chosen['sql'], 'pol.receipt_status IN (:receiptStatus0)') !== false, 'Apply receipt status after the existing line inclusion rule.');
+acquisitionsOpenOrdersAssert(strpos($chosen['sql'], 'pol.payment_status IN (:paymentStatus0)') !== false, 'Apply payment status after the existing line inclusion rule.');
 acquisitionsOpenOrdersAssert($chosen['marcTag'] === 'open-orders', 'Use the governed open-orders report filename context.');
 acquisitionsOpenOrdersAssert($chosen['location']['name'] === 'SC' && $chosen['location']['code'] === 'SC', 'Return the selected acquisitions unit as export context.');
 ReportExecutionContractService::assertStaticExportSql($chosen['sql'], ['fetchRowLimit' => 100001]);
+SqlBuilderService::validateSafety($chosen['sql']);
+SqlBuilderService::validateTablePolicy($chosen['sql']);
 $contract = ReportExecutionContractService::fromReport($report, [
     'exportKind' => 'worklist', 'marcTag' => $chosen['marcTag'],
     'locationName' => $chosen['location']['name'], 'locationCode' => $chosen['location']['code'],
@@ -67,17 +79,21 @@ acquisitionsOpenOrdersAssert($contract['identifierExport']['sourceColumn'] === '
 
 $parameters = $report->getDecodedParameters();
 $parameterNames = array_column($parameters, 'name');
-acquisitionsOpenOrdersAssert($parameterNames === ['acqUnit', 'startDate', 'endDate', 'orderFormat', 'reEncumber'], 'Declare the five fixed report parameters in ticket order.');
+acquisitionsOpenOrdersAssert($parameterNames === ['acqUnit', 'startDate', 'endDate', 'orderFormat', 'reEncumber', 'receiptStatuses', 'paymentStatuses'], 'Declare report parameters in ticket order.');
 acquisitionsOpenOrdersAssert(strpos($report->parameters, 'orders.acquisitions_unit__t') !== false, 'Load acquisitions-unit choices from FOLIO.');
+acquisitionsOpenOrdersAssert($parameters[5]['default'] === 'Pending,Awaiting Receipt,Partially Received,Fully Received', 'Default receipt statuses to all supported values.');
+acquisitionsOpenOrdersAssert($parameters[6]['default'] === 'Pending,Awaiting Payment,Partially Paid,Fully Paid,Ongoing,Payment Not Required,Cancelled', 'Default payment statuses to all supported values.');
 
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['acqUnit' => 'UNKNOWN']); }, 'acqUnit', 'Reject units outside the FOLIO unit whitelist.');
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['startDate' => '2026-02-30']); }, 'startDate', 'Reject invalid calendar dates.');
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['startDate' => '2026-07-02', 'endDate' => '2026-07-01']); }, 'endDate', 'Reject an end date earlier than the start date.');
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['orderFormat' => 'Unknown']); }, 'orderFormat', 'Reject order formats outside the fixed choices.');
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['reEncumber' => 'Maybe']); }, 'reEncumber', 'Reject re-encumber values outside Any, On, and Off.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['receiptStatuses' => 'Unknown']); }, 'receiptStatuses', 'Reject receipt statuses outside the fixed choices.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['paymentStatuses' => 'Pending,Pending']); }, 'paymentStatuses', 'Reject repeated payment-status values.');
 
 $originalDefinition = [];
-foreach (['slug', 'name', 'category', 'data_source', 'created_by', 'default_limit', 'is_active', 'sql_template', 'parameters', 'execution_config'] as $key) {
+foreach (['slug', 'name', 'description', 'help_text', 'category', 'data_source', 'created_by', 'default_limit', 'is_active', 'sql_template', 'parameters', 'execution_config'] as $key) {
     $originalDefinition[$key] = $report->$key;
 }
 acquisitionsOpenOrdersAssert(\app\services\AcquisitionsOpenOrdersReportService::isCanonicalSeedDefinition($originalDefinition), 'Accept the canonical migration definition.');
