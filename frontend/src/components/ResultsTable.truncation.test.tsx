@@ -35,17 +35,16 @@ describe('ResultsTable truncation feedback', () => {
           executionTimeMs: 18,
           sql: 'select instance_uuid',
           outputMode: 'file',
-          downloadUrl: '/api/query/export/job-8',
+          downloadUrl: '/query/export/job-8',
+          jobId: 'job-8',
           truncated: true,
         }}
       />,
     );
 
     expect(screen.getByRole('alert')).toHaveTextContent(truncationWarning);
-    expect(screen.getByRole('link', { name: /Download Full CSV/i })).toHaveAttribute(
-      'href',
-      '/api/query/export/job-8',
-    );
+    expect(screen.getByRole('button', { name: /Download Full CSV/i })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Download Full CSV/i })).not.toBeInTheDocument();
   });
 
   it('surfaces skipped non-conforming identifiers beside the export warning', () => {
@@ -58,7 +57,7 @@ describe('ResultsTable truncation feedback', () => {
           executionTimeMs: 18,
           sql: 'select instance_uuid',
           outputMode: 'file',
-          downloadUrl: '/api/query/export/job-9',
+          downloadUrl: '/query/export/job-9',
           identifierSkippedCount: 1,
         }}
       />,
@@ -79,7 +78,7 @@ describe('ResultsTable truncation feedback', () => {
           executionTimeMs: 18,
           sql: 'select instance_uuid',
           outputMode: 'file',
-          downloadUrl: '/api/query/export/job-10',
+          downloadUrl: '/query/export/job-10',
           identifierSkippedCount: 0,
         }}
       />,

@@ -8,6 +8,7 @@ import {
 } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
+import { jobStatusToExecuteResponse } from '../utils/jobStatus';
 import ResultsModal from '../components/ResultsModal';
 import ChartPanel from '../components/ChartPanel';
 import ExpenseMonitorCard from '../components/ExpenseMonitorCard';
@@ -33,7 +34,7 @@ const DISPLAY_TYPES: { key: ChartType | 'table'; label: string; icon: React.Reac
 
 // ─── Single card ──────────────────────────────────────────────────────────────
 
-function DashboardCard({
+export function DashboardCard({
   item,
   isAdmin,
   isDragging,
@@ -79,14 +80,8 @@ function DashboardCard({
     setLoadingCache(true);
     checkJobStatus(lastJobId)
       .then((job) => {
-        if (job.status === 'completed' && job.columns && job.rows) {
-          setCachedResults({
-            columns: job.columns,
-            rows: job.rows,
-            rowCount: job.rowCount ?? job.rows.length,
-            executionTimeMs: job.executionTimeMs ?? 0,
-            sql: job.sql ?? '',
-          });
+        if (job.status === 'completed' && (job.outputMode === 'file' || (job.columns && job.rows))) {
+          setCachedResults(jobStatusToExecuteResponse(job));
         }
       })
       .catch(() => { /* ignore stale job errors */ })

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { checkJobStatus, cancelJob } from '../api/client';
 import type { JobStatusResponse, ExecuteResponse } from '../types';
+import { jobStatusToExecuteResponse } from '../utils/jobStatus';
 
 const POLL_INTERVAL = 2000;
 
@@ -104,30 +105,7 @@ export function useJobPolling(jobId: string | null): UseJobPollingReturn {
 
         if (status.status === 'completed') {
           stopPolling();
-          if (status.outputMode === 'file') {
-            setResults({
-              columns: status.columns || [],
-              rows: status.rows || [],
-              rowCount: status.rowCount || 0,
-              executionTimeMs: status.executionTimeMs || 0,
-              sql: status.sql,
-              outputMode: 'file',
-              downloadUrl: status.downloadUrl,
-              truncated: status.truncated,
-              identifierSkippedCount: status.identifierSkippedCount,
-            });
-          } else {
-            // Convert to ExecuteResponse
-            setResults({
-              columns: status.columns || [],
-              rows: status.rows || [],
-              rowCount: status.rowCount || 0,
-              executionTimeMs: status.executionTimeMs || 0,
-              sql: status.sql,
-              truncated: status.truncated,
-              identifierSkippedCount: status.identifierSkippedCount,
-            });
-          }
+          setResults(jobStatusToExecuteResponse(status));
         } else if (status.status === 'failed') {
           stopPolling();
           setError(status.error || 'Query execution failed');

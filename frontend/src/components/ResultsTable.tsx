@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-table';
 import { ArrowUpDown, Download, BarChart3, Table2 } from 'lucide-react';
 import type { ExecuteResponse } from '../types';
+import { downloadExportCsv } from '../api/client';
 import { downloadCsv } from '../utils/csv';
 import ChartPanel from './ChartPanel';
 
@@ -18,11 +19,14 @@ interface Props {
     column: string;
     onClick: (value: string, row: Record<string, unknown>) => void;
   };
+  onFullDownload?: () => void;
 }
 
-export default function ResultsTable({ data, drillThrough }: Props) {
+export default function ResultsTable({ data, drillThrough, onFullDownload }: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [view, setView] = useState<'table' | 'chart'>('table');
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>>[]>(
     () =>
@@ -80,8 +84,21 @@ export default function ResultsTable({ data, drillThrough }: Props) {
   });
 
   const exportCsv = () => downloadCsv(data.columns, data.rows, 'query-results');
+  const downloadFullCsv = async () => {
+    if (!data.jobId) return;
+    setIsDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadExportCsv(data.jobId);
+      onFullDownload?.();
+    } catch {
+      setDownloadError('Unable to download full CSV. Please try again.');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
   const hasRows = data.rowCount > 0 && data.columns.length > 0;
-  const downloadUrl = data.outputMode === 'file' ? data.downloadUrl : undefined;
+  const hasFileExport = data.outputMode === 'file' && Boolean(data.jobId);
 
   return (
     <div>
@@ -115,19 +132,23 @@ export default function ResultsTable({ data, drillThrough }: Props) {
           </span>
         </div>
         <button
+          type="button"
           onClick={exportCsv}
           disabled={!hasRows}
           className="flex items-center gap-1 text-folio-600 hover:text-folio-800"
         >
-          <Download size={14} /> CSV
+          <Download size={14} />
+          {data.outputMode === 'file' ? `CSV (preview, ${data.rows.length} rows)` : 'CSV'}
         </button>
-        {downloadUrl && (
-          <a
-            href={downloadUrl}
+        {hasFileExport && (
+          <button
+            type="button"
+            onClick={() => void downloadFullCsv()}
+            disabled={isDownloading}
             className="flex items-center gap-1 ml-2 text-green-700 hover:text-green-900"
           >
-            <Download size={14} /> Download Full CSV
-          </a>
+            <Download size={14} /> {isDownloading ? 'Preparing download…' : 'Download Full CSV'}
+          </button>
         )}
         <button
           onClick={() => setView(view === 'table' ? 'chart' : 'table')}
@@ -142,6 +163,11 @@ export default function ResultsTable({ data, drillThrough }: Props) {
           {view === 'table' ? 'Chart' : 'Table'}
         </button>
       </div>
+      {downloadError && (
+        <div role="alert" className="border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {downloadError}
+        </div>
+      )}
 
       {/* Chart view */}
       {view === 'chart' && (
@@ -155,7 +181,7 @@ export default function ResultsTable({ data, drillThrough }: Props) {
       data.columns.length === 0 ? (
         <div className="border border-t-0 rounded-b-lg p-4 text-sm text-gray-600 bg-white">
           No inline preview rows are available for this result.
-          {downloadUrl ? ' Use Download Full CSV to retrieve the export file.' : ''}
+          {hasFileExport ? ' Use Download Full CSV to retrieve the export file.' : ''}
         </div>
       ) : (
       <div className="overflow-x-auto border border-t-0 rounded-b-lg">

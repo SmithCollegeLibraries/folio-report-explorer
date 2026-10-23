@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as R
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, downloadExportCsv, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision, recordQueryMemorySignal } from '../api/client';
+import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision, recordQueryMemorySignal } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
@@ -1212,12 +1212,6 @@ export default function Ask() {
     }
   };
 
-  const handleDownloadExport = async () => {
-    if (!activeJobId) return;
-    await downloadExportCsv(activeJobId);
-    recordMemorySignal('downloaded');
-  };
-
   const handleUseSuggestion = (suggestedPrompt: string) => {
     const context = buildCurrentAskFollowUpContext(
       history[0]?.prompt || prompt,
@@ -2394,16 +2388,8 @@ export default function Ask() {
                               ? 'Preview shown below. Download CSV for the full result set.'
                               : 'This query was exported as CSV in the background. Download the file to view all data.'}
                           </div>
-                          {results.downloadUrl && activeJobId && (
-                            <button
-                              onClick={handleDownloadExport}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
-                            >
-                              Download full CSV
-                            </button>
-                          )}
                         </div>
-                        {hasFilePreview && <ResultsTable data={results} />}
+                        <ResultsTable data={results} onFullDownload={() => recordMemorySignal('downloaded')} />
                       </div>
                     ) : (
                       <ResultsTable data={results} />

@@ -57,7 +57,9 @@ namespace {
     $export->metadata = json_encode(['reportExecution' => $contract]);
     $export->markExportCompleted('/tmp/report.csv', 100000, 20, ['Instance UUID'], [['Instance UUID' => 'a']], false);
     queryMetadataAssertSame(false, $export->getDecodedMetadata()['reportExecution']['truncated'] ?? null, 'Export completion must persist a false truncation flag.');
-    queryMetadataAssertSame(false, $export->toStatusArray()['truncated'] ?? null, 'Export status must expose false truncation as a boolean.');
+    $exportStatus = $export->toStatusArray();
+    queryMetadataAssertSame(false, $exportStatus['truncated'] ?? null, 'Export status must expose false truncation as a boolean.');
+    queryMetadataAssertSame('/query/export/report-export-job', $exportStatus['downloadUrl'] ?? null, 'Export status must return an API-relative download path.');
 
     $ordinary = new QueryJob();
     $ordinary->id = 'ordinary-job';

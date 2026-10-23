@@ -91,7 +91,7 @@ describe('useJobPolling cancellation', () => {
       rows: [{ UUID: 'instance-1' }],
       rowCount: 100000,
       executionTimeMs: 18,
-      downloadUrl: '/api/query/export/job-1',
+      downloadUrl: '/query/export/job-1',
       truncated: true,
       identifierSkippedCount: 1,
     });
@@ -100,8 +100,9 @@ describe('useJobPolling cancellation', () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(result.current.results).toMatchObject({
+      jobId: 'job-1',
       outputMode: 'file',
-      downloadUrl: '/api/query/export/job-1',
+      downloadUrl: '/query/export/job-1',
       truncated: true,
       identifierSkippedCount: 1,
     });

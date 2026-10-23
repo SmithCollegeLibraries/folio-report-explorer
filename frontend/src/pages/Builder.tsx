@@ -8,7 +8,6 @@ import {
   buildQuery,
   submitQuery,
   saveQuery,
-  downloadExportCsv,
 } from '../api/client';
 import { useJobPolling } from '../hooks/useJobPolling';
 import RelationshipPanel from '../components/RelationshipPanel';
@@ -932,19 +931,9 @@ export default function Builder() {
                         ? 'Preview shown below. Download CSV for the full result set.'
                         : 'This query was exported as CSV in the background. Download the file to view all data.'}
                     </div>
-                    {results.downloadUrl && activeJobId && (
-                      <button
-                        onClick={() => downloadExportCsv(activeJobId)}
-                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 text-xs"
-                      >
-                        Download full CSV
-                      </button>
-                    )}
-                    {results.columns.length > 0 && results.rows.length > 0 && (
-                      <div className="mt-4">
-                        <ResultsTable data={results} />
-                      </div>
-                    )}
+                    <div className="mt-4">
+                      <ResultsTable data={results} />
+                    </div>
                   </div>
                 ) : (
                   <ResultsTable data={results} />
