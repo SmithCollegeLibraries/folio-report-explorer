@@ -13,6 +13,7 @@ interface SearchableMultiSelectProps {
   options: SelectOption[];
   placeholder?: string;
   maxSelections?: number;
+  required?: boolean;
   onChange: (value: string) => void;
   error?: string;
   errorId?: string;
@@ -55,6 +56,7 @@ export default function SearchableMultiSelect({
   options,
   placeholder = 'Search options',
   maxSelections = 100,
+  required = false,
   onChange,
   error,
   errorId,
@@ -108,6 +110,7 @@ export default function SearchableMultiSelect({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
+        aria-required={required ? true : undefined}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
         onClick={() => setIsOpen((current) => !current)}

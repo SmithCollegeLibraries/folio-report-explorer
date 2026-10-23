@@ -40,7 +40,6 @@ import type {
   IndexRecommendationResponse,
   DashboardResponse,
   AcrlStatistic,
-  ExpenseAllocation,
   ExpenseMonitorCode,
   ExpenseMonitorRefreshResponse,
   DashboardWidgetTemplate,
@@ -64,7 +63,7 @@ import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
 const basePath = (import.meta.env.VITE_BASE_PATH || '').replace(/\/$/, '');
 const apiBase = import.meta.env.VITE_API_URL || `${basePath}/api`;
 
-const api = axios.create({
+export const api = axios.create({
   baseURL: apiBase,
   headers: { 'Content-Type': 'application/json' },
   timeout: 300000,
@@ -488,36 +487,6 @@ export async function deleteAcrlRow(id: number): Promise<void> {
 
 export async function copyAcrlYear(fromYear: number, toYear: number, overwrite = false): Promise<{ success: boolean; copied: number; updated: number; skipped: number }> {
   const { data } = await api.post('/local/acrl/copy-year', { fromYear, toYear, overwrite });
-  return data;
-}
-
-export async function listAllocations(fiscalYear?: number): Promise<{ items: ExpenseAllocation[]; years: number[] }> {
-  const { data } = await api.get('/local/allocations', { params: fiscalYear ? { fiscalYear } : {} });
-  return data;
-}
-
-export async function listAllocationYears(): Promise<number[]> {
-  const { data } = await api.get('/local/allocations/years');
-  return data.years || [];
-}
-
-export async function upsertAllocations(
-  fiscalYear: number,
-  payload:
-    | { code: string; amount: number }
-    | { rows: Array<{ expense_class_code: string; allocation_amount: number }> }
-    | { pastedData: string },
-): Promise<{ success: boolean; inserted: number; updated: number }> {
-  const { data } = await api.post('/local/allocations', { fiscalYear, ...payload });
-  return data;
-}
-
-export async function deleteAllocation(id: number): Promise<void> {
-  await api.delete(`/local/allocations/${id}`);
-}
-
-export async function copyAllocationYear(fiscalYear: number): Promise<{ success: boolean; copied: number; skipped: number; sourceYear: number }> {
-  const { data } = await api.post('/local/allocations/copy-year', { fiscalYear });
   return data;
 }
 
