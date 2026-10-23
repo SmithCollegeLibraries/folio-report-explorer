@@ -4,7 +4,6 @@ namespace app\services;
 
 require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
 require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
-require_once __DIR__ . '/CatalogingHoldingslessReportService.php';
 require_once __DIR__ . '/CatalogingReportMigrationRecognitionService.php';
 
 class MigrationService
@@ -341,7 +340,8 @@ class MigrationService
             && self::marcMissingTagReportAppearsComplete($db)
             && self::catalogingMarcFieldFinderAppearsComplete($db)
             && CatalogingReportMigrationRecognitionService::holdingslessReportAppearsComplete($db)
-            && self::acquisitionsOpenOrdersReportAppearsComplete($db);
+            && CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db)
+            && CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -439,7 +439,8 @@ class MigrationService
             case '046_cataloging_holdingsless_marker_patterns.sql':
             case '047_cataloging_holdingsless_exclusion_match.sql':
                 return CatalogingReportMigrationRecognitionService::holdingslessReportAppearsComplete($db);
-            case '048_quarterly_open_orders_report.sql': return self::acquisitionsOpenOrdersReportAppearsComplete($db);
+            case '048_quarterly_open_orders_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db);
+            case '049_acquisitions_invoice_status_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [
                     'generation_id',
@@ -481,11 +482,6 @@ class MigrationService
                 CatalogingMarcMissingTagReportService::isCanonicalSeedDefinition($definition)
                 || ($allowLegacy && CatalogingMarcMissingTagReportService::isLegacySeedDefinition($definition))
             );
-    }
-
-    private static function acquisitionsOpenOrdersReportAppearsComplete($db): bool
-    {
-        return CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db);
     }
 
     private static function catalogingMarcFieldFinderAppearsComplete($db): bool

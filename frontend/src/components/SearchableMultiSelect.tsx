@@ -18,9 +18,34 @@ interface SearchableMultiSelectProps {
   errorId?: string;
 }
 
-function selectionCountLabel(count: number, singularLabel: string): string {
-  if (count === 0) return `No ${singularLabel}s selected`;
-  return `${count} ${singularLabel}${count === 1 ? '' : 's'} selected`;
+function selectionLabels(label: string): { singular: string; plural: string } {
+  const normalized = label.trim();
+  const lower = normalized.toLocaleLowerCase();
+  if (lower.endsWith('statuses')) {
+    return { singular: normalized.slice(0, -2), plural: normalized };
+  }
+  if (lower.endsWith('status')) {
+    return { singular: normalized, plural: `${normalized}es` };
+  }
+  if (/(?:sses|ches|shes|xes|zes)$/i.test(normalized)) {
+    return { singular: normalized.slice(0, -2), plural: normalized };
+  }
+  if (lower.endsWith('ies')) {
+    return { singular: `${normalized.slice(0, -3)}y`, plural: normalized };
+  }
+  if (lower.endsWith('s') && !/(?:us|ss)$/i.test(normalized)) {
+    return { singular: normalized.slice(0, -1), plural: normalized };
+  }
+  if (/(?:s|x|z|ch|sh)$/i.test(normalized)) {
+    return { singular: normalized, plural: `${normalized}es` };
+  }
+  return { singular: normalized, plural: `${normalized}s` };
+}
+
+function selectionCountLabel(count: number, singularLabel: string, pluralLabel: string): string {
+  if (count === 0) return `No ${pluralLabel.toLocaleLowerCase()} selected`;
+  const label = count === 1 ? singularLabel : pluralLabel;
+  return `${count} ${label.toLocaleLowerCase()} selected`;
 }
 
 export default function SearchableMultiSelect({
@@ -52,7 +77,9 @@ export default function SearchableMultiSelect({
   }, [options, search]);
   const atLimit = selectedValues.length >= maxSelections;
   const listboxId = `${id}-options`;
-  const singularLabel = label.replace(/s$/i, '').toLocaleLowerCase();
+  const selectionName = selectionLabels(label);
+  const singularLabel = selectionName.singular;
+  const pluralLabel = selectionName.plural;
 
   const emit = (next: string[]) => onChange(next.join(','));
   const toggleOption = (optionValue: string) => {
@@ -66,7 +93,9 @@ export default function SearchableMultiSelect({
     }
   };
 
-  const countLabel = selectionCountLabel(selectedValues.length, singularLabel);
+  const countLabel = selectionCountLabel(selectedValues.length, singularLabel, pluralLabel);
+  const selectorLabel = `Select ${label.toLocaleLowerCase()}`;
+  const limitLabel = (maxSelections === 1 ? singularLabel : pluralLabel).toLocaleLowerCase();
 
   return (
     <div className="relative" onKeyDown={(event) => {
@@ -75,7 +104,7 @@ export default function SearchableMultiSelect({
       <button
         id={id}
         type="button"
-        aria-label={selectedValues.length === 0 ? 'Select locations' : countLabel}
+        aria-label={selectedValues.length === 0 ? selectorLabel : countLabel}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
@@ -85,7 +114,7 @@ export default function SearchableMultiSelect({
         className="flex w-full items-center justify-between rounded-lg border border-stone-300 bg-white px-3 py-2 text-left text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
       >
         <span className={selectedValues.length === 0 ? 'text-stone-500' : 'text-gray-800'}>
-          {selectedValues.length === 0 ? 'Select locations' : countLabel}
+          {selectedValues.length === 0 ? selectorLabel : countLabel}
         </span>
         <ChevronDown size={16} className={`text-stone-400 transition ${isOpen ? 'rotate-180' : ''}`} />
       </button>
@@ -147,12 +176,12 @@ export default function SearchableMultiSelect({
           <div
             id={listboxId}
             role="listbox"
-            aria-label={`${label.replace(/s$/i, '')} options`}
+            aria-label={`${singularLabel} options`}
             aria-multiselectable="true"
             className="mt-2 max-h-72 overflow-y-auto rounded-lg border border-stone-100"
           >
             {filteredOptions.length === 0 ? (
-              <p className="px-3 py-6 text-center text-sm text-stone-500">No matching locations.</p>
+              <p className="px-3 py-6 text-center text-sm text-stone-500">No matching {pluralLabel.toLocaleLowerCase()}.</p>
             ) : filteredOptions.map((option) => {
               const selected = selectedSet.has(option.value);
               return (
@@ -177,7 +206,7 @@ export default function SearchableMultiSelect({
 
           {atLimit && (
             <p className="mt-2 text-xs font-medium text-amber-700">
-              Maximum of {maxSelections} {singularLabel}{maxSelections === 1 ? '' : 's'} selected.
+              Maximum of {maxSelections} {limitLabel} selected.
             </p>
           )}
         </div>

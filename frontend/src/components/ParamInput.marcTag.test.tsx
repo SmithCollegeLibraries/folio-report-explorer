@@ -210,4 +210,50 @@ describe('ParamInput', () => {
     await user.type(search, 'does not exist');
     expect(screen.getByText('No matching locations.')).toBeInTheDocument();
   });
+
+  it.each([
+    {
+      label: 'Invoice Status',
+      singular: 'invoice status',
+      plural: 'invoice statuses',
+      option: 'Approved',
+    },
+    {
+      label: 'Vendor',
+      singular: 'vendor',
+      plural: 'vendors',
+      option: 'Vendor One (V1)',
+    },
+  ])('uses the $label field name in its multiselect controls', async ({ label, singular, plural, option }) => {
+    const user = userEvent.setup();
+
+    function Harness() {
+      const [value, setValue] = useState('');
+      return (
+        <ParamInput
+          param={{
+            name: 'selection',
+            type: 'multiselect' as never,
+            label,
+            required: false,
+            default: '',
+            resolvedDefault: '',
+          } as never}
+          value={value}
+          options={[{ value: 'one', label: option }]}
+          onChange={setValue}
+        />
+      );
+    }
+
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: `Select ${singular}` }));
+    const search = screen.getByRole('searchbox', { name: `Search ${singular}` });
+    await user.type(search, 'no match');
+    expect(screen.getByText(`No matching ${plural}.`)).toBeInTheDocument();
+
+    await user.clear(search);
+    await user.click(screen.getByRole('checkbox', { name: option }));
+    expect(screen.getByRole('button', { name: `1 ${singular} selected` })).toBeInTheDocument();
+  });
 });
