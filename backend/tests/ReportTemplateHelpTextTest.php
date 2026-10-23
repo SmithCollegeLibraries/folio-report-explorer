@@ -53,6 +53,7 @@ namespace yii\db {
 
 namespace {
     require_once __DIR__ . '/../models/ReportTemplate.php';
+    require_once __DIR__ . '/support/AcquisitionsMissingUnitReportFixture.php';
 
     use app\models\ReportTemplate;
 
@@ -100,6 +101,23 @@ namespace {
         in_array('help_text', $legacyRuleAttributes, true),
         'Schemas without help_text should not validate the unavailable attribute.'
     );
+
+    $missingAcqUnitReport = acquisitionsMissingUnitReportSeed();
+    foreach ([
+        'no non-null acquisitions unit',
+        'all workflow statuses',
+        'SC prefix',
+        'numbers only',
+        'vendor code starts with SC',
+        'fund code starting with SC',
+        'not a definitive ownership decision',
+    ] as $helpTextRequirement) {
+        assertSameValue(
+            true,
+            strpos($missingAcqUnitReport['help_text'], $helpTextRequirement) !== false,
+            'Missing-acquisitions-unit help text should explain ' . $helpTextRequirement . '.'
+        );
+    }
 
     echo "PASS: ReportTemplate help text serialization tests\n";
 }
