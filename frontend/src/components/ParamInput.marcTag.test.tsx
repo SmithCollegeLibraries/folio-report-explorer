@@ -73,6 +73,7 @@ describe('ParamInput', () => {
     const user = userEvent.setup();
     const smithInternetId = '67204874-e4d7-495b-9247-62cd27d9ea31';
     const smithDvdId = 'c740efa7-7905-4514-995f-b6b23cc5e4b8';
+    const hampshireId = 'b4a2ef09-a996-44a9-94ca-a8ff7fb0d539';
 
     function Harness() {
       const [value, setValue] = useState('');
@@ -98,6 +99,7 @@ describe('ParamInput', () => {
               value: smithDvdId,
               label: 'Smith College — SC Neilson Library — SC Neilson DVD [SNDVD]',
             },
+            { value: hampshireId, label: 'Hampshire College — Harold F. Johnson Library [HCMAIN]' },
           ]}
           onChange={setValue}
         />
@@ -118,7 +120,8 @@ describe('ParamInput', () => {
     await user.clear(reopenedSearch);
     await user.click(screen.getByRole('checkbox', { name: /neilson dvd/i }));
 
-    expect(screen.getByRole('button', { name: '2 locations selected' })).toBeInTheDocument();
+    const selectedControl = screen.getByRole('button', { name: '2 locations selected' });
+    expect(selectedControl).toHaveTextContent('2 of 3 locations');
     expect(screen.getByRole('button', { name: /remove .*sc internet/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /remove .*sc neilson dvd/i })).toBeInTheDocument();
 
@@ -126,8 +129,10 @@ describe('ParamInput', () => {
     expect(screen.getByRole('button', { name: '1 location selected' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /remove .*sc internet/i })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /clear all locations/i }));
-    expect(screen.getByText('No locations selected')).toBeInTheDocument();
+    await user.click(selectedControl);
+    await user.click(screen.getByRole('button', { name: 'Clear all locations' }));
+    expect(screen.getByRole('button', { name: /select locations/i })).toBeInTheDocument();
+    expect(screen.queryByText('No locations selected')).not.toBeInTheDocument();
   });
 
   it('closes the location list after a location is selected', async () => {

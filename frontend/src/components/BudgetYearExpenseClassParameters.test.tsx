@@ -108,7 +108,8 @@ describe('BudgetYearExpenseClassParameters', () => {
     expect(startDate).toHaveValue('2025-07-01');
     await user.clear(startDate);
     expect(startDate).toHaveValue('');
-    expect(screen.getByRole('button', { name: '2 funds: SCBPS, SCBIS' })).toBeInTheDocument();
+    const fundsControl = screen.getByRole('button', { name: '2 funds: SCBPS, SCBIS' });
+    expect(fundsControl).toHaveTextContent('All funds (2)');
 
     await user.click(screen.getByRole('button', { name: '2 funds: SCBPS, SCBIS' }));
     expect(screen.getByRole('listbox')).toBeInTheDocument();

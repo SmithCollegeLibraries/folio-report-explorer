@@ -1,5 +1,6 @@
 import { ChevronDown, Search, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { selectionCountLabel, selectionLabels } from '../utils/multiSelectLabels';
 
 interface SelectOption {
   value: string;
@@ -22,35 +23,8 @@ interface SearchableMultiSelectProps {
   disabled?: boolean;
 }
 
-function selectionLabels(label: string): { singular: string; plural: string } {
-  const normalized = label.trim();
-  const lower = normalized.toLocaleLowerCase();
-  if (lower.endsWith('statuses')) {
-    return { singular: normalized.slice(0, -2), plural: normalized };
-  }
-  if (lower.endsWith('status')) {
-    return { singular: normalized, plural: `${normalized}es` };
-  }
-  if (/(?:sses|ches|shes|xes|zes)$/i.test(normalized)) {
-    return { singular: normalized.slice(0, -2), plural: normalized };
-  }
-  if (lower.endsWith('ies')) {
-    return { singular: `${normalized.slice(0, -3)}y`, plural: normalized };
-  }
-  if (lower.endsWith('s') && !/(?:us|ss)$/i.test(normalized)) {
-    return { singular: normalized.slice(0, -1), plural: normalized };
-  }
-  if (/(?:s|x|z|ch|sh)$/i.test(normalized)) {
-    return { singular: normalized, plural: `${normalized}es` };
-  }
-  return { singular: normalized, plural: `${normalized}s` };
-}
-
-function selectionCountLabel(count: number, singularLabel: string, pluralLabel: string): string {
-  if (count === 0) return `No ${pluralLabel.toLocaleLowerCase()} selected`;
-  const label = count === 1 ? singularLabel : pluralLabel;
-  return `${count} ${label.toLocaleLowerCase()} selected`;
-}
+const MAX_VISIBLE_CHIPS = 3;
+const MAX_SHORT_SUMMARY_LENGTH = 32;
 
 export default function SearchableMultiSelect({
   id,
@@ -91,6 +65,13 @@ export default function SearchableMultiSelect({
   const selectionName = selectionLabels(label);
   const singularLabel = selectionName.singular;
   const pluralLabel = selectionName.plural;
+  const selectedLabels = selectedValues
+    .map((selectedValue) => optionByValue.get(selectedValue)?.label)
+    .filter((optionLabel): optionLabel is string => Boolean(optionLabel));
+  const selectedNames = selectedLabels.join(', ');
+  const isAllSelected = options.length > 0
+    && selectedValues.length === options.length
+    && options.every((option) => selectedSet.has(option.value));
 
   const emit = (next: string[]) => onChange(next.join(','));
   const toggleOption = (optionValue: string) => {
@@ -106,10 +87,25 @@ export default function SearchableMultiSelect({
 
   const countLabel = selectionCountLabel(selectedValues.length, singularLabel, pluralLabel);
   const selectorLabel = `Select ${label.toLocaleLowerCase()}`;
-  const buttonLabel = disabled && buttonPlaceholder
+  const buttonText = disabled && buttonPlaceholder
     ? buttonPlaceholder
-    : selectedValues.length === 0 ? buttonPlaceholder || selectorLabel : selectedSummary || countLabel;
+    : selectedValues.length === 0
+      ? buttonPlaceholder || selectorLabel
+      : isAllSelected
+        ? `All ${pluralLabel.toLocaleLowerCase()} (${options.length})`
+        : selectedLabels.length === selectedValues.length && selectedNames.length <= MAX_SHORT_SUMMARY_LENGTH
+          ? selectedNames
+          : options.length > 0
+            ? `${selectedValues.length} of ${options.length} ${pluralLabel.toLocaleLowerCase()}`
+            : countLabel;
+  const accessibleButtonLabel = disabled && buttonPlaceholder
+    ? buttonPlaceholder
+    : selectedValues.length === 0
+      ? buttonPlaceholder || selectorLabel
+      : selectedSummary || countLabel;
   const limitLabel = (maxSelections === 1 ? singularLabel : pluralLabel).toLocaleLowerCase();
+  const visibleSelectedValues = isAllSelected ? [] : selectedValues.slice(0, MAX_VISIBLE_CHIPS);
+  const hiddenSelectionCount = selectedValues.length - visibleSelectedValues.length;
 
   return (
     <div className="relative" onKeyDown={(event) => {
@@ -118,7 +114,7 @@ export default function SearchableMultiSelect({
       <button
         id={id}
         type="button"
-        aria-label={buttonLabel}
+        aria-label={accessibleButtonLabel}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
@@ -127,25 +123,26 @@ export default function SearchableMultiSelect({
         aria-describedby={error ? errorId : undefined}
         onClick={() => setIsOpen((current) => !current)}
         disabled={disabled}
-        className="flex w-full items-center justify-between rounded-lg border border-stone-300 bg-white px-3 py-2 text-left text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
+        title={selectedLabels.length > 0 ? selectedNames : undefined}
+        className="flex h-10 w-full min-w-0 items-center justify-between rounded-lg border border-stone-300 bg-white px-3 text-left text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
       >
-        <span className={selectedValues.length === 0 ? 'text-stone-500' : 'text-gray-800'}>
-          {buttonLabel}
+        <span className={`min-w-0 flex-1 truncate ${selectedValues.length === 0 ? 'text-stone-500' : 'text-gray-800'}`}>
+          {buttonText}
         </span>
-        <ChevronDown size={16} className={`text-stone-400 transition ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown size={16} className={`ml-2 shrink-0 text-stone-400 transition ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
-      {selectedValues.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {selectedValues.map((selectedValue) => {
+      {visibleSelectedValues.length > 0 && (
+        <div className="mt-2 flex min-w-0 items-center gap-1.5 overflow-hidden">
+          {visibleSelectedValues.map((selectedValue) => {
             const option = optionByValue.get(selectedValue);
             if (!option) return null;
             return (
               <span
                 key={selectedValue}
-                className="inline-flex max-w-full items-center gap-1 rounded-full bg-folio-50 px-2.5 py-1 text-xs font-medium text-folio-800"
+                className={`inline-flex h-6 ${hiddenSelectionCount > 0 ? 'max-w-[24%]' : 'max-w-[32%]'} min-w-0 shrink-0 items-center gap-1 rounded-full bg-folio-50 px-2 text-xs font-medium text-folio-800`}
               >
-                <span className="truncate">{option.label}</span>
+                <span className="min-w-0 truncate">{option.label}</span>
                 <button
                   type="button"
                   aria-label={`Remove ${option.label}`}
@@ -157,25 +154,44 @@ export default function SearchableMultiSelect({
               </span>
             );
           })}
+          {hiddenSelectionCount > 0 && (
+            <button
+              type="button"
+              aria-haspopup="listbox"
+              aria-expanded={isOpen}
+              aria-controls={listboxId}
+              title={`Show ${hiddenSelectionCount} more selected ${pluralLabel.toLocaleLowerCase()}`}
+              onClick={() => setIsOpen(true)}
+              className="h-6 shrink-0 whitespace-nowrap rounded-full px-2 text-xs font-medium text-folio-700 hover:bg-folio-50"
+            >
+              +{hiddenSelectionCount} more
+            </button>
+          )}
         </div>
       )}
 
-      <div className="mt-1 flex items-center justify-between gap-2 text-xs text-stone-500">
-        <span>{countLabel}</span>
-        {selectedValues.length > 0 && (
-          <button
-            type="button"
-            aria-label={`Clear all ${label.toLocaleLowerCase()}`}
-            onClick={() => emit([])}
-            className="font-medium text-folio-700 hover:text-folio-900"
-          >
-            Clear all
-          </button>
-        )}
-      </div>
-
       {isOpen && (
         <div className="absolute z-30 mt-2 w-full min-w-[22rem] rounded-xl border border-stone-200 bg-white p-2 shadow-xl">
+          <div className="mb-2 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              aria-label={`Select all ${label.toLocaleLowerCase()}`}
+              onClick={() => emit(options.slice(0, maxSelections).map((option) => option.value))}
+              disabled={isAllSelected || atLimit || options.length === 0 || options.length > maxSelections}
+              className="rounded-md px-2 py-1 text-xs font-medium text-folio-700 hover:bg-folio-50 disabled:cursor-not-allowed disabled:text-stone-400"
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              aria-label={`Clear all ${label.toLocaleLowerCase()}`}
+              onClick={() => emit([])}
+              disabled={selectedValues.length === 0}
+              className="rounded-md px-2 py-1 text-xs font-medium text-folio-700 hover:bg-folio-50 disabled:cursor-not-allowed disabled:text-stone-400"
+            >
+              Clear all
+            </button>
+          </div>
           <div className="relative">
             <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-stone-400" />
             <input

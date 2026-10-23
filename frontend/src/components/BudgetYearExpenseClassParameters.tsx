@@ -95,7 +95,7 @@ export default function BudgetYearExpenseClassParameters({
     : null;
 
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
       <div>
         <label htmlFor="report-param-acqUnit" className="mb-1 block text-xs font-medium text-gray-600">
           {label('acqUnit', 'Acquisitions Unit')}<span aria-hidden="true" className="ml-0.5 text-red-400">*</span>

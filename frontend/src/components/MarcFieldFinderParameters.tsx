@@ -124,7 +124,7 @@ export default function MarcFieldFinderParameters({
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
         {renderParam('locationIds')}
         {renderParam('locationBasis')}
         {renderParam('marcTag')}
