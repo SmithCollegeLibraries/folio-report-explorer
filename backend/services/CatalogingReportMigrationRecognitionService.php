@@ -5,8 +5,9 @@ namespace app\services;
 require_once __DIR__ . '/CatalogingHoldingslessReportService.php';
 require_once __DIR__ . '/AcquisitionsOpenOrdersReportService.php';
 require_once __DIR__ . '/AcquisitionsInvoiceStatusReportService.php';
+require_once __DIR__ . '/AcquisitionsMissingUnitReportMigrationService.php';
 
-/** Keeps cataloging report migration checks outside the legacy migration service. */
+/** Keeps governed report migration checks outside the legacy migration service. */
 final class CatalogingReportMigrationRecognitionService
 {
     public static function holdingslessReportAppearsComplete($db): bool
@@ -22,6 +23,11 @@ final class CatalogingReportMigrationRecognitionService
     public static function acquisitionsInvoiceStatusReportAppearsComplete($db): bool
     {
         return self::canonicalReportAppearsComplete($db, AcquisitionsInvoiceStatusReportService::class);
+    }
+
+    public static function ordersMissingAcqUnitReportAppearsComplete($db): bool
+    {
+        return AcquisitionsMissingUnitReportMigrationService::ordersMissingAcqUnitReportAppearsComplete($db);
     }
 
     private static function canonicalReportAppearsComplete($db, string $serviceClass): bool
