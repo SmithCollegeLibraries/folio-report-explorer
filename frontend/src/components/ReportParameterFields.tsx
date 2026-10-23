@@ -48,7 +48,7 @@ export default function ReportParameterFields({
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
       {parameters.map((parameter) => (
         <div key={parameter.name}>
           <ParamInput
