@@ -1,5 +1,5 @@
 import { ChevronDown, Search, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 interface SelectOption {
   value: string;
@@ -17,6 +17,9 @@ interface SearchableMultiSelectProps {
   onChange: (value: string) => void;
   error?: string;
   errorId?: string;
+  buttonPlaceholder?: string;
+  selectedSummary?: string;
+  disabled?: boolean;
 }
 
 function selectionLabels(label: string): { singular: string; plural: string } {
@@ -60,9 +63,15 @@ export default function SearchableMultiSelect({
   onChange,
   error,
   errorId,
+  buttonPlaceholder,
+  selectedSummary,
+  disabled = false,
 }: SearchableMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
+  useEffect(() => {
+    if (disabled) setIsOpen(false);
+  }, [disabled]);
   const selectedValues = useMemo(
     () => value.split(',').map((item) => item.trim()).filter(Boolean),
     [value],
@@ -97,6 +106,9 @@ export default function SearchableMultiSelect({
 
   const countLabel = selectionCountLabel(selectedValues.length, singularLabel, pluralLabel);
   const selectorLabel = `Select ${label.toLocaleLowerCase()}`;
+  const buttonLabel = disabled && buttonPlaceholder
+    ? buttonPlaceholder
+    : selectedValues.length === 0 ? buttonPlaceholder || selectorLabel : selectedSummary || countLabel;
   const limitLabel = (maxSelections === 1 ? singularLabel : pluralLabel).toLocaleLowerCase();
 
   return (
@@ -106,7 +118,7 @@ export default function SearchableMultiSelect({
       <button
         id={id}
         type="button"
-        aria-label={selectedValues.length === 0 ? selectorLabel : countLabel}
+        aria-label={buttonLabel}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
@@ -114,10 +126,11 @@ export default function SearchableMultiSelect({
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
         onClick={() => setIsOpen((current) => !current)}
+        disabled={disabled}
         className="flex w-full items-center justify-between rounded-lg border border-stone-300 bg-white px-3 py-2 text-left text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
       >
         <span className={selectedValues.length === 0 ? 'text-stone-500' : 'text-gray-800'}>
-          {selectedValues.length === 0 ? selectorLabel : countLabel}
+          {buttonLabel}
         </span>
         <ChevronDown size={16} className={`text-stone-400 transition ${isOpen ? 'rotate-180' : ''}`} />
       </button>

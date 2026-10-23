@@ -10,6 +10,10 @@ interface AuthContextType {
   loading: boolean;
   /** Whether the user is an admin */
   isAdmin: boolean;
+  /** Colleges the current user may edit allocations for */
+  allocationColleges: string[];
+  /** Whether the current user may edit allocations, optionally for one college */
+  canEditAllocationsFor: (college?: string) => boolean;
   /** Whether auth is enabled (production mode) */
   authEnabled: boolean;
   /** Store tokens from Shibboleth callback */
@@ -23,6 +27,8 @@ const AuthContext = createContext<AuthContextType>({
   accessToken: null,
   loading: true,
   isAdmin: false,
+  allocationColleges: [],
+  canEditAllocationsFor: () => false,
   authEnabled: false,
   login: () => {},
   logout: () => {},
@@ -55,6 +61,29 @@ function isTokenExpired(token: string): boolean {
 const STORAGE_ACCESS_KEY = 'fre_access_token';
 const STORAGE_REFRESH_KEY = 'fre_refresh_token';
 
+function userFromToken(payload: JwtPayload): AuthUser | null {
+  if (!payload.user) return null;
+  return {
+    id: payload.user.id,
+    smithId: '',
+    username: payload.user.username,
+    firstName: payload.user.firstName,
+    lastName: payload.user.lastName,
+    displayName: payload.user.firstName && payload.user.lastName
+      ? `${payload.user.firstName} ${payload.user.lastName}`
+      : payload.user.username,
+    affiliation: null,
+    email: null,
+    role: payload.user.role,
+    isApproved: true,
+    receiveNotifications: false,
+    defaultCampus: payload.user.defaultCampus ?? 'Smith College',
+    allocationColleges: payload.user.allocationColleges ?? [],
+    lastLogin: null,
+    createdAt: '',
+  };
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -70,26 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAccessToken(newAccessToken);
 
     const payload = decodeJwt(newAccessToken);
-    if (payload?.user) {
-      setUser({
-        id: payload.user.id,
-        smithId: '',
-        username: payload.user.username,
-        firstName: payload.user.firstName,
-        lastName: payload.user.lastName,
-        displayName: payload.user.firstName && payload.user.lastName
-          ? `${payload.user.firstName} ${payload.user.lastName}`
-          : payload.user.username,
-        affiliation: null,
-        email: null,
-        role: payload.user.role,
-        isApproved: true,
-        receiveNotifications: false,
-        defaultCampus: payload.user.defaultCampus ?? 'Smith College',
-        lastLogin: null,
-        createdAt: '',
-      });
-    }
+    if (payload) setUser(userFromToken(payload));
   }, []);
 
   const logout = useCallback(() => {
@@ -109,35 +119,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem(STORAGE_ACCESS_KEY);
     if (stored && !isTokenExpired(stored)) {
       const payload = decodeJwt(stored);
-      if (payload?.user) {
+      if (payload) {
         setAccessToken(stored);
-        setUser({
-          id: payload.user.id,
-          smithId: '',
-          username: payload.user.username,
-          firstName: payload.user.firstName,
-          lastName: payload.user.lastName,
-          displayName: payload.user.firstName && payload.user.lastName
-            ? `${payload.user.firstName} ${payload.user.lastName}`
-            : payload.user.username,
-          affiliation: null,
-          email: null,
-          role: payload.user.role,
-          isApproved: true,
-          receiveNotifications: false,
-          defaultCampus: payload.user.defaultCampus ?? 'Smith College',
-          lastLogin: null,
-          createdAt: '',
-        });
+        setUser(userFromToken(payload));
       }
     }
     setLoading(false);
   }, [authEnabled]);
 
   const isAdmin = user?.role === 'admin';
+  const allocationColleges = user?.allocationColleges ?? [];
+  const canEditAllocationsFor = useCallback((college?: string) => {
+    if (!authEnabled || isAdmin) return true;
+    if (!college) return allocationColleges.length > 0;
+    return allocationColleges.includes(college.trim().toUpperCase());
+  }, [allocationColleges, authEnabled, isAdmin]);
+
+  useEffect(() => {
+    const handleRefresh = (event: Event) => {
+      const refreshedAuth = (event as CustomEvent<{ user: AuthUser; accessToken: string }>).detail;
+      if (refreshedAuth) {
+        setUser(refreshedAuth.user);
+        setAccessToken(refreshedAuth.accessToken);
+      }
+    };
+    window.addEventListener('folio-auth-refresh', handleRefresh);
+    return () => window.removeEventListener('folio-auth-refresh', handleRefresh);
+  }, []);
 
   return (
-    <AuthContext.Provider value={{ user, accessToken, loading, isAdmin, authEnabled, login, logout }}>
+    <AuthContext.Provider value={{ user, accessToken, loading, isAdmin, allocationColleges, canEditAllocationsFor, authEnabled, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

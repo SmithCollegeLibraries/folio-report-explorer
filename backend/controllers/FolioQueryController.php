@@ -114,7 +114,8 @@ class FolioQueryController extends Controller
             $behaviors['access'] = [
                 'class' => \yii\filters\AccessControl::class,
                 'except' => ['options', 'health', 'auth-refresh'],
-                'rules' => [
+                'rules' => array_merge(
+                    [
                     // Admin-only actions
                     [
                         'allow' => true,
@@ -126,9 +127,7 @@ class FolioQueryController extends Controller
                             'report-generate', 'report-convert',
                             'local-acrl-list', 'local-acrl-years', 'local-acrl-create',
                             'local-acrl-update', 'local-acrl-delete', 'local-acrl-copy-year',
-                            'local-alloc-list', 'local-alloc-years', 'local-alloc-upsert',
-                            'local-alloc-delete', 'local-alloc-copy-year',
-                            'user-list', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
+                            'user-list', 'user-allocation-colleges', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
                             'admin-widget-create', 'admin-widget-update', 'admin-widget-delete',
                             'report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update',
                             'query-memory-list', 'query-feedback-reuse-approval', 'query-feedback-suppression',
@@ -138,6 +137,9 @@ class FolioQueryController extends Controller
                             return $this->isPersistedAdministrator();
                         },
                     ],
+                    ],
+                    \app\services\AllocationEditorAccessService::rules(),
+                    [
                     // Stable API denial for authenticated non-administrators.
                     [
                         'allow' => false,
@@ -157,7 +159,8 @@ class FolioQueryController extends Controller
                         'allow' => true,
                         'roles' => ['@'],
                     ],
-                ],
+                    ]
+                ),
             ];
         }
 
@@ -5431,6 +5434,7 @@ class FolioQueryController extends Controller
     public function actionLocalAllocList()
     {
         $request = Yii::$app->request;
+        \app\services\AllocationEditorAccessService::requireCollege($request->get('prefix'));
         return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::listRows(
             Yii::$app->db->getMasterPdo(),
             $request->get('prefix'),
@@ -5443,6 +5447,7 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocYears()
     {
+        \app\services\AllocationEditorAccessService::requireCollege(Yii::$app->request->get('prefix'));
         return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::years(
             Yii::$app->db->getMasterPdo(),
             Yii::$app->request->get('prefix')
@@ -5464,8 +5469,10 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocUpsert()
     {
+        $body = Yii::$app->request->getBodyParams();
+        \app\services\AllocationEditorAccessService::requireCollege($body['prefix'] ?? null);
         return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::upsert(
-            Yii::$app->request->getBodyParams(),
+            $body,
             Yii::$app->folioDb
         ));
     }
@@ -5475,6 +5482,11 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocDelete($id)
     {
+        $allocation = ExpenseAllocation::findOne((int) $id);
+        $prefix = $allocation
+            ? substr((string) $allocation->expense_class_code, 0, 2)
+            : Yii::$app->request->get('prefix');
+        \app\services\AllocationEditorAccessService::requireCollege($prefix);
         return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::delete(
             $id,
             Yii::$app->request->get('prefix'),
@@ -5488,8 +5500,10 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocCopyYear()
     {
+        $body = Yii::$app->request->getBodyParams();
+        \app\services\AllocationEditorAccessService::requireCollege($body['prefix'] ?? null);
         return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::copyYear(
-            Yii::$app->request->getBodyParams(),
+            $body,
             Yii::$app->db->getMasterPdo(),
             Yii::$app->folioDb
         ));
@@ -5590,6 +5604,19 @@ class FolioQueryController extends Controller
         return array_map(function ($u) {
             return $u->toArray();
         }, $users);
+    }
+
+    /** PUT /api/users/<id>/allocation-colleges — assign local allocation colleges. */
+    public function actionUserAllocationColleges($id)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+
+        return $this->allocationApiResponse(\app\services\UserAllocationCollegesService::update(
+            $id,
+            Yii::$app->request->getBodyParams()
+        ));
     }
 
     /**

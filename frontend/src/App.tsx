@@ -181,7 +181,7 @@ function MobileNavGroup({
 }
 
 export default function App() {
-  const { user, isAdmin, authEnabled, logout } = useAuth();
+  const { user, isAdmin, authEnabled, logout, canEditAllocationsFor } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
 
@@ -231,6 +231,14 @@ export default function App() {
 
             <NavDropdown label="Query" icon={MessageSquare} items={queryItems} />
             <NavDropdown label="Library" icon={BookOpen} items={libraryItems} />
+            {authEnabled && !isAdmin && canEditAllocationsFor() && (
+              <NavLink
+                to="/local-data"
+                className={({ isActive }) => `flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-folio-600 text-white' : 'text-folio-200 hover:bg-folio-700 hover:text-white'}`}
+              >
+                <Database size={15} /> Local Data
+              </NavLink>
+            )}
             {showAdmin && (
               <NavDropdown label="Admin" icon={ShieldCheck} items={adminItems} color="amber" />
             )}
@@ -288,6 +296,11 @@ export default function App() {
 
             <MobileNavGroup label="Query" icon={MessageSquare} items={queryItems} />
             <MobileNavGroup label="Library" icon={BookOpen} items={libraryItems} />
+            {authEnabled && !isAdmin && canEditAllocationsFor() && (
+              <NavLink to="/local-data" className="flex items-center gap-2 px-3 py-2.5 rounded-md text-sm font-medium text-folio-200 hover:bg-folio-700 hover:text-white">
+                <Database size={16} /> Local Data
+              </NavLink>
+            )}
             {showAdmin && (
               <MobileNavGroup label="Admin" icon={ShieldCheck} items={adminItems} color="amber" />
             )}
@@ -342,7 +355,7 @@ export default function App() {
 
           {/* Admin routes */}
           <Route path="/training" element={<ProtectedRoute adminOnly><Training /></ProtectedRoute>} />
-          <Route path="/local-data" element={<ProtectedRoute adminOnly><LocalDataPage /></ProtectedRoute>} />
+          <Route path="/local-data" element={<ProtectedRoute allocationEditorOnly><LocalDataPage /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
           <Route path="/setup" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
           <Route path="/report-reviews" element={<ProtectedRoute adminOnly><ReportReviews /></ProtectedRoute>} />

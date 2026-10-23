@@ -165,6 +165,7 @@ $config = [
 
                 // User management (admin)
                 'GET users' => 'folio-query/user-list',
+                'PUT users/<id:\d+>/allocation-colleges' => 'folio-query/user-allocation-colleges',
                 'PUT users/<id:\d+>/approve' => 'folio-query/user-approve',
                 'PUT users/<id:\d+>/role' => 'folio-query/user-role',
                 'DELETE users/<id:\d+>' => 'folio-query/user-delete',

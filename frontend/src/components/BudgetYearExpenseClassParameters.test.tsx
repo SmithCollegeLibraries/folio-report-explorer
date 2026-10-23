@@ -10,15 +10,15 @@ const optionsByUnit = {
   SC: {
     prefix: 'SC',
     funds: [
-      { id: 'sc-fund-one', code: 'SCBPS', name: 'Book Fund', defaultSelected: true },
-      { id: 'sc-fund-two', code: 'SCBIS', name: 'E-Book Fund', defaultSelected: true },
+      { id: 'sc-fund-one', code: 'SCBPS', name: 'Book Fund', label: 'SCBPS — Book Fund', defaultSelected: true },
+      { id: 'sc-fund-two', code: 'SCBIS', name: 'E-Book Fund', label: 'SCBIS — E-Book Fund', defaultSelected: true },
     ],
     expenseClasses: [{ code: 'SCAP', name: 'SC Books' }],
     fiscalYears: [{ year: 2026, code: 'SCFY2026', startDate: '2025-07-02', endDate: '2026-06-30' }],
   },
   MH: {
     prefix: 'MH',
-    funds: [{ id: 'mh-fund-one', code: 'MHBPS', name: 'Book Fund', defaultSelected: false }],
+    funds: [{ id: 'mh-fund-one', code: 'MHBPS', name: 'Book Fund', label: 'MHBPS — Book Fund', defaultSelected: false }],
     expenseClasses: [{ code: 'MHBPS', name: 'MH Books' }],
     fiscalYears: [{ year: 2026, code: 'MHFY2026', startDate: '2025-07-01', endDate: '2026-06-30' }],
   },
@@ -108,12 +108,49 @@ describe('BudgetYearExpenseClassParameters', () => {
     expect(startDate).toHaveValue('2025-07-01');
     await user.clear(startDate);
     expect(startDate).toHaveValue('');
-    expect(screen.getByRole('button', { name: '2 funds selected' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '2 funds: SCBPS, SCBIS' })).toBeInTheDocument();
 
+    await user.click(screen.getByRole('button', { name: '2 funds: SCBPS, SCBIS' }));
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText(/Acquisitions unit/), 'MH');
-    await waitFor(() => expect(screen.getByRole('button', { name: /select funds/i })).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: /select funds/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /choose funds/i })).toBeInTheDocument());
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /choose funds/i }));
     expect(screen.getByRole('checkbox', { name: /MHBPS/ })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /SCBPS/ })).not.toBeInTheDocument();
+  });
+
+  it('prompts for a college before opening the fund picker', () => {
+    renderParameters();
+
+    const picker = screen.getByRole('button', { name: 'Choose a college first' });
+    expect(picker).toBeDisabled();
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
+
+  it('shows the server error from failed fund options', async () => {
+    const { getBudgetYearExpenseClassOptions } = await import('../api/budgetYearExpenseClass');
+    vi.mocked(getBudgetYearExpenseClassOptions).mockRejectedValueOnce({
+      response: { data: { error: 'Allocation options are unavailable.' } },
+    });
+    const user = userEvent.setup();
+    renderParameters();
+
+    await user.selectOptions(screen.getByLabelText(/Acquisitions unit/), 'SC');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Allocation options are unavailable.');
+  });
+
+  it('shows a loading label while fund options are pending', async () => {
+    const { getBudgetYearExpenseClassOptions } = await import('../api/budgetYearExpenseClass');
+    let resolveOptions: (value: typeof optionsByUnit.SC) => void = () => {};
+    vi.mocked(getBudgetYearExpenseClassOptions).mockImplementationOnce(() => new Promise((resolve) => {
+      resolveOptions = resolve;
+    }));
+    const user = userEvent.setup();
+    renderParameters();
+
+    await user.selectOptions(screen.getByLabelText(/Acquisitions unit/), 'SC');
+    expect(screen.getByRole('button', { name: 'Loading funds…' })).toBeDisabled();
+    resolveOptions(optionsByUnit.SC);
   });
 });

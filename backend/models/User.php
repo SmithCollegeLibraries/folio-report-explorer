@@ -7,6 +7,8 @@ use yii\db\ActiveRecord;
 use yii\web\IdentityInterface;
 use Firebase\JWT\JWT;
 
+require_once __DIR__ . '/../services/ExpenseClassScopeService.php';
+
 /**
  * User model — authenticated users via Shibboleth + JWT.
  *
@@ -21,6 +23,7 @@ use Firebase\JWT\JWT;
  * @property int    $is_approved     1 if approved by admin
  * @property int    $receive_notifications  1 to receive new-user emails (admins)
  * @property string $default_campus  Preferred campus scope for Ask AI (e.g. 'Smith College')
+ * @property string|null $allocation_colleges Comma-separated colleges for local allocation editing
  * @property string $last_login
  * @property string $refresh_token   Current refresh token (for revocation)
  * @property string $created_at
@@ -69,6 +72,8 @@ class User extends ActiveRecord implements IdentityInterface
             [['refresh_token'], 'string', 'max' => 512],
             [['default_campus'], 'string', 'max' => 50],
             [['default_campus'], 'default', 'value' => 'Smith College'],
+            [['allocation_colleges'], 'string', 'max' => 32],
+            [['allocation_colleges'], 'validateAllocationColleges'],
         ];
     }
 
@@ -170,6 +175,7 @@ class User extends ActiveRecord implements IdentityInterface
                 'lastName' => $this->last_name,
                 'role' => $this->role,
                 'defaultCampus' => $this->default_campus ?: 'Smith College',
+                'allocationColleges' => $this->getAllocationColleges(),
             ],
         ];
 
@@ -238,6 +244,43 @@ class User extends ActiveRecord implements IdentityInterface
         return $this->role === 'admin';
     }
 
+    public function getAllocationColleges(): array
+    {
+        return \app\services\ExpenseClassScopeService::allocationCollegesFromString($this->allocation_colleges);
+    }
+
+    public function canEditAllocationsFor($prefix = null): bool
+    {
+        if ($this->isAdmin()) {
+            return true;
+        }
+
+        $colleges = $this->getAllocationColleges();
+        if ($prefix === null) {
+            return !empty($colleges);
+        }
+        if (!is_string($prefix)) {
+            return false;
+        }
+
+        try {
+            $prefix = \app\services\ExpenseClassScopeService::normalizePrefix($prefix);
+        } catch (\InvalidArgumentException $error) {
+            return false;
+        }
+
+        return in_array($prefix, $colleges, true);
+    }
+
+    public function validateAllocationColleges($attribute)
+    {
+        try {
+            $this->$attribute = \app\services\ExpenseClassScopeService::normalizeAllocationCollegeString($this->$attribute);
+        } catch (\InvalidArgumentException $error) {
+            $this->addError($attribute, 'Choose allocation colleges from the listed colleges.');
+        }
+    }
+
     /**
      * Get display name.
      *
@@ -280,6 +323,7 @@ class User extends ActiveRecord implements IdentityInterface
             'isApproved' => (bool) $this->is_approved,
             'receiveNotifications' => (bool) $this->receive_notifications,
             'defaultCampus' => $this->default_campus ?: 'Smith College',
+            'allocationColleges' => $this->getAllocationColleges(),
             'lastLogin' => $this->last_login,
             'createdAt' => $this->created_at,
         ];

@@ -9,8 +9,11 @@ import {
   updateAcrlRow,
 } from '../api/client';
 import ExpenseAllocationsPanel from '../components/ExpenseAllocationsPanel';
+import { useAuth } from '../hooks/useAuth';
 
 export default function LocalDataPage() {
+  const { isAdmin, authEnabled, allocationColleges, canEditAllocationsFor } = useAuth();
+  const allocationEditorOnly = authEnabled && !isAdmin && canEditAllocationsFor();
   const qc = useQueryClient();
   const [tab, setTab] = useState<'acrl' | 'alloc'>('acrl');
 
@@ -18,10 +21,11 @@ export default function LocalDataPage() {
   const [copyFromYear, setCopyFromYear] = useState<number | ''>('');
   const [copyToYear, setCopyToYear] = useState<number | ''>('');
 
-  const acrlYearsQ = useQuery({ queryKey: ['local', 'acrl-years'], queryFn: listAcrlYears });
+  const acrlYearsQ = useQuery({ queryKey: ['local', 'acrl-years'], queryFn: listAcrlYears, enabled: !allocationEditorOnly });
   const acrlQ = useQuery({
     queryKey: ['local', 'acrl', acrlYear ?? 'all'],
     queryFn: () => listAcrl(acrlYear),
+    enabled: !allocationEditorOnly,
   });
 
   const saveAcrlMut = useMutation({
@@ -51,6 +55,16 @@ export default function LocalDataPage() {
   });
 
   const acrlYears = useMemo(() => acrlYearsQ.data || [], [acrlYearsQ.data]);
+
+  if (allocationEditorOnly) {
+    return (
+      <div className="max-w-screen-2xl mx-auto p-4 sm:p-6 space-y-4">
+        <h2 className="text-xl font-semibold">Local Data</h2>
+        <p className="text-sm text-gray-500">Manage supplementary tables used for institutional reporting.</p>
+        <ExpenseAllocationsPanel allowedColleges={allocationColleges} />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-screen-2xl mx-auto p-4 sm:p-6 space-y-4">
