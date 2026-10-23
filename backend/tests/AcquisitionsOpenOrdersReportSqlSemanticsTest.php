@@ -112,12 +112,24 @@ $sql = str_replace("EXTRACT(YEAR FROM (il.report_date - INTERVAL '6 months'))", 
 $sql = str_replace("EXTRACT(QUARTER FROM (il.report_date - INTERVAL '6 months'))", 'SMITH_FQ(il.report_date)', $sql);
 $sql = preg_replace('/STRING_AGG\(DISTINCT ([a-zA-Z_][a-zA-Z0-9_.]*), \'; \' ORDER BY [a-zA-Z_][a-zA-Z0-9_.]*\)/', "REPLACE(GROUP_CONCAT(DISTINCT $1), ',', '; ')", $sql);
 
-$run = static function (array $overrides = []) use ($compile, $pdo, $sql): array {
+$adaptSql = static function (string $sql): string {
+    $sql = str_replace('CAST(:startDate AS date)', ':startDate', $sql);
+    $sql = str_replace('CAST(:endDate AS date)', ':endDate', $sql);
+    $sql = str_replace('CAST(po.date_ordered AS date)', 'date(po.date_ordered)', $sql);
+    $sql = str_replace('CAST(po.metadata__updated_date AS date)', 'date(po.metadata__updated_date)', $sql);
+    $sql = str_replace('::text', '', $sql);
+    $sql = str_replace('CURRENT_DATE - il.report_date', 'CAST(julianday(CURRENT_DATE) - julianday(il.report_date) AS INTEGER)', $sql);
+    $sql = str_replace("EXTRACT(YEAR FROM (il.report_date - INTERVAL '6 months'))", 'SMITH_FY(il.report_date)', $sql);
+    $sql = str_replace("EXTRACT(QUARTER FROM (il.report_date - INTERVAL '6 months'))", 'SMITH_FQ(il.report_date)', $sql);
+    return preg_replace('/STRING_AGG\(DISTINCT ([a-zA-Z_][a-zA-Z0-9_.]*), \'\\; \' ORDER BY [a-zA-Z_][a-zA-Z0-9_.]*\)/', "REPLACE(GROUP_CONCAT(DISTINCT $1), ',', '; ')", $sql);
+};
+
+$run = static function (array $overrides = []) use ($compile, $pdo, $adaptSql): array {
     $compiled = $compile(array_replace([
         'acqUnit' => 'SC', 'startDate' => '2025-07-01', 'endDate' => '2026-12-31',
         'orderFormat' => 'All', 'reEncumber' => 'Any',
     ], $overrides));
-    $statement = $pdo->prepare($sql);
+    $statement = $pdo->prepare($adaptSql($compiled['sql']));
     $statement->execute($compiled['params']);
     return $statement->fetchAll(\PDO::FETCH_ASSOC);
 };
@@ -144,6 +156,7 @@ acquisitionsSqlAssert($awaiting['Vendor name'] === 'Example Vendor' && $awaiting
 acquisitionsSqlAssert($awaiting['Vendor contact email(s)'] === 'acquisitions@example.test', 'Include vendor contact email when available.');
 acquisitionsSqlAssert($awaiting['Vendor order reference number'] === 'REF-1', 'Include only the vendor order reference number.');
 acquisitionsSqlAssert($awaiting['Material type'] === 'Book', 'Resolve physical material type.');
+acquisitionsSqlAssert($awaiting['PO status'] === 'Open', 'Expose the parent purchase-order workflow status.');
 acquisitionsSqlAssert(array_slice(array_keys($awaiting), -2) === ['PO UUID', 'PO Line UUID'], 'Append both PO UUIDs to worklist CSV rows.');
 
 $on = $run(['reEncumber' => 'On']);
@@ -153,5 +166,11 @@ $electronic = $run(['orderFormat' => 'Electronic Resource']);
 acquisitionsSqlAssert(count($electronic) === 2 && isset(array_column($electronic, null, 'PO Line UUID')[$lines[7][0]]), 'Filter to the selected order format.');
 $inclusive = $run(['startDate' => '2025-07-01', 'endDate' => '2025-07-01']);
 acquisitionsSqlAssert(count($inclusive) === 3, 'Include both start and end dates on the range edges.');
+$receiptFiltered = $run(['receiptStatuses' => 'Fully Received']);
+acquisitionsSqlAssert(count($receiptFiltered) === 2, 'Filter eligible lines by receipt status.');
+$paymentFiltered = $run(['paymentStatuses' => 'Partially Paid']);
+acquisitionsSqlAssert(count($paymentFiltered) === 1 && $paymentFiltered[0]['PO Line UUID'] === $lines[2][0], 'Filter eligible lines by payment status.');
+$combinedStatusFiltered = $run(['receiptStatuses' => 'Fully Received', 'paymentStatuses' => 'Awaiting Payment']);
+acquisitionsSqlAssert(count($combinedStatusFiltered) === 1 && $combinedStatusFiltered[0]['PO Line UUID'] === $lines[1][0], 'Apply both status filters after the existing inclusion rule.');
 
 echo "Acquisitions open-orders SQLite SQL-semantics checks passed\n";

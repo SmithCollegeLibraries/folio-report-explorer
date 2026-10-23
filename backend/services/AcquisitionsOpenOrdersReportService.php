@@ -7,15 +7,20 @@ use app\models\ReportTemplate;
 
 require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/ReportExecutionContractService.php';
+require_once __DIR__ . '/ReportFilterInputService.php';
 
 /** Compiles the fixed, one-time acquisitions open-orders worklist. */
 final class AcquisitionsOpenOrdersReportService
 {
     public const REPORT_SLUG = 'quarterly-open-orders';
-    private const SQL_SHA256 = '93fad881ef7833c6800ffa422f77f9cf3e5ef9e81a39bc21977654cacf74a86a';
-    private const PARAMETERS_SHA256 = '6779c7f14a90bcdc6a44132c140ebe0db717d24d647a2d80b22eeff172751b3a';
+    private const SQL_SHA256 = '0c06cfba037331c1ad748b0a852f85567d7d01e2e69e6e83d1782828cffe0981';
+    private const PARAMETERS_SHA256 = '7eedbfe6e580fc6649f15e64812bff80a688ca0e5355dac01b1ac3241e65968d';
+    private const DESCRIPTION_SHA256 = '7276ecf6bb276e7d8fd7418985b155330aa75abc3a60c0bb10af6697af0a7d84';
+    private const HELP_TEXT_SHA256 = 'dfba685312c9062039a6b943ff68d3baa29e865df8cec830b0a266ad78dd2f8a';
     private const ORDER_FORMATS = ['All', 'Electronic Resource', 'Physical Resource', 'P/E Mix', 'Other'];
     private const RE_ENCUMBER = ['Any', 'On', 'Off'];
+    private const RECEIPT_STATUSES = ['Pending', 'Awaiting Receipt', 'Partially Received', 'Fully Received'];
+    private const PAYMENT_STATUSES = ['Pending', 'Awaiting Payment', 'Partially Paid', 'Fully Paid', 'Ongoing', 'Payment Not Required', 'Cancelled'];
     private const REQUIRED_TABLES = [
         'orders.acquisitions_unit__t',
         'orders.purchase_order__t',
@@ -40,7 +45,7 @@ final class AcquisitionsOpenOrdersReportService
     {
         foreach ([
             'slug' => self::REPORT_SLUG,
-            'name' => 'Quarterly Open Orders',
+            'name' => 'Open Order Report',
             'category' => 'acquisitions',
             'data_source' => 'folio',
             'created_by' => 'manual',
@@ -53,10 +58,16 @@ final class AcquisitionsOpenOrdersReportService
         }
 
         $sql = $definition['sql_template'] ?? null;
+        $description = $definition['description'] ?? null;
+        $helpText = $definition['help_text'] ?? null;
         $parameters = self::normalizedJson($definition['parameters'] ?? null);
         $config = self::normalizedJson($definition['execution_config'] ?? null);
         return is_string($sql)
             && hash_equals(self::SQL_SHA256, hash('sha256', $sql))
+            && is_string($description)
+            && hash_equals(self::DESCRIPTION_SHA256, hash('sha256', $description))
+            && is_string($helpText)
+            && hash_equals(self::HELP_TEXT_SHA256, hash('sha256', $helpText))
             && is_array($parameters)
             && hash_equals(self::PARAMETERS_SHA256, hash('sha256', json_encode($parameters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)))
             && $config === self::normalizeJson([
@@ -89,11 +100,11 @@ final class AcquisitionsOpenOrdersReportService
     public static function build(ReportTemplate $report, array $inputs, $folioDb): array
     {
         $definition = [];
-        foreach (['slug', 'name', 'category', 'data_source', 'created_by', 'default_limit', 'is_active', 'sql_template', 'parameters', 'execution_config'] as $key) {
+        foreach (['slug', 'name', 'description', 'help_text', 'category', 'data_source', 'created_by', 'default_limit', 'is_active', 'sql_template', 'parameters', 'execution_config'] as $key) {
             $definition[$key] = $report->$key;
         }
         if (!self::isCanonicalSeedDefinition($definition)) {
-            throw new \InvalidArgumentException('Quarterly open-orders report definition does not match the reviewed seed contract.');
+            throw new \InvalidArgumentException('Open Order Report definition does not match the reviewed seed contract.');
         }
 
         $acqUnit = self::stringInput($inputs, 'acqUnit', 'SC');
@@ -107,20 +118,52 @@ final class AcquisitionsOpenOrdersReportService
         }
         $orderFormat = self::choiceInput($inputs, 'orderFormat', 'All', self::ORDER_FORMATS);
         $reEncumber = self::choiceInput($inputs, 'reEncumber', 'Any', self::RE_ENCUMBER);
+        $receiptStatuses = ReportFilterInputService::selections(
+            $inputs['receiptStatuses'] ?? null,
+            'receiptStatuses',
+            self::RECEIPT_STATUSES,
+            self::RECEIPT_STATUSES
+        );
+        $paymentStatuses = ReportFilterInputService::selections(
+            $inputs['paymentStatuses'] ?? null,
+            'paymentStatuses',
+            self::PAYMENT_STATUSES,
+            self::PAYMENT_STATUSES
+        );
 
         ReportExecutionContractService::assertStaticExportSql($report->sql_template, ['fetchRowLimit' => 100001]);
+        $params = [
+            ':acqUnit' => $acqUnit,
+            ':startDate' => $startDate,
+            ':endDate' => $endDate,
+            ':orderFormat' => $orderFormat,
+            ':reEncumber' => $reEncumber,
+        ];
+        $receiptFilter = ReportFilterInputService::selectionPredicate(
+            $receiptStatuses,
+            self::RECEIPT_STATUSES,
+            'pol.receipt_status',
+            'receiptStatus',
+            $params
+        );
+        $paymentFilter = ReportFilterInputService::selectionPredicate(
+            $paymentStatuses,
+            self::PAYMENT_STATUSES,
+            'pol.payment_status',
+            'paymentStatus',
+            $params
+        );
+        $sql = str_replace(
+            ['/*__RECEIPT_STATUS_FILTER__*/TRUE', '/*__PAYMENT_STATUS_FILTER__*/TRUE'],
+            [$receiptFilter, $paymentFilter],
+            $report->sql_template
+        );
         self::assertRequiredTables($folioDb);
         self::assertAcquisitionsUnit($folioDb, $acqUnit);
 
         return [
-            'sql' => $report->sql_template,
-            'params' => [
-                ':acqUnit' => $acqUnit,
-                ':startDate' => $startDate,
-                ':endDate' => $endDate,
-                ':orderFormat' => $orderFormat,
-                ':reEncumber' => $reEncumber,
-            ],
+            'sql' => $sql,
+            'params' => $params,
             'marcTag' => 'open-orders',
             'location' => ['name' => $acqUnit, 'code' => $acqUnit],
             'locations' => [],
@@ -141,17 +184,7 @@ final class AcquisitionsOpenOrdersReportService
 
     private static function dateInput(array $inputs, string $name, string $default): string
     {
-        $value = self::stringInput($inputs, $name, $default);
-        if (preg_match('/\A\d{4}-\d{2}-\d{2}\z/D', $value) !== 1) {
-            throw new ReportParameterValidationException($name, 'Enter a date in YYYY-MM-DD format.');
-        }
-        $date = \DateTime::createFromFormat('!Y-m-d', $value);
-        $errors = \DateTime::getLastErrors();
-        if ($date === false || ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))
-            || $date->format('Y-m-d') !== $value) {
-            throw new ReportParameterValidationException($name, 'Enter a valid calendar date.');
-        }
-        return $value;
+        return ReportFilterInputService::date($inputs[$name] ?? null, $name, $default);
     }
 
     private static function choiceInput(array $inputs, string $name, string $default, array $allowed): string

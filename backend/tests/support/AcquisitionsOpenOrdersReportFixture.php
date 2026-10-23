@@ -18,14 +18,14 @@ namespace {
 
     function acquisitionsOpenOrdersReportFixture(): \app\models\ReportTemplate
     {
-        $path = __DIR__ . '/../../../mysql/migrations/048_quarterly_open_orders_report.sql';
+        $path = __DIR__ . '/../../../mysql/migrations/053_acquisitions_feedback_report_filters.sql';
         $migration = file_get_contents($path);
         if (!is_string($migration) || preg_match(
             "/VALUES \\(\\s*'quarterly-open-orders',\\s*'(.*?)',\\s*'(.*?)',\\s*'(.*?)',\\s*'acquisitions',\\s*'(WITH params AS .*?LIMIT 100001)',\\s*'(\\[.*?\\])',\\s*'folio',\\s*'(\\{.*?\\})',\\s*100000,\\s*1,\\s*'manual'\\s*\\)/s",
             $migration,
             $matches
         ) !== 1) {
-            throw new \RuntimeException('Cannot load the quarterly open-orders report seed from migration 048.');
+            throw new \RuntimeException('Cannot load the open-order report seed from migration 053.');
         }
 
         $report = new \app\models\ReportTemplate();
