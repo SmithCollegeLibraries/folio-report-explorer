@@ -1,11 +1,78 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import ReportDetail from './ReportDetail';
 import Reports from './Reports';
 import type { ReportTemplate } from '../types';
+import { useAuth } from '../hooks/useAuth';
+
+vi.mock('../hooks/useAuth', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../hooks/useAuth')>();
+  return {
+    ...actual,
+    useAuth: vi.fn(() => ({
+      user: null,
+      accessToken: null,
+      loading: false,
+      isAdmin: false,
+      authEnabled: false,
+      login: () => {},
+      logout: () => {},
+    })),
+  };
+});
+
+const pinnedReportsStorageKey = 'folio-report-explorer:pinned-reports';
+
+class MemoryStorage implements Storage {
+  private entries = new Map<string, string>();
+
+  get length() { return this.entries.size; }
+  clear() { this.entries.clear(); }
+  getItem(key: string) { return this.entries.get(key) ?? null; }
+  key(index: number) { return Array.from(this.entries.keys())[index] ?? null; }
+  removeItem(key: string) { this.entries.delete(key); }
+  setItem(key: string, value: string) { this.entries.set(key, String(value)); }
+}
+
+const localStorageMock = new MemoryStorage();
+const sessionStorageMock = new MemoryStorage();
+
+function setAdmin(isAdmin: boolean) {
+  vi.mocked(useAuth).mockReturnValue({
+    user: null,
+    accessToken: null,
+    loading: false,
+    isAdmin,
+    authEnabled: false,
+    login: () => {},
+    logout: () => {},
+  });
+}
+
+function renderReports() {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/reports']}>
+        <Routes><Route path="/reports" element={<Reports />} /></Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function renderReportDetail(id = 9) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[`/reports/${id}`]}>
+        <Routes><Route path="/reports/:id" element={<ReportDetail />} /></Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 const buildFinderDetail = (id = 9): ReportTemplate => {
   const locationId = '11111111-1111-4111-8111-111111111111';
@@ -110,7 +177,21 @@ vi.mock('../api/client', async () => {
   };
 });
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.stubGlobal('localStorage', localStorageMock);
+  vi.stubGlobal('sessionStorage', sessionStorageMock);
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: localStorageMock });
+  Object.defineProperty(window, 'sessionStorage', { configurable: true, value: sessionStorageMock });
+  setAdmin(false);
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  localStorageMock.clear();
+  sessionStorageMock.clear();
+});
 
 describe('Reports', () => {
   it('shows grouped category sections on the reports landing page', async () => {
@@ -136,7 +217,142 @@ describe('Reports', () => {
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Cataloging' })).toBeInTheDocument();
     expect(screen.getByText('MARC Field, Indicator, and Content Finder')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^All$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All (4)' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('4 of 4 reports');
+    expect(screen.queryByRole('button', { name: /Delete/ })).not.toBeInTheDocument();
+  });
+
+  it('filters by report name or description and combines text search with category', async () => {
+    renderReports();
+    const search = await screen.findByRole('searchbox', { name: 'Search reports' });
+
+    fireEvent.change(search, { target: { value: 'ALLOCATED' } });
+    expect(await screen.findByText('Fund Allocation by Fiscal Year')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('1 of 4 reports');
+    expect(screen.queryByText('Budget Report by Material Type')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cataloging (2)' }));
+    expect(await screen.findByText('No reports match')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 4 reports');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(await screen.findByText('MARC Field, Indicator, and Content Finder')).toBeInTheDocument();
+    expect(screen.queryByText('Fund Allocation by Fiscal Year')).not.toBeInTheDocument();
+  });
+
+  it('pins reports in most-recently-pinned order and persists pin and unpin changes', async () => {
+    const firstView = renderReports();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin Budget Report by Material Type' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pin Fund Allocation by Fiscal Year' }));
+    const pinnedHeading = await screen.findByRole('heading', { name: 'Pinned' });
+    const pinnedSection = pinnedHeading.closest('section') as HTMLElement;
+    const firstPinned = within(pinnedSection).getByText('Fund Allocation by Fiscal Year');
+    const secondPinned = within(pinnedSection).getByText('Budget Report by Material Type');
+    expect(firstPinned.compareDocumentPosition(secondPinned) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(within(pinnedSection).getByRole('button', { name: 'Unpin Fund Allocation by Fiscal Year' }));
+    expect(within(pinnedSection).queryByText('Fund Allocation by Fiscal Year')).not.toBeInTheDocument();
+    firstView.unmount();
+
+    renderReports();
+    const restoredHeading = await screen.findByRole('heading', { name: 'Pinned' });
+    const restoredSection = restoredHeading.closest('section') as HTMLElement;
+    expect(within(restoredSection).getByText('Budget Report by Material Type')).toBeInTheDocument();
+    expect(within(restoredSection).queryByText('Fund Allocation by Fiscal Year')).not.toBeInTheDocument();
+  });
+
+  it('ignores pinned ids that are missing from the current report list', async () => {
+    window.localStorage.setItem(pinnedReportsStorageKey, JSON.stringify([999]));
+    renderReports();
+
+    expect(await screen.findByRole('heading', { name: 'Reports' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Pinned' })).not.toBeInTheDocument();
+    expect(screen.getByText('Budget Report by Material Type')).toBeInTheDocument();
+  });
+
+  it('keeps the catalog usable when browser storage reads and writes throw', async () => {
+    vi.spyOn(localStorageMock, 'getItem').mockImplementation(() => {
+      throw new Error('Storage is unavailable');
+    });
+    vi.spyOn(localStorageMock, 'setItem').mockImplementation(() => {
+      throw new Error('Storage is unavailable');
+    });
+    vi.spyOn(sessionStorageMock, 'getItem').mockImplementation(() => {
+      throw new Error('Storage is unavailable');
+    });
+    vi.spyOn(sessionStorageMock, 'setItem').mockImplementation(() => {
+      throw new Error('Storage is unavailable');
+    });
+    renderReports();
+
+    expect(await screen.findByRole('heading', { name: 'Reports' })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search reports' }), {
+      target: { value: 'budget' },
+    });
+    expect(screen.getByText('Budget Report by Material Type')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Pin Budget Report by Material Type' }));
+    expect(screen.getByRole('heading', { name: 'Pinned' })).toBeInTheDocument();
+  });
+
+  it('restores the last search and category for the browser session', async () => {
+    const firstView = renderReports();
+    fireEvent.change(await screen.findByRole('searchbox', { name: 'Search reports' }), {
+      target: { value: 'allocated' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Finance (1)' }));
+    firstView.unmount();
+
+    renderReports();
+    expect(await screen.findByRole('searchbox', { name: 'Search reports' })).toHaveValue('allocated');
+    expect(screen.getByRole('button', { name: 'Finance (1)' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Fund Allocation by Fiscal Year')).toBeInTheDocument();
+  });
+
+  it('lets category sections collapse and reopen', async () => {
+    renderReports();
+    await screen.findByRole('heading', { name: 'Acquisitions' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse Acquisitions section' }));
+    expect(screen.queryByText('Budget Report by Material Type')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Acquisitions section' }));
+    expect(screen.getByText('Budget Report by Material Type')).toBeInTheDocument();
+  });
+
+  it('allows pinning the current report from its detail page', async () => {
+    const { getReport } = await import('../api/client');
+    vi.mocked(getReport).mockResolvedValue(buildFinderDetail());
+    const detailView = renderReportDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin MARC Field, Indicator, and Content Finder' }));
+    detailView.unmount();
+
+    renderReports();
+    const pinnedSection = (await screen.findByRole('heading', { name: 'Pinned' })).closest('section') as HTMLElement;
+    expect(within(pinnedSection).getByText('MARC Field, Indicator, and Content Finder')).toBeInTheDocument();
+  });
+
+  it('hides report deletion from non-admins on the detail page', async () => {
+    const { getReport } = await import('../api/client');
+    vi.mocked(getReport).mockResolvedValue(buildFinderDetail());
+    renderReportDetail();
+
+    expect(await screen.findByRole('heading', { name: 'MARC Field, Indicator, and Content Finder' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete report' })).not.toBeInTheDocument();
+  });
+
+  it('confirms deletion by report name for admins on the detail page', async () => {
+    setAdmin(true);
+    const { getReport, deleteReport } = await import('../api/client');
+    vi.mocked(getReport).mockResolvedValue(buildFinderDetail());
+    vi.mocked(deleteReport).mockResolvedValue(undefined);
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal('confirm', confirmSpy);
+    renderReportDetail();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete report' }));
+    expect(confirmSpy).toHaveBeenCalledWith('Delete "MARC Field, Indicator, and Content Finder"?');
+    await waitFor(() => expect(deleteReport).toHaveBeenCalledWith(9));
   });
 
   it('lets you collapse and reopen report parameters on the detail page', async () => {
