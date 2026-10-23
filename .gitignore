@@ -56,3 +56,17 @@ Thumbs.db
 # Playwright MCP scratch output and ad-hoc screenshots
 .playwright-mcp/
 /ask-*.png
+
+# Archived process material and local data exports
+/updates/
+/planning/
+/.superpowers/
+/docs/superpowers/
+/*.sql
+/backend/data/full_backend*.sql
+/backend/data/ai_training_hints[0-9]*.sql
+/backend/data/ai_training[0-9_]*.sql
+!/backend/data/ai_training_hints.sql
+/presentation/
+*.pptx
+*.docx
