@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Users as UsersIcon, Shield, ShieldCheck, Trash2, CheckCircle, XCircle, Bell, BellOff } from 'lucide-react';
 import { listUsers, approveUser, changeUserRole, deleteUser, toggleUserNotifications } from '../api/client';
+import { setUserAllocationColleges } from '../api/userAllocationColleges';
 import type { AuthUser } from '../types';
+
+const ALLOCATION_COLLEGES = ['AC', 'HC', 'MH', 'SC', 'UM'];
 
 /**
  * User management page (admin only).
@@ -44,6 +47,19 @@ export default function Users() {
       setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
     } catch (e: any) {
       setError(e.response?.data?.error || 'Failed to update role');
+    }
+  };
+
+  const handleAllocationCollegeChange = async (user: AuthUser, college: string, enabled: boolean) => {
+    const current = user.allocationColleges || [];
+    const allocationColleges = enabled
+      ? Array.from(new Set([...current, college])).sort()
+      : current.filter((assigned) => assigned !== college);
+    try {
+      const updated = await setUserAllocationColleges(user.id, allocationColleges);
+      setUsers((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Failed to update allocation access');
     }
   };
 
@@ -92,6 +108,7 @@ export default function Users() {
                 <th className="text-left p-3 font-medium text-gray-600">Username</th>
                 <th className="text-left p-3 font-medium text-gray-600">Affiliation</th>
                 <th className="text-left p-3 font-medium text-gray-600">Role</th>
+                <th className="text-left p-3 font-medium text-gray-600">Can edit allocations for</th>
                 <th className="text-center p-3 font-medium text-gray-600">Status</th>
                 <th className="text-center p-3 font-medium text-gray-600">Notifications</th>
                 <th className="text-left p-3 font-medium text-gray-600">Last Login</th>
@@ -110,12 +127,29 @@ export default function Users() {
                   <td className="p-3">
                     <select
                       value={user.role}
+                      aria-label={`Role for ${user.username}`}
                       onChange={(e) => handleRoleChange(user, e.target.value as 'admin' | 'user')}
                       className="text-sm border rounded px-2 py-1"
                     >
                       <option value="user">User</option>
                       <option value="admin">Admin</option>
                     </select>
+                  </td>
+                  <td className="p-3">
+                    <div className="flex flex-wrap gap-x-2 gap-y-1">
+                      {ALLOCATION_COLLEGES.map((college) => (
+                        <label key={college} className="inline-flex items-center gap-1 text-xs text-gray-600">
+                          <input
+                            type="checkbox"
+                            aria-label={`${college} allocation access for ${user.username}`}
+                            checked={(user.allocationColleges || []).includes(college)}
+                            onChange={(event) => handleAllocationCollegeChange(user, college, event.target.checked)}
+                            className="rounded border-gray-300 text-folio-600 focus:ring-folio-500"
+                          />
+                          {college}
+                        </label>
+                      ))}
+                    </div>
                   </td>
                   <td className="p-3 text-center">
                     {user.isApproved ? (
@@ -182,7 +216,7 @@ export default function Users() {
               ))}
               {users.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-gray-400">
+                  <td colSpan={9} className="p-8 text-center text-gray-400">
                     No users yet.
                   </td>
                 </tr>

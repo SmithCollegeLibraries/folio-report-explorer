@@ -28,7 +28,6 @@ import type {
   CorrectionInput,
   CorrectionResponse,
   AuthUser,
-  RefreshResponse,
   HistoryResponse,
   HistorySuggestionsResponse,
   QueryReuseCandidateRequest,
@@ -56,7 +55,7 @@ import type {
   QueryMemoryStatus,
   QueryMemorySuppressionResponse,
 } from '../types';
-import { getStoredAccessToken, getStoredRefreshToken } from '../hooks/useAuth';
+import { configureAuthInterceptors } from './authInterceptors';
 
 // Derive API URL from VITE_BASE_PATH (e.g. '/folio-report-explorer/api')
 // Falls back to VITE_API_URL for dev Docker setup, or plain '/api'
@@ -82,82 +81,7 @@ export function extractReportFieldErrors(error: unknown): Record<string, string>
   );
 }
 
-// ── Auth interceptors ─────────────────────────────────────────────
-
-// Request interceptor: attach JWT Bearer token
-api.interceptors.request.use((config) => {
-  const token = getStoredAccessToken();
-  if (token) {
-    config.headers = config.headers || {};
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
-// Response interceptor: handle 401 by attempting token refresh
-let isRefreshing = false;
-let refreshSubscribers: ((token: string) => void)[] = [];
-
-function onRefreshed(token: string) {
-  refreshSubscribers.forEach((cb) => cb(token));
-  refreshSubscribers = [];
-}
-
-api.interceptors.response.use(
-  (response) => response,
-  async (error) => {
-    const originalRequest = error.config;
-    const authEnabled = import.meta.env.VITE_AUTH_ENABLED === 'true';
-
-    // Only handle 401 when auth is enabled
-    if (error.response?.status !== 401 || !authEnabled) {
-      return Promise.reject(error);
-    }
-
-    // Don't retry refresh or auth endpoints
-    if (originalRequest.url?.includes('/auth/refresh') || originalRequest._retry) {
-      // Redirect to Shibboleth login
-      window.location.href = `${basePath}/admin/authorize.php`;
-      return Promise.reject(error);
-    }
-
-    if (!isRefreshing) {
-      isRefreshing = true;
-      const refreshToken = getStoredRefreshToken();
-
-      if (!refreshToken) {
-        window.location.href = `${basePath}/admin/authorize.php`;
-        return Promise.reject(error);
-      }
-
-      try {
-        const { data } = await axios.post<RefreshResponse>(`${apiBase}/auth/refresh`, {
-          refreshToken,
-        });
-
-        localStorage.setItem('fre_access_token', data.accessToken);
-        localStorage.setItem('fre_refresh_token', data.refreshToken);
-        isRefreshing = false;
-        onRefreshed(data.accessToken);
-      } catch {
-        isRefreshing = false;
-        localStorage.removeItem('fre_access_token');
-        localStorage.removeItem('fre_refresh_token');
-        window.location.href = `${basePath}/admin/authorize.php`;
-        return Promise.reject(error);
-      }
-    }
-
-    // Queue this request until refresh completes
-    return new Promise((resolve) => {
-      refreshSubscribers.push((token: string) => {
-        originalRequest._retry = true;
-        originalRequest.headers.Authorization = `Bearer ${token}`;
-        resolve(api(originalRequest));
-      });
-    });
-  },
-);
+configureAuthInterceptors(api, apiBase, basePath);
 
 // ─── Schema ───────────────────────────────────────────────────────
 

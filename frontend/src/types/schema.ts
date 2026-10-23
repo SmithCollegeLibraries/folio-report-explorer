@@ -778,6 +778,7 @@ export interface AuthUser {
   isApproved: boolean;
   receiveNotifications: boolean;
   defaultCampus: string;
+  allocationColleges: string[];
   lastLogin: string | null;
   createdAt: string;
 }
@@ -795,6 +796,7 @@ export interface JwtPayload {
     lastName: string | null;
     role: 'admin' | 'user';
     defaultCampus?: string;
+    allocationColleges?: string[];
   };
 }
 

@@ -9,7 +9,15 @@ import {
   upsertAllocations,
 } from '../api/expenseAllocations';
 
-export default function ExpenseAllocationsPanel() {
+const COLLEGES = [
+  { code: 'AC', label: 'Amherst College (AC)' },
+  { code: 'HC', label: 'Hampshire College (HC)' },
+  { code: 'MH', label: 'Mount Holyoke College (MH)' },
+  { code: 'SC', label: 'Smith College (SC)' },
+  { code: 'UM', label: 'UMass Amherst (UM)' },
+];
+
+export default function ExpenseAllocationsPanel({ allowedColleges }: { allowedColleges?: string[] }) {
   const queryClient = useQueryClient();
   const [prefix, setPrefix] = useState('');
   const [fiscalYear, setFiscalYear] = useState(new Date().getFullYear() + 1);
@@ -89,11 +97,8 @@ export default function ExpenseAllocationsPanel() {
             }}
           >
             <option value="">Select college</option>
-            <option value="AC">Amherst College (AC)</option>
-            <option value="HC">Hampshire College (HC)</option>
-            <option value="MH">Mount Holyoke College (MH)</option>
-            <option value="SC">Smith College (SC)</option>
-            <option value="UM">UMass Amherst (UM)</option>
+            {COLLEGES.filter((college) => !allowedColleges || allowedColleges.includes(college.code))
+              .map((college) => <option key={college.code} value={college.code}>{college.label}</option>)}
           </select>
         </div>
 

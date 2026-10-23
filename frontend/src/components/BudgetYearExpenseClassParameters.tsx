@@ -68,6 +68,13 @@ export default function BudgetYearExpenseClassParameters({
     })),
     [options],
   );
+  const selectedFundCodes = (values.funds || '').split(',').map((fundId) => {
+    const selectedOption = fundOptions.find((option) => option.value === fundId.trim());
+    return selectedOption?.label.split(' — ')[0];
+  }).filter((code): code is string => Boolean(code));
+  const selectedFundsSummary = selectedFundCodes.length
+    ? `${selectedFundCodes.length} fund${selectedFundCodes.length === 1 ? '' : 's'}: ${selectedFundCodes.join(', ')}`
+    : undefined;
 
   const selectUnit = (nextUnit: string) => {
     defaultedUnit.current = '';
@@ -183,12 +190,19 @@ export default function BudgetYearExpenseClassParameters({
           options={fundOptions}
           required
           placeholder="Search funds by code or name"
+          buttonPlaceholder={!unit ? 'Choose a college first' : optionsQuery.isLoading ? 'Loading funds…' : 'Choose funds…'}
+          selectedSummary={selectedFundsSummary}
+          disabled={!unit || optionsQuery.isLoading}
           maxSelections={500}
           error={fieldError('funds')}
           errorId="report-error-funds"
           onChange={(value) => onChange('funds', value)}
         />
-        {optionsQuery.isError && <p role="alert" className="mt-1 text-xs text-red-600">College options could not be loaded.</p>}
+        {optionsQuery.isError && (
+          <p role="alert" className="mt-1 text-xs text-red-600">
+            {(optionsQuery.error as { response?: { data?: { error?: string } } }).response?.data?.error || 'College options could not be loaded.'}
+          </p>
+        )}
       </div>
     </div>
   );

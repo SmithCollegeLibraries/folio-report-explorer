@@ -35,6 +35,46 @@ final class ExpenseClassScopeService
         return self::UNIT_PREFIXES[$prefix];
     }
 
+    public static function normalizeAllocationColleges($colleges): array
+    {
+        if (!is_array($colleges)) {
+            throw new \InvalidArgumentException('Choose allocation colleges from the listed colleges.');
+        }
+
+        $normalized = [];
+        foreach ($colleges as $college) {
+            $prefix = self::normalizePrefix($college);
+            $normalized[$prefix] = $prefix;
+        }
+
+        $normalized = array_values($normalized);
+        sort($normalized, SORT_STRING);
+        return $normalized;
+    }
+
+    public static function normalizeAllocationCollegeString($colleges): ?string
+    {
+        if ($colleges === null || trim((string) $colleges) === '') {
+            return null;
+        }
+
+        $normalized = self::normalizeAllocationColleges(explode(',', (string) $colleges));
+        return empty($normalized) ? null : implode(',', $normalized);
+    }
+
+    public static function allocationCollegesFromString($colleges): array
+    {
+        if (!is_string($colleges) || trim($colleges) === '') {
+            return [];
+        }
+
+        try {
+            return self::normalizeAllocationColleges(explode(',', $colleges));
+        } catch (\InvalidArgumentException $error) {
+            return [];
+        }
+    }
+
     public static function getOptions($folioDb, $unit): array
     {
         $unit = self::normalizeUnit($unit);
