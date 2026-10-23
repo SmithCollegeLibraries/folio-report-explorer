@@ -95,6 +95,7 @@ $config = [
                 'DELETE reports/<id:\d+>' => 'folio-query/report-delete',
                 'POST reports/generate' => 'folio-query/report-generate',
                 'POST reports/convert' => 'folio-query/report-convert',
+                'GET budget-year-expense-class/options' => 'folio-query/budget-year-expense-class-options',
 
                 // Local supplementary data (admin)
                 'GET local/acrl' => 'folio-query/local-acrl-list',

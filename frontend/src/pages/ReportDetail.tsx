@@ -4,9 +4,8 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { extractReportFieldErrors, getReport, runReport } from '../api/client';
 import ResultsTable from '../components/ResultsTable';
 import SqlPreview from '../components/SqlPreview';
-import ParamInput from '../components/ParamInput';
-import MarcFieldFinderParameters from '../components/MarcFieldFinderParameters';
 import ReportDetailHeader from '../components/ReportDetailHeader';
+import ReportParameterFields from '../components/ReportParameterFields';
 import { useJobPolling } from '../hooks/useJobPolling';
 import {
   ArrowLeft,
@@ -292,37 +291,15 @@ export default function ReportDetail() {
                       Parameters are hidden. Expand this section to review or change the filters.
                     </div>
                   ) : (
-                    <div
-                      id="report-parameters-panel"
-                      className={isMarcFieldFinder ? '' : 'grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3'}
-                    >
-                      {isMarcFieldFinder ? (
-                        <MarcFieldFinderParameters
-                          values={paramValues}
-                          parameters={report.parameters}
-                          selectOptions={report.selectOptions}
-                          serverFieldErrors={serverFieldErrors}
-                          onChange={updateParamValue}
-                        />
-                      ) : (
-                        report.parameters.map((parameter) => (
-                          <div key={parameter.name}>
-                            <ParamInput
-                              param={parameter}
-                              value={paramValues[parameter.name] || ''}
-                              options={report.selectOptions?.[parameter.name]}
-                              error={serverFieldErrors[parameter.name]}
-                              errorId={`report-error-${parameter.name}`}
-                              onChange={(value) => updateParamValue(parameter.name, value)}
-                            />
-                            {serverFieldErrors[parameter.name] && parameter.type !== 'multiselect' && (
-                              <p id={`report-error-${parameter.name}`} role="alert" className="mt-1 text-xs text-red-600">
-                                {serverFieldErrors[parameter.name]}
-                              </p>
-                            )}
-                          </div>
-                        ))
-                      )}
+                    <div id="report-parameters-panel">
+                      <ReportParameterFields
+                        slug={report.slug}
+                        values={paramValues}
+                        parameters={report.parameters}
+                        selectOptions={report.selectOptions}
+                        serverFieldErrors={serverFieldErrors}
+                        onChange={updateParamValue}
+                      />
                     </div>
                   )}
                 </section>

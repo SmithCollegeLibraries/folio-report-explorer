@@ -49,6 +49,8 @@ require_once __DIR__ . '/../services/AskRequestPolicyService.php';
 require_once __DIR__ . '/../services/AskGenerationCoordinatorService.php';
 require_once __DIR__ . '/../services/AskResponseContractService.php';
 require_once __DIR__ . '/../services/AskUserExplanationService.php';
+require_once __DIR__ . '/../services/ExpenseClassScopeService.php';
+require_once __DIR__ . '/../services/ExpenseAllocationApiService.php';
 
 /**
  * FolioQueryController — REST API for the FOLIO Report Explorer.
@@ -4679,6 +4681,23 @@ class FolioQueryController extends Controller
         return $data;
     }
 
+    /** GET /api/budget-year-expense-class/options?acqUnit=SC */
+    public function actionBudgetYearExpenseClassOptions()
+    {
+        try {
+            return \app\services\ExpenseClassScopeService::getOptions(
+                Yii::$app->folioDb,
+                Yii::$app->request->get('acqUnit')
+            );
+        } catch (\app\exceptions\ReportParameterValidationException $error) {
+            Yii::$app->response->statusCode = 400;
+            return ['error' => 'Choose one of the listed colleges.', 'fieldErrors' => $error->getFieldErrors()];
+        } catch (\Throwable $error) {
+            Yii::$app->response->statusCode = 422;
+            return ['error' => 'College report options could not be loaded.'];
+        }
+    }
+
     /**
      * POST /api/reports/<id>/run — execute a report with user-provided parameters.
         * Body: {params: {startDate: '2025-07-01', endDate: '2026-06-30', ...}, outputMode?: 'table'|'file'}
@@ -4785,7 +4804,7 @@ class FolioQueryController extends Controller
             // Bind secondary SQL params too (secondary uses same param set)
             $metadata = [
                 'composite_config' => $compositeConfig,
-                'bound_params' => $bound['params'],
+                'bound_params' => array_merge($bound['params'], is_array($compiled) ? ($compiled['compositeParams'] ?? []) : []),
             ];
         }
 
@@ -4846,7 +4865,10 @@ class FolioQueryController extends Controller
         }
 
         // Create async job
-        $job = QueryJob::createJob($bound['sql'], $bound['params'], 'report', $dataSource, $metadata);
+        $jobParams = is_array($metadata)
+            ? array_merge($bound['params'], $metadata['bound_params'] ?? [])
+            : $bound['params'];
+        $job = QueryJob::createJob($bound['sql'], $jobParams, 'report', $dataSource, $metadata);
         $job->user_id = $this->getCurrentUserId();
         if ($job->hasAttribute('output_mode')) {
             $job->output_mode = $outputMode;
@@ -5408,15 +5430,12 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocList()
     {
-        $fiscalYear = Yii::$app->request->get('fiscalYear');
-        $query = ExpenseAllocation::find()->orderBy(['fiscal_year' => SORT_DESC, 'expense_class_code' => SORT_ASC]);
-        if ($fiscalYear !== null && $fiscalYear !== '') {
-            $query->andWhere(['fiscal_year' => (int) $fiscalYear]);
-        }
-        return [
-            'items' => $query->asArray()->all(),
-            'years' => ExpenseAllocation::getAvailableYears(),
-        ];
+        $request = Yii::$app->request;
+        return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::listRows(
+            Yii::$app->db->getMasterPdo(),
+            $request->get('prefix'),
+            $request->get('fiscalYear')
+        ));
     }
 
     /**
@@ -5424,40 +5443,16 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocYears()
     {
-        return ['years' => ExpenseAllocation::getAvailableYears()];
+        return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::years(
+            Yii::$app->db->getMasterPdo(),
+            Yii::$app->request->get('prefix')
+        ));
     }
 
-    private function parseBulkAllocationData($pastedData)
+    private function allocationApiResponse(array $result): array
     {
-        $lines = explode("\n", trim((string) $pastedData));
-        $allocations = [];
-
-        foreach ($lines as $line) {
-            $line = trim($line);
-            if ($line === '') {
-                continue;
-            }
-
-            $parts = preg_split('/\s*\t+\s*|\s{2,}/', $line);
-            if (!is_array($parts) || count($parts) < 2) {
-                continue;
-            }
-
-            $code = strtoupper(trim((string) $parts[count($parts) - 1]));
-            $amounts = [];
-            foreach ($parts as $part) {
-                if (preg_match('/\$?([0-9,]+\.?\d*)/', (string) $part, $matches)) {
-                    $amounts[] = (float) str_replace([',', '$'], '', $matches[1]);
-                }
-            }
-
-            if ($code !== '' && !empty($amounts)) {
-                $allocation = count($amounts) > 1 ? $amounts[1] : $amounts[0];
-                $allocations[$code] = $allocation;
-            }
-        }
-
-        return $allocations;
+        Yii::$app->response->statusCode = (int) ($result['status'] ?? 200);
+        return $result['body'] ?? [];
     }
 
     /**
@@ -5469,62 +5464,10 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocUpsert()
     {
-        $body = Yii::$app->request->getBodyParams();
-        $fiscalYear = (int) ($body['fiscalYear'] ?? 0);
-        if ($fiscalYear <= 0) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'fiscalYear is required'];
-        }
-
-        $payload = [];
-        if (!empty($body['pastedData'])) {
-            $parsed = $this->parseBulkAllocationData($body['pastedData']);
-            foreach ($parsed as $code => $amount) {
-                $payload[] = ['expense_class_code' => $code, 'allocation_amount' => $amount];
-            }
-        } elseif (!empty($body['rows']) && is_array($body['rows'])) {
-            $payload = $body['rows'];
-        } elseif (isset($body['code'], $body['amount'])) {
-            $payload = [[
-                'expense_class_code' => $body['code'],
-                'allocation_amount' => $body['amount'],
-            ]];
-        }
-
-        if (empty($payload)) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'No allocation data provided'];
-        }
-
-        $inserted = 0;
-        $updated = 0;
-        foreach ($payload as $row) {
-            $code = strtoupper(trim((string) ($row['expense_class_code'] ?? '')));
-            if ($code === '') {
-                continue;
-            }
-            $amount = (float) ($row['allocation_amount'] ?? 0);
-
-            $model = ExpenseAllocation::findOne([
-                'fiscal_year' => $fiscalYear,
-                'expense_class_code' => $code,
-            ]);
-            if (!$model) {
-                $model = new ExpenseAllocation();
-                $model->fiscal_year = $fiscalYear;
-                $model->expense_class_code = $code;
-                $inserted++;
-            } else {
-                $updated++;
-            }
-            $model->allocation_amount = $amount;
-            if (!$model->save()) {
-                Yii::$app->response->statusCode = 422;
-                return ['error' => 'Validation failed', 'details' => $model->errors];
-            }
-        }
-
-        return ['success' => true, 'inserted' => $inserted, 'updated' => $updated];
+        return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::upsert(
+            Yii::$app->request->getBodyParams(),
+            Yii::$app->folioDb
+        ));
     }
 
     /**
@@ -5532,13 +5475,11 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocDelete($id)
     {
-        $model = ExpenseAllocation::findOne((int) $id);
-        if (!$model) {
-            Yii::$app->response->statusCode = 404;
-            return ['error' => 'Allocation not found'];
-        }
-        $model->delete();
-        return ['success' => true];
+        return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::delete(
+            $id,
+            Yii::$app->request->get('prefix'),
+            Yii::$app->folioDb
+        ));
     }
 
     /**
@@ -5547,25 +5488,11 @@ class FolioQueryController extends Controller
      */
     public function actionLocalAllocCopyYear()
     {
-        $body = Yii::$app->request->getBodyParams();
-        $targetYear = (int) ($body['fiscalYear'] ?? 0);
-        if ($targetYear <= 0) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'fiscalYear is required'];
-        }
-
-        try {
-            $result = ExpenseAllocation::copyFromPreviousYear($targetYear);
-            if (!$result['foundSource']) {
-                Yii::$app->response->statusCode = 404;
-                return ['error' => 'No rows found in previous fiscal year'];
-            }
-
-            return ['success' => true] + $result;
-        } catch (\Throwable $e) {
-            Yii::$app->response->statusCode = 500;
-            return ['error' => $e->getMessage()];
-        }
+        return $this->allocationApiResponse(\app\services\ExpenseAllocationApiService::copyYear(
+            Yii::$app->request->getBodyParams(),
+            Yii::$app->db->getMasterPdo(),
+            Yii::$app->folioDb
+        ));
     }
 
     // ─── Auth endpoints ────────────────────────────────────────────

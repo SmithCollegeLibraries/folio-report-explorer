@@ -339,10 +339,7 @@ class MigrationService
         return self::budgetYearFundReportPaymentDistributionsAppearComplete($db)
             && self::marcMissingTagReportAppearsComplete($db)
             && self::catalogingMarcFieldFinderAppearsComplete($db)
-            && CatalogingReportMigrationRecognitionService::holdingslessReportAppearsComplete($db)
-            && CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db)
-            && CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db)
-            && CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);
+            && CatalogingReportMigrationRecognitionService::reportsAppearComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -443,6 +440,7 @@ class MigrationService
             case '048_quarterly_open_orders_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db);
             case '049_acquisitions_invoice_status_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db);
             case '050_orders_missing_acquisitions_unit.sql': return CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);
+            case '051_budget_year_expense_class_report.sql': return CatalogingReportMigrationRecognitionService::budgetYearExpenseClassReportAppearsComplete($db);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [
                     'generation_id',
