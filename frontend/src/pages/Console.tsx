@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Terminal, Play, Square, Loader2, Save, Copy, Check, Info } from 'lucide-react';
-import { submitQuery, downloadExportCsv } from '../api/client';
+import { submitQuery } from '../api/client';
 import { useJobPolling } from '../hooks/useJobPolling';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
@@ -267,18 +267,13 @@ export default function Console() {
           {results && !isExecuting && (
             <>
               {results.outputMode === 'file' ? (
-                <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
-                  <Check size={16} />
-                  <span>CSV export ready.</span>
-                  {activeJobId && (
-                    <button
-                      onClick={() => downloadExportCsv(activeJobId)}
-                      className="ml-auto flex items-center gap-1 text-folio-600 hover:text-folio-800 font-medium"
-                    >
-                      Download CSV
-                    </button>
-                  )}
-                </div>
+                <>
+                  <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+                    <Check size={16} />
+                    <span>CSV export ready.</span>
+                  </div>
+                  <ResultsTable data={results} />
+                </>
               ) : (
                 <ResultsTable data={results} />
               )}

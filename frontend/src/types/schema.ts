@@ -266,6 +266,8 @@ export interface ExecuteResponse {
   rowCount: number;
   executionTimeMs: number;
   sql: string;
+  /** Job ID when this result came from an asynchronous query. */
+  jobId?: string;
   dataSource?: 'folio' | 'local' | 'composite';
   outputMode?: 'table' | 'file';
   downloadUrl?: string;

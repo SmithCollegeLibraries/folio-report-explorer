@@ -291,7 +291,7 @@ class QueryJob extends ActiveRecord
         }
 
         if ($this->status === 'completed' && $outputMode === 'file') {
-            $data['downloadUrl'] = '/api/query/export/' . $this->id;
+            $data['downloadUrl'] = '/query/export/' . $this->id;
         }
 
         if ($this->status === 'failed') {

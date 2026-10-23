@@ -4,6 +4,7 @@ import { listSaved, deleteSaved, togglePin, promoteToReport, refreshDashboardCar
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import { fmtDate } from '../utils/format';
+import { jobStatusToExecuteResponse } from '../utils/jobStatus';
 import type { SavedQuery, ExecuteResponse } from '../types';
 import {
   Trash2, Play, ChevronDown, ChevronRight, Clock,
@@ -42,15 +43,7 @@ export default function SavedQueries() {
         if (status.status === 'completed') {
           setResults((prev) => ({
             ...prev,
-            [savedQueryId]: {
-              columns: status.columns || [],
-              rows: status.rows || [],
-              rowCount: status.rowCount || 0,
-              executionTimeMs: status.executionTimeMs || 0,
-              sql: status.sql || '',
-              outputMode: status.outputMode,
-              downloadUrl: status.downloadUrl,
-            },
+            [savedQueryId]: jobStatusToExecuteResponse(status),
           }));
           setRunningIds((prev) => {
             const next = new Set(prev);
@@ -95,15 +88,7 @@ export default function SavedQueries() {
       if (status.status === 'completed') {
         setResults((prev) => ({
           ...prev,
-          [q.id]: {
-            columns: status.columns || [],
-            rows: status.rows || [],
-            rowCount: status.rowCount || 0,
-            executionTimeMs: status.executionTimeMs || 0,
-            sql: status.sql || q.generated_sql || '',
-            outputMode: status.outputMode,
-            downloadUrl: status.downloadUrl,
-          },
+          [q.id]: jobStatusToExecuteResponse(status, q.generated_sql || ''),
         }));
       }
     } catch {
