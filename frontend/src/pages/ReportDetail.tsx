@@ -6,7 +6,7 @@ import ResultsTable from '../components/ResultsTable';
 import SqlPreview from '../components/SqlPreview';
 import ParamInput from '../components/ParamInput';
 import MarcFieldFinderParameters from '../components/MarcFieldFinderParameters';
-import ReportHelp from '../components/ReportHelp';
+import ReportDetailHeader from '../components/ReportDetailHeader';
 import { useJobPolling } from '../hooks/useJobPolling';
 import {
   ArrowLeft,
@@ -14,7 +14,6 @@ import {
   ChevronUp,
   Eye,
   EyeOff,
-  FileText,
   Loader2,
   Play,
   Square,
@@ -22,7 +21,6 @@ import {
 import {
   buildBudgetDrillthroughSearch,
   buildSourceReportSearch,
-  formatCategoryLabel,
   readReportParamsFromSearch,
   writeReportParamsToSearch,
 } from '../utils/reports';
@@ -259,34 +257,11 @@ export default function ReportDetail() {
           </div>
 
           <div className="rounded-3xl border border-stone-200 bg-white shadow-sm">
-            <div className="border-b border-stone-200 px-6 py-6">
-              <div className="flex flex-wrap items-start gap-4">
-                <div className="rounded-2xl bg-folio-50 p-3 text-folio-700">
-                  <FileText size={22} />
-                </div>
-                <div className="min-w-[260px] flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h1 className="text-2xl font-semibold text-gray-900">{report.name}</h1>
-                    <span className="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-medium uppercase tracking-wide text-stone-600">
-                      {formatCategoryLabel(report.category)}
-                    </span>
-                  </div>
-                  {report.description && (
-                    <p className="mt-2 max-w-3xl text-sm text-gray-600">{report.description}</p>
-                  )}
-                  {report.helpText?.trim() && (
-                    <div className="mt-3">
-                      <ReportHelp reportName={report.name} helpText={report.helpText} />
-                    </div>
-                  )}
-                  {sourceReportName && sourceMaterialType && (
-                    <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                      Drillthrough from {sourceReportName} for material type "{sourceMaterialType}".
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
+            <ReportDetailHeader
+              report={report}
+              sourceReportName={sourceReportName}
+              sourceMaterialType={sourceMaterialType}
+            />
 
             <div className="space-y-6 px-6 py-6">
               {report.parameters.length > 0 && (
