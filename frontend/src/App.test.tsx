@@ -54,3 +54,39 @@ describe('Local Data navigation', () => {
     expect(screen.getByRole('link', { name: /Local Data/ })).toHaveAttribute('href', '/local-data');
   });
 });
+
+describe('ACRL administration navigation', () => {
+  it('shows ACRL in the Admin menu for admins and hides it from regular users', async () => {
+    auth.current = {
+      user: { role: 'admin', displayName: 'Admin' },
+      isAdmin: true,
+      authEnabled: true,
+      canEditAllocationsFor: () => true,
+      logout: vi.fn(),
+    };
+    const user = userEvent.setup();
+    const adminView = renderApp();
+    await user.click(screen.getByRole('button', { name: 'Admin' }));
+
+    expect(screen.getByRole('link', { name: /ACRL.*Survey questions and yearly review/ })).toHaveAttribute('href', '/acrl');
+    await user.click(screen.getByRole('button', { name: 'Admin' }));
+    await user.click(screen.getByRole('button', { name: 'Open menu' }));
+    const adminButtons = screen.getAllByRole('button', { name: 'Admin' });
+    const mobileAdminButton = adminButtons[adminButtons.length - 1];
+    await user.click(mobileAdminButton);
+    expect(screen.getByRole('link', { name: 'ACRL' })).toHaveAttribute('href', '/acrl');
+
+    adminView.unmount();
+    auth.current = {
+      user: { role: 'user', displayName: 'Reader' },
+      isAdmin: false,
+      authEnabled: true,
+      canEditAllocationsFor: () => false,
+      logout: vi.fn(),
+    };
+    renderApp();
+
+    expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /ACRL/ })).not.toBeInTheDocument();
+  });
+});
