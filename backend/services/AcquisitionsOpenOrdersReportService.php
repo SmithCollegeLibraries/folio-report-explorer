@@ -9,18 +9,22 @@ require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/ReportExecutionContractService.php';
 require_once __DIR__ . '/ReportFilterInputService.php';
 
-/** Compiles the fixed, one-time acquisitions open-orders worklist. */
+/** Compiles the governed acquisitions open-order worklist. */
 final class AcquisitionsOpenOrdersReportService
 {
     public const REPORT_SLUG = 'quarterly-open-orders';
-    private const SQL_SHA256 = '0c06cfba037331c1ad748b0a852f85567d7d01e2e69e6e83d1782828cffe0981';
-    private const PARAMETERS_SHA256 = '7eedbfe6e580fc6649f15e64812bff80a688ca0e5355dac01b1ac3241e65968d';
-    private const DESCRIPTION_SHA256 = '7276ecf6bb276e7d8fd7418985b155330aa75abc3a60c0bb10af6697af0a7d84';
-    private const HELP_TEXT_SHA256 = 'dfba685312c9062039a6b943ff68d3baa29e865df8cec830b0a266ad78dd2f8a';
+    private const SQL_SHA256 = 'efc6d56e68a65a0cf3d89da9aadfeecf2ae5a66ff562a157edab18bc9afe9fea';
+    private const PARAMETERS_SHA256 = '68aba9046d2b1ab7b19147066d595ec99dbdf7c7a9b6a83fea1861160f507f06';
+    private const DESCRIPTION_SHA256 = '945c7b36e9fe4d33e39b5c925e3e2a6ee495234042365f07bfd9174a094a00ba';
+    private const HELP_TEXT_SHA256 = '7f4dacbe5ac30edf971a3f916ca419f7fdc079ddf63e3dbf1313e27e83fe411a';
+    private const WORKFLOW_STATUSES = ['Pending', 'Open', 'Closed'];
+    private const ORDER_TYPES = ['One-Time', 'Ongoing'];
+    private const LINE_VIEWS = ['Not yet received or not yet paid', 'All lines'];
     private const ORDER_FORMATS = ['All', 'Electronic Resource', 'Physical Resource', 'P/E Mix', 'Other'];
     private const RE_ENCUMBER = ['Any', 'On', 'Off'];
-    private const RECEIPT_STATUSES = ['Pending', 'Awaiting Receipt', 'Partially Received', 'Fully Received'];
+    private const RECEIPT_STATUSES = ['Pending', 'Awaiting Receipt', 'Partially Received', 'Fully Received', 'Receipt Not Required', 'Ongoing', 'Cancelled'];
     private const PAYMENT_STATUSES = ['Pending', 'Awaiting Payment', 'Partially Paid', 'Fully Paid', 'Ongoing', 'Payment Not Required', 'Cancelled'];
+    private const NO_EXPENSE_CLASS = '__none__';
     private const REQUIRED_TABLES = [
         'orders.acquisitions_unit__t',
         'orders.purchase_order__t',
@@ -34,6 +38,8 @@ final class AcquisitionsOpenOrdersReportService
         'organizations.organizations__t',
         'organizations.organizations__t__contacts',
         'organizations.contacts__t__emails',
+        'invoice.invoice_lines__t',
+        'invoice.invoices__t',
     ];
 
     public static function supports(ReportTemplate $report): bool
@@ -107,17 +113,31 @@ final class AcquisitionsOpenOrdersReportService
             throw new \InvalidArgumentException('Open Order Report definition does not match the reviewed seed contract.');
         }
 
+        ReportExecutionContractService::assertStaticExportSql($report->sql_template, ['fetchRowLimit' => 100001]);
         $acqUnit = self::stringInput($inputs, 'acqUnit', 'SC');
         if ($acqUnit === '' || strlen($acqUnit) > 100) {
             throw new ReportParameterValidationException('acqUnit', 'Choose an acquisitions unit from the list.');
         }
-        $startDate = self::dateInput($inputs, 'startDate', ReportTemplate::resolveDefaultMacro('$fiscal_year_start'));
-        $endDate = self::dateInput($inputs, 'endDate', ReportTemplate::resolveDefaultMacro('$today'));
-        if ($endDate < $startDate) {
+        $workflowStatuses = ReportFilterInputService::selections(
+            $inputs['workflowStatuses'] ?? null,
+            'workflowStatuses',
+            self::WORKFLOW_STATUSES,
+            self::WORKFLOW_STATUSES
+        );
+        $orderTypes = ReportFilterInputService::selections(
+            $inputs['orderTypes'] ?? null,
+            'orderTypes',
+            self::ORDER_TYPES,
+            self::ORDER_TYPES
+        );
+        $lineView = self::choiceInput($inputs, 'lineView', self::LINE_VIEWS[0], self::LINE_VIEWS);
+        $titleSearch = self::searchPattern($inputs, 'titleSearch', 200);
+        $poLineNumberSearch = self::searchPattern($inputs, 'poLineNumberSearch', 100);
+        $startDate = ReportFilterInputService::date($inputs['startDate'] ?? null, 'startDate', null, true);
+        $endDate = ReportFilterInputService::date($inputs['endDate'] ?? null, 'endDate', null, true);
+        if ($startDate !== null && $endDate !== null && $endDate < $startDate) {
             throw new ReportParameterValidationException('endDate', 'End date must be on or after start date.');
         }
-        $orderFormat = self::choiceInput($inputs, 'orderFormat', 'All', self::ORDER_FORMATS);
-        $reEncumber = self::choiceInput($inputs, 'reEncumber', 'Any', self::RE_ENCUMBER);
         $receiptStatuses = ReportFilterInputService::selections(
             $inputs['receiptStatuses'] ?? null,
             'receiptStatuses',
@@ -130,36 +150,58 @@ final class AcquisitionsOpenOrdersReportService
             self::PAYMENT_STATUSES,
             self::PAYMENT_STATUSES
         );
+        $orderFormat = self::choiceInput($inputs, 'orderFormat', 'All', self::ORDER_FORMATS);
+        $reEncumber = self::choiceInput($inputs, 'reEncumber', 'Any', self::RE_ENCUMBER);
 
-        ReportExecutionContractService::assertStaticExportSql($report->sql_template, ['fetchRowLimit' => 100001]);
+        self::assertRequiredTables($folioDb);
+        self::assertAcquisitionsUnit($folioDb, $acqUnit);
+        $materialTypeOptions = self::loadOptionValues($report, 'materialTypes', $folioDb);
+        $expenseClassOptions = self::loadOptionValues($report, 'expenseClasses', $folioDb);
+        $materialTypes = self::dynamicSelections($inputs['materialTypes'] ?? null, 'materialTypes', $materialTypeOptions);
+        $expenseClasses = self::dynamicSelections($inputs['expenseClasses'] ?? null, 'expenseClasses', $expenseClassOptions);
+
         $params = [
             ':acqUnit' => $acqUnit,
+            ':lineView' => $lineView,
+            ':titleSearch' => $titleSearch,
+            ':poLineNumberSearch' => $poLineNumberSearch,
             ':startDate' => $startDate,
             ':endDate' => $endDate,
             ':orderFormat' => $orderFormat,
             ':reEncumber' => $reEncumber,
         ];
+        $workflowFilter = ReportFilterInputService::selectionPredicate(
+            $workflowStatuses, self::WORKFLOW_STATUSES, 'po.workflow_status', 'workflowStatus', $params
+        );
+        $orderTypeFilter = ReportFilterInputService::selectionPredicate(
+            $orderTypes, self::ORDER_TYPES, 'po.order_type', 'orderType', $params
+        );
         $receiptFilter = ReportFilterInputService::selectionPredicate(
-            $receiptStatuses,
-            self::RECEIPT_STATUSES,
-            'pol.receipt_status',
-            'receiptStatus',
-            $params
+            $receiptStatuses, self::RECEIPT_STATUSES, 'pol.receipt_status', 'receiptStatus', $params
         );
         $paymentFilter = ReportFilterInputService::selectionPredicate(
-            $paymentStatuses,
-            self::PAYMENT_STATUSES,
-            'pol.payment_status',
-            'paymentStatus',
+            $paymentStatuses, self::PAYMENT_STATUSES, 'pol.payment_status', 'paymentStatus', $params
+        );
+        $materialFilter = ReportFilterInputService::selectionPredicate(
+            $materialTypes,
+            $materialTypeOptions,
+            'COALESCE(physical_mt.name, eresource_mt.name)',
+            'materialType',
             $params
         );
+        $expenseFilter = self::expenseClassPredicate($expenseClasses, $expenseClassOptions, $params);
         $sql = str_replace(
-            ['/*__RECEIPT_STATUS_FILTER__*/TRUE', '/*__PAYMENT_STATUS_FILTER__*/TRUE'],
-            [$receiptFilter, $paymentFilter],
+            [
+                '/*__WORKFLOW_STATUS_FILTER__*/TRUE',
+                '/*__ORDER_TYPE_FILTER__*/TRUE',
+                '/*__RECEIPT_STATUS_FILTER__*/TRUE',
+                '/*__PAYMENT_STATUS_FILTER__*/TRUE',
+                '/*__MATERIAL_TYPE_FILTER__*/TRUE',
+                '/*__EXPENSE_CLASS_FILTER__*/TRUE',
+            ],
+            [$workflowFilter, $orderTypeFilter, $receiptFilter, $paymentFilter, $materialFilter, $expenseFilter],
             $report->sql_template
         );
-        self::assertRequiredTables($folioDb);
-        self::assertAcquisitionsUnit($folioDb, $acqUnit);
 
         return [
             'sql' => $sql,
@@ -182,11 +224,6 @@ final class AcquisitionsOpenOrdersReportService
         return $value;
     }
 
-    private static function dateInput(array $inputs, string $name, string $default): string
-    {
-        return ReportFilterInputService::date($inputs[$name] ?? null, $name, $default);
-    }
-
     private static function choiceInput(array $inputs, string $name, string $default, array $allowed): string
     {
         $value = self::stringInput($inputs, $name, $default);
@@ -194,6 +231,88 @@ final class AcquisitionsOpenOrdersReportService
             throw new ReportParameterValidationException($name, 'Choose one of the listed options.');
         }
         return $value;
+    }
+
+    private static function searchPattern(array $inputs, string $name, int $maximumLength): ?string
+    {
+        $value = $inputs[$name] ?? null;
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_string($value)) {
+            throw new ReportParameterValidationException($name, 'Enter text from the report form.');
+        }
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+        if (strlen($value) > $maximumLength) {
+            throw new ReportParameterValidationException($name, 'Search text is too long.');
+        }
+        $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+        return '%' . $escaped . '%';
+    }
+
+    private static function dynamicSelections($value, string $field, array $allowed): array
+    {
+        if ($value === null || $value === '') {
+            return $allowed;
+        }
+        return ReportFilterInputService::selections($value, $field, $allowed, $allowed);
+    }
+
+    private static function loadOptionValues(ReportTemplate $report, string $name, $folioDb): array
+    {
+        foreach ($report->getDecodedParameters() as $definition) {
+            if (($definition['name'] ?? null) !== $name) {
+                continue;
+            }
+            $sql = $definition['options_sql'] ?? null;
+            if (!is_string($sql) || trim($sql) === '' || ($definition['options_db'] ?? 'folio') !== 'folio') {
+                break;
+            }
+            $values = $folioDb->createCommand($sql)->queryColumn();
+            if (!is_array($values)) {
+                break;
+            }
+            return array_values(array_unique(array_map('strval', $values)));
+        }
+        throw new \InvalidArgumentException('Open Order Report is missing its ' . $name . ' option query.');
+    }
+
+    private static function expenseClassPredicate(array $selected, array $all, array &$params): string
+    {
+        if ($selected === $all) {
+            return 'TRUE';
+        }
+        $classIds = [];
+        $includeNoClass = false;
+        foreach ($selected as $value) {
+            if ($value === self::NO_EXPENSE_CLASS) {
+                $includeNoClass = true;
+            } else {
+                $classIds[] = $value;
+            }
+        }
+
+        $predicates = [];
+        if (!empty($classIds)) {
+            $markers = [];
+            foreach ($classIds as $index => $classId) {
+                $marker = ':expenseClass' . $index;
+                $markers[] = $marker;
+                $params[$marker] = $classId;
+            }
+            $predicates[] = 'EXISTS (SELECT 1 FROM orders.po_line__t__fund_distribution AS selected_fd'
+                . ' WHERE selected_fd.id = il.po_line_id'
+                . ' AND selected_fd.fund_distribution__expense_class_id IN (' . implode(', ', $markers) . '))';
+        }
+        if ($includeNoClass) {
+            $predicates[] = 'NOT EXISTS (SELECT 1 FROM orders.po_line__t__fund_distribution AS no_class_fd'
+                . ' WHERE no_class_fd.id = il.po_line_id'
+                . ' AND no_class_fd.fund_distribution__expense_class_id IS NOT NULL)';
+        }
+        return empty($predicates) ? 'FALSE' : '(' . implode(' OR ', $predicates) . ')';
     }
 
     private static function assertRequiredTables($folioDb): void
