@@ -40,32 +40,53 @@ $compile = static function (array $overrides = []) use ($report, $db): array {
 };
 
 $defaults = $compile();
-$today = new \DateTime('today');
-$year = (int) $today->format('Y');
-$expectedStart = (int) $today->format('n') >= 7 ? sprintf('%04d-07-01', $year) : sprintf('%04d-07-01', $year - 1);
 acquisitionsOpenOrdersAssert($defaults['params'][':acqUnit'] === 'SC', 'Default the acquisitions unit to Smith.');
-acquisitionsOpenOrdersAssert($defaults['params'][':startDate'] === $expectedStart, 'Default start date to the current Smith fiscal-year start.');
-acquisitionsOpenOrdersAssert($defaults['params'][':endDate'] === $today->format('Y-m-d'), 'Default end date to today.');
+acquisitionsOpenOrdersAssert($defaults['params'][':startDate'] === null, 'Leave the optional report start date blank by default.');
+acquisitionsOpenOrdersAssert($defaults['params'][':endDate'] === null, 'Leave the optional report end date blank by default.');
 acquisitionsOpenOrdersAssert($defaults['params'][':orderFormat'] === 'All', 'Default order format to all formats.');
 acquisitionsOpenOrdersAssert($defaults['params'][':reEncumber'] === 'Any', 'Default re-encumber to any value.');
 acquisitionsOpenOrdersAssert(strpos($defaults['sql'], '/*__') === false, 'Compile the default status filters before execution.');
-acquisitionsOpenOrdersAssert(strpos($defaults['sql'], 'AND (TRUE)') !== false, 'Default all status selections leave the existing inclusion rule unchanged.');
+acquisitionsOpenOrdersAssert(strpos($defaults['sql'], 'AND (TRUE)') !== false, 'Default all status selections to no narrowing predicate.');
 acquisitionsOpenOrdersAssert(strpos($defaults['sql'], 'il.workflow_status AS "PO status"') !== false, 'Include the purchase-order workflow status column.');
-acquisitionsOpenOrdersAssert(count($db->queries) === 2, 'Probe the schema in one lookup and validate the selected unit in one lookup.');
+acquisitionsOpenOrdersAssert(count($db->queries) === 4, 'Probe schema, acquisitions unit, material-type options, and expense-class options separately.');
+
+$expandedDefaults = $compile();
+acquisitionsOpenOrdersAssert($expandedDefaults['params'][':startDate'] === null, 'Leave the optional report start date blank by default.');
+acquisitionsOpenOrdersAssert($expandedDefaults['params'][':endDate'] === null, 'Leave the optional report end date blank by default.');
+acquisitionsOpenOrdersAssert(!array_key_exists(':workflowStatus0', $expandedDefaults['params'])
+    && !array_key_exists(':orderType0', $expandedDefaults['params']), 'Do not narrow default all-status and all-order-type selections.');
+acquisitionsOpenOrdersAssert($expandedDefaults['params'][':lineView'] === 'Not yet received or not yet paid', 'Keep the existing eligible-line view as the default.');
+acquisitionsOpenOrdersAssert(strpos($expandedDefaults['sql'], '/*__') === false, 'Compile every report filter before execution.');
 
 $chosen = $compile([
-    'acqUnit' => 'SC', 'startDate' => '2025-07-01', 'endDate' => '2026-06-30',
+    'acqUnit' => 'SC', 'workflowStatuses' => 'Pending,Closed', 'orderTypes' => 'Ongoing',
+    'lineView' => 'All lines', 'titleSearch' => '50%_\\', 'poLineNumberSearch' => 'SC_4%',
+    'startDate' => '2025-07-01', 'endDate' => '',
     'orderFormat' => 'Electronic Resource', 'reEncumber' => 'Off',
-    'receiptStatuses' => 'Fully Received', 'paymentStatuses' => 'Awaiting Payment',
+    'receiptStatuses' => 'Receipt Not Required,Cancelled', 'paymentStatuses' => 'Payment Not Required',
+    'materialTypes' => 'Book', 'expenseClasses' => 'expense-1,__none__',
 ]);
-acquisitionsOpenOrdersAssert($chosen['params'] === [
-    ':acqUnit' => 'SC', ':startDate' => '2025-07-01', ':endDate' => '2026-06-30',
-    ':orderFormat' => 'Electronic Resource', ':reEncumber' => 'Off',
-    ':receiptStatus0' => 'Fully Received', ':paymentStatus0' => 'Awaiting Payment',
-], 'Bind every report filter as a parameter.');
+acquisitionsOpenOrdersAssert($chosen['params'][':acqUnit'] === 'SC'
+    && $chosen['params'][':workflowStatus0'] === 'Pending'
+    && $chosen['params'][':workflowStatus1'] === 'Closed'
+    && $chosen['params'][':orderType0'] === 'Ongoing'
+    && $chosen['params'][':lineView'] === 'All lines', 'Bind PO status, order type, and line view values.');
+acquisitionsOpenOrdersAssert($chosen['params'][':startDate'] === '2025-07-01' && $chosen['params'][':endDate'] === null, 'Allow a start date without an end date.');
+acquisitionsOpenOrdersAssert($chosen['params'][':titleSearch'] === '%50\\%\\_\\\\%' && $chosen['params'][':poLineNumberSearch'] === '%SC\\_4\\%%', 'Escape search wildcards and bind partial-match patterns.');
+acquisitionsOpenOrdersAssert($chosen['params'][':receiptStatus0'] === 'Receipt Not Required'
+    && $chosen['params'][':receiptStatus1'] === 'Cancelled'
+    && $chosen['params'][':paymentStatus0'] === 'Payment Not Required', 'Bind every receipt and payment status value.');
+acquisitionsOpenOrdersAssert($chosen['params'][':materialType0'] === 'Book'
+    && $chosen['params'][':expenseClass0'] === 'expense-1'
+    && strpos($chosen['sql'], 'no_class_fd.fund_distribution__expense_class_id IS NOT NULL') !== false, 'Bind material types and expense classes and compile the no-class choice safely.');
 acquisitionsOpenOrdersAssert(strpos($chosen['sql'], "'SC'") === false, 'Do not interpolate the selected acquisitions unit.');
-acquisitionsOpenOrdersAssert(strpos($chosen['sql'], 'pol.receipt_status IN (:receiptStatus0)') !== false, 'Apply receipt status after the existing line inclusion rule.');
+acquisitionsOpenOrdersAssert(strpos($chosen['sql'], 'pol.receipt_status IN (:receiptStatus0, :receiptStatus1)') !== false, 'Apply receipt status after the line-view rule.');
 acquisitionsOpenOrdersAssert(strpos($chosen['sql'], 'pol.payment_status IN (:paymentStatus0)') !== false, 'Apply payment status after the existing line inclusion rule.');
+acquisitionsOpenOrdersAssert(strpos($chosen['sql'], 'pol.title_or_package ILIKE so.title_search ESCAPE CHR(92)') !== false
+    && strpos($chosen['sql'], 'pol.po_line_number ILIKE so.po_line_number_search ESCAPE CHR(92)') !== false, 'Apply case-insensitive escaped title and PO-line searches.');
+acquisitionsOpenOrdersAssert(strpos($chosen['sql'], 'invoice.invoice_lines__t') !== false
+    && strpos($chosen['sql'], "invoice_line_status = 'Paid'") !== false
+    && strpos($chosen['sql'], 'paid_totals') !== false, 'Aggregate all-time paid invoice lines separately from report filters.');
 acquisitionsOpenOrdersAssert($chosen['marcTag'] === 'open-orders', 'Use the governed open-orders report filename context.');
 acquisitionsOpenOrdersAssert($chosen['location']['name'] === 'SC' && $chosen['location']['code'] === 'SC', 'Return the selected acquisitions unit as export context.');
 ReportExecutionContractService::assertStaticExportSql($chosen['sql'], ['fetchRowLimit' => 100001]);
@@ -79,10 +100,15 @@ acquisitionsOpenOrdersAssert($contract['identifierExport']['sourceColumn'] === '
 
 $parameters = $report->getDecodedParameters();
 $parameterNames = array_column($parameters, 'name');
-acquisitionsOpenOrdersAssert($parameterNames === ['acqUnit', 'startDate', 'endDate', 'orderFormat', 'reEncumber', 'receiptStatuses', 'paymentStatuses'], 'Declare report parameters in ticket order.');
+acquisitionsOpenOrdersAssert($parameterNames === ['acqUnit', 'workflowStatuses', 'orderTypes', 'lineView', 'titleSearch', 'poLineNumberSearch', 'startDate', 'endDate', 'receiptStatuses', 'paymentStatuses', 'materialTypes', 'expenseClasses', 'orderFormat', 'reEncumber'], 'Declare report parameters in ticket order.');
 acquisitionsOpenOrdersAssert(strpos($report->parameters, 'orders.acquisitions_unit__t') !== false, 'Load acquisitions-unit choices from FOLIO.');
-acquisitionsOpenOrdersAssert($parameters[5]['default'] === 'Pending,Awaiting Receipt,Partially Received,Fully Received', 'Default receipt statuses to all supported values.');
-acquisitionsOpenOrdersAssert($parameters[6]['default'] === 'Pending,Awaiting Payment,Partially Paid,Fully Paid,Ongoing,Payment Not Required,Cancelled', 'Default payment statuses to all supported values.');
+acquisitionsOpenOrdersAssert($parameters[1]['default'] === 'Pending,Open,Closed', 'Default PO status to every workflow status.');
+acquisitionsOpenOrdersAssert($parameters[2]['default'] === 'One-Time,Ongoing', 'Default order type to every PO type.');
+acquisitionsOpenOrdersAssert($parameters[3]['default'] === 'Not yet received or not yet paid', 'Default line view to the previous inclusion rule.');
+acquisitionsOpenOrdersAssert($parameters[6]['default'] === '' && $parameters[7]['default'] === '', 'Leave both report dates optional and blank by default.');
+acquisitionsOpenOrdersAssert($parameters[8]['default'] === 'Pending,Awaiting Receipt,Partially Received,Fully Received,Receipt Not Required,Ongoing,Cancelled', 'Default receipt statuses to every stored value.');
+acquisitionsOpenOrdersAssert($parameters[9]['default'] === 'Pending,Awaiting Payment,Partially Paid,Fully Paid,Ongoing,Payment Not Required,Cancelled', 'Default payment statuses to every stored value.');
+acquisitionsOpenOrdersAssert($parameters[10]['default'] === '' && $parameters[11]['default'] === '', 'Default dynamic material and expense selections to all options.');
 
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['acqUnit' => 'UNKNOWN']); }, 'acqUnit', 'Reject units outside the FOLIO unit whitelist.');
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['startDate' => '2026-02-30']); }, 'startDate', 'Reject invalid calendar dates.');
@@ -91,6 +117,13 @@ acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['orderFormat
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['reEncumber' => 'Maybe']); }, 'reEncumber', 'Reject re-encumber values outside Any, On, and Off.');
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['receiptStatuses' => 'Unknown']); }, 'receiptStatuses', 'Reject receipt statuses outside the fixed choices.');
 acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['paymentStatuses' => 'Pending,Pending']); }, 'paymentStatuses', 'Reject repeated payment-status values.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['workflowStatuses' => 'Deleted']); }, 'workflowStatuses', 'Reject unknown PO statuses.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['orderTypes' => 'Subscription']); }, 'orderTypes', 'Reject unknown PO order types.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['lineView' => 'Everything']); }, 'lineView', 'Reject unknown line views.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['receiptStatuses' => 'Receipt not required']); }, 'receiptStatuses', 'Reject status values with noncanonical spelling.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['materialTypes' => 'Unknown']); }, 'materialTypes', 'Reject material types outside the selected unit options.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['expenseClasses' => 'unknown-id']); }, 'expenseClasses', 'Reject expense classes outside the FOLIO options.');
+acquisitionsOpenOrdersThrows(function () use ($compile) { $compile(['titleSearch' => ['A', 'B']]); }, 'titleSearch', 'Reject non-string title-search values.');
 
 $originalDefinition = [];
 foreach (['slug', 'name', 'description', 'help_text', 'category', 'data_source', 'created_by', 'default_limit', 'is_active', 'sql_template', 'parameters', 'execution_config'] as $key) {

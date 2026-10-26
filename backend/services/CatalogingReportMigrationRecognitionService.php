@@ -70,6 +70,9 @@ final class CatalogingReportMigrationRecognitionService
         if ($filename === '053_acquisitions_feedback_report_filters.sql') {
             return self::acquisitionsFeedbackReportsAppearComplete($db);
         }
+        if ($filename === '056_open_order_report_expansion.sql') {
+            return self::acquisitionsOpenOrdersReportAppearsComplete($db);
+        }
         return false;
     }
 

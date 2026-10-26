@@ -29,6 +29,7 @@ $db = new class($definition) {
 $recognize = new ReflectionMethod(app\services\MigrationService::class, 'migrationAppearsApplied');
 if (PHP_VERSION_ID < 80500) { $recognize->setAccessible(true); }
 acquisitionsMigrationAssert($recognize->invoke(null, $db, '048_quarterly_open_orders_report.sql'), 'Recognize migration 048 when its canonical report is installed.');
+acquisitionsMigrationAssert($recognize->invoke(null, $db, '056_open_order_report_expansion.sql'), 'Recognize migration 056 when its canonical report is installed.');
 acquisitionsMigrationAssert(
     app\services\CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db),
     'Recognize the canonical report through the shared migration helper.'
@@ -47,6 +48,6 @@ acquisitionsMigrationAssert(
 
 $files = app\services\MigrationService::discoverMigrationFiles();
 $last = end($files);
-acquisitionsMigrationAssert($last['filename'] === '054_acrl_question_catalogue.sql', 'Migration 054 is the newest migration.');
+acquisitionsMigrationAssert($last['filename'] === '056_open_order_report_expansion.sql', 'Migration 056 is the newest migration.');
 
 echo "Acquisitions open-orders migration recognition checks passed\n";
