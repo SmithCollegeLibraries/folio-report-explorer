@@ -105,6 +105,13 @@ $config = [
                 'DELETE local/acrl/<id:\d+>' => 'folio-query/local-acrl-delete',
                 'POST local/acrl/copy-year' => 'folio-query/local-acrl-copy-year',
 
+                // ACRL survey question catalogue and review (admin only)
+                'GET acrl/years' => 'acrl/years',
+                'POST acrl/worksheets' => 'acrl/upload',
+                'GET acrl/years/<year:\\d+>/review' => 'acrl/review',
+                'POST acrl/years/<year:\\d+>/links' => 'acrl/save-links',
+                'POST acrl/years/<year:\\d+>/publish' => 'acrl/publish',
+
                 'GET local/allocations' => 'folio-query/local-alloc-list',
                 'GET local/allocations/years' => 'folio-query/local-alloc-years',
                 'POST local/allocations' => 'folio-query/local-alloc-upsert',

@@ -38,6 +38,7 @@ use app\models\AcrlStatistic;
 use app\models\ExpenseAllocation;
 use app\models\User;
 use app\models\DummyIdentity;
+use app\controllers\traits\PersistedAdminAccessTrait;
 use Firebase\JWT\JWT;
 
 require_once __DIR__ . '/../exceptions/DatabaseQueryCancelledException.php';
@@ -51,6 +52,7 @@ require_once __DIR__ . '/../services/AskResponseContractService.php';
 require_once __DIR__ . '/../services/AskUserExplanationService.php';
 require_once __DIR__ . '/../services/ExpenseClassScopeService.php';
 require_once __DIR__ . '/../services/ExpenseAllocationApiService.php';
+require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
 
 /**
  * FolioQueryController — REST API for the FOLIO Report Explorer.
@@ -72,6 +74,8 @@ require_once __DIR__ . '/../services/ExpenseAllocationApiService.php';
  */
 class FolioQueryController extends Controller
 {
+    use PersistedAdminAccessTrait;
+
     private const QUERY_JOB_NAME_MAX_LENGTH = 240;
 
     /**
@@ -233,38 +237,6 @@ class FolioQueryController extends Controller
             return false;
         }
         return true;
-    }
-
-    /**
-     * Enforce administrator access in every environment and return stable API copy.
-     * Authentication still runs through AccessControl in production, while this
-     * guard owns the role check and stable response in every environment.
-     *
-     * @return array|null
-     */
-    private function requireAdministrator(): ?array
-    {
-        if ($this->isPersistedAdministrator()) {
-            return null;
-        }
-
-        Yii::$app->response->statusCode = 403;
-        return ['error' => 'Forbidden'];
-    }
-
-    private function isPersistedAdministrator(): bool
-    {
-        $user = Yii::$app->user;
-        $identity = $user->identity;
-        if ($user->isGuest || !($identity instanceof User)) {
-            return false;
-        }
-
-        return User::find()->where([
-            'id' => (int)$identity->getId(),
-            'role' => 'admin',
-            'is_approved' => 1,
-        ])->exists();
     }
 
     /**

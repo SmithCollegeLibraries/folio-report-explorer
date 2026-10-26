@@ -1,4 +1,9 @@
 Options +FollowSymLinks -Indexes
+
+<IfModule mod_mime.c>
+  AddType text/javascript .mjs
+</IfModule>
+
 RewriteEngine On
 
 <IfModule mod_headers.c>
