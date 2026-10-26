@@ -79,7 +79,7 @@ function makeUploadResponse(review = makeReview()) {
 }
 
 describe('ACRL review panel bulk decisions', () => {
-  it('selects high-score reworded and renumbered matches, excludes low-score rows, and keeps single approval', async () => {
+  it('approves every undecided row by status and confirms weak text matches', async () => {
     const question = (id: number, questionId: string, prompt: string): AcrlQuestionPart => ({
       id,
       sheet: 'survey',
@@ -92,9 +92,9 @@ describe('ACRL review panel bulk decisions', () => {
       calculated_from: null,
       survey_order: id,
     });
-    const item = (status: 'reworded' | 'renumbered', score: number, previousId: string, currentId: string): AcrlReviewResponse['items'][number] => ({
+    const item = (status: 'unchanged' | 'reworded' | 'renumbered', score: number, previousId: string, currentId: string): AcrlReviewResponse['items'][number] => ({
       status,
-      matchKind: status,
+      matchKind: status === 'unchanged' ? 'same' : status,
       score,
       decision: null,
       linkId: null,
@@ -113,35 +113,59 @@ describe('ACRL review panel bulk decisions', () => {
         item('reworded', 0.78, '7', '7'),
         item('reworded', 0.49, '8', '8'),
         item('renumbered', 0.68, '110', '101'),
+        item('unchanged', 0.45, '9', '9'),
       ],
     } as AcrlReviewResponse;
     const onSave = vi.fn();
     const user = userEvent.setup();
     render(<AcrlReviewPanel review={review} saving={false} publishing={false} onSave={onSave} onPublish={vi.fn()} />);
 
-    await user.click(screen.getByRole('checkbox', { name: 'Select all high-score Reworded matches' }));
-    await user.click(screen.getByRole('checkbox', { name: 'Select all high-score Renumbered matches' }));
+    const rewordedGroup = screen.getByRole('region', { name: 'Reworded survey questions' });
+    await user.click(within(rewordedGroup).getByRole('button', { name: 'Approve all (2)' }));
+    expect(screen.getByRole('alertdialog', { name: 'Confirm bulk approval for Reworded' })).toHaveTextContent(
+      '1 of these have a weak text match (IDs 8). Approve all anyway?'
+    );
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+    expect(onSave).not.toHaveBeenCalled();
 
-    expect(screen.getByRole('checkbox', { name: 'Select 7 reworded match' })).toBeChecked();
-    expect(screen.getByRole('checkbox', { name: 'Select 8 reworded match' })).toBeDisabled();
-    expect(screen.getByRole('checkbox', { name: 'Select 101 renumbered match' })).toBeChecked();
-
-    await user.click(screen.getByRole('button', { name: 'Approve selected' }));
+    await user.click(within(rewordedGroup).getByRole('button', { name: 'Approve all (2)' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Approve all' }));
     expect(onSave).toHaveBeenNthCalledWith(1, [
       expect.objectContaining({ previous_question_id: '7', current_question_id: '7', decision: 'approved' }),
-      expect.objectContaining({ previous_question_id: '110', current_question_id: '101', decision: 'approved' }),
+      expect.objectContaining({ previous_question_id: '8', current_question_id: '8', decision: 'approved' }),
     ]);
     expect(onSave.mock.calls[0][0]).toHaveLength(2);
 
-    const lowScoreMatch = screen.getByText('Current · 8').closest('article');
-    expect(lowScoreMatch).not.toBeNull();
-    await user.click(within(lowScoreMatch as HTMLElement).getByRole('button', { name: 'Approve' }));
-    expect(onSave).toHaveBeenNthCalledWith(2, [expect.objectContaining({ previous_question_id: '8', current_question_id: '8', decision: 'approved' })]);
+    await user.click(within(screen.getByRole('region', { name: 'Renumbered survey questions' })).getByRole('button', { name: 'Approve all (1)' }));
+    expect(onSave).toHaveBeenNthCalledWith(2, [expect.objectContaining({ previous_question_id: '110', current_question_id: '101', decision: 'approved' })]);
+    await user.click(within(screen.getByRole('region', { name: 'Unchanged survey questions' })).getByRole('button', { name: 'Approve all (1)' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Approve all' }));
+    expect(onSave).toHaveBeenNthCalledWith(3, [expect.objectContaining({ previous_question_id: '9', current_question_id: '9', decision: 'approved' })]);
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve selected' })).not.toBeInTheDocument();
+  });
+
+  it('lets a draft decision be changed from the row', async () => {
+    const review = makeReview();
+    review.items = [{
+      status: 'reworded', matchKind: 'reworded', score: 0.8, decision: 'rejected', linkId: 1, topical: false,
+      previous: makeQuestion('survey', '7'), current: makeQuestion('survey', '7'),
+    }];
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(<AcrlReviewPanel review={review} saving={false} publishing={false} onSave={onSave} onPublish={vi.fn()} />);
+
+    const group = screen.getByRole('region', { name: 'Reworded survey questions' });
+    expect(within(group).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
+    await user.click(within(group).getByRole('button', { name: 'Change decision for 7' }));
+    await user.click(within(group).getByRole('button', { name: 'Approve' }));
+
+    expect(onSave).toHaveBeenCalledWith([expect.objectContaining({ previous_question_id: '7', current_question_id: '7', decision: 'approved' })]);
   });
 });
 
 describe('ACRL catalogue page', () => {
-  it('shows grouped annual changes and approves unchanged high-score matches in bulk', async () => {
+  it('shows grouped annual changes and approves unchanged matches in bulk', async () => {
     listYears.mockResolvedValue([
       { surveyYear: 2026, status: 'draft', sourceFileName: 'worksheet.pdf', surveyPromptCount: 73, trendsPromptCount: 9, surveyItemCount: 73, trendsItemCount: 9, totalItemCount: 82, publishedAt: null },
       { surveyYear: 2025, status: 'published', sourceFileName: null, surveyPromptCount: 69, trendsPromptCount: 15, surveyItemCount: 79, trendsItemCount: 15, totalItemCount: 94, publishedAt: '2026-01-01' },
@@ -166,11 +190,11 @@ describe('ACRL catalogue page', () => {
     expect(currentYearCard).not.toBeNull();
     await user.click(within(currentYearCard as HTMLElement).getByRole('button', { name: 'Open review' }));
     expect(await screen.findByRole('heading', { name: 'FY 2026 compared with FY 2025' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'New' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Removed' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'New survey questions' }).querySelector('summary')).toHaveTextContent(/^New/);
+    expect(screen.getByRole('region', { name: 'Removed survey questions' }).querySelector('summary')).toHaveTextContent(/^Removed/);
     expect(screen.getByText('Current · 6C')).toBeInTheDocument();
     expect(screen.getByText('Previous · 20a')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Approve unchanged high-score matches' }));
+    await user.click(within(screen.getByRole('region', { name: 'Unchanged survey questions' })).getByRole('button', { name: 'Approve all (1)' }));
     await waitFor(() => expect(saveLinks).toHaveBeenCalledWith(2026, [expect.objectContaining({ decision: 'approved', previous_question_id: '1', current_question_id: '1' })]));
   });
 
@@ -193,12 +217,21 @@ describe('ACRL catalogue page', () => {
     expect(uploadWorksheet).not.toHaveBeenCalled();
   });
 
-  it('automatically saves a clean parse, compares the prior year, and focuses the review heading', async () => {
+  it('automatically saves a clean parse, compares the prior year, and focuses the review heading only on open', async () => {
     listYears.mockResolvedValue([makeYear(2025, 'published')]);
-    getReview.mockResolvedValue(makeReview());
+    const review = makeReview();
+    review.unresolvedCount = 1;
+    review.canPublish = false;
+    review.items = [{
+      status: 'reworded', matchKind: 'reworded', score: 0.8, decision: null, linkId: null, topical: false,
+      previous: makeQuestion('survey', '7'), current: makeQuestion('survey', '7'),
+    }];
+    getReview.mockResolvedValue(review);
     parseWorksheetFile.mockResolvedValue({ items: [makeQuestion('survey', '1')], unresolved: [] });
     sha256ForFile.mockResolvedValue('worksheet-hash');
-    uploadWorksheet.mockResolvedValue(makeUploadResponse());
+    uploadWorksheet.mockResolvedValue(makeUploadResponse(review));
+    const savedReview = { ...review, unresolvedCount: 0, canPublish: true, items: [{ ...review.items[0], decision: 'approved' as const }] };
+    saveLinks.mockResolvedValue(savedReview);
     const scrollIntoView = vi.fn();
     scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
@@ -219,6 +252,12 @@ describe('ACRL catalogue page', () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
     expect(screen.queryByRole('button', { name: 'Save draft' })).not.toBeInTheDocument();
     expect(screen.getByText('Your upload is kept as a draft. Nothing is final until you publish it.')).toBeInTheDocument();
+
+    await user.click(within(screen.getByRole('region', { name: 'Reworded survey questions' })).getByRole('button', { name: 'Approve' }));
+    await waitFor(() => expect(saveLinks).toHaveBeenCalledTimes(1));
+    const decidedGroup = await screen.findByRole('group', { name: 'Reworded questions · All 1 approved' });
+    await waitFor(() => expect(decidedGroup.querySelector('summary')).toHaveFocus());
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
   it('shows parsing and comparison progress while a clean worksheet is processed', async () => {
@@ -308,7 +347,7 @@ describe('ACRL catalogue page', () => {
     expect(screen.getByLabelText('Worksheet PDF')).toBeEnabled();
   });
 
-  it('summarizes counts by sheet and links each status to its review group', () => {
+  it('summarizes survey changes, displays full new and shortened removed questions, and separates Trends', async () => {
     const question = (sheet: 'survey' | 'trends', questionId: string) => makeQuestion(sheet, questionId);
     const item = (status: AcrlReviewResponse['items'][number]['status'], previous: AcrlQuestionPart | null, current: AcrlQuestionPart | null): AcrlReviewResponse['items'][number] => ({
       status,
@@ -324,26 +363,66 @@ describe('ACRL catalogue page', () => {
       ...makeReview(),
       unresolvedCount: 2,
       canPublish: false,
+      previousQuestions: [question('trends', 'T10')],
       items: [
-        item('new', null, question('survey', '1')),
-        item('new', null, question('trends', '1')),
-        item('removed', question('trends', '2'), null),
+        item('new', null, { ...question('survey', '6'), part: 'C', prompt: 'Total salaries and wages when an institution cannot report them separately' }),
+        item('new', null, question('trends', 'T1')),
+        item('removed', { ...question('survey', '20a'), prompt: 'Removed survey question wording that is more than eighty characters long so the summary truncates it after the expected boundary.' }, null),
+        item('removed', question('trends', 'T10'), null),
         item('renumbered', question('survey', '3'), question('survey', '4')),
         item('reworded', question('trends', '5'), question('trends', '5')),
         item('unchanged', question('survey', '6'), question('survey', '6')),
       ],
     };
+    const user = userEvent.setup();
     render(<AcrlReviewPanel review={review} saving={false} publishing={false} onSave={vi.fn()} onPublish={vi.fn()} />);
 
     expect(screen.getByRole('heading', { name: 'FY 2026 compared with FY 2025' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /New: Survey 1, Trends 1/ })).toHaveAttribute('href', '#acrl-group-new');
-    expect(screen.getByRole('link', { name: /Removed: Survey 0, Trends 1/ })).toHaveAttribute('href', '#acrl-group-removed');
-    expect(screen.getByRole('link', { name: /Renumbered: Survey 1, Trends 0/ })).toHaveAttribute('href', '#acrl-group-renumbered');
-    expect(screen.getByRole('link', { name: /Reworded: Survey 0, Trends 1/ })).toHaveAttribute('href', '#acrl-group-reworded');
-    expect(screen.getByRole('link', { name: /Unchanged: Survey 1, Trends 0/ })).toHaveAttribute('href', '#acrl-group-unchanged');
-    expect(screen.getByText(/2 matches still need a decision/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /1 renumbered/ })).toHaveAttribute('href', '#acrl-group-renumbered');
+    expect(screen.getByRole('link', { name: /0 reworded/ })).toHaveAttribute('href', '#acrl-group-reworded');
+    expect(screen.getByRole('link', { name: /1 unchanged/ })).toHaveAttribute('href', '#acrl-group-unchanged');
+    expect(screen.getByRole('heading', { name: 'New survey questions (1)' })).toBeInTheDocument();
+    expect(screen.getByText(/6C — Total salaries and wages when an institution cannot report them separately/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Removed survey questions (1)' })).toBeInTheDocument();
+    const removedSummary = within(screen.getByRole('region', { name: 'Removed survey questions (1)' })).getByRole('link');
+    expect(removedSummary).toHaveTextContent(/^20a — Removed survey question wording that is more than eighty characters long so the…$/);
+    expect(removedSummary.textContent?.length).toBeLessThanOrEqual(86);
+    expect(screen.getByText('Trends (topical, new each year): 2 questions this year')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Trends for FY 2026' })).toBeInTheDocument();
+    const currentTrends = screen.getByRole('group', { name: 'FY 2026 Trends questions (2)' });
+    expect(currentTrends).not.toHaveAttribute('open');
+    await user.click(within(currentTrends).getByText('FY 2026 Trends questions (2)'));
+    expect(within(currentTrends).getByText(/T1/)).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'FY 2025 Trends questions (1)' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Survey change counts')).toHaveTextContent(/; 2 still need a decision$/);
+    expect(within(currentTrends).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Publish year at the bottom of this review/ })).toHaveAttribute('href', '#acrl-publish');
-    expect(screen.getByRole('region', { name: 'New questions' })).toHaveAttribute('id', 'acrl-group-new');
+    expect(screen.getByRole('region', { name: 'New survey questions' })).toHaveAttribute('id', 'acrl-group-new');
+    expect(screen.getByRole('region', { name: 'Reworded survey questions' })).not.toHaveTextContent('Trends question 5');
+    const groupOrder = Array.from(screen.getByRole('region', { name: 'Annual question review' }).querySelectorAll('section[id^="acrl-group-"]')).map((section) => section.id);
+    expect(groupOrder).toEqual(['acrl-group-new', 'acrl-group-removed', 'acrl-group-renumbered', 'acrl-group-reworded', 'acrl-group-unchanged']);
+  });
+
+  it('shows an explicit no-new-questions message and keeps all-decided groups collapsed', () => {
+    const statuses: AcrlReviewResponse['items'][number]['status'][] = ['removed', 'renumbered', 'reworded', 'unchanged'];
+    const items = statuses.map((status, index) => ({
+      status,
+      matchKind: status === 'removed' ? null : 'same' as const,
+      score: 1,
+      previous: status === 'new' ? null : makeQuestion('survey', String(index + 1)),
+      current: status === 'removed' ? null : makeQuestion('survey', String(index + 10)),
+      topical: false,
+      decision: status === 'removed' ? null : 'approved' as const,
+      linkId: null,
+    }));
+    const review = { ...makeReview(), items, unresolvedCount: 0, canPublish: true };
+    render(<AcrlReviewPanel review={review} saving={false} publishing={false} onSave={vi.fn()} onPublish={vi.fn()} />);
+
+    expect(screen.getByText('No new Survey questions this year.')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Renumbered questions · All 1 approved' })).not.toHaveAttribute('open');
+    expect(screen.getByRole('group', { name: 'Reworded questions · All 1 approved' })).not.toHaveAttribute('open');
+    expect(screen.getByRole('group', { name: 'Unchanged questions · All 1 approved' })).not.toHaveAttribute('open');
+    expect(screen.getByRole('group', { name: 'New questions' })).toHaveAttribute('open');
   });
 
   it('shows the active year review and the ready-to-publish summary', async () => {
