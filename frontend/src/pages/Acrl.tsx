@@ -22,6 +22,7 @@ export default function AcrlPage() {
   const [reviewOpenSequence, setReviewOpenSequence] = useState(0);
   const worksheetInputRef = useRef<HTMLInputElement>(null);
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
+  const lastScrolledReviewSequence = useRef(0);
 
   const yearsQuery = useQuery({ queryKey: ['acrl', 'years'], queryFn: listAcrlCatalogueYears });
   const reviewQuery = useQuery({
@@ -72,7 +73,8 @@ export default function AcrlPage() {
   });
 
   useEffect(() => {
-    if (!reviewOpenSequence || !reviewQuery.data || !reviewHeadingRef.current) return;
+    if (!reviewOpenSequence || reviewOpenSequence === lastScrolledReviewSequence.current || !reviewQuery.data || !reviewHeadingRef.current) return;
+    lastScrolledReviewSequence.current = reviewOpenSequence;
     reviewHeadingRef.current.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
     reviewHeadingRef.current.focus();
   }, [reviewOpenSequence, reviewQuery.data]);
