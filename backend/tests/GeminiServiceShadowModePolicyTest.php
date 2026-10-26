@@ -35,6 +35,9 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $modeResolver = new ReflectionMethod(GeminiService::class, 'resolvePrimaryModeForPrompt');
+if (PHP_VERSION_ID < 80100) {
+    $modeResolver->setAccessible(true);
+}
 
 assertSameValue(
     'intent',

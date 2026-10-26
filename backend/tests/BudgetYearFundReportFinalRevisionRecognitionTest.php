@@ -252,6 +252,7 @@ function finalMigrationAppearsApplied(array $report, string $filename): bool
     static $method;
     if ($method === null) {
         $method = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
+        $method->setAccessible(true);
     }
 
     return $method->invoke(null, new FinalRevisionDatabase($report), $filename);
@@ -262,6 +263,7 @@ function finalDatabaseAppearsCurrent(array $report): bool
     static $method;
     if ($method === null) {
         $method = new ReflectionMethod(MigrationService::class, 'databaseAppearsCurrent');
+        $method->setAccessible(true);
     }
 
     return $method->invoke(null, new FinalRevisionDatabase($report));

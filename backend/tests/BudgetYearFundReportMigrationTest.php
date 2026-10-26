@@ -240,6 +240,10 @@ assertContainsText('help_text LONGTEXT NULL', $initSql, 'Fresh-install schema mu
 
 $migrationApplied = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
 $databaseCurrent = new ReflectionMethod(MigrationService::class, 'databaseAppearsCurrent');
+if (PHP_VERSION_ID < 80100) {
+    $migrationApplied->setAccessible(true);
+    $databaseCurrent->setAccessible(true);
+}
 
 $columnOnlyDatabase = new BudgetYearFundReportTestDatabase(true, []);
 assertTrueValue(

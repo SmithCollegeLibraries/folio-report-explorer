@@ -105,6 +105,9 @@ class MigrationServiceTransactionTestCommand
 $transactionMigration = $tempDir . '/003_transactional_reconciliation.sql';
 file_put_contents($transactionMigration, "ALTER TABLE sample ADD COLUMN help_text TEXT;\nSTART TRANSACTION;\nUPDATE sample SET name = 'changed';\nFAIL RECONCILIATION;\nCOMMIT;\n");
 $executeSqlFile = new ReflectionMethod(MigrationService::class, 'executeSqlFile');
+if (PHP_VERSION_ID < 80100) {
+    $executeSqlFile->setAccessible(true);
+}
 $transactionDatabase = new MigrationServiceTransactionTestDatabase();
 $transactionFailure = null;
 try {

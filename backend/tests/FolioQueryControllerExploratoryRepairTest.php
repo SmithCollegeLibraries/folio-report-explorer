@@ -295,6 +295,7 @@ namespace {
 
     $controller = new \app\controllers\FolioQueryController('folio-query', null);
     $validateAndRepair = new ReflectionMethod($controller, 'validateAndRepairNlResult');
+    $validateAndRepair->setAccessible(true);
 
     $preflightSql = [];
     $repairCalls = 0;
@@ -913,6 +914,7 @@ namespace {
     repairAssertSame(0, $structuredCancelRepairCalls, 'Exact structured SQLSTATE 57014 must never call Gemini repair.');
 
     $continuation = new ReflectionMethod($controller, 'buildAskContinuationFromFailure');
+    $continuation->setAccessible(true);
     $cancelResponse = $continuation->invoke(
         $controller,
         new \app\exceptions\DatabaseQueryCancelledException(),
@@ -1127,6 +1129,7 @@ namespace {
     $finalizingController = new TestableFolioQueryController('folio-query', null);
     $finalizingController->reviewService = $capturingReview;
     $finalize = new ReflectionMethod($finalizingController, 'finalizeAskResponse');
+    $finalize->setAccessible(true);
     $finalized = $finalize->invoke($finalizingController, [
         'mode' => 'exploratory',
         'route' => 'exploratory_recovery',
@@ -1269,6 +1272,7 @@ namespace {
     $ordinaryRecoveryController = new TestableFolioQueryController('folio-query', null);
     $ordinaryRecoveryController->reviewService = $ordinaryRecoveryRecorder;
     $ordinaryRecoveryFinalize = new ReflectionMethod($ordinaryRecoveryController, 'finalizeAskResponse');
+    $ordinaryRecoveryFinalize->setAccessible(true);
     $finalizedOrdinaryRecovery = $ordinaryRecoveryFinalize->invoke(
         $ordinaryRecoveryController,
         $ordinaryDatabaseRecovery,
@@ -1322,6 +1326,7 @@ namespace {
         $outcomeController = new TestableFolioQueryController('folio-query', null);
         $outcomeController->reviewService = $outcomeRecorder;
         $outcomeFinalize = new ReflectionMethod($outcomeController, 'finalizeAskResponse');
+        $outcomeFinalize->setAccessible(true);
         $finalizedOutcome = $outcomeFinalize->invoke(
             $outcomeController,
             $recovery,
@@ -1350,6 +1355,7 @@ namespace {
 
     Yii::$app->response->statusCode = 200;
     $continuation = new ReflectionMethod($controller, 'buildAskContinuationFromFailure');
+    $continuation->setAccessible(true);
     $cancellationRecovery = $continuation->invoke(
         $controller,
         new \app\exceptions\DatabaseQueryCancelledException(),
@@ -1357,6 +1363,7 @@ namespace {
         'Smith College'
     );
     $attachEvidence = new ReflectionMethod($controller, 'attachTrustedAskEvidence');
+    $attachEvidence->setAccessible(true);
     $cancellationRecovery = $attachEvidence->invoke($controller, $cancellationRecovery, [
         'sql' => 'SELECT id, holdings_record_id FROM inventory.item__t',
         '_askEvidence' => $postGenerationEvidence,
@@ -1365,6 +1372,7 @@ namespace {
     $cancellationController = new TestableFolioQueryController('folio-query', null);
     $cancellationController->reviewService = $cancellationRecorder;
     $cancellationFinalize = new ReflectionMethod($cancellationController, 'finalizeAskResponse');
+    $cancellationFinalize->setAccessible(true);
     $finalizedCancellation = $cancellationFinalize->invoke(
         $cancellationController,
         $cancellationRecovery,

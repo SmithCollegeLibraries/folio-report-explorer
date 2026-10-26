@@ -47,6 +47,10 @@ $providerResolver = new ReflectionMethod(GeminiService::class, 'getAiProvider');
 $keyResolver = new ReflectionMethod(GeminiService::class, 'getAiApiKey');
 $modelResolver = new ReflectionMethod(GeminiService::class, 'getAiModel');
 $openAiPayloadBuilder = new ReflectionMethod(GeminiService::class, 'buildOpenAiPayloadFromGeminiShape');
+$providerResolver->setAccessible(true);
+$keyResolver->setAccessible(true);
+$modelResolver->setAccessible(true);
+$openAiPayloadBuilder->setAccessible(true);
 
 assertSameValue(
     'none',

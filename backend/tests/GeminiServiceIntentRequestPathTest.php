@@ -98,6 +98,9 @@ use app\services\GeminiService;
 $mapProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredMap');
 $columnProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredColumns');
 $subtableProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredSubtables');
+$mapProperty->setAccessible(true);
+$columnProperty->setAccessible(true);
+$subtableProperty->setAccessible(true);
 
 $tableMapCache = json_decode((string) file_get_contents(__DIR__ . '/../data/table_mapping_cache.json'), true);
 $columnCache = json_decode((string) file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
@@ -146,6 +149,9 @@ function assertThrowsRuntimeException(callable $callback, string $expectedText, 
 }
 
 $requestContextBuilder = new ReflectionMethod(GeminiService::class, 'buildIntentRequestContext');
+if (PHP_VERSION_ID < 80100) {
+    $requestContextBuilder->setAccessible(true);
+}
 
 $familyContext = $requestContextBuilder->invoke(
     null,
@@ -194,6 +200,9 @@ assertContainsText(
 );
 
 $familyRouteHelper = new ReflectionMethod(GeminiService::class, 'maybeRouteQueryFamilyIntentResponse');
+if (PHP_VERSION_ID < 80100) {
+    $familyRouteHelper->setAccessible(true);
+}
 
 $capturedFamilyDispatch = null;
 $familyResponse = $familyRouteHelper->invoke(

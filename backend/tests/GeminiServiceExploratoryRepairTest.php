@@ -553,6 +553,9 @@ $seededCandidateSql = 'SELECT inst.title FROM inventory.instance__t inst';
 $seededRepairedSql = "SELECT inst.title, inst.publication_date FROM inventory.instance__t inst "
     . "WHERE inst.hrid IN ('in0001','in0002')";
 $aiBuiltLane = new ReflectionMethod(GeminiService::class, 'generateAiBuiltLane');
+if (PHP_VERSION_ID < 80100) {
+    $aiBuiltLane->setAccessible(true);
+}
 TestTransport::$responses = [geminiText($seededRepairedSql)];
 TestTransport::$requests = [];
 Yii::$logs = [];

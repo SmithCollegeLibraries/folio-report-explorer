@@ -195,6 +195,7 @@ function migration036AppearsApplied(array $report): bool
     static $migrationApplied;
     if ($migrationApplied === null) {
         $migrationApplied = new ReflectionMethod(MigrationService::class, 'migrationAppearsApplied');
+        $migrationApplied->setAccessible(true);
     }
 
     return $migrationApplied->invoke(null, new FiscalYearOptionsDatabase($report), '036_budget_year_fund_report_fiscal_year_options.sql');
@@ -205,6 +206,7 @@ function databaseAppearsCurrentWithReport(array $report): bool
     static $databaseCurrent;
     if ($databaseCurrent === null) {
         $databaseCurrent = new ReflectionMethod(MigrationService::class, 'databaseAppearsCurrent');
+        $databaseCurrent->setAccessible(true);
     }
 
     return $databaseCurrent->invoke(null, new FiscalYearOptionsDatabase($report));

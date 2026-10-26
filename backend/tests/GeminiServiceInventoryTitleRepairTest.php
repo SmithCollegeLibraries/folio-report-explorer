@@ -61,6 +61,10 @@ function assertSameValue($expected, $actual, string $message): void
 
 $repair = new ReflectionMethod(GeminiService::class, 'repairInvalidInventoryTitleReferences');
 $repairAliasLeak = new ReflectionMethod(GeminiService::class, 'repairOnlyHoldingLocationAliasLeaks');
+if (PHP_VERSION_ID < 80100) {
+    $repair->setAccessible(true);
+    $repairAliasLeak->setAccessible(true);
+}
 
 $badSql = implode("\n", [
     'SELECT ii.title, COUNT(DISTINCT inst.id) AS record_count',

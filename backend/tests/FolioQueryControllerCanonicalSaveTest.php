@@ -8,7 +8,7 @@ namespace yii\web {
 namespace app\models {
     class SavedQuery
     {
-        public static array $saved = [];
+        public static $saved = [];
         public $id = 7, $name, $user_id, $description, $query_definition, $generated_sql, $source,
             $nl_prompt, $is_pinned, $is_global = 0, $last_job_id, $created_at = 'now', $updated_at = 'now', $errors = [];
         public function save(): bool { self::$saved[] = clone $this; return true; }
@@ -66,7 +66,7 @@ namespace app\services {
     }
     class SqlBuilderService
     {
-        public static bool $fail = false;
+        public static $fail = false;
         public static function build(array $definition): array
         {
             if (self::$fail) throw new \InvalidArgumentException('build failed');
@@ -87,7 +87,8 @@ namespace {
     class Yii { public static $app; public static function warning($message, $category = 'application') {} }
     final class CanonicalSaveRequest
     {
-        public function __construct(private array $body) {}
+        private $body;
+        public function __construct(array $body) { $this->body = $body; }
         public function getBodyParams(): array { return $this->body; }
         public function get($name, $default = null) { return $default; }
     }

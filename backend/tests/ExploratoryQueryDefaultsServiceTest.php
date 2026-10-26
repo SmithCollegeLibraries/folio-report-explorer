@@ -206,6 +206,7 @@ $malformedArtifact = json_decode(
 );
 $malformedArtifact['defaults'][4]['key'] = 'purchase_date_basis';
 $validateArtifact = new ReflectionMethod(ExploratoryQueryDefaultsService::class, 'validateArtifact');
+$validateArtifact->setAccessible(true);
 
 assertThrowsRuntimeException(
     function () use ($validateArtifact, $malformedArtifact): void {

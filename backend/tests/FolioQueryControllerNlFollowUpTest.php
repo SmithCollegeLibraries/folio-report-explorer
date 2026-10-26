@@ -128,6 +128,8 @@ namespace {
 
     $normalize = new ReflectionMethod($controller, 'normalizeFollowUpContext');
     $build = new ReflectionMethod($controller, 'buildFollowUpPrompt');
+    $normalize->setAccessible(true);
+    $build->setAccessible(true);
 
     $context = $normalize->invoke($controller, [
         'previousPrompt' => 'Please provide a list of titles with the location MRBC Reference Collection containing only records for which the MRBC Reference Collection is the only holding location in the 5 Colleges.',
@@ -191,6 +193,7 @@ namespace {
     assertSameValue(['title'], $historyContext['previousColumns'] ?? null, 'History follow-up context should expose stored result columns.');
     assertSameValue('generation-from-history-job', $historyContext['parentGenerationId'] ?? null, 'History follow-up lineage must come from server-written job provenance, not client context.');
     $resolveParent = new ReflectionMethod($controller, 'resolveAskParentGenerationId');
+    $resolveParent->setAccessible(true);
     assertSameValue(
         'generation-from-history-job',
         $resolveParent->invoke(

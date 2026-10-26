@@ -47,7 +47,8 @@ CREATE TABLE ai_report_generations (
     rerun_count INTEGER NOT NULL DEFAULT 0,
     follow_up_count INTEGER NOT NULL DEFAULT 0
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand('CREATE TABLE ai_query_feedback (id INTEGER PRIMARY KEY, generation_id VARCHAR(36), result_accuracy VARCHAR(20), reuse_suppressed INTEGER, admin_reuse_approved_at DATETIME)')->execute();
 $db->createCommand()->insert('query_jobs', [
     'id' => 'job-1',

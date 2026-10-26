@@ -147,10 +147,16 @@ namespace {
             'locationBasis' => $basis,
             'marcTag' => '856',
         ], $lookupDb);
+        $sqliteSql = str_replace('AS MATERIALIZED', 'AS', $effective['sql']);
+        $sqliteSql = str_replace(
+            ['target_instances.title NULLS LAST', 'target_instances.instance_hrid NULLS LAST'],
+            ['(target_instances.title IS NULL), target_instances.title', '(target_instances.instance_hrid IS NULL), target_instances.instance_hrid'],
+            $sqliteSql
+        );
         $sqliteSql = str_replace(
             "location.id = ANY(string_to_array(:locationIds, ',')::uuid[])",
             "instr(',' || :locationIds || ',', ',' || location.id || ',') > 0",
-            $effective['sql']
+            $sqliteSql
         );
         $sqliteSql = preg_replace(
             "/STRING_AGG\\(\\s*DISTINCT location\\.name \\|\\| COALESCE\\(' \\[' \\|\\| location\\.code \\|\\| '\\]', ''\\),\\s*'; ' ORDER BY location\\.name \\|\\| COALESCE\\(' \\[' \\|\\| location\\.code \\|\\| '\\]', ''\\)\\s*\\)/s",

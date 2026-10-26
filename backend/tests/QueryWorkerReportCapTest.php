@@ -117,6 +117,9 @@ function executeQueryWorkerReportCapJob(string $id, string $sql, ?array $contrac
     $job = \app\models\QueryJob::findOne($id);
     $worker = new QueryWorkerController('query-worker', Yii::$app);
     $method = new ReflectionMethod($worker, 'executeJob');
+    if (PHP_VERSION_ID < 80100) {
+        $method->setAccessible(true);
+    }
     $method->invoke($worker, $job);
     $job->refresh();
 

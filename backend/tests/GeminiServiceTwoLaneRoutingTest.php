@@ -345,15 +345,23 @@ namespace {
     $tableMapCache = json_decode((string)file_get_contents(__DIR__ . '/../data/table_mapping_cache.json'), true);
     $columnCache = json_decode((string)file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
     $subtableCache = json_decode((string)file_get_contents(__DIR__ . '/../data/subtable_cache.json'), true);
-    (new \ReflectionProperty(FolioSchemaService::class, 'discoveredMap'))->setValue(
+    $discoveredMap = new \ReflectionProperty(FolioSchemaService::class, 'discoveredMap');
+    $discoveredColumns = new \ReflectionProperty(FolioSchemaService::class, 'discoveredColumns');
+    $discoveredSubtables = new \ReflectionProperty(FolioSchemaService::class, 'discoveredSubtables');
+    if (PHP_VERSION_ID < 80100) {
+        $discoveredMap->setAccessible(true);
+        $discoveredColumns->setAccessible(true);
+        $discoveredSubtables->setAccessible(true);
+    }
+    $discoveredMap->setValue(
         null,
         is_array($tableMapCache['mapping'] ?? null) ? $tableMapCache['mapping'] : []
     );
-    (new \ReflectionProperty(FolioSchemaService::class, 'discoveredColumns'))->setValue(
+    $discoveredColumns->setValue(
         null,
         is_array($columnCache['columns'] ?? null) ? $columnCache['columns'] : []
     );
-    (new \ReflectionProperty(FolioSchemaService::class, 'discoveredSubtables'))->setValue(
+    $discoveredSubtables->setValue(
         null,
         is_array($subtableCache['subtables'] ?? null) ? $subtableCache['subtables'] : []
     );

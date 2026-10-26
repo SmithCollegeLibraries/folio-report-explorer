@@ -37,7 +37,8 @@ CREATE TABLE ai_report_generations (
     query_job_id VARCHAR(36) NULL,
     created_at DATETIME NOT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_reviews (
     id VARCHAR(36) PRIMARY KEY,
@@ -47,7 +48,8 @@ CREATE TABLE ai_report_reviews (
     updated_at DATETIME NOT NULL,
     FOREIGN KEY (generation_id) REFERENCES ai_report_generations(id) ON DELETE CASCADE
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function retentionAssert($condition, $message)
 {

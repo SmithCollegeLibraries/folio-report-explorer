@@ -56,7 +56,8 @@ CREATE TABLE query_jobs (
     started_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function insertQueryWorkerConcurrencyJob(string $id, string $status, string $createdAt): void
 {
@@ -76,6 +77,9 @@ function claimNextQueryWorkerJob(): ?QueryJob
 {
     $controller = new QueryWorkerController('query-worker', Yii::$app);
     $method = new ReflectionMethod($controller, 'claimNextJob');
+    if (PHP_VERSION_ID < 80100) {
+        $method->setAccessible(true);
+    }
     $job = $method->invoke($controller);
 
     return $job instanceof QueryJob ? $job : null;

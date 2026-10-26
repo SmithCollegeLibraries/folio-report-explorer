@@ -36,6 +36,10 @@ function assertContainsText(string $needle, string $haystack, string $message): 
 
 $familyResolver = new ReflectionMethod(GeminiService::class, 'resolvePromptQueryFamily');
 $promptBuilder = new ReflectionMethod(GeminiService::class, 'buildQueryFamilySlotSystemPrompt');
+if (PHP_VERSION_ID < 80100) {
+    $familyResolver->setAccessible(true);
+    $promptBuilder->setAccessible(true);
+}
 
 $corporateBodyPrompt = 'Create a list of materials with the document type "Theses" and other author "Smith College. Department of Biological Sciences." Include title, publication date, barcode and instance number.';
 

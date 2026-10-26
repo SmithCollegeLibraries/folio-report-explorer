@@ -48,7 +48,9 @@ $parameters = json_decode(str_replace("''", "'", $matches[1]), true);
 if (!is_array($parameters)) {
     finderMigrationFail('Finder parameter JSON must decode.');
 }
-$names = array_map(static fn (array $parameter): ?string => $parameter['name'] ?? null, $parameters);
+$names = array_map(static function (array $parameter): ?string {
+    return $parameter['name'] ?? null;
+}, $parameters);
 $expectedNames = [
     'locationIds', 'locationBasis', 'marcTag', 'occurrenceCondition',
     'firstIndicator', 'secondIndicator', 'subfieldCode', 'contentRule',
