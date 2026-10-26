@@ -131,15 +131,55 @@ fi
 
 # ── 6. Ensure writable directories ────────────────────────────────
 echo "→ Setting permissions..."
-mkdir -p backend/runtime/cache backend/runtime/logs
-chmod -R 775 backend/runtime
-chmod 775 backend/data
+if ! mkdir -p backend/runtime/cache backend/runtime/logs backend/data; then
+    echo "WARNING: Could not create one or more runtime/data directories; continuing."
+fi
+
+DEPLOY_UID="$(id -u)"
+chmod_owned_entries() {
+    local path="$1"
+    local mode="$2"
+    local recursive="$3"
+    local find_scope=("$path")
+    local owned_count
+    local other_count
+
+    if [ ! -e "$path" ]; then
+        return 0
+    fi
+
+    if [ "$recursive" != "true" ]; then
+        find_scope+=(-maxdepth 0)
+    fi
+
+    owned_count=$(find "${find_scope[@]}" -user "$DEPLOY_UID" -print 2>/dev/null | wc -l | tr -d '[:space:]' || true)
+    other_count=$(find "${find_scope[@]}" ! -user "$DEPLOY_UID" -print 2>/dev/null | wc -l | tr -d '[:space:]' || true)
+
+    if [ "$owned_count" -gt 0 ]; then
+        if [ "$recursive" = "true" ]; then
+            if ! find "$path" -user "$DEPLOY_UID" -exec chmod "$mode" {} +; then
+                echo "WARNING: Could not set permissions on $owned_count owned item(s) under $path; continuing."
+            fi
+        elif ! chmod "$mode" "$path"; then
+            echo "WARNING: Could not set permissions on $owned_count owned item(s) at $path; continuing."
+        fi
+    fi
+
+    if [ "$other_count" -gt 0 ]; then
+        echo "WARNING: Skipped permissions for $other_count item(s) under $path not owned by deploy user; continuing."
+    fi
+}
+
+chmod_owned_entries backend/runtime 775 true
+chmod_owned_entries backend/data 775 false
 
 # Create settings.json if it doesn't exist (will be populated via the web UI)
 if [ ! -f backend/data/settings.json ]; then
-    echo '{}' > backend/data/settings.json
+    if ! printf '{}\n' > backend/data/settings.json; then
+        echo "WARNING: Could not create backend/data/settings.json; continuing."
+    fi
 fi
-chmod 664 backend/data/settings.json
+chmod_owned_entries backend/data/settings.json 664 false
 
 # ── 7. Load .env vars for PHP (create a runtime env loader) ───────
 ENV_PHP="$SCRIPT_DIR/backend/config/env.php"
@@ -233,7 +273,11 @@ echo ""
 echo "  Data cleanup (add to cron):"
 echo "    0 3 * * 0 cd $SCRIPT_DIR && php backend/yii cleanup/run"
 echo ""
-echo "  Worker processes (bare-metal):"
+echo "  Worker processes (systemd):"
+echo "    sudo systemctl restart folio-report-explorer-query-worker folio-report-explorer-export-worker"
+echo "    Workers load .env only at start; restart them after deploys or .env changes."
+echo ""
+echo "  No systemd units? Fallback:"
 echo "    QUERY_WORKER_COUNT=${QUERY_WORKER_COUNT:-2} QUERY_WORKER_MAX_FOLIO_JOBS=${QUERY_WORKER_MAX_FOLIO_JOBS:-${QUERY_WORKER_COUNT:-2}} bash worker.sh restart"
 echo "    bash worker.sh export-start"
 echo ""
