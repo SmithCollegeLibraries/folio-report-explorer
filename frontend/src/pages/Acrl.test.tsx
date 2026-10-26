@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import AcrlPage from './Acrl';
 import AcrlReviewPanel from '../components/AcrlReviewPanel';
-import type { AcrlQuestionPart, AcrlReviewResponse } from '../types/acrl';
+import type { AcrlQuestionPart, AcrlReviewResponse, AcrlSurveyYear } from '../types/acrl';
 
 const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWorksheetFile, sha256ForFile } = vi.hoisted(() => ({
   listYears: vi.fn(),
@@ -15,6 +15,7 @@ const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWork
   parseWorksheetFile: vi.fn(),
   sha256ForFile: vi.fn(),
 }));
+let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
 vi.mock('../api/acrl', () => ({ listAcrlCatalogueYears: listYears, getAcrlReview: getReview, saveAcrlLinks: saveLinks, publishAcrlYear: publishYear, uploadAcrlWorksheet: uploadWorksheet }));
 vi.mock('../services/acrlWorksheetParser', () => ({ parseWorksheetFile, sha256ForFile }));
@@ -22,11 +23,59 @@ vi.mock('../services/acrlWorksheetParser', () => ({ parseWorksheetFile, sha256Fo
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.restoreAllMocks();
+  if (scrollIntoViewDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', scrollIntoViewDescriptor);
+  else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+  scrollIntoViewDescriptor = undefined;
 });
 
 function renderAcrl() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(<QueryClientProvider client={queryClient}><AcrlPage /></QueryClientProvider>);
+}
+
+function makeQuestion(sheet: 'survey' | 'trends', questionId: string): AcrlQuestionPart {
+  return {
+    sheet,
+    question_id: questionId,
+    part: '',
+    section: 'Staffing',
+    prompt: `${sheet} question ${questionId}`,
+    answer_type: 'text',
+    required: 'yes',
+    calculated_from: null,
+    survey_order: 1,
+  };
+}
+
+function makeYear(surveyYear: number, status: 'draft' | 'published' = 'draft'): AcrlSurveyYear {
+  return {
+    surveyYear,
+    status,
+    sourceFileName: status === 'draft' ? 'worksheet.pdf' : null,
+    surveyPromptCount: 1,
+    trendsPromptCount: 1,
+    surveyItemCount: 1,
+    trendsItemCount: 1,
+    totalItemCount: 2,
+    publishedAt: status === 'published' ? '2026-01-01' : null,
+  };
+}
+
+function makeReview(): AcrlReviewResponse {
+  return {
+    surveyYear: 2026,
+    previousYear: 2025,
+    status: 'draft',
+    items: [],
+    previousQuestions: [],
+    unresolvedCount: 0,
+    canPublish: true,
+  };
+}
+
+function makeUploadResponse(review = makeReview()) {
+  return { success: true, surveyYear: makeYear(2026), review };
 }
 
 describe('ACRL review panel bulk decisions', () => {
@@ -84,7 +133,9 @@ describe('ACRL review panel bulk decisions', () => {
     ]);
     expect(onSave.mock.calls[0][0]).toHaveLength(2);
 
-    await user.click(screen.getAllByRole('button', { name: 'Approve' })[1]);
+    const lowScoreMatch = screen.getByText('Current · 8').closest('article');
+    expect(lowScoreMatch).not.toBeNull();
+    await user.click(within(lowScoreMatch as HTMLElement).getByRole('button', { name: 'Approve' }));
     expect(onSave).toHaveBeenNthCalledWith(2, [expect.objectContaining({ previous_question_id: '8', current_question_id: '8', decision: 'approved' })]);
   });
 });
@@ -111,8 +162,10 @@ describe('ACRL catalogue page', () => {
     const user = userEvent.setup();
     renderAcrl();
 
-    await user.click(await screen.findByRole('button', { name: 'Review 2026' }));
-    expect(await screen.findByRole('heading', { name: '2025 → 2026 review' })).toBeInTheDocument();
+    const currentYearCard = (await screen.findByRole('heading', { name: 'FY 2026' })).closest('article');
+    expect(currentYearCard).not.toBeNull();
+    await user.click(within(currentYearCard as HTMLElement).getByRole('button', { name: 'Open review' }));
+    expect(await screen.findByRole('heading', { name: 'FY 2026 compared with FY 2025' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'New' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Removed' })).toBeInTheDocument();
     expect(screen.getByText('Current · 6C')).toBeInTheDocument();
@@ -134,7 +187,175 @@ describe('ACRL catalogue page', () => {
     await user.upload(screen.getByLabelText('Worksheet PDF'), file);
 
     expect(await screen.findByText('*? unclear source line')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Continue and compare' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save draft' })).not.toBeInTheDocument();
     expect(uploadWorksheet).not.toHaveBeenCalled();
+  });
+
+  it('automatically saves a clean parse, compares the prior year, and focuses the review heading', async () => {
+    listYears.mockResolvedValue([makeYear(2025, 'published')]);
+    getReview.mockResolvedValue(makeReview());
+    parseWorksheetFile.mockResolvedValue({ items: [makeQuestion('survey', '1')], unresolved: [] });
+    sha256ForFile.mockResolvedValue('worksheet-hash');
+    uploadWorksheet.mockResolvedValue(makeUploadResponse());
+    const scrollIntoView = vi.fn();
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView });
+    const user = userEvent.setup();
+    renderAcrl();
+
+    await user.upload(screen.getByLabelText('Worksheet PDF'), new File(['worksheet'], 'worksheet.pdf', { type: 'application/pdf' }));
+
+    expect(await screen.findByText('FY 2026 compared with FY 2025')).toBeInTheDocument();
+    expect(uploadWorksheet).toHaveBeenCalledWith({
+      surveyYear: 2026,
+      fileName: 'worksheet.pdf',
+      sha256: 'worksheet-hash',
+      items: [makeQuestion('survey', '1')],
+      replacePublished: false,
+    });
+    expect(screen.getByRole('heading', { name: 'FY 2026 compared with FY 2025' })).toHaveFocus();
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start', behavior: 'smooth' });
+    expect(screen.queryByRole('button', { name: 'Save draft' })).not.toBeInTheDocument();
+    expect(screen.getByText('Your upload is kept as a draft. Nothing is final until you publish it.')).toBeInTheDocument();
+  });
+
+  it('shows parsing and comparison progress while a clean worksheet is processed', async () => {
+    listYears.mockResolvedValue([]);
+    getReview.mockResolvedValue(makeReview());
+    let resolveParse!: (result: { items: AcrlQuestionPart[]; unresolved: string[] }) => void;
+    let resolveUpload!: (result: ReturnType<typeof makeUploadResponse>) => void;
+    parseWorksheetFile.mockReturnValue(new Promise((resolve) => { resolveParse = resolve; }));
+    sha256ForFile.mockResolvedValue('worksheet-hash');
+    uploadWorksheet.mockReturnValue(new Promise((resolve) => { resolveUpload = resolve; }));
+    const user = userEvent.setup();
+    renderAcrl();
+
+    await user.upload(screen.getByLabelText('Worksheet PDF'), new File(['worksheet'], 'worksheet.pdf', { type: 'application/pdf' }));
+    expect(await screen.findByText('Reading PDF…')).toBeInTheDocument();
+
+    await act(async () => resolveParse({ items: [makeQuestion('survey', '1')], unresolved: [] }));
+    expect(await screen.findByText('Comparing with FY2025…')).toBeInTheDocument();
+    await act(async () => resolveUpload(makeUploadResponse()));
+    expect(await screen.findByText('FY 2026 compared with FY 2025')).toBeInTheDocument();
+  });
+
+  it('lets the user continue to comparison when the parser leaves lines unplaced', async () => {
+    listYears.mockResolvedValue([]);
+    getReview.mockResolvedValue(makeReview());
+    parseWorksheetFile.mockResolvedValue({ items: [makeQuestion('survey', '1')], unresolved: ['unclear source line'] });
+    sha256ForFile.mockResolvedValue('worksheet-hash');
+    uploadWorksheet.mockResolvedValue(makeUploadResponse());
+    const user = userEvent.setup();
+    renderAcrl();
+
+    await user.upload(screen.getByLabelText('Worksheet PDF'), new File(['worksheet'], 'worksheet.pdf', { type: 'application/pdf' }));
+    expect(await screen.findByText('unclear source line')).toBeInTheDocument();
+    expect(uploadWorksheet).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Continue and compare' }));
+
+    expect(await screen.findByText('FY 2026 compared with FY 2025')).toBeInTheDocument();
+    expect(uploadWorksheet).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels an unresolved worksheet without saving it', async () => {
+    listYears.mockResolvedValue([]);
+    parseWorksheetFile.mockResolvedValue({ items: [makeQuestion('survey', '1')], unresolved: ['unclear source line'] });
+    const user = userEvent.setup();
+    renderAcrl();
+
+    await user.upload(screen.getByLabelText('Worksheet PDF'), new File(['worksheet'], 'worksheet.pdf', { type: 'application/pdf' }));
+    expect(await screen.findByText('unclear source line')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByText('unclear source line')).not.toBeInTheDocument();
+    expect(uploadWorksheet).not.toHaveBeenCalled();
+  });
+
+  it('asks before replacing a published year and uploads only after confirmation', async () => {
+    listYears.mockResolvedValue([makeYear(2026, 'published')]);
+    parseWorksheetFile.mockResolvedValue({ items: [makeQuestion('survey', '1')], unresolved: [] });
+    sha256ForFile.mockResolvedValue('worksheet-hash');
+    uploadWorksheet.mockResolvedValue(makeUploadResponse());
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const user = userEvent.setup();
+    renderAcrl();
+    expect(await screen.findByText('FY 2026')).toBeInTheDocument();
+
+    await user.upload(screen.getByLabelText('Worksheet PDF'), new File(['worksheet'], 'worksheet.pdf', { type: 'application/pdf' }));
+
+    expect(await screen.findByText('FY 2026 compared with FY 2025')).toBeInTheDocument();
+    expect(window.confirm).toHaveBeenCalledWith('FY 2026 is published. Replace it with this upload as a draft?');
+    expect(uploadWorksheet).toHaveBeenCalledWith(expect.objectContaining({ surveyYear: 2026, replacePublished: true }));
+  });
+
+  it('does not save a published year when replacement is declined', async () => {
+    listYears.mockResolvedValue([makeYear(2026, 'published')]);
+    parseWorksheetFile.mockResolvedValue({ items: [makeQuestion('survey', '1')], unresolved: [] });
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const user = userEvent.setup();
+    renderAcrl();
+    expect(await screen.findByText('FY 2026')).toBeInTheDocument();
+
+    await user.upload(screen.getByLabelText('Worksheet PDF'), new File(['worksheet'], 'worksheet.pdf', { type: 'application/pdf' }));
+
+    await waitFor(() => expect(window.confirm).toHaveBeenCalledWith('FY 2026 is published. Replace it with this upload as a draft?'));
+    expect(uploadWorksheet).not.toHaveBeenCalled();
+    expect(screen.getByText(/Upload canceled/)).toBeInTheDocument();
+    expect(screen.getByRole('spinbutton', { name: 'Survey year' })).toBeEnabled();
+    expect(screen.getByLabelText('Worksheet PDF')).toBeEnabled();
+  });
+
+  it('summarizes counts by sheet and links each status to its review group', () => {
+    const question = (sheet: 'survey' | 'trends', questionId: string) => makeQuestion(sheet, questionId);
+    const item = (status: AcrlReviewResponse['items'][number]['status'], previous: AcrlQuestionPart | null, current: AcrlQuestionPart | null): AcrlReviewResponse['items'][number] => ({
+      status,
+      matchKind: null,
+      score: 0,
+      previous,
+      current,
+      topical: false,
+      decision: null,
+      linkId: null,
+    });
+    const review: AcrlReviewResponse = {
+      ...makeReview(),
+      unresolvedCount: 2,
+      canPublish: false,
+      items: [
+        item('new', null, question('survey', '1')),
+        item('new', null, question('trends', '1')),
+        item('removed', question('trends', '2'), null),
+        item('renumbered', question('survey', '3'), question('survey', '4')),
+        item('reworded', question('trends', '5'), question('trends', '5')),
+        item('unchanged', question('survey', '6'), question('survey', '6')),
+      ],
+    };
+    render(<AcrlReviewPanel review={review} saving={false} publishing={false} onSave={vi.fn()} onPublish={vi.fn()} />);
+
+    expect(screen.getByRole('heading', { name: 'FY 2026 compared with FY 2025' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /New: Survey 1, Trends 1/ })).toHaveAttribute('href', '#acrl-group-new');
+    expect(screen.getByRole('link', { name: /Removed: Survey 0, Trends 1/ })).toHaveAttribute('href', '#acrl-group-removed');
+    expect(screen.getByRole('link', { name: /Renumbered: Survey 1, Trends 0/ })).toHaveAttribute('href', '#acrl-group-renumbered');
+    expect(screen.getByRole('link', { name: /Reworded: Survey 0, Trends 1/ })).toHaveAttribute('href', '#acrl-group-reworded');
+    expect(screen.getByRole('link', { name: /Unchanged: Survey 1, Trends 0/ })).toHaveAttribute('href', '#acrl-group-unchanged');
+    expect(screen.getByText(/2 matches still need a decision/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Publish year at the bottom of this review/ })).toHaveAttribute('href', '#acrl-publish');
+    expect(screen.getByRole('region', { name: 'New questions' })).toHaveAttribute('id', 'acrl-group-new');
+  });
+
+  it('shows the active year review and the ready-to-publish summary', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    const user = userEvent.setup();
+    renderAcrl();
+
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+
+    expect(await screen.findByText('Ready to publish.')).toBeInTheDocument();
+    expect(screen.getByText('Review open')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Publish year at the bottom of this review/ })).toHaveAttribute('href', '#acrl-publish');
   });
 });

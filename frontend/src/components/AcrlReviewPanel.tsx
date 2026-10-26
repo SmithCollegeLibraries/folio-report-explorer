@@ -1,12 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type Ref } from 'react';
 import type { AcrlLinkDecision, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlReviewItem, AcrlReviewResponse, AcrlReviewStatus } from '../types/acrl';
 import AcrlPromptComparison from './AcrlPromptComparison';
 
 const GROUPS: Array<{ status: AcrlReviewStatus; title: string }> = [
   { status: 'new', title: 'New' },
   { status: 'removed', title: 'Removed' },
-  { status: 'reworded', title: 'Reworded' },
   { status: 'renumbered', title: 'Renumbered' },
+  { status: 'reworded', title: 'Reworded' },
   { status: 'unchanged', title: 'Unchanged' },
 ];
 
@@ -16,6 +16,12 @@ function questionKey(question: AcrlQuestionPart): string {
 
 function reviewItemKey(item: AcrlReviewItem): string {
   return `${item.previous ? questionKey(item.previous) : 'none'}→${item.current ? questionKey(item.current) : 'none'}`;
+}
+
+function decisionStatusLabel(review: AcrlReviewResponse): string {
+  if (review.canPublish) return 'Ready to publish';
+  if (review.unresolvedCount === 1) return '1 match still needs a decision';
+  return `${review.unresolvedCount} matches still need a decision`;
 }
 
 function isBulkReviewItem(item: AcrlReviewItem): boolean {
@@ -39,9 +45,10 @@ function linkInput(item: AcrlReviewItem, decision: AcrlLinkDecision): AcrlLinkDe
 }
 
 export default function AcrlReviewPanel({
-  review, saving, publishing, onSave, onPublish,
+  review, reviewHeadingRef, saving, publishing, onSave, onPublish,
 }: {
   review: AcrlReviewResponse;
+  reviewHeadingRef?: Ref<HTMLHeadingElement>;
   saving: boolean;
   publishing: boolean;
   onSave: (links: AcrlLinkDecisionInput[]) => void;
@@ -54,6 +61,14 @@ export default function AcrlReviewPanel({
     title,
     items: review.items.filter((item) => item.status === status),
   })), [review.items]);
+  const summaryCounts = useMemo(() => GROUPS.map(({ status, title }) => {
+    const counts = { survey: 0, trends: 0 };
+    review.items.filter((item) => item.status === status).forEach((item) => {
+      const sheet = item.current?.sheet || item.previous?.sheet;
+      if (sheet) counts[sheet] += 1;
+    });
+    return { status, title, counts };
+  }), [review.items]);
   const bulkLinks = review.items
     .filter((item) => item.status === 'unchanged' && item.score >= 0.85 && !item.decision)
     .map((item) => linkInput(item, 'approved'))
@@ -62,6 +77,10 @@ export default function AcrlReviewPanel({
     .filter((item) => isBulkReviewItem(item) && selectedKeys.includes(reviewItemKey(item)))
     .map((item) => linkInput(item, 'approved'))
     .filter((link): link is AcrlLinkDecisionInput => link !== null);
+  const reviewTitle = review.previousYear
+    ? `FY ${review.surveyYear} compared with FY ${review.previousYear}`
+    : `FY ${review.surveyYear} catalogue review`;
+  const decisionStatus = decisionStatusLabel(review);
 
   const toggleSelection = (item: AcrlReviewItem) => {
     const key = reviewItemKey(item);
@@ -155,10 +174,22 @@ export default function AcrlReviewPanel({
 
   return (
     <section aria-label="Annual question review" className="space-y-5">
+      <section aria-label="Comparison summary" className="space-y-4 rounded-lg border border-folio-200 bg-folio-50 p-4">
+        <h2 ref={reviewHeadingRef} tabIndex={-1} className="scroll-mt-6 text-xl font-semibold text-gray-900 outline-none focus:ring-2 focus:ring-folio-500">{reviewTitle}</h2>
+        <nav aria-label="Question changes by status" className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+          {summaryCounts.map(({ status, title, counts }) => (
+            <a key={status} href={`#acrl-group-${status}`} className="flex flex-col gap-1 rounded-md border border-folio-200 bg-white px-3 py-2 text-sm hover:border-folio-500 hover:bg-folio-50 focus:outline-none focus:ring-2 focus:ring-folio-500">
+              <span className="font-semibold text-folio-800">{title}: Survey {counts.survey}, Trends {counts.trends}</span>
+              <span className="text-xs text-gray-500">Open {title.toLowerCase()} questions</span>
+            </a>
+          ))}
+        </nav>
+        <p className="text-sm text-gray-700"><strong>{decisionStatus}.</strong>{' '}<a href="#acrl-publish" className="font-medium text-folio-800 underline hover:text-folio-600">Publish year at the bottom of this review</a>.</p>
+      </section>
+
       <header className="flex flex-col gap-3 rounded-lg border border-folio-200 bg-folio-50 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">{review.previousYear ? `${review.previousYear} → ${review.surveyYear} review` : `${review.surveyYear} catalogue review`}</h2>
-          <p className="mt-1 text-sm text-gray-600">{review.unresolvedCount} matched question parts need a decision. New and removed questions remain visible as change lists.</p>
+          <p className="text-sm text-gray-600">Review proposed matches below. New and removed questions remain visible as change lists.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className="rounded border border-folio-700 px-3 py-2 text-sm font-semibold text-folio-800 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50" disabled={!selectedLinks.length || saving} onClick={approveSelected}>
@@ -171,7 +202,7 @@ export default function AcrlReviewPanel({
       </header>
 
       {groupedItems.map((group) => (
-        <section key={group.status} aria-label={`${group.title} questions`} className="space-y-3">
+        <section key={group.status} id={`acrl-group-${group.status}`} aria-label={`${group.title} questions`} className="scroll-mt-6 space-y-3">
           <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-gray-200 pb-2">
             <h3 className="text-lg font-semibold text-gray-900">{group.title}</h3>
             <div className="flex items-center gap-3">
@@ -196,7 +227,7 @@ export default function AcrlReviewPanel({
 
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 pt-4">
         <span className="text-sm text-gray-600">{review.canPublish ? 'All matched question parts have a recorded decision.' : 'Review every proposed match before publishing this year.'}</span>
-        <button className="rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50" disabled={!review.canPublish || review.status === 'published' || saving || publishing} onClick={onPublish}>
+        <button id="acrl-publish" className="rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50" disabled={!review.canPublish || review.status === 'published' || saving || publishing} onClick={onPublish}>
           {publishing ? 'Publishing…' : review.status === 'published' ? 'Published' : 'Publish year'}
         </button>
       </footer>
