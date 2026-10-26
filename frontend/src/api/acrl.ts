@@ -1,4 +1,4 @@
-import type { AcrlReviewResponse, AcrlSurveyYear, AcrlUploadResponse, AcrlQuestionPart, AcrlLinkDecisionInput } from '../types/acrl';
+import type { AcrlReviewResponse, AcrlSurveyYear, AcrlUploadResponse, AcrlQuestionPart, AcrlLinkDecisionInput, AcrlEntryResponse, AcrlImportPreview } from '../types/acrl';
 import type { AcrlStatistic } from '../types/schema';
 import { api } from './client';
 
@@ -59,5 +59,55 @@ export async function saveAcrlLinks(year: number, links: AcrlLinkDecisionInput[]
 
 export async function publishAcrlYear(year: number): Promise<AcrlReviewResponse> {
   const { data } = await api.post(`/acrl/years/${year}/publish`);
+  return data;
+}
+
+export async function getAcrlEntry(year?: number): Promise<AcrlEntryResponse> {
+  const { data } = await api.get(year ? `/acrl/entry/${year}` : '/acrl/entry');
+  return data;
+}
+
+export async function saveAcrlAnswer(year: number, input: {
+  sheet: 'survey' | 'trends';
+  question_id: string;
+  part: string;
+  value: string;
+  note: string;
+  expected_updated_at: string | null;
+}): Promise<{ conflict: boolean; answer?: AcrlEntryResponse['sections'][number]['questions'][number]['answer']; current?: unknown }> {
+  const { data } = await api.post(`/acrl/years/${year}/answers`, input);
+  return data;
+}
+
+export async function setAcrlSectionStatus(year: number, section: string, status: 'open' | 'ready'): Promise<{ section: string; status: 'open' | 'ready' }> {
+  const { data } = await api.post(`/acrl/years/${year}/sections/${encodeURIComponent(section)}/status`, { status });
+  return data;
+}
+
+export async function getAcrlThreshold(): Promise<{ thresholdPercent: number }> {
+  const { data } = await api.get('/acrl/threshold');
+  return data;
+}
+
+export async function saveAcrlThreshold(thresholdPercent: number): Promise<{ thresholdPercent: number }> {
+  const { data } = await api.post('/acrl/threshold', { thresholdPercent });
+  return data;
+}
+
+export async function previewAcrlImport(year: number, input: {
+  rows: Array<Record<string, string>>;
+  sourceLabel: string;
+  overwrite: boolean;
+}): Promise<AcrlImportPreview> {
+  const { data } = await api.post(`/acrl/years/${year}/import/preview`, input);
+  return data;
+}
+
+export async function confirmAcrlImport(year: number, input: {
+  rows: Array<Record<string, string>>;
+  sourceLabel: string;
+  overwrite: boolean;
+}): Promise<{ preview: AcrlImportPreview; result: { imported: number; unchanged: number; skipped: number } }> {
+  const { data } = await api.post(`/acrl/years/${year}/import/confirm`, input);
   return data;
 }

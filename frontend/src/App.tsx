@@ -19,6 +19,7 @@ import Console from './pages/Console';
 import UsersPage from './pages/Users';
 import LocalDataPage from './pages/LocalData.tsx';
 const AcrlPage = lazy(() => import('./pages/Acrl'));
+const AcrlEntryPage = lazy(() => import('./pages/AcrlEntryPage'));
 import ReportReviews from './pages/ReportReviews';
 import AuthCallback from './pages/AuthCallback';
 import AuthPending from './pages/AuthPending';
@@ -39,6 +40,7 @@ const libraryItems = [
   { to: '/reports', label: 'Reports',       icon: FileBarChart,  desc: 'Scheduled & saved reports' },
   { to: '/saved',   label: 'Saved Queries', icon: Bookmark,      desc: 'Your bookmarked queries' },
   { to: '/history', label: 'History',       icon: HistoryIcon,   desc: 'Past query runs' },
+  { to: '/acrl/entry', label: 'ACRL entry', icon: ClipboardCheck, desc: 'Enter annual survey values' },
 ];
 
 const adminItems = [
@@ -65,7 +67,7 @@ function NavDropdown({
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const location = useLocation();
-  const isAnyActive = items.some((item) => location.pathname === item.to);
+  const isAnyActive = items.some((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`));
 
   useEffect(() => {
     if (!open) return;
@@ -359,6 +361,8 @@ export default function App() {
           <Route path="/training" element={<ProtectedRoute adminOnly><Training /></ProtectedRoute>} />
           <Route path="/local-data" element={<ProtectedRoute allocationEditorOnly><LocalDataPage /></ProtectedRoute>} />
           <Route path="/acrl" element={<ProtectedRoute adminOnly><Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading ACRL catalogue…</div>}><AcrlPage /></Suspense></ProtectedRoute>} />
+          <Route path="/acrl/entry" element={<ProtectedRoute><Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading ACRL entry…</div>}><AcrlEntryPage /></Suspense></ProtectedRoute>} />
+          <Route path="/acrl/entry/:year" element={<ProtectedRoute><Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading ACRL entry…</div>}><AcrlEntryPage /></Suspense></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
           <Route path="/setup" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
           <Route path="/report-reviews" element={<ProtectedRoute adminOnly><ReportReviews /></ProtectedRoute>} />

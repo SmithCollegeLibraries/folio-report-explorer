@@ -14,6 +14,7 @@ function acrlMigrationAssert($condition, string $message): void
 
 $migrationDir = __DIR__ . '/../../mysql/migrations';
 $migrationPath = $migrationDir . '/054_acrl_question_catalogue.sql';
+$answersMigrationPath = $migrationDir . '/055_acrl_answers.sql';
 acrlMigrationAssert(file_exists($migrationPath), 'Migration 054 must create the ACRL catalogue schema and historical seed.');
 
 $migration = (string)file_get_contents($migrationPath);
@@ -39,3 +40,24 @@ foreach ($audit['nonIdempotentRisks'] as $risk) {
 acrlMigrationAssert(empty($migrationRisks), 'Migration 054 must not contain audit-detected non-idempotent operations.');
 
 echo "PASS: ACRL migration 054 is guarded and migration-audit clean\n";
+
+acrlMigrationAssert(file_exists($answersMigrationPath), 'Migration 055 must create answer, history, and section-status tables.');
+$answersMigration = (string)file_get_contents($answersMigrationPath);
+$answersUpper = strtoupper($answersMigration);
+foreach (['ACRL_ANSWERS', 'ACRL_ANSWER_HISTORY', 'ACRL_SECTION_STATUS'] as $table) {
+    acrlMigrationAssert(strpos($answersUpper, 'CREATE TABLE IF NOT EXISTS ' . $table) !== false, $table . ' must be created idempotently.');
+}
+acrlMigrationAssert(strpos($answersUpper, 'DECIMAL(18,2)') !== false, 'Numeric values must preserve the required DECIMAL(18,2) precision.');
+acrlMigrationAssert(strpos($answersUpper, 'ON UPDATE CURRENT_TIMESTAMP(6)') !== false, 'Answer updates need an optimistic-lock timestamp.');
+acrlMigrationAssert(strpos($answersUpper, 'ADD COLUMN IF NOT EXISTS') === false, 'Migration 055 must remain compatible with MySQL 8 and MariaDB 10.3.');
+acrlMigrationAssert(strpos($answersUpper, 'JSON_TABLE') === false, 'Migration 055 must not depend on MySQL 8-only JSON_TABLE.');
+$audit = MigrationService::auditDirectory($migrationDir);
+$answersRisks = [];
+foreach ($audit['nonIdempotentRisks'] as $risk) {
+    if ($risk['filename'] === '055_acrl_answers.sql') {
+        $answersRisks = $risk['reasons'];
+    }
+}
+acrlMigrationAssert(empty($answersRisks), 'Migration 055 must not contain audit-detected non-idempotent operations.');
+
+echo "PASS: ACRL migration 055 is guarded and migration-audit clean\n";

@@ -72,3 +72,78 @@ export interface AcrlUploadResponse {
   surveyYear: AcrlSurveyYear;
   review: AcrlReviewResponse;
 }
+
+export interface AcrlAnswer {
+  value_text: string | null;
+  value_number: string | null;
+  note: string | null;
+  source: 'manual' | 'import' | null;
+  source_label: string | null;
+  updated_by: string | null;
+  updated_at: string | null;
+}
+
+export interface AcrlEntryQuestion {
+  sheet: AcrlSheet;
+  questionId: string;
+  part: string;
+  section: string;
+  prompt: string;
+  answerType: AcrlAnswerType;
+  required: AcrlRequired;
+  calculatedFrom: string | null;
+  surveyOrder: number;
+  answer: AcrlAnswer;
+  previous: {
+    value: number | string | null;
+    label: string;
+    isSum: boolean;
+    linkedValues: Array<{ questionId: string; part: string; value: number | string }>;
+  };
+  comparison: {
+    previousValue: number | string | null;
+    previousLabel: string;
+    changePercent: number | null;
+    highlighted: boolean;
+    addNote: boolean;
+  };
+  calculated: { supported: boolean; raw: string | null; value: number | null; mismatch: boolean } | null;
+}
+
+export interface AcrlEntrySection {
+  name: string;
+  status: 'open' | 'ready';
+  setAt: string | null;
+  reopenedAt: string | null;
+  filled: number;
+  total: number;
+  questions: AcrlEntryQuestion[];
+}
+
+export interface AcrlEntryResponse {
+  selectedYear: number;
+  previousYear: number;
+  years: number[];
+  thresholdPercent: number;
+  sections: AcrlEntrySection[];
+}
+
+export interface AcrlImportPreview {
+  surveyYear: number;
+  sourceLabel: string;
+  overwrite: boolean;
+  matchedCount: number;
+  unknownCount: number;
+  typeErrorCount: number;
+  existingChanges: number;
+  items: Array<{
+    line: number;
+    sheet?: string;
+    questionId?: string;
+    part?: string;
+    status: string;
+    currentValue: string | null;
+    value: string | null;
+    error: string | null;
+  }>;
+}
