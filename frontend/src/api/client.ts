@@ -38,7 +38,6 @@ import type {
   QueryReuseDecisionInput,
   IndexRecommendationResponse,
   DashboardResponse,
-  AcrlStatistic,
   ExpenseMonitorCode,
   ExpenseMonitorRefreshResponse,
   DashboardWidgetTemplate,
@@ -381,37 +380,6 @@ export async function downloadExportCsv(jobId: string): Promise<void> {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
-}
-
-// ─── Local supplementary data (admin) ────────────────────────────
-
-export async function listAcrl(year?: number): Promise<{ items: AcrlStatistic[]; years: number[] }> {
-  const { data } = await api.get('/local/acrl', { params: year ? { year } : {} });
-  return data;
-}
-
-export async function listAcrlYears(): Promise<number[]> {
-  const { data } = await api.get('/local/acrl/years');
-  return data.years || [];
-}
-
-export async function createAcrlRows(rows: Array<Partial<AcrlStatistic>>): Promise<{ success: boolean; created: number; updated: number }> {
-  const { data } = await api.post('/local/acrl', { rows });
-  return data;
-}
-
-export async function updateAcrlRow(id: number, patch: Partial<AcrlStatistic>): Promise<{ success: boolean; item: AcrlStatistic }> {
-  const { data } = await api.put(`/local/acrl/${id}`, patch);
-  return data;
-}
-
-export async function deleteAcrlRow(id: number): Promise<void> {
-  await api.delete(`/local/acrl/${id}`);
-}
-
-export async function copyAcrlYear(fromYear: number, toYear: number, overwrite = false): Promise<{ success: boolean; copied: number; updated: number; skipped: number }> {
-  const { data } = await api.post('/local/acrl/copy-year', { fromYear, toYear, overwrite });
-  return data;
 }
 
 export async function checkJobStatus(

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { lazy, Suspense, useState, useRef, useEffect } from 'react';
 import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import {
   Database, Wrench, MessageSquare, FileBarChart, Bookmark, Settings,
@@ -18,6 +18,7 @@ import History from './pages/History';
 import Console from './pages/Console';
 import UsersPage from './pages/Users';
 import LocalDataPage from './pages/LocalData.tsx';
+const AcrlPage = lazy(() => import('./pages/Acrl'));
 import ReportReviews from './pages/ReportReviews';
 import AuthCallback from './pages/AuthCallback';
 import AuthPending from './pages/AuthPending';
@@ -356,6 +357,7 @@ export default function App() {
           {/* Admin routes */}
           <Route path="/training" element={<ProtectedRoute adminOnly><Training /></ProtectedRoute>} />
           <Route path="/local-data" element={<ProtectedRoute allocationEditorOnly><LocalDataPage /></ProtectedRoute>} />
+          <Route path="/acrl" element={<ProtectedRoute adminOnly><Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading ACRL catalogue…</div>}><AcrlPage /></Suspense></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute adminOnly><UsersPage /></ProtectedRoute>} />
           <Route path="/setup" element={<ProtectedRoute adminOnly><SettingsPage /></ProtectedRoute>} />
           <Route path="/report-reviews" element={<ProtectedRoute adminOnly><ReportReviews /></ProtectedRoute>} />

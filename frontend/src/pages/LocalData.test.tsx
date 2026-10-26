@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import LocalDataPage from './LocalData';
 
@@ -12,7 +13,7 @@ const { auth, listAcrlYears, listAcrl, getBudgetYearExpenseClassOptions } = vi.h
 }));
 
 vi.mock('../hooks/useAuth', () => ({ useAuth: () => auth.current }));
-vi.mock('../api/client', () => ({
+vi.mock('../api/acrl', () => ({
   listAcrlYears,
   listAcrl,
   copyAcrlYear: vi.fn(),
@@ -36,7 +37,7 @@ afterEach(() => {
 
 function renderLocalData() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={queryClient}><LocalDataPage /></QueryClientProvider>);
+  return render(<MemoryRouter><QueryClientProvider client={queryClient}><LocalDataPage /></QueryClientProvider></MemoryRouter>);
 }
 
 describe('Local Data access', () => {
@@ -80,6 +81,7 @@ describe('Local Data access', () => {
     renderLocalData();
 
     expect(screen.getByRole('button', { name: 'ACRL Statistics' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'ACRL question catalogue' })).toHaveAttribute('href', '/acrl');
     await user.click(screen.getByRole('button', { name: 'Expense Allocations' }));
     const college = screen.getByLabelText('College');
     expect(college).toHaveValue('');
