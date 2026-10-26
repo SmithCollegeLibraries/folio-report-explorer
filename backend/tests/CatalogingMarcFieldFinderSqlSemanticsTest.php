@@ -127,6 +127,11 @@ namespace {
     {
         $sql = str_replace('AS MATERIALIZED', 'AS', $sql);
         $sql = str_replace(
+            ['"Title" NULLS LAST', '"Instance HRID" NULLS LAST', '"Field Occurrence" NULLS LAST', '"Subfield" NULLS LAST', '"Content" NULLS LAST'],
+            ['("Title" IS NULL), "Title"', '("Instance HRID" IS NULL), "Instance HRID"', '("Field Occurrence" IS NULL), "Field Occurrence"', '("Subfield" IS NULL), "Subfield"', '("Content" IS NULL), "Content"'],
+            $sql
+        );
+        $sql = str_replace(
             "location.id = ANY(string_to_array(:locationIds, ',')::uuid[])",
             "instr(',' || :locationIds || ',', ',' || location.id || ',') > 0",
             $sql
@@ -281,8 +286,18 @@ namespace {
     ];
     foreach ($textCases as [$rule, $search, $caseExact, $expected]) {
         $actual = array_column($run(['contentRule' => $rule, 'searchValue' => $search, 'caseExact' => $caseExact]), 'Content');
-        sort($expected);
-        sort($actual);
+        $sortValues = static function (array $values): array {
+            usort($values, static function ($left, $right): int {
+                if ($left === null || $right === null) {
+                    if ($left === $right) return 0;
+                    return $left === null ? -1 : 1;
+                }
+                return strcmp((string)$left, (string)$right);
+            });
+            return $values;
+        };
+        $expected = $sortValues($expected);
+        $actual = $sortValues($actual);
         finderSemanticsSame($expected, $actual, "{$rule} must honor caseExact={$caseExact}.");
     }
 

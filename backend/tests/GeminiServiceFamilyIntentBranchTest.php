@@ -105,8 +105,12 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $familyBranch = new ReflectionMethod(GeminiService::class, 'buildQueryFamilyIntentResponse');
+if (PHP_VERSION_ID < 80100) {
+    $familyBranch->setAccessible(true);
+}
 
 $mapProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredMap');
+$mapProperty->setAccessible(true);
 $mapProperty->setValue(null, [
     'inventory_instances' => 'inventory.instance__t',
     'inventory_holdings' => 'inventory.holdings_record__t',
@@ -117,9 +121,11 @@ $mapProperty->setValue(null, [
     'inventory_material_types' => 'inventory.material_type__t',
 ]);
 $columnProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredColumns');
+$columnProperty->setAccessible(true);
 $columnCache = json_decode((string)file_get_contents(__DIR__ . '/../data/column_cache.json'), true);
 $columnProperty->setValue(null, is_array($columnCache['columns'] ?? null) ? $columnCache['columns'] : []);
 $subtableProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredSubtables');
+$subtableProperty->setAccessible(true);
 $subtableProperty->setValue(null, []);
 
 $resolvedVideoPayload = null;

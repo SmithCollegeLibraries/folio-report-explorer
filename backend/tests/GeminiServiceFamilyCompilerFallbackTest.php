@@ -129,6 +129,9 @@ $fallbackInvocations = 0;
 $compilerInvocations = 0;
 
 $helper = new ReflectionMethod(GeminiService::class, 'buildCompiledQueryFamilyOrLegacyFallback');
+if (PHP_VERSION_ID < 80100) {
+    $helper->setAccessible(true);
+}
 Yii::$app->params['nl2sqlForceLegacy'] = false;
 Yii::$app->params['nl2sqlTwoLaneEnabled'] = true;
 

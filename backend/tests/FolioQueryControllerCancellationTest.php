@@ -32,7 +32,8 @@ CREATE TABLE users (
     role VARCHAR(20),
     is_approved INTEGER
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE query_jobs (
@@ -56,7 +57,8 @@ CREATE TABLE query_jobs (
     started_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function controllerCancellationAssert($condition, $message)
 {

@@ -206,6 +206,7 @@ namespace {
         $nestedCompiledSql
     );
     $compiledSqlValidator = new \ReflectionMethod(CatalogingMarcMissingTagReportService::class, 'assertCompiledSql');
+    $compiledSqlValidator->setAccessible(true);
     marcCompilerAssertThrows(function () use ($compiledSqlValidator, $nestedCompiledSql) { return $compiledSqlValidator->invoke(null, $nestedCompiledSql); }, 'ORDER BY and LIMIT inside a CTE must not satisfy the top-level compiled SQL contract.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace("AND instance.source = 'MARC'", '', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Removing the MARC source guard must be rejected.');
     marcCompilerAssertThrows(function () use ($report, $db) { return CatalogingMarcMissingTagReportService::build(marcCompilerReport(['sql_template' => str_replace('marc_tag.instance_id = target_instances.instance_uuid', 'marc_tag.instance_id = target_instances.instance_hrid', $report->sql_template)]), marcCompilerInputs(), $db); }, 'Changing the UUID anti-join must be rejected.');

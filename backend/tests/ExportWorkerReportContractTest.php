@@ -117,6 +117,7 @@ function runExportContractJob(string $id, string $sql, ?array $contract = null):
     $job = QueryJob::findOne($id);
     $worker = new ExportWorkerController('export-worker', Yii::$app);
     $method = new ReflectionMethod($worker, 'executeExportJob');
+    $method->setAccessible(true);
     $method->invoke($worker, $job);
     $job->refresh();
     return $job;

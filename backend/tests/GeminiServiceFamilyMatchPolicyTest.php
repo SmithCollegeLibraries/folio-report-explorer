@@ -94,6 +94,9 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $familyBranch = new ReflectionMethod(GeminiService::class, 'buildQueryFamilyIntentResponse');
+if (PHP_VERSION_ID < 80100) {
+    $familyBranch->setAccessible(true);
+}
 
 $capturedExactPayload = null;
 $familyBranch->invoke(

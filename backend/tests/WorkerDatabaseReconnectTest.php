@@ -110,7 +110,8 @@ CREATE TABLE query_jobs (
     started_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand()->insert('query_jobs', [
     'id' => 'query-reconnect-job',

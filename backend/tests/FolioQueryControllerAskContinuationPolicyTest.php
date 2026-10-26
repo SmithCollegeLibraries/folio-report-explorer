@@ -129,6 +129,7 @@ namespace {
 
     $controller = new \app\controllers\FolioQueryController('folio-query', null);
     $continuation = new ReflectionMethod($controller, 'buildAskContinuationFromFailure');
+    $continuation->setAccessible(true);
 
     $softFailure = $continuation->invoke(
         $controller,
@@ -183,6 +184,7 @@ namespace {
     $policyController = new PolicyFinalizingController('folio-query', null);
     $policyController->reviewService = $policyRecorder;
     $finalize = new ReflectionMethod($policyController, 'finalizeAskResponse');
+    $finalize->setAccessible(true);
     $finalizedPolicy = $finalize->invoke(
         $policyController,
         $policyFailure,

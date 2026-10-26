@@ -26,7 +26,8 @@ CREATE TABLE query_jobs (
     status VARCHAR(20) DEFAULT 'pending',
     export_file_path VARCHAR(500) NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
@@ -36,7 +37,8 @@ CREATE TABLE ai_report_generations (
     original_question TEXT NOT NULL,
     generated_sql TEXT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_reviews (
@@ -44,7 +46,8 @@ CREATE TABLE ai_report_reviews (
     generation_id VARCHAR(36) NOT NULL,
     administrator_notes TEXT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function deletionAssert($condition, $message)
 {
@@ -319,7 +322,8 @@ WHEN OLD.id = 'rollback-job'
 BEGIN
     SELECT RAISE(FAIL, 'forced linked job deletion failure');
 END
-SQL);
+SQL
+);
 expectDeletionException(
     Throwable::class,
     static function () use ($service, $rollbackJob): void {

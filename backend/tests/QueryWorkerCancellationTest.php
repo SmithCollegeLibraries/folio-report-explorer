@@ -54,7 +54,8 @@ CREATE TABLE query_jobs (
     started_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE query_log (
@@ -68,7 +69,8 @@ CREATE TABLE query_log (
     execution_time_ms INTEGER,
     error_message TEXT
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function workerCancellationAssert($condition, $message)
 {
@@ -100,6 +102,9 @@ function insertWorkerCancellationJob($id, $dataSource, $outputMode)
 $queryJob = insertWorkerCancellationJob('query-cancelling', 'local', 'table');
 $queryWorker = new QueryWorkerController('query-worker', Yii::$app);
 $executeQuery = new ReflectionMethod($queryWorker, 'executeJob');
+if (PHP_VERSION_ID < 80100) {
+    $executeQuery->setAccessible(true);
+}
 $executeQuery->invoke($queryWorker, $queryJob);
 $queryJob->refresh();
 workerCancellationAssert($queryJob->status === 'cancelled', 'A query worker should terminalize a pre-execution cancellation.');
@@ -109,6 +114,9 @@ workerCancellationAssert($queryJob->error_message === null, 'A cancelled query s
 $exportJob = insertWorkerCancellationJob('export-cancelling', 'local', 'file');
 $exportWorker = new ExportWorkerController('export-worker', Yii::$app);
 $executeExport = new ReflectionMethod($exportWorker, 'executeExportJob');
+if (PHP_VERSION_ID < 80100) {
+    $executeExport->setAccessible(true);
+}
 $executeExport->invoke($exportWorker, $exportJob);
 $exportJob->refresh();
 workerCancellationAssert($exportJob->status === 'cancelled', 'An export worker should terminalize a pre-execution cancellation.');

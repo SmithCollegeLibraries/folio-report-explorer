@@ -200,6 +200,7 @@ foreach ([
     'discoveredSubtables' => [],
 ] as $propertyName => $value) {
     $property = new ReflectionProperty(app\services\FolioSchemaService::class, $propertyName);
+    $property->setAccessible(true);
     $property->setValue(null, $value);
 }
 

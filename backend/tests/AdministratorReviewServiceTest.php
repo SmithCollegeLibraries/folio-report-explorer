@@ -58,7 +58,8 @@ CREATE TABLE query_jobs (
     user_id INTEGER NULL,
     status VARCHAR(20) NOT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
     id VARCHAR(36) PRIMARY KEY,
@@ -89,7 +90,8 @@ CREATE TABLE ai_report_generations (
     updated_at DATETIME NOT NULL,
     FOREIGN KEY (parent_generation_id) REFERENCES ai_report_generations(id) ON DELETE SET NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_reviews (
     id VARCHAR(36) PRIMARY KEY,
@@ -106,7 +108,8 @@ CREATE TABLE ai_report_reviews (
     updated_at DATETIME NOT NULL,
     FOREIGN KEY (generation_id) REFERENCES ai_report_generations(id) ON DELETE CASCADE
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_query_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,7 +136,8 @@ CREATE TABLE ai_query_feedback (
     replacement_generation_id VARCHAR(36) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function reviewAssert($condition, $message)
 {

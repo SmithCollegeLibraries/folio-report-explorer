@@ -42,10 +42,12 @@ require_once $schemaServicePath;
 use app\services\FolioSchemaService;
 
 $mapProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredMap');
+$mapProperty->setAccessible(true);
 $mapProperty->setValue(null, [
     'inventory_items' => 'inventory.item__t',
 ]);
 $columnProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredColumns');
+$columnProperty->setAccessible(true);
 $columnProperty->setValue(null, []);
 
 function assertSameDisplayValue($expected, $actual, string $message): void

@@ -53,7 +53,8 @@ CREATE TABLE query_jobs (
     metadata TEXT,
     completed_at DATETIME
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
     id VARCHAR(36) PRIMARY KEY,
@@ -68,7 +69,8 @@ CREATE TABLE ai_report_generations (
     provenance_json TEXT,
     created_at DATETIME
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_query_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,7 +97,8 @@ CREATE TABLE ai_query_feedback (
     replacement_generation_id VARCHAR(36),
     created_at DATETIME
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function feedbackTrustAssert($condition, string $message): void
 {

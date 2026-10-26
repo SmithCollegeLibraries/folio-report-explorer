@@ -35,7 +35,8 @@ CREATE TABLE query_jobs (
     created_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function cancellationAssert($condition, $message)
 {

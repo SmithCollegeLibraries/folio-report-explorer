@@ -116,7 +116,7 @@ $nestedInQuery['filters'][] = [
 ];
 
 assertThrowsInvalidArgument(
-    fn() => SqlBuilderService::build($nestedInQuery),
+    function () use ($nestedInQuery) { return SqlBuilderService::build($nestedInQuery); },
     'Operator IN requires scalar list values',
     'SqlBuilderService should reject nested IN values with a controlled exception instead of calling trim() on an array.'
 );
@@ -130,7 +130,7 @@ $scalarArrayQuery['filters'][] = [
 ];
 
 assertThrowsInvalidArgument(
-    fn() => SqlBuilderService::build($scalarArrayQuery),
+    function () use ($scalarArrayQuery) { return SqlBuilderService::build($scalarArrayQuery); },
     'Operator = requires a scalar value',
     'SqlBuilderService should reject array values for scalar operators.'
 );

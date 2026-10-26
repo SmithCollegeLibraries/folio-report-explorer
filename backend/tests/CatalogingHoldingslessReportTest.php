@@ -84,6 +84,8 @@ $pdo->exec("INSERT INTO marctab.mt035 VALUES ('marked',NULL,'a',' (smhaslkr)123'
 $run = static function ($overrides = []) use ($compile, $pdo) {
     $compiled = $compile($overrides);
     $sql = str_replace("unnest(string_to_array(:excluded035Patterns, ',')) AS excluded(pattern)", 'json_each(:excluded035Patterns) AS excluded', $compiled['sql']);
+    $sql = str_replace('AS MATERIALIZED', 'AS', $sql);
+    $sql = str_replace(['inst.hrid NULLS LAST', 'candidates.hrid NULLS LAST'], ['(inst.hrid IS NULL), inst.hrid', '(candidates.hrid IS NULL), candidates.hrid'], $sql);
     $sql = str_replace('excluded.pattern', 'excluded.value', $sql);
     $sql = str_replace('OFFSET 0', 'LIMIT -1 OFFSET 0', $sql);
     $sql = preg_replace("/STRING_AGG\(DISTINCT BTRIM\(m.content\), '; ' ORDER BY BTRIM\(m.content\)\)/", 'GROUP_CONCAT(DISTINCT BTRIM(m.content))', $sql);

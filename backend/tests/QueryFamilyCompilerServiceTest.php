@@ -108,6 +108,9 @@ function assertNotContainsText(string $needle, string $haystack, string $message
 $mapProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredMap');
 $columnProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredColumns');
 $subtableProperty = new ReflectionProperty(FolioSchemaService::class, 'discoveredSubtables');
+$mapProperty->setAccessible(true);
+$columnProperty->setAccessible(true);
+$subtableProperty->setAccessible(true);
 
 $mapProperty->setValue(null, [
     'inventory_instances' => 'inventory.instance__t',

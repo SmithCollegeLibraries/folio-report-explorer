@@ -73,7 +73,8 @@ CREATE TABLE query_jobs (
     started_at DATETIME,
     completed_at DATETIME
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
     id VARCHAR(36) PRIMARY KEY,
@@ -103,7 +104,8 @@ CREATE TABLE ai_report_generations (
     linked_at DATETIME,
     updated_at DATETIME NOT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_reviews (
     id VARCHAR(36) PRIMARY KEY,
@@ -119,7 +121,8 @@ CREATE TABLE ai_report_reviews (
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 $db->createCommand(<<<'SQL'
 CREATE TABLE ai_query_feedback (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -135,7 +138,8 @@ CREATE TABLE ai_query_feedback (
     admin_reuse_approved_at DATETIME,
     created_at DATETIME
 )
-SQL)->execute();
+SQL
+)->execute();
 
 function queryMemoryReuseAssert($condition, string $message): void
 {

@@ -59,7 +59,8 @@ CREATE TABLE users (
     role VARCHAR(20),
     is_approved INTEGER
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
@@ -72,7 +73,8 @@ CREATE TABLE ai_report_generations (
     generated_sql TEXT NULL,
     confidence_evidence_json TEXT NOT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_reviews (
@@ -84,7 +86,8 @@ CREATE TABLE ai_report_reviews (
     updated_at DATETIME NOT NULL,
     FOREIGN KEY (superseded_by_job_id) REFERENCES query_jobs(id) ON DELETE SET NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE query_jobs (
@@ -109,7 +112,8 @@ CREATE TABLE query_jobs (
     started_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand()->batchInsert(
     'users',
@@ -409,7 +413,8 @@ WHEN OLD.id = '8f4a4aa0-6001-4222-8333-123456789abc'
 BEGIN
     SELECT RAISE(FAIL, 'forced deletion failure');
 END
-SQL);
+SQL
+);
 $failureResponse = invokeHistoryDeletion($failureId);
 historyDeletionAssert(Yii::$app->response->statusCode === 500, 'An unexpected deletion failure should receive HTTP 500.');
 historyDeletionAssert(

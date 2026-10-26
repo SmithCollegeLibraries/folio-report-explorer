@@ -48,13 +48,15 @@ function evaluatePhysicalAllocation(array $invoiceLines, array $pieceLinks, arra
     $paidPoLines = [];
     foreach ($invoiceLines as $invoiceLine) {
         $key = $invoiceLine['po_line_id'] . '|' . $invoiceLine['currency'];
-        $paidPoLines[$key] ??= [
-            'po_line_id' => $invoiceLine['po_line_id'],
-            'instance_id' => $invoiceLine['instance_id'],
-            'currency' => $invoiceLine['currency'],
-            'quantity' => 0,
-            'spend' => 0.0,
-        ];
+        if (!isset($paidPoLines[$key])) {
+            $paidPoLines[$key] = [
+                'po_line_id' => $invoiceLine['po_line_id'],
+                'instance_id' => $invoiceLine['instance_id'],
+                'currency' => $invoiceLine['currency'],
+                'quantity' => 0,
+                'spend' => 0.0,
+            ];
+        }
         $paidPoLines[$key]['quantity'] += $invoiceLine['quantity'];
         foreach ($invoiceLine['fund_distributions'] as $distribution) {
             $paidPoLines[$key]['spend'] += $distribution['total'] * $distribution['percentage'] * 0.01;
@@ -73,7 +75,8 @@ function evaluatePhysicalAllocation(array $invoiceLines, array $pieceLinks, arra
         uksort($instanceCounts, static function (string $left, string $right) use ($instanceCounts): int {
             return $instanceCounts[$right] <=> $instanceCounts[$left] ?: $left <=> $right;
         });
-        $preferredExactInstance = array_key_first($instanceCounts);
+        reset($instanceCounts);
+        $preferredExactInstance = key($instanceCounts);
         $fallback = isset($currentInstances[$paidPoLine['instance_id']])
             ? max($paidPoLine['quantity'] - $exact, 0)
             : 0;
@@ -97,7 +100,9 @@ function evaluateFinalAggregation(array $allocations, array $dominantClasses, ar
     foreach ($allocations as $allocation) {
         $instanceId = $allocation['resolved_instance_id'];
         $class = $dominantClasses[$instanceId];
-        $results[$class] ??= ['exact' => 0, 'fallback' => 0, 'copies' => 0, 'spend' => 0.0, 'circulation' => 0];
+        if (!isset($results[$class])) {
+            $results[$class] = ['exact' => 0, 'fallback' => 0, 'copies' => 0, 'spend' => 0.0, 'circulation' => 0];
+        }
         $results[$class]['exact'] += $allocation['exact'];
         $results[$class]['fallback'] += $allocation['fallback'];
         $results[$class]['copies'] += $allocation['allocated'];
@@ -129,7 +134,8 @@ function evaluateDominantClass(array $items): array
         uksort($classCounts, static function (string $left, string $right) use ($classCounts): int {
             return $classCounts[$right] <=> $classCounts[$left] ?: $left <=> $right;
         });
-        $dominant[$instanceId] = array_key_first($classCounts);
+        reset($classCounts);
+        $dominant[$instanceId] = key($classCounts);
     }
     return $dominant;
 }

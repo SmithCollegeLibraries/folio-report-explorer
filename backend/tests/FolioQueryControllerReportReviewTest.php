@@ -60,7 +60,8 @@ CREATE TABLE users (
     role VARCHAR(20),
     is_approved INTEGER
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE query_jobs (
@@ -70,7 +71,8 @@ CREATE TABLE query_jobs (
     created_at DATETIME NULL,
     completed_at DATETIME NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_generations (
@@ -101,7 +103,8 @@ CREATE TABLE ai_report_generations (
     linked_at DATETIME NULL,
     updated_at DATETIME NOT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_report_reviews (
@@ -118,7 +121,8 @@ CREATE TABLE ai_report_reviews (
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand(<<<'SQL'
 CREATE TABLE ai_query_feedback (
@@ -146,7 +150,8 @@ CREATE TABLE ai_query_feedback (
     replacement_generation_id VARCHAR(36) NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 )
-SQL)->execute();
+SQL
+)->execute();
 
 Yii::$app->db->createCommand()->batchInsert(
     'users',

@@ -58,6 +58,7 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $loader = new ReflectionMethod(GeminiService::class, 'loadAcceptedClarificationKeys');
+$loader->setAccessible(true);
 $keys = $loader->invoke(null, 42);
 
 assertSameValue(['location_alias.mrbc_reference'], $keys, 'GeminiService should load accepted clarification keys from the clarification event tracker.');
