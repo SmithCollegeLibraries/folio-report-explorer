@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import AcrlReviewPanel from '../components/AcrlReviewPanel';
+import AcrlToolsPanel from '../components/AcrlToolsPanel';
 import { getAcrlReview, listAcrlCatalogueYears, publishAcrlYear, saveAcrlLinks, uploadAcrlWorksheet } from '../api/acrl';
 import { parseWorksheetFile, sha256ForFile } from '../services/acrlWorksheetParser';
 import type { AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
@@ -158,6 +159,8 @@ export default function AcrlPage() {
         <h1 className="text-2xl font-semibold text-gray-900">ACRL worksheet review</h1>
         <p className="max-w-3xl text-sm leading-6 text-gray-600">Upload a worksheet PDF to preview the question parts, compare them with the previous year, and publish the reviewed catalogue. The PDF is read in this browser and only the extracted question text is saved.</p>
       </header>
+
+      <AcrlToolsPanel years={yearsQuery.data || []} />
 
       <section aria-labelledby="upload-heading" className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
         <div>

@@ -99,6 +99,15 @@ class SettingsService
         return max(1, min(3650, $days));
     }
 
+    public static function getAcrlChangeThresholdPercent()
+    {
+        $threshold = self::get('acrl_change_threshold_percent', null, 10);
+        if (!is_numeric($threshold) || (float)$threshold < 0 || (float)$threshold > 100) {
+            return 10;
+        }
+        return (float)$threshold;
+    }
+
     /**
      * Return the masked version for display (hide passwords).
      */

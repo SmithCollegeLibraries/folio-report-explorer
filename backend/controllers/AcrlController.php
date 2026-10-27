@@ -7,6 +7,10 @@ use yii\web\Controller;
 use yii\web\Response;
 use app\controllers\traits\PersistedAdminAccessTrait;
 use app\services\AcrlCatalogueService;
+use app\services\AcrlEntryService;
+use app\services\AcrlImportService;
+use app\services\AcrlThresholdService;
+use app\models\User;
 
 require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
 
@@ -40,11 +44,17 @@ class AcrlController extends Controller
                 'class' => \yii\filters\auth\HttpBearerAuth::class,
                 'except' => ['options'],
             ];
-            $actions = ['years', 'upload', 'review', 'save-links', 'publish'];
+            $userActions = ['entry', 'save-answer', 'section-status'];
+            $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'import-preview', 'import-confirm'];
             $behaviors['access'] = [
                 'class' => \yii\filters\AccessControl::class,
                 'except' => ['options'],
                 'rules' => [
+                    [
+                        'allow' => true,
+                        'actions' => $userActions,
+                        'roles' => ['@'],
+                    ],
                     [
                         'allow' => true,
                         'actions' => $actions,
@@ -146,6 +156,166 @@ class AcrlController extends Controller
         } catch (\DomainException $exception) {
             return $this->errorResponse(409, $exception->getMessage());
         }
+    }
+
+    public function actionEntry($year = null)
+    {
+        if (($forbidden = $this->requireAcrlUser()) !== null) {
+            return $forbidden;
+        }
+        try {
+            return (new AcrlEntryService())->entry($year === null ? null : (int)$year);
+        } catch (\DomainException $exception) {
+            return $this->errorResponse(404, $exception->getMessage());
+        }
+    }
+
+    public function actionSaveAnswer($year)
+    {
+        if (($forbidden = $this->requireAcrlUser()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->bodyParams;
+        try {
+            $result = (new AcrlEntryService())->saveAnswer(
+                (int)$year,
+                (string)($body['sheet'] ?? 'survey'),
+                (string)($body['question_id'] ?? ''),
+                (string)($body['part'] ?? ''),
+                $body['value'] ?? null,
+                $body['note'] ?? null,
+                isset($body['expected_updated_at']) && $body['expected_updated_at'] !== '' ? (string)$body['expected_updated_at'] : null,
+                (string)(Yii::$app->user->id ?? ''),
+                $this->isPersistedAdministrator()
+            );
+            if ($result['conflict']) {
+                Yii::$app->response->statusCode = 409;
+            }
+            return $result;
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        } catch (\DomainException $exception) {
+            $status = strpos($exception->getMessage(), 'read-only') !== false ? 409 : 404;
+            return $this->errorResponse($status, $exception->getMessage());
+        }
+    }
+
+    public function actionSectionStatus($year, $section)
+    {
+        if (($forbidden = $this->requireAcrlUser()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->bodyParams;
+        $status = (string)($body['status'] ?? '');
+        if ($status === 'open' && ($forbidden = $this->requireAcrlAdministrator()) !== null) {
+            return $forbidden;
+        }
+        try {
+            return (new AcrlEntryService())->setSectionStatus(
+                (int)$year,
+                rawurldecode((string)$section),
+                $status,
+                (string)(Yii::$app->user->id ?? ''),
+                $this->isPersistedAdministrator()
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        } catch (\DomainException $exception) {
+            $code = strpos($exception->getMessage(), 'Only an administrator') !== false ? 403 : 409;
+            return $this->errorResponse($code, $exception->getMessage());
+        }
+    }
+
+    public function actionThreshold()
+    {
+        if (($forbidden = $this->requireAcrlAdministrator()) !== null) {
+            return $forbidden;
+        }
+        return ['thresholdPercent' => (new AcrlThresholdService())->get()];
+    }
+
+    public function actionSaveThreshold()
+    {
+        if (($forbidden = $this->requireAcrlAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->bodyParams;
+        try {
+            return ['thresholdPercent' => (new AcrlThresholdService())->save($body['thresholdPercent'] ?? null)];
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        }
+    }
+
+    public function actionImportPreview($year)
+    {
+        if (($forbidden = $this->requireAcrlAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->bodyParams;
+        try {
+            return (new AcrlImportService())->preview(
+                (int)$year,
+                $body['rows'] ?? null,
+                $body['sourceLabel'] ?? null,
+                !empty($body['overwrite'])
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        } catch (\DomainException $exception) {
+            return $this->errorResponse(409, $exception->getMessage());
+        }
+    }
+
+    public function actionImportConfirm($year)
+    {
+        if (($forbidden = $this->requireAcrlAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->bodyParams;
+        try {
+            return (new AcrlImportService())->confirm(
+                (int)$year,
+                $body['rows'] ?? null,
+                $body['sourceLabel'] ?? null,
+                !empty($body['overwrite']),
+                (string)(Yii::$app->user->id ?? '')
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        } catch (\DomainException $exception) {
+            return $this->errorResponse(409, $exception->getMessage());
+        }
+    }
+
+    private function requireAcrlUser(): ?array
+    {
+        $user = Yii::$app->user;
+        if ($user->isGuest) {
+            Yii::$app->response->statusCode = 401;
+            return ['error' => 'Unauthorized'];
+        }
+        $identity = $user->identity;
+        if (!($identity instanceof User) || !User::find()->where([
+            'id' => (int)$identity->getId(),
+            'is_approved' => 1,
+        ])->exists()) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Forbidden'];
+        }
+        return null;
+    }
+
+    private function requireAcrlAdministrator(): ?array
+    {
+        if (($forbidden = $this->requireAcrlUser()) !== null) {
+            return $forbidden;
+        }
+        if ($this->isPersistedAdministrator()) {
+            return null;
+        }
+        Yii::$app->response->statusCode = 403;
+        return ['error' => 'Forbidden'];
     }
 
     private function errorResponse(int $status, string $message): array
