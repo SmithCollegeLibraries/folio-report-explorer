@@ -40,7 +40,7 @@ class AcrlCatalogueReviewService
     public function questionRows(int $year): array
     {
         $rows = $this->db->createCommand(
-            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type,'
+            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type, answer_options,'
                 . ' required_status, calculated_from, survey_order FROM acrl_questions'
                 . ' WHERE survey_year = :year ORDER BY sheet, survey_order, question_id, part',
             [':year' => $year]
@@ -50,6 +50,7 @@ class AcrlCatalogueReviewService
             $row['survey_year'] = (int)$row['survey_year'];
             $row['survey_order'] = (int)$row['survey_order'];
             $row['required'] = $row['required_status'];
+            $row['answer_options'] = $this->decodeAnswerOptions($row['answer_options'] ?? null);
             unset($row['required_status']);
         }
         unset($row);
@@ -92,7 +93,7 @@ class AcrlCatalogueReviewService
     {
         if (!in_array($sheet, ['survey', 'trends'], true) || !is_string($questionId) || !is_string($part)) return null;
         $row = $this->db->createCommand(
-            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type,'
+            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type, answer_options,'
                 . ' required_status, calculated_from, survey_order FROM acrl_questions'
                 . ' WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part',
             [':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part]
@@ -102,6 +103,7 @@ class AcrlCatalogueReviewService
         $row['survey_year'] = (int)$row['survey_year'];
         $row['survey_order'] = (int)$row['survey_order'];
         $row['required'] = $row['required_status'];
+        $row['answer_options'] = $this->decodeAnswerOptions($row['answer_options'] ?? null);
         unset($row['required_status']);
         return $row;
     }
@@ -245,7 +247,17 @@ class AcrlCatalogueReviewService
             'question_id' => $question['question_id'], 'part' => $question['part'],
             'section' => $question['section'], 'prompt' => $question['prompt'],
             'answer_type' => $question['answer_type'], 'required' => $question['required'],
+            'answer_options' => $question['answer_options'] ?? null,
             'calculated_from' => $question['calculated_from'], 'survey_order' => (int)$question['survey_order'],
         ];
+    }
+
+    private function decodeAnswerOptions($rawOptions): ?array
+    {
+        if ($rawOptions === null || $rawOptions === '') return null;
+        if (is_array($rawOptions)) return $rawOptions;
+        if (!is_string($rawOptions)) return null;
+        $options = json_decode($rawOptions, true);
+        return is_array($options) ? $options : null;
     }
 }

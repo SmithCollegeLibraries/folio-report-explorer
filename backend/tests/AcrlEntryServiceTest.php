@@ -4,6 +4,7 @@ require_once __DIR__ . '/../services/AcrlEntryRulesService.php';
 require_once __DIR__ . '/../services/AcrlHistoryService.php';
 require_once __DIR__ . '/../services/AcrlCalculationService.php';
 require_once __DIR__ . '/../services/AcrlAnswerValueService.php';
+require_once __DIR__ . '/../services/AcrlStructuredAnswerService.php';
 require_once __DIR__ . '/../services/AcrlQuestionNotesService.php';
 require_once __DIR__ . '/../services/AcrlEntryService.php';
 
@@ -34,6 +35,7 @@ class AcrlEntryTestRepository
     public $statusWrites = [];
     public $savedCalculations = [];
     public $suggestionWrites = [];
+    public $answerWrites = [];
 
     public function publishedYears(): array { return [2026, 2025]; }
     public function year(int $year): ?array { return in_array($year, [2025, 2026], true) ? ['survey_year' => $year, 'status' => 'published'] : null; }
@@ -65,7 +67,8 @@ class AcrlEntryTestRepository
         if ($year === 2026 && $sheet === 'trends') {
             return [[
                 'survey_year' => 2026, 'sheet' => 'trends', 'question_id' => 'T1', 'part' => '',
-                'section' => 'Trends', 'prompt' => 'Trend question', 'answer_type' => 'text',
+                'section' => 'Trends', 'prompt' => 'Trend question', 'answer_type' => 'choice',
+                'answer_options' => '{"kind":"radio","rows":[],"choices":["Yes","No"],"allowOther":false}',
                 'required_status' => 'no', 'calculated_from' => null, 'survey_order' => 1,
             ]];
         }
@@ -80,6 +83,12 @@ class AcrlEntryTestRepository
     }
     public function answers(int $year, string $sheet = 'survey'): array
     {
+        if ($year === 2026 && $sheet === 'trends') {
+            return [[
+                'sheet' => 'trends', 'question_id' => 'T1', 'part' => '', 'value_text' => '{"value":"No"}', 'value_number' => null,
+                'note' => null, 'source' => 'manual', 'source_label' => null, 'updated_by' => 'user-2', 'updated_at' => '2026-02-01 00:00:00.000003',
+            ]];
+        }
         if ($year === 2026 && $sheet === 'survey') {
             return [[
                 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'value_text' => '200', 'value_number' => '200.00',
@@ -119,6 +128,7 @@ class AcrlEntryTestRepository
     public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null, array $calculatedChanges = []): array
     {
         $this->savedCalculations = $calculatedChanges;
+        $this->answerWrites[] = ['question' => $question, 'values' => $values];
         return $this->saveResult;
     }
     public function saveSuggestions(array $suggestions, string $userId): array
@@ -158,6 +168,8 @@ acrlEntryServiceAssert($questionsById['0B']['suggestion'] === null, 'An already 
 acrlEntryServiceAssert($questionsById['1A']['suggestion'] === null && $questionsById['60']['suggestion'] === null, 'Numeric answers must never be suggested.');
 $trend = $entry['sections'][1]['questions'][0];
 acrlEntryServiceAssert($trend['comparison']['changePercent'] === null && $trend['previous']['label'] === 'No previous value' && $trend['history'] === [] && $trend['suggestion'] === null, 'Trends parts do not show history, suggestions, or change.');
+acrlEntryServiceAssert($trend['answerOptions']['kind'] === 'radio' && $trend['answerOptions']['choices'] === ['Yes', 'No'], 'Entry responses expose stored answer options for structured controls.');
+acrlEntryServiceAssert($trend['answerDisplay'] === 'No', 'Structured answers expose readable text alongside their stored JSON.');
 
 try {
     $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false);
@@ -165,6 +177,15 @@ try {
 } catch (DomainException $exception) {
     acrlEntryServiceAssert(strpos($exception->getMessage(), 'read-only') !== false, 'Ready sections report the lock to non-admins.');
 }
+$repository->status = ['section' => 'Trends', 'status' => 'open'];
+try {
+    $service->saveAnswer(2026, 'trends', 'T1', '', '{"value":"Maybe"}', null, null, 'user-1', false);
+    acrlEntryServiceAssert(false, 'A submitted radio value outside the stored options must be rejected.');
+} catch (InvalidArgumentException $exception) {
+    acrlEntryServiceAssert(count($repository->answerWrites) === 0, 'Invalid structured answers must not reach repository persistence.');
+}
+$service->saveAnswer(2026, 'trends', 'T1', '', '{"value":"Yes"}', null, null, 'user-1', false);
+acrlEntryServiceAssert($repository->answerWrites[0]['values']['value_text'] === '{"value":"Yes"}', 'A valid structured answer is stored as JSON text after server-side option validation.');
 $repository->status = ['section' => 'Circulation', 'status' => 'open'];
 $conflict = $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false);
 acrlEntryServiceAssert($conflict['conflict'] && $conflict['current']['value_text'] === '175', 'An unassigned signed-in user can still save an answer and receives the normal optimistic-lock conflict.');

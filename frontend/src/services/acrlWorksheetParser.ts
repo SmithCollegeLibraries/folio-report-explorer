@@ -1,4 +1,7 @@
 import type { AcrlAnswerType, AcrlQuestionPart, AcrlSheet, AcrlWorksheetParseResult } from '../types/acrl';
+import type { PdfTextItem } from './acrlPdfText';
+import { pdfItemsToText } from './acrlPdfText';
+import { detectTrendsAnswerLayouts } from './acrlWorksheetLayoutParser';
 
 const SECTION_NAMES = [
   'Library characteristics',
@@ -23,8 +26,18 @@ const SECTION_HEADING_ALIASES = [
 const PDF_PART_BASES = new Set(['1', '2', '3', '4', '5', '6', '40', '41', '42', '43', '44', '70', '71', '72', '73']);
 
 export async function parseWorksheetFile(file: File): Promise<AcrlWorksheetParseResult> {
-  const { extractPdfTextPages } = await import('./acrlPdfPages');
-  return parseWorksheetPages(await extractPdfTextPages(file));
+  const { extractPdfItemPages } = await import('./acrlPdfPages');
+  return parseWorksheetPositionedPages(await extractPdfItemPages(file));
+}
+
+export function parseWorksheetPositionedPages(pages: PdfTextItem[][]): AcrlWorksheetParseResult {
+  const parsed = parseWorksheetPages(pages.map((items) => pdfItemsToText(items)));
+  const layouts = detectTrendsAnswerLayouts(pages, parsed.items);
+  return {
+    ...parsed,
+    items: layouts.items,
+    layoutWarnings: layouts.layoutWarnings,
+  };
 }
 
 export async function sha256ForFile(file: File): Promise<string> {

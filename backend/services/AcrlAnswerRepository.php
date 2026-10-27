@@ -33,7 +33,7 @@ class AcrlAnswerRepository
     public function questions(int $year, string $sheet = 'survey'): array
     {
         return $this->db->createCommand(
-            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type, required_status, calculated_from, survey_order '
+            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type, answer_options, required_status, calculated_from, survey_order '
             . 'FROM acrl_questions WHERE survey_year = :year AND sheet = :sheet ORDER BY survey_order, question_id, part',
             [':year' => $year, ':sheet' => $sheet]
         )->queryAll();
@@ -42,7 +42,7 @@ class AcrlAnswerRepository
     public function question(int $year, string $sheet, string $questionId, string $part): ?array
     {
         $row = $this->db->createCommand(
-            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type, required_status, calculated_from, survey_order '
+            'SELECT id, survey_year, sheet, question_id, part, section, prompt, answer_type, answer_options, required_status, calculated_from, survey_order '
             . 'FROM acrl_questions WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part',
             [':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part]
         )->queryOne();

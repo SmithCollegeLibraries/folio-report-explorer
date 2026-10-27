@@ -13,8 +13,9 @@ class AcrlEntryService
     private $history;
     private $assignments;
     private $questionNotes;
+    private $structuredAnswers;
 
-    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null, $questionNotes = null)
+    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null, $questionNotes = null, $structuredAnswers = null)
     {
         $this->repository = $repository ?: new AcrlAnswerRepository();
         $this->rules = $rules ?: new AcrlEntryRulesService();
@@ -26,6 +27,7 @@ class AcrlEntryService
         $this->questionNotes = $questionNotes ?: ($repository
             ? new AcrlQuestionNotesService($repository, $repository)
             : new AcrlQuestionNotesService());
+        $this->structuredAnswers = $structuredAnswers ?: new AcrlStructuredAnswerService();
     }
 
     public function latestYear(): int
@@ -69,6 +71,12 @@ class AcrlEntryService
             $key = $this->questionKey($question['sheet'], $question['question_id'], $question['part']);
             $answer = $answers[$key] ?? $this->emptyAnswer();
             $history = $questionHistory[$key] ?? [];
+            if (!empty($question['answer_options'])) {
+                foreach ($history as &$historyItem) {
+                    $historyItem['label'] = $this->structuredAnswers->displayValue($question['answer_options'], $historyItem['value'] ?? null);
+                }
+                unset($historyItem);
+            }
             $previous = $this->previousFromHistory($history[0] ?? null);
             $calculation = $calculationResults[$this->calculationKey($question['sheet'], $question['question_id'], $question['part'])] ?? null;
             $currentValue = $answer['value_number'] ?? $answer['value_text'];
@@ -93,10 +101,12 @@ class AcrlEntryService
                 'section' => $question['section'],
                 'prompt' => $question['prompt'],
                 'answerType' => $question['answer_type'],
+                'answerOptions' => $this->structuredAnswers->decodeOptions($question['answer_options'] ?? null),
                 'required' => $question['required_status'],
                 'calculatedFrom' => $question['calculated_from'],
                 'surveyOrder' => (int)$question['survey_order'],
                 'answer' => $answer,
+                'answerDisplay' => $this->structuredAnswers->displayValue($question['answer_options'] ?? null, $answer['value_text'] ?? null),
                 'previous' => $previous,
                 'history' => $history,
                 'suggestion' => $this->suggestion($question, $answer, $history),
@@ -148,7 +158,10 @@ class AcrlEntryService
         if ($status && $status['status'] === 'ready' && !$isAdmin) {
             throw new \DomainException('This section is ready for review and is read-only.');
         }
-        $normalized = $this->values->normalize($question['answer_type'], $value);
+        $normalized = $this->structuredAnswers->normalize($question['answer_options'] ?? null, $value);
+        if ($normalized === null) {
+            $normalized = $this->values->normalize($question['answer_type'], $value);
+        }
         $note = $this->values->normalizeNote($note);
         $allQuestions = array_merge(
             $this->repository->questions($year, 'survey'),

@@ -77,12 +77,16 @@ class AcrlCatalogueService
                 $keep[$key] = true;
                 $values = $item;
                 $values['survey_year'] = $year;
+                $values['answer_options'] = $item['answer_options'] === null
+                    ? null
+                    : json_encode($item['answer_options'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
                 $values['required_status'] = $values['required'];
                 unset($values['required']);
                 $this->db->createCommand()->upsert('acrl_questions', $values, [
                     'section' => $item['section'],
                     'prompt' => $item['prompt'],
                     'answer_type' => $item['answer_type'],
+                    'answer_options' => $values['answer_options'],
                     'required_status' => $item['required'],
                     'calculated_from' => $item['calculated_from'],
                     'survey_order' => $item['survey_order'],
