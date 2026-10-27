@@ -37,6 +37,7 @@ class AcrlQuestionImportValidatorService
             $section = $item['section'] ?? null;
             $prompt = $item['prompt'] ?? null;
             $answerType = $item['answer_type'] ?? null;
+            $answerOptions = $this->validateAnswerOptions($item['answer_options'] ?? null, $answerType);
             $required = $item['required'] ?? null;
             $calculatedFrom = $item['calculated_from'] ?? null;
             $surveyOrder = $item['survey_order'] ?? null;
@@ -86,12 +87,81 @@ class AcrlQuestionImportValidatorService
                 'section' => trim($section),
                 'prompt' => trim($prompt),
                 'answer_type' => $answerType,
+                'answer_options' => $answerOptions,
                 'required' => $required,
                 'calculated_from' => $calculatedFrom === null ? null : trim($calculatedFrom),
                 'survey_order' => (int)$surveyOrder,
             ];
         }
 
+        return $normalized;
+    }
+
+    private function validateAnswerOptions($options, $answerType): ?array
+    {
+        if ($options === null) {
+            return null;
+        }
+        if (!is_array($options)) {
+            throw new \InvalidArgumentException('Question answer options must be an object.');
+        }
+        if (count(array_diff(array_keys($options), ['kind', 'rows', 'choices', 'allowOther'])) > 0) {
+            throw new \InvalidArgumentException('Question answer options contain unsupported fields.');
+        }
+        $kind = $options['kind'] ?? null;
+        $rows = $options['rows'] ?? null;
+        $choices = $options['choices'] ?? null;
+        $allowOther = $options['allowOther'] ?? null;
+        if (!in_array($kind, ['checkbox', 'radio', 'rating', 'grid', 'text'], true)
+            || !is_array($rows) || !is_array($choices) || !is_bool($allowOther)
+            || count($rows) > 100 || count($choices) > 100) {
+            throw new \InvalidArgumentException('Question answer options have an invalid shape.');
+        }
+
+        $rows = $this->optionLabels($rows, 'row');
+        $choices = $this->optionLabels($choices, 'choice');
+        if ($kind === 'text') {
+            if (!empty($rows) || !empty($choices) || $allowOther || $answerType !== 'text') {
+                throw new \InvalidArgumentException('Free-text answer options must not contain fixed rows or choices.');
+            }
+        } elseif ($answerType !== 'choice') {
+            throw new \InvalidArgumentException('Structured answer options require the choice answer type.');
+        } elseif ($kind === 'grid') {
+            if (empty($rows) || count($choices) < 2) {
+                throw new \InvalidArgumentException('Grid answer options require rows and at least two choices.');
+            }
+        } elseif (!empty($rows) || empty($choices)) {
+            throw new \InvalidArgumentException('List answer options require choices and no rows.');
+        }
+
+        $hasOther = false;
+        foreach ($kind === 'grid' ? $rows : $choices as $label) {
+            if (preg_match('/^other\b/i', $label) === 1) $hasOther = true;
+        }
+        if ($allowOther !== $hasOther || ($kind === 'rating' && $allowOther)) {
+            throw new \InvalidArgumentException('Other-response metadata must match an Other row or choice.');
+        }
+        $normalized = ['kind' => $kind, 'rows' => $rows, 'choices' => $choices, 'allowOther' => $allowOther];
+        $encoded = json_encode($normalized, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        if ($encoded === false || strlen($encoded) > 60000) {
+            throw new \InvalidArgumentException('Question answer options are too large to store.');
+        }
+        return $normalized;
+    }
+
+    private function optionLabels(array $labels, string $labelKind): array
+    {
+        $normalized = [];
+        foreach ($labels as $label) {
+            if (!is_string($label)) {
+                throw new \InvalidArgumentException('Question answer ' . $labelKind . ' labels must be text.');
+            }
+            $label = trim($label);
+            if ($label === '' || strlen($label) > 255 || in_array($label, $normalized, true)) {
+                throw new \InvalidArgumentException('Question answer ' . $labelKind . ' labels must be unique and up to 255 characters.');
+            }
+            $normalized[] = $label;
+        }
         return $normalized;
     }
 }

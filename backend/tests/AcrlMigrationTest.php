@@ -103,3 +103,20 @@ foreach ($audit['nonIdempotentRisks'] as $risk) {
 acrlMigrationAssert(empty($detailsRisks), 'Migration 059 must not contain audit-detected non-idempotent operations.');
 
 echo "PASS: ACRL migration 059 is guarded and migration-audit clean\n";
+
+$layoutsMigrationPath = $migrationDir . '/060_acrl_question_answer_options.sql';
+acrlMigrationAssert(file_exists($layoutsMigrationPath), 'Migration 060 must store ACRL question answer options.');
+$layoutsMigration = (string)file_get_contents($layoutsMigrationPath);
+$layoutsUpper = str_replace('`', '', strtoupper($layoutsMigration));
+acrlMigrationAssert(strpos($layoutsUpper, 'INFORMATION_SCHEMA.COLUMNS') !== false, 'Migration 060 must guard its ALTER through information_schema.');
+acrlMigrationAssert(strpos($layoutsUpper, 'ACRL_QUESTIONS') !== false && strpos($layoutsUpper, 'ANSWER_OPTIONS TEXT NULL') !== false, 'Migration 060 must add a nullable TEXT answer_options column to acrl_questions.');
+acrlMigrationAssert(strpos($layoutsUpper, 'ADD COLUMN IF NOT EXISTS') === false, 'Migration 060 must be compatible with MySQL 8 and MariaDB 10.3.');
+$audi = MigrationService::auditDirectory($migrationDir);
+$layoutsRisks = [];
+foreach ($audi['nonIdempotentRisks'] as $risk) {
+    if ($risk['filename'] === '060_acrl_question_answer_options.sql') {
+        $layoutsRisks = $risk['reasons'];
+    }
+}
+acrlMigrationAssert(empty($layoutsRisks), 'Migration 060 must not contain audit-detected non-idempotent operations.');
+echo "PASS: ACRL migration 060 is guarded and migration-audit clean\n";

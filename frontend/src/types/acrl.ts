@@ -1,5 +1,12 @@
 export type AcrlSheet = 'survey' | 'trends';
 export type AcrlAnswerType = 'number' | 'currency' | 'yes/no' | 'choice' | 'text';
+export type AcrlAnswerOptionsKind = 'checkbox' | 'radio' | 'rating' | 'grid' | 'text';
+export interface AcrlAnswerOptions {
+  kind: AcrlAnswerOptionsKind;
+  rows: string[];
+  choices: string[];
+  allowOther: boolean;
+}
 export type AcrlRequired = 'yes' | 'no' | 'unknown';
 export type AcrlReviewStatus = 'unchanged' | 'reworded' | 'renumbered' | 'new' | 'removed';
 export type AcrlMatchKind = 'same' | 'reworded' | 'renumbered' | 'split' | 'merged';
@@ -24,6 +31,7 @@ export interface AcrlQuestionPart {
   section: string;
   prompt: string;
   answer_type: AcrlAnswerType;
+  answer_options?: AcrlAnswerOptions | null;
   required: AcrlRequired;
   calculated_from: string | null;
   survey_order: number;
@@ -113,6 +121,7 @@ export interface AcrlWorksheetParseResult {
   items: AcrlQuestionPart[];
   unresolved: string[];
   unresolvedCalculations?: string[];
+  layoutWarnings?: string[];
 }
 
 export interface AcrlSurveyYear {
@@ -172,11 +181,13 @@ export interface AcrlEntryQuestion {
   section: string;
   prompt: string;
   answerType: AcrlAnswerType;
+  answerOptions?: AcrlAnswerOptions | null;
   required: AcrlRequired;
   calculatedFrom: string | null;
   surveyOrder: number;
   hasDetailsNotes: boolean;
   answer: AcrlAnswer;
+  answerDisplay?: string | null;
   previous: {
     value: number | string | null;
     label: string;

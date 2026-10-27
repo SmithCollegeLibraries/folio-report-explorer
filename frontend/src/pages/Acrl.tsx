@@ -158,6 +158,7 @@ export default function AcrlPage() {
   const uploadError = uploadMutation.error ? errorMessage(uploadMutation.error) : '';
   const reviewError = saveMutation.error || publishMutation.error;
   const unresolvedCalculations = parsed?.unresolvedCalculations || [];
+  const layoutWarnings = parsed?.layoutWarnings || [];
   return (
     <div className="mx-auto max-w-screen-2xl space-y-6 p-4 sm:p-6">
       <header className="space-y-1">
@@ -203,14 +204,31 @@ export default function AcrlPage() {
               <h4 className="font-semibold text-amber-950">Calculations that need checking</h4>
               <ul className="list-disc space-y-1 pl-5 text-sm text-amber-950">{unresolvedCalculations.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul>
             </div>}
+            {layoutWarnings.length > 0 && <div className="space-y-2 rounded border border-amber-200 bg-amber-50 p-4">
+              <h4 className="font-semibold text-amber-950">Trends questions using free text</h4>
+              <p className="text-sm text-amber-900">These answer controls were not recognized and will be saved as text responses.</p>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-amber-950">{layoutWarnings.map((warning, index) => <li key={`${warning}-${index}`}>{warning}</li>)}</ul>
+            </div>}
             {(parsed.unresolved.length > 0 || unresolvedCalculations.length > 0) && <div className="flex flex-wrap gap-2">
               <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={uploadPhase !== 'idle'} onClick={continueComparison}>Continue and compare</button>
               <button className="rounded border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" disabled={uploadPhase !== 'idle'} onClick={cancelWorksheet}>Cancel</button>
             </div>}
             <div className="max-h-96 overflow-auto rounded border border-gray-200">
               <table className="min-w-full text-left text-sm">
-                <thead className="sticky top-0 bg-gray-50 text-xs uppercase tracking-wide text-gray-500"><tr><th className="px-3 py-2">Sheet</th><th className="px-3 py-2">Question</th><th className="px-3 py-2">Section</th><th className="px-3 py-2">Prompt</th><th className="px-3 py-2">Required</th><th className="px-3 py-2">Calculated from</th></tr></thead>
-                <tbody className="divide-y divide-gray-100">{parsed.items.map((item: AcrlQuestionPart) => <tr key={`${item.sheet}-${item.question_id}-${item.part}`}><td className="px-3 py-2">{item.sheet}</td><td className="whitespace-nowrap px-3 py-2 font-medium">{item.question_id}{item.part}</td><td className="px-3 py-2">{item.section}</td><td className="min-w-72 px-3 py-2">{item.prompt}</td><td className="px-3 py-2">{item.required}</td><td className="min-w-48 px-3 py-2">{item.calculated_from || '—'}</td></tr>)}</tbody>
+                <thead className="sticky top-0 bg-gray-50 text-xs uppercase tracking-wide text-gray-500"><tr><th className="px-3 py-2">Sheet</th><th className="px-3 py-2">Question</th><th className="px-3 py-2">Section</th><th className="px-3 py-2">Prompt</th><th className="px-3 py-2">Required</th><th className="px-3 py-2">Answer layout</th><th className="px-3 py-2">Calculated from</th></tr></thead>
+                <tbody className="divide-y divide-gray-100">{parsed.items.map((item: AcrlQuestionPart) => {
+                  const options = item.answer_options;
+                  return <tr key={`${item.sheet}-${item.question_id}-${item.part}`}><td className="px-3 py-2">{item.sheet}</td><td className="whitespace-nowrap px-3 py-2 font-medium">{item.question_id}{item.part}</td><td className="px-3 py-2">{item.section}</td><td className="min-w-72 px-3 py-2">{item.prompt}</td><td className="px-3 py-2">{item.required}</td><td className="min-w-52 px-3 py-2">{item.sheet === 'trends' ? <div className="space-y-1">
+                    <span className="font-medium">{answerLayoutLabel(options?.kind)}</span>
+                    {options && options.kind !== 'text' && <details><summary className="cursor-pointer text-xs text-gray-600">{options.rows.length ? `${options.rows.length} rows · ${options.choices.length} choices` : `${options.choices.length} choices`}</summary>
+                      <div className="mt-1 space-y-1 text-xs text-gray-700">
+                        {options.rows.length > 0 && <p><strong>Rows:</strong> {options.rows.join('; ')}</p>}
+                        <p><strong>Choices:</strong> {options.choices.join('; ')}</p>
+                        {options.allowOther && <p>Other text response</p>}
+                      </div>
+                    </details>}
+                  </div> : '—'}</td><td className="min-w-48 px-3 py-2">{item.calculated_from || '—'}</td></tr>;
+                })}</tbody>
               </table>
             </div>
           </div>
@@ -258,4 +276,14 @@ export default function AcrlPage() {
       )}
     </div>
   );
+}
+
+function answerLayoutLabel(kind?: string): string {
+  switch (kind) {
+    case 'checkbox': return 'Checkbox list';
+    case 'radio': return 'Single choice';
+    case 'rating': return 'Rating scale';
+    case 'grid': return 'Grid';
+    default: return 'Free text';
+  }
 }

@@ -49,6 +49,24 @@ $normalized = $validator->validateUpload(2026, '2026 ACRL Survey Worksheet.pdf',
 acrlValidatorAssert($normalized[0]['question_id'] === '0A', 'Identifiers should trim whitespace and trailing periods without changing case.');
 acrlValidatorAssert($normalized[0]['part'] === '', 'A whole question identifier should keep an empty answer part.');
 
+$structured = $validator->validateUpload(2026, 'worksheet.pdf', $sha256, [acrlValidatorItem([
+    'sheet' => 'trends', 'question_id' => 'T3', 'section' => 'Trends', 'answer_type' => 'choice',
+    'answer_options' => ['kind' => 'checkbox', 'rows' => [], 'choices' => ['Policy', 'Other'], 'allowOther' => true],
+])]);
+acrlValidatorAssert($structured[0]['answer_options']['choices'] === ['Policy', 'Other'], 'Validated answer options must be returned for database storage.');
+
+acrlValidatorRejects(function () use ($validator, $sha256) {
+    $validator->validateUpload(2026, 'worksheet.pdf', $sha256, [acrlValidatorItem([
+        'sheet' => 'trends', 'answer_options' => ['kind' => 'grid', 'rows' => [], 'choices' => ['Yes'], 'allowOther' => false],
+    ])]);
+}, 'Grid options must contain labeled rows and at least two allowed answers.');
+
+acrlValidatorRejects(function () use ($validator, $sha256) {
+    $validator->validateUpload(2026, 'worksheet.pdf', $sha256, [acrlValidatorItem([
+        'sheet' => 'trends', 'answer_options' => ['kind' => 'checkbox', 'rows' => [], 'choices' => ['Policy'], 'allowOther' => 'yes'],
+    ])]);
+}, 'Answer layout metadata must use a boolean allowOther value.');
+
 $caseDistinct = $validator->validateUpload(2026, 'worksheet.pdf', $sha256, [
     acrlValidatorItem(['question_id' => '40a', 'survey_order' => 1]),
     acrlValidatorItem(['question_id' => '40A', 'survey_order' => 2]),

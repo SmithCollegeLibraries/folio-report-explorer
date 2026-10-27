@@ -98,6 +98,28 @@ function renderPage() {
 }
 
 describe('ACRL entry page', () => {
+  it('renders stored radio options and saves the selected answer as JSON text', async () => {
+    const response = entry();
+    response.sections[0].questions.push(makeQuestion({
+      sheet: 'trends', questionId: 'T1', part: '', prompt: 'Rating question', answerType: 'choice',
+      answerOptions: { kind: 'rating', rows: [], choices: ['Higher', 'Same', 'Lower'], allowOther: false },
+      answer: { value_text: '{"value":"Higher"}', value_number: null, note: null, source: 'manual', source_label: null, updated_by: 'editor', updated_at: '2026-01-03' },
+      answerDisplay: 'Higher',
+    }));
+    getEntry.mockResolvedValue(response);
+    saveAnswer.mockResolvedValue({ conflict: false, answer: response.sections[0].questions[0].answer });
+    const user = userEvent.setup();
+    renderPage();
+
+    const row = (await screen.findByRole('heading', { name: 'Rating question' })).closest('article') as HTMLElement;
+    expect(within(row).getByRole('radio', { name: 'Higher' })).toBeChecked();
+    expect(within(row).getByText('Current value: Higher')).toBeInTheDocument();
+    await user.click(within(row).getByRole('radio', { name: 'Lower' }));
+    await user.click(within(row).getByRole('button', { name: 'Save answer' }));
+
+    await waitFor(() => expect(saveAnswer).toHaveBeenCalledWith(2026, expect.objectContaining({ value: '{"value":"Lower"}' })));
+  });
+
   it('shows assigned sections with progress and marks owned sections in navigation', async () => {
     const response = entry();
     response.sections[0].assignees = [{ id: 7, displayName: 'Alex Editor' }];

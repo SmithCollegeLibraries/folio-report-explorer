@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { acceptAcrlSuggestions, getAcrlEntry, saveAcrlAnswer, setAcrlSectionStatus } from '../api/acrl';
 import AcrlSectionAssignmentPanel from '../components/AcrlSectionAssignmentPanel';
+import AcrlStructuredAnswerInput from '../components/AcrlStructuredAnswerInput';
 import AcrlQuestionDetailsModal from '../components/AcrlQuestionDetailsModal';
 import { useAuth } from '../hooks/useAuth';
 import type { AcrlEntryQuestion, AcrlEntryResponse, AcrlEntrySection } from '../types/acrl';
@@ -47,6 +48,7 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
   const disabled = locked && !isAdmin;
   const numberInput = question.answerType === 'number' || question.answerType === 'currency';
   const currentCalculated = question.answer.value_number ?? question.answer.value_text;
+  const currentDisplay = question.answerDisplay ?? currentCalculated;
   const isCalculated = Boolean(question.calculatedFrom);
   const calculationLabel = question.calculatedFrom?.replace(/^sum of\s+/i, '').replace(/,\s*/g, ' + ');
   return (
@@ -96,11 +98,14 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
       </div>}
       {isCalculated && question.calculated && !question.calculated.supported && <p className="text-sm text-gray-600">Calculation: {question.calculated.raw}</p>}
       {!isCalculated && <div className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto] md:items-end">
-        <label className="text-sm font-medium text-gray-700">Answer
+        {question.answerOptions ? <div className="text-sm font-medium text-gray-700">
+          <span>Answer</span>
+          <AcrlStructuredAnswerInput options={question.answerOptions} value={value} disabled={disabled} onChange={setValue} />
+        </div> : <label className="text-sm font-medium text-gray-700">Answer
           {numberInput ? <input className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 disabled:bg-gray-100" type="number" step="0.01" value={value} disabled={disabled} onChange={(event) => setValue(event.target.value)} />
             : question.answerType === 'yes/no' ? <select className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2 disabled:bg-gray-100" value={value} disabled={disabled} onChange={(event) => setValue(event.target.value)}><option value="">Select…</option><option value="yes">Yes</option><option value="no">No</option></select>
               : <textarea className="mt-1 block min-h-10 w-full rounded border border-gray-300 px-3 py-2 disabled:bg-gray-100" value={value} disabled={disabled} onChange={(event) => setValue(event.target.value)} />}
-        </label>
+        </label>}
         <label className="text-sm font-medium text-gray-700">Note
           <textarea className="mt-1 block min-h-10 w-full rounded border border-gray-300 px-3 py-2 disabled:bg-gray-100" value={note} disabled={disabled} onChange={(event) => setNote(event.target.value)} />
         </label>
@@ -111,7 +116,7 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
       {conflict && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{conflict}</p>}
       {saveMutation.error && !conflict && <p role="alert" className="text-sm text-rose-700">Could not save this answer.</p>}
       {question.answer.source === 'import' && <p className="text-xs text-gray-500">Imported from {question.answer.source_label || 'an administrator source'}.</p>}
-      <span className="sr-only">Current value: {currentCalculated ?? 'blank'}</span>
+      <span className="sr-only">Current value: {currentDisplay ?? 'blank'}</span>
     </article>
   );
 }
