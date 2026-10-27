@@ -119,7 +119,7 @@ export default function AcrlPage() {
     try {
       const worksheetParse = await parseWorksheetFile(file);
       setParsed(worksheetParse);
-      if (worksheetParse.items.length > 0 && worksheetParse.unresolved.length === 0) {
+      if (worksheetParse.items.length > 0 && worksheetParse.unresolved.length === 0 && (worksheetParse.unresolvedCalculations?.length || 0) === 0) {
         await startComparison(file, worksheetParse);
       } else {
         setUploadPhase('idle');
@@ -152,6 +152,7 @@ export default function AcrlPage() {
   }, { survey: 0, trends: 0 });
   const uploadError = uploadMutation.error ? errorMessage(uploadMutation.error) : '';
   const reviewError = saveMutation.error || publishMutation.error;
+  const unresolvedCalculations = parsed?.unresolvedCalculations || [];
   return (
     <div className="mx-auto max-w-screen-2xl space-y-6 p-4 sm:p-6">
       <header className="space-y-1">
@@ -186,12 +187,16 @@ export default function AcrlPage() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h3 className="font-semibold text-gray-900">Parsed worksheet preview</h3>
-                <p className="text-sm text-gray-600">{itemCounts?.survey || 0} Survey parts · {itemCounts?.trends || 0} Trends parts · {parsed.unresolved.length} unresolved lines</p>
+                <p className="text-sm text-gray-600">{itemCounts?.survey || 0} Survey parts · {itemCounts?.trends || 0} Trends parts · {parsed.unresolved.length} unresolved lines · {unresolvedCalculations.length} calculations to check</p>
               </div>
-              {parsed.unresolved.length > 0 && <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">Review these lines before comparing</span>}
+              {(parsed.unresolved.length > 0 || unresolvedCalculations.length > 0) && <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">Review before comparing</span>}
             </div>
             {parsed.unresolved.length > 0 && <ul className="list-disc space-y-1 rounded border border-amber-200 bg-amber-50 p-4 pl-8 text-sm text-amber-950">{parsed.unresolved.map((line, index) => <li key={`${line}-${index}`}>{line}</li>)}</ul>}
-            {parsed.unresolved.length > 0 && <div className="flex flex-wrap gap-2">
+            {unresolvedCalculations.length > 0 && <div className="space-y-2 rounded border border-amber-200 bg-amber-50 p-4">
+              <h4 className="font-semibold text-amber-950">Calculations that need checking</h4>
+              <ul className="list-disc space-y-1 pl-5 text-sm text-amber-950">{unresolvedCalculations.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul>
+            </div>}
+            {(parsed.unresolved.length > 0 || unresolvedCalculations.length > 0) && <div className="flex flex-wrap gap-2">
               <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={uploadPhase !== 'idle'} onClick={continueComparison}>Continue and compare</button>
               <button className="rounded border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" disabled={uploadPhase !== 'idle'} onClick={cancelWorksheet}>Cancel</button>
             </div>}

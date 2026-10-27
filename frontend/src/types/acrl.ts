@@ -32,6 +32,7 @@ export interface AcrlQuestionPart {
 export interface AcrlWorksheetParseResult {
   items: AcrlQuestionPart[];
   unresolved: string[];
+  unresolvedCalculations?: string[];
 }
 
 export interface AcrlSurveyYear {
@@ -77,7 +78,7 @@ export interface AcrlAnswer {
   value_text: string | null;
   value_number: string | null;
   note: string | null;
-  source: 'manual' | 'import' | null;
+  source: 'manual' | 'import' | 'calculated' | null;
   source_label: string | null;
   updated_by: string | null;
   updated_at: string | null;
@@ -107,7 +108,7 @@ export interface AcrlEntryQuestion {
     highlighted: boolean;
     addNote: boolean;
   };
-  calculated: { supported: boolean; raw: string | null; value: number | null; mismatch: boolean } | null;
+  calculated: { supported: boolean; raw: string | null; value: number | null; mismatch: boolean; waitingFor: string[] } | null;
 }
 
 export interface AcrlEntrySection {

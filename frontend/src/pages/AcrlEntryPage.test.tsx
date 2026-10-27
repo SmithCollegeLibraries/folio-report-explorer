@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -41,7 +41,7 @@ function entry(status: 'open' | 'ready' = 'open'): AcrlEntryResponse {
       makeQuestion({ previous: { value: 10, label: 'Sum of linked values: 10', isSum: true, linkedValues: [{ questionId: '59', part: '', value: 10 }] } }),
       makeQuestion({ questionId: '61', part: '', prompt: 'New count', answer: { value_text: '25', value_number: '25', note: null, source: null, source_label: null, updated_by: null, updated_at: null }, previous: { value: 0, label: 'New (was 0)', isSum: false, linkedValues: [] }, comparison: { previousValue: 0, previousLabel: 'New (was 0)', changePercent: null, highlighted: false, addNote: false } }),
       makeQuestion({ questionId: '62', part: '', prompt: 'New survey item', answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null }, previous: { value: null, label: 'No previous value', isSum: false, linkedValues: [] }, comparison: { previousValue: null, previousLabel: 'No previous value', changePercent: null, highlighted: false, addNote: false } }),
-      makeQuestion({ questionId: '63', part: '', prompt: 'Calculated total', calculatedFrom: 'sum of 1A, 1B', calculated: { supported: true, raw: null, value: 10, mismatch: true } }),
+      makeQuestion({ questionId: '63', part: '', prompt: 'Calculated total', calculatedFrom: 'sum of 1A, 2A', calculated: { supported: true, raw: null, value: 10, mismatch: true, waitingFor: [] } }),
     ] }],
   };
 }
@@ -77,6 +77,21 @@ describe('ACRL entry page', () => {
     await screen.findByText('2 of 4 parts filled');
     await userEvent.click(screen.getAllByRole('button', { name: 'Save answer' })[0]);
     expect(await screen.findByRole('alert')).toHaveTextContent('Current value: 25');
+  });
+
+  it('shows calculated totals and dependencies without answer controls', async () => {
+    const response = entry();
+    response.sections[0].questions[3].answer = { value_text: null, value_number: null, note: null, source: 'calculated', source_label: null, updated_by: null, updated_at: null };
+    response.sections[0].questions[3].calculated = { supported: true, raw: null, value: null, mismatch: false, waitingFor: ['2A'] };
+    getEntry.mockResolvedValue(response);
+    renderPage();
+    await screen.findByText('2 of 4 parts filled');
+    const calculatedRow = screen.getByText('Calculated total').closest('article');
+    expect(calculatedRow).not.toBeNull();
+    expect(within(calculatedRow as HTMLElement).getByText('Calculated from 1A + 2A')).toBeInTheDocument();
+    expect(within(calculatedRow as HTMLElement).getByText(/Waiting for 2A/)).toBeInTheDocument();
+    expect(within(calculatedRow as HTMLElement).queryByLabelText('Answer')).not.toBeInTheDocument();
+    expect(within(calculatedRow as HTMLElement).queryByRole('button', { name: 'Save answer' })).not.toBeInTheDocument();
   });
 
   it('locks ready sections for editors and exposes reopen to administrators', async () => {
