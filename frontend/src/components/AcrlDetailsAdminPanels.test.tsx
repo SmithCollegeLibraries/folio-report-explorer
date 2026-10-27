@@ -54,7 +54,7 @@ describe('ACRL details administrator panels', () => {
       fileName: 'instructions.pdf', sha256: 'a'.repeat(64),
       blocks: [expect.objectContaining({ blockKey: 'question:40', sourceFile: 'instructions.pdf' })],
     })));
-    expect(await screen.findByText('Saved 1 blocks and 1 question links.')).toBeInTheDocument();
+    expect(await screen.findByText('Saved 1 instruction block and 1 question link.')).toBeInTheDocument();
   });
 
   it('shows duplicate instruction keys and prevents saving the preview', async () => {

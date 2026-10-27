@@ -2,6 +2,7 @@ import type { AcrlAnswerType, AcrlQuestionPart, AcrlSheet, AcrlWorksheetParseRes
 import type { PdfTextItem } from './acrlPdfText';
 import { pdfItemsToText } from './acrlPdfText';
 import { detectTrendsAnswerLayouts } from './acrlWorksheetLayoutParser';
+import type { PdfPageProgress } from './acrlPdfPages';
 
 const SECTION_NAMES = [
   'Library characteristics',
@@ -25,9 +26,9 @@ const SECTION_HEADING_ALIASES = [
 
 const PDF_PART_BASES = new Set(['1', '2', '3', '4', '5', '6', '40', '41', '42', '43', '44', '70', '71', '72', '73']);
 
-export async function parseWorksheetFile(file: File): Promise<AcrlWorksheetParseResult> {
+export async function parseWorksheetFile(file: File, onPageProgress?: PdfPageProgress): Promise<AcrlWorksheetParseResult> {
   const { extractPdfItemPages } = await import('./acrlPdfPages');
-  return parseWorksheetPositionedPages(await extractPdfItemPages(file));
+  return parseWorksheetPositionedPages(await extractPdfItemPages(file, onPageProgress));
 }
 
 export function parseWorksheetPositionedPages(pages: PdfTextItem[][]): AcrlWorksheetParseResult {

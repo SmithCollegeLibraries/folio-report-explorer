@@ -29,10 +29,11 @@ import {
   slug,
   type InstructionDraft,
 } from './acrlInstructionParserRules';
+import type { PdfPageProgress } from './acrlPdfPages';
 
-export async function parseInstructionFile(file: File, questions: AcrlInstructionQuestionRef[]): Promise<AcrlInstructionParseResult> {
+export async function parseInstructionFile(file: File, questions: AcrlInstructionQuestionRef[], onPageProgress?: PdfPageProgress): Promise<AcrlInstructionParseResult> {
   const { extractPdfTextPages } = await import('./acrlPdfPages');
-  return parseInstructionPages(await extractPdfTextPages(file), questions);
+  return parseInstructionPages(await extractPdfTextPages(file, onPageProgress), questions);
 }
 export function parseInstructionPages(pages: string[], questions: AcrlInstructionQuestionRef[]): AcrlInstructionParseResult {
   const surveyQuestions = questions.filter((question) => question.sheet === 'survey');

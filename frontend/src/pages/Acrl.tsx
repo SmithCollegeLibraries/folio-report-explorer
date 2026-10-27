@@ -4,6 +4,7 @@ import AcrlReviewPanel from '../components/AcrlReviewPanel';
 import AcrlToolsPanel from '../components/AcrlToolsPanel';
 import AcrlInstructionUploadPanel from '../components/AcrlInstructionUploadPanel';
 import AcrlNotesImportPanel from '../components/AcrlNotesImportPanel';
+import AcrlFileStatus from '../components/AcrlFileStatus';
 import { getAcrlReview, listAcrlCatalogueYears, publishAcrlYear, saveAcrlLinks, uploadAcrlWorksheet } from '../api/acrl';
 import { parseWorksheetFile, sha256ForFile } from '../services/acrlWorksheetParser';
 import type { AcrlAssignmentCopyResponse, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
@@ -20,7 +21,8 @@ export default function AcrlPage() {
   const [parsed, setParsed] = useState<AcrlWorksheetParseResult | null>(null);
   const [parseError, setParseError] = useState('');
   const [uploadCanceled, setUploadCanceled] = useState(false);
-  const [uploadPhase, setUploadPhase] = useState<'idle' | 'reading' | 'comparing'>('idle');
+  const [uploadPhase, setUploadPhase] = useState<'idle' | 'reading' | 'checking' | 'saving'>('idle');
+  const [readMessage, setReadMessage] = useState('');
   const [reviewYear, setReviewYear] = useState<number | null>(null);
   const [assignmentCopyResult, setAssignmentCopyResult] = useState<AcrlAssignmentCopyResponse | null>(null);
   const [reviewOpenSequence, setReviewOpenSequence] = useState(0);
@@ -56,6 +58,7 @@ export default function AcrlPage() {
       queryClient.invalidateQueries({ queryKey: ['acrl', 'years'] });
       queryClient.invalidateQueries({ queryKey: ['local', 'acrl-years'] });
     },
+    onMutate: () => setUploadPhase('saving'),
     onSettled: () => setUploadPhase('idle'),
   });
   const saveMutation = useMutation({
@@ -87,12 +90,16 @@ export default function AcrlPage() {
 
   const startComparison = async (file: File, worksheetParse: AcrlWorksheetParseResult) => {
     const year = Number(surveyYear);
-    setUploadPhase('comparing');
+    setUploadPhase('checking');
     setUploadCanceled(false);
     setParseError('');
 
     try {
-      const years = yearsQuery.data ?? await queryClient.fetchQuery({ queryKey: ['acrl', 'years'], queryFn: listAcrlCatalogueYears });
+      const years = await queryClient.fetchQuery({
+        queryKey: ['acrl', 'years'],
+        queryFn: listAcrlCatalogueYears,
+        staleTime: 0,
+      });
       if (!years) throw new Error('Survey years could not be loaded.');
       const replacePublished = years.some((catalogueYear) => catalogueYear.surveyYear === year && catalogueYear.status === 'published');
       if (replacePublished && !window.confirm(`FY ${year} is published. Replace it with this upload as a draft?`)) {
@@ -118,11 +125,16 @@ export default function AcrlPage() {
     uploadMutation.reset();
     if (!file) {
       setUploadPhase('idle');
+      setReadMessage('');
       return;
     }
     setUploadPhase('reading');
+    setReadMessage('Reading file…');
     try {
-      const worksheetParse = await parseWorksheetFile(file);
+      const worksheetParse = await parseWorksheetFile(file, (currentPage, totalPages) => {
+        setReadMessage(`Reading page ${currentPage} of ${totalPages}…`);
+      });
+      setReadMessage('');
       setParsed(worksheetParse);
       if (worksheetParse.items.length > 0 && worksheetParse.unresolved.length === 0 && (worksheetParse.unresolvedCalculations?.length || 0) === 0) {
         await startComparison(file, worksheetParse);
@@ -130,6 +142,7 @@ export default function AcrlPage() {
         setUploadPhase('idle');
       }
     } catch (error) {
+      setReadMessage('');
       setParseError(errorMessage(error));
       setUploadPhase('idle');
     }
@@ -159,6 +172,16 @@ export default function AcrlPage() {
   const reviewError = saveMutation.error || publishMutation.error;
   const unresolvedCalculations = parsed?.unresolvedCalculations || [];
   const layoutWarnings = parsed?.layoutWarnings || [];
+  const uploadBusy = uploadPhase !== 'idle';
+  const uploadStatusMessage = uploadPhase === 'reading'
+    ? readMessage || 'Reading file…'
+    : uploadPhase === 'checking'
+      ? `Checking ${parsed?.items.length || 0} ${(parsed?.items.length || 0) === 1 ? 'row' : 'rows'}…`
+      : uploadPhase === 'saving'
+        ? 'Saving draft…'
+        : uploadMutation.data
+          ? `Draft saved for FY ${uploadMutation.data.surveyYear.surveyYear}.`
+          : parsed ? `Preview ready: ${parsed.items.length} ${parsed.items.length === 1 ? 'row' : 'rows'} parsed.` : '';
   return (
     <div className="mx-auto max-w-screen-2xl space-y-6 p-4 sm:p-6">
       <header className="space-y-1">
@@ -171,22 +194,21 @@ export default function AcrlPage() {
       <AcrlInstructionUploadPanel years={yearsQuery.data || []} />
       <AcrlNotesImportPanel years={yearsQuery.data || []} />
 
-      <section aria-labelledby="upload-heading" className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+      <section aria-labelledby="upload-heading" aria-busy={uploadBusy} className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
         <div>
           <h2 id="upload-heading" className="text-lg font-semibold text-gray-900">Upload worksheet</h2>
           <p className="mt-1 text-sm text-gray-600">PDF worksheets are parsed in your browser, then compared with the previous year.</p>
         </div>
         <div className="grid gap-4 md:grid-cols-[10rem_minmax(16rem,1fr)_auto] md:items-end">
           <label className="text-sm font-medium text-gray-700">Survey year
-            <input className="mt-1 block w-full rounded border border-gray-300 px-3 py-2" type="number" min="1900" max="2100" value={surveyYear} disabled={uploadPhase !== 'idle'} onChange={(event) => setSurveyYear(event.target.value)} />
+            <input className="mt-1 block w-full rounded border border-gray-300 px-3 py-2" type="number" min="1900" max="2100" value={surveyYear} disabled={uploadBusy} onChange={(event) => setSurveyYear(event.target.value)} />
           </label>
           <label className="text-sm font-medium text-gray-700">Worksheet PDF
-            <input ref={worksheetInputRef} className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2 file:mr-3 file:rounded file:border-0 file:bg-folio-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-folio-800" type="file" accept="application/pdf,.pdf" aria-label="Worksheet PDF" disabled={uploadPhase !== 'idle'} onChange={(event) => void handleFile(event.target.files?.[0] || null)} />
+            <input ref={worksheetInputRef} className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2 file:mr-3 file:rounded file:border-0 file:bg-folio-50 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-folio-800" type="file" accept="application/pdf,.pdf" aria-label="Worksheet PDF" disabled={uploadBusy} onChange={(event) => { const file = event.currentTarget.files?.[0] || null; event.currentTarget.value = ''; void handleFile(file); }} />
           </label>
         </div>
         <p className="text-sm text-gray-600">Your upload is kept as a draft. Nothing is final until you publish it.</p>
-        {uploadPhase === 'reading' && <p role="status" className="text-sm font-medium text-folio-700">Reading PDF…</p>}
-        {uploadPhase === 'comparing' && <p role="status" className="text-sm font-medium text-folio-700">Comparing with FY{Number(surveyYear) - 1}…</p>}
+        <AcrlFileStatus message={uploadStatusMessage || null} busy={uploadBusy} className={uploadBusy ? 'font-medium' : parsed ? 'rounded bg-emerald-50 p-3 text-emerald-800' : ''} />
         {uploadCanceled && <p role="status" className="text-sm text-gray-600">Upload canceled. No draft was saved. Choose the PDF again to retry.</p>}
         {parseError && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">Could not prepare worksheet: {parseError}</p>}
         {uploadError && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">Could not save worksheet: {uploadError}</p>}
