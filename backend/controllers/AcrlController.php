@@ -44,7 +44,7 @@ class AcrlController extends Controller
                 'class' => \yii\filters\auth\HttpBearerAuth::class,
                 'except' => ['options'],
             ];
-            $userActions = ['entry', 'save-answer', 'section-status'];
+            $userActions = ['entry', 'save-answer', 'section-status', 'accept-suggestions'];
             $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'import-preview', 'import-confirm'];
             $behaviors['access'] = [
                 'class' => \yii\filters\AccessControl::class,
@@ -197,6 +197,34 @@ class AcrlController extends Controller
         } catch (\DomainException $exception) {
             $status = strpos($exception->getMessage(), 'read-only') !== false ? 409 : 404;
             return $this->errorResponse($status, $exception->getMessage());
+        }
+    }
+
+    public function actionAcceptSuggestions($year, $section)
+    {
+        if (($forbidden = $this->requireAcrlUser()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->bodyParams;
+        if (!isset($body['items']) || !is_array($body['items'])) {
+            return $this->errorResponse(422, 'Select one or more suggestions from a section.');
+        }
+        try {
+            $result = (new AcrlEntryService())->acceptSuggestions(
+                (int)$year,
+                rawurldecode((string)$section),
+                $body['items'],
+                (string)(Yii::$app->user->id ?? ''),
+                $this->isPersistedAdministrator()
+            );
+            if (!empty($result['conflict'])) {
+                Yii::$app->response->statusCode = 409;
+            }
+            return $result;
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        } catch (\DomainException $exception) {
+            return $this->errorResponse(409, $exception->getMessage());
         }
     }
 

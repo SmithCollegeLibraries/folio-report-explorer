@@ -115,6 +115,7 @@ $config = [
                 'GET acrl/entry/<year:\\d+>' => 'acrl/entry',
                 'POST acrl/years/<year:\\d+>/answers' => 'acrl/save-answer',
                 'POST acrl/years/<year:\\d+>/sections/<section:[^/]+>/status' => 'acrl/section-status',
+                'POST acrl/years/<year:\\d+>/sections/<section:[^/]+>/suggestions/accept' => 'acrl/accept-suggestions',
                 'GET acrl/threshold' => 'acrl/threshold',
                 'POST acrl/threshold' => 'acrl/save-threshold',
                 'POST acrl/years/<year:\\d+>/import/preview' => 'acrl/import-preview',

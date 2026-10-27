@@ -183,6 +183,66 @@ class AcrlAnswerRepository
         return ['conflict' => false, 'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part'])];
     }
 
+    public function saveSuggestions(array $suggestions, string $userId): array
+    {
+        $transaction = $this->db->beginTransaction();
+        try {
+            foreach ($suggestions as $suggestion) {
+                $question = $suggestion['question'];
+                $key = [
+                    'survey_year' => (int)$question['survey_year'],
+                    'sheet' => $question['sheet'],
+                    'question_id' => $question['question_id'],
+                    'part' => $question['part'],
+                ];
+                $old = $this->db->createCommand(
+                    'SELECT * FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
+                    [':year' => $key['survey_year'], ':sheet' => $key['sheet'], ':question_id' => $key['question_id'], ':part' => $key['part']]
+                )->queryOne();
+                if ($old === false) {
+                    $old = null;
+                }
+                if ($old && !$this->isEmptyAnswer($old)) {
+                    $transaction->rollBack();
+                    return ['conflict' => true, 'accepted' => 0, 'current' => $old];
+                }
+
+                $values = $suggestion['values'];
+                $new = array_merge($key, $values, [
+                    'note' => $suggestion['note'],
+                    'source' => 'manual',
+                    'source_label' => null,
+                    'updated_by' => $userId,
+                ]);
+                if ($old) {
+                    $this->db->createCommand()->update('acrl_answers', $new, $key)->execute();
+                } else {
+                    try {
+                        $this->db->createCommand()->insert('acrl_answers', $new)->execute();
+                    } catch (\yii\db\IntegrityException $exception) {
+                        if (!$this->isDuplicateKey($exception)) {
+                            throw $exception;
+                        }
+                        $transaction->rollBack();
+                        return [
+                            'conflict' => true,
+                            'accepted' => 0,
+                            'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part']),
+                        ];
+                    }
+                }
+                $this->appendHistory($key, $old, $new, $userId);
+            }
+            $transaction->commit();
+        } catch (\Throwable $exception) {
+            if ($transaction->isActive) {
+                $transaction->rollBack();
+            }
+            throw $exception;
+        }
+        return ['conflict' => false, 'accepted' => count($suggestions)];
+    }
+
     public function importAnswers(array $items, string $userId, string $sourceLabel, bool $overwrite): array
     {
         $transaction = $this->db->beginTransaction();
