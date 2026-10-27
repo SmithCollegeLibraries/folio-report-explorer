@@ -4,6 +4,7 @@ require_once __DIR__ . '/../services/AcrlEntryRulesService.php';
 require_once __DIR__ . '/../services/AcrlHistoryService.php';
 require_once __DIR__ . '/../services/AcrlCalculationService.php';
 require_once __DIR__ . '/../services/AcrlAnswerValueService.php';
+require_once __DIR__ . '/../services/AcrlQuestionNotesService.php';
 require_once __DIR__ . '/../services/AcrlEntryService.php';
 
 use app\services\AcrlEntryService;
@@ -113,6 +114,7 @@ class AcrlEntryTestRepository
         return [];
     }
     public function sectionStatuses(int $year): array { return []; }
+    public function questionNoteKeysAndLinksThroughYear(int $year): array { return ['notes' => [], 'links' => []]; }
     public function sectionStatus(int $year, string $section): ?array { return $this->status; }
     public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null, array $calculatedChanges = []): array
     {

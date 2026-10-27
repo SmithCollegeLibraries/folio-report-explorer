@@ -1,4 +1,21 @@
-import type { AcrlReviewResponse, AcrlSurveyYear, AcrlUploadResponse, AcrlQuestionPart, AcrlLinkDecisionInput, AcrlEntryResponse, AcrlImportPreview, AcrlAssignmentUser, AcrlSectionAssignmentsResponse, AcrlAssignmentCopyResponse } from '../types/acrl';
+import type {
+  AcrlAssignmentCopyResponse,
+  AcrlAssignmentUser,
+  AcrlEntryResponse,
+  AcrlImportPreview,
+  AcrlInstructionsSaveResult,
+  AcrlInstructionBlock,
+  AcrlInstructionLink,
+  AcrlLinkDecisionInput,
+  AcrlNotesImportPreview,
+  AcrlQuestionDetails,
+  AcrlQuestionNote,
+  AcrlQuestionPart,
+  AcrlReviewResponse,
+  AcrlSectionAssignmentsResponse,
+  AcrlSurveyYear,
+  AcrlUploadResponse,
+} from '../types/acrl';
 import type { AcrlStatistic } from '../types/schema';
 import { api } from './client';
 
@@ -138,5 +155,54 @@ export async function confirmAcrlImport(year: number, input: {
   overwrite: boolean;
 }): Promise<{ preview: AcrlImportPreview; result: { imported: number; unchanged: number; skipped: number } }> {
   const { data } = await api.post(`/acrl/years/${year}/import/confirm`, input);
+  return data;
+}
+
+export async function saveAcrlInstructions(year: number, input: {
+  fileName: string;
+  sha256: string;
+  blocks: AcrlInstructionBlock[];
+  links: AcrlInstructionLink[];
+}): Promise<AcrlInstructionsSaveResult> {
+  const { data } = await api.post(`/acrl/years/${year}/instructions`, input);
+  return data;
+}
+
+export async function getAcrlQuestionDetails(year: number, sheet: 'survey' | 'trends', questionId: string, part: string): Promise<AcrlQuestionDetails> {
+  const { data } = await api.get(`/acrl/years/${year}/question-details`, { params: { sheet, question_id: questionId, part } });
+  return data;
+}
+
+export async function addAcrlQuestionNote(year: number, input: {
+  sheet: 'survey' | 'trends';
+  question_id: string;
+  part: string;
+  note: string;
+  source: string;
+  origin_year: number;
+}): Promise<AcrlQuestionNote> {
+  const { data } = await api.post(`/acrl/years/${year}/question-notes`, input);
+  return data;
+}
+
+export async function editAcrlQuestionNote(id: number, input: { note: string; source: string; origin_year: number }): Promise<AcrlQuestionNote> {
+  const { data } = await api.put(`/acrl/question-notes/${id}`, input);
+  return data;
+}
+
+export async function deleteAcrlQuestionNote(id: number): Promise<void> {
+  await api.delete(`/acrl/question-notes/${id}`);
+}
+
+export async function previewAcrlNotesImport(year: number, rows: Array<Record<string, string | number>>): Promise<AcrlNotesImportPreview> {
+  const { data } = await api.post(`/acrl/years/${year}/notes/import/preview`, { rows });
+  return data;
+}
+
+export async function confirmAcrlNotesImport(year: number, rows: Array<Record<string, string | number>>): Promise<{
+  preview: AcrlNotesImportPreview;
+  result: { imported: number; unchanged: number; skipped: number };
+}> {
+  const { data } = await api.post(`/acrl/years/${year}/notes/import/confirm`, { rows });
   return data;
 }

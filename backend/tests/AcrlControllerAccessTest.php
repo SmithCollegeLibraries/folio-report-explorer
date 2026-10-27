@@ -72,6 +72,10 @@ namespace {
 
     $controller = new \app\controllers\AcrlController('acrl', Yii::$app);
     $assignmentController = new \app\controllers\AcrlAssignmentController('acrl-assignment', Yii::$app);
+    $corsMethods = $controller->behaviors()['corsFilter']['cors']['Access-Control-Request-Method'] ?? [];
+    foreach (['PUT', 'DELETE'] as $method) {
+        acrlAccessAssert(in_array($method, $corsMethods, true), 'ACRL note management must support browser CORS ' . $method . ' requests.');
+    }
     $actions = [
         'years' => function () use ($controller) { return $controller->actionYears(); },
         'upload' => function () use ($controller) { return $controller->actionUpload(); },
@@ -157,6 +161,39 @@ namespace {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must use the persisted-admin rule.');
     }
 
+    $detailsUserActions = ['question-details', 'add-question-note'];
+    $detailsAdminActions = ['save-instructions', 'notes-import-preview', 'notes-import-confirm', 'edit-question-note', 'delete-question-note'];
+    foreach ($detailsUserActions as $name) {
+        acrlAccessAssert(in_array($name, $userActions, true), $name . ' must allow any approved signed-in user.');
+    }
+    foreach ($detailsAdminActions as $name) {
+        acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must use the persisted-admin rule.');
+    }
+    $detailsMethods = [
+        'question-details' => function () use ($controller) { return $controller->actionQuestionDetails(2026); },
+        'add-question-note' => function () use ($controller) { return $controller->actionAddQuestionNote(2026); },
+        'save-instructions' => function () use ($controller) { return $controller->actionSaveInstructions(2026); },
+        'notes-import-preview' => function () use ($controller) { return $controller->actionNotesImportPreview(2026); },
+        'notes-import-confirm' => function () use ($controller) { return $controller->actionNotesImportConfirm(2026); },
+        'edit-question-note' => function () use ($controller) { return $controller->actionEditQuestionNote(1); },
+        'delete-question-note' => function () use ($controller) { return $controller->actionDeleteQuestionNote(1); },
+    ];
+    foreach ($detailsMethods as $name => $invoke) {
+        $methodName = 'action' . str_replace(' ', '', ucwords(str_replace('-', ' ', $name)));
+        acrlAccessAssert(method_exists($controller, $methodName), $name . ' action must be registered.');
+        acrlAccessAppUser(true, null);
+        $guestResponse = $invoke();
+        acrlAccessAssert(Yii::$app->response->statusCode === 401 && ($guestResponse['error'] ?? null) === 'Unauthorized', $name . ' must reject guests.');
+        if (in_array($name, $detailsAdminActions, true)) {
+            acrlAccessAppUser(false, new \app\models\User());
+            \app\models\User::$approvedExists = true;
+            \app\models\User::$adminExists = false;
+            \app\models\User::$queryExists = false;
+            $regularUserResponse = $invoke();
+            acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($regularUserResponse['error'] ?? null) === 'Forbidden', $name . ' must reject non-admin users.');
+        }
+    }
+
     $routes = (string)file_get_contents(__DIR__ . '/../config/web.php');
     foreach ([
         "'GET acrl/years'",
@@ -168,6 +205,13 @@ namespace {
         "'GET acrl/threshold'",
         "'POST acrl/years/<year:\\\\d+>/import/preview'",
         "'POST acrl/years/<year:\\\\d+>/import/confirm'",
+        "'POST acrl/years/<year:\\\\d+>/instructions'",
+        "'GET acrl/years/<year:\\\\d+>/question-details'",
+        "'POST acrl/years/<year:\\\\d+>/question-notes'",
+        "'POST acrl/years/<year:\\\\d+>/notes/import/preview'",
+        "'POST acrl/years/<year:\\\\d+>/notes/import/confirm'",
+        "'PUT acrl/question-notes/<id:\\\\d+>'",
+        "'DELETE acrl/question-notes/<id:\\\\d+>'",
     ] as $route) {
         acrlAccessAssert(strpos($routes, $route) !== false, 'Missing ACRL route ' . $route . '.');
     }

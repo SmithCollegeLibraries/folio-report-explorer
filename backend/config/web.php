@@ -124,6 +124,13 @@ $config = [
                 'POST acrl/threshold' => 'acrl/save-threshold',
                 'POST acrl/years/<year:\\d+>/import/preview' => 'acrl/import-preview',
                 'POST acrl/years/<year:\\d+>/import/confirm' => 'acrl/import-confirm',
+                'POST acrl/years/<year:\\d+>/instructions' => 'acrl/save-instructions',
+                'GET acrl/years/<year:\\d+>/question-details' => 'acrl/question-details',
+                'POST acrl/years/<year:\\d+>/question-notes' => 'acrl/add-question-note',
+                'PUT acrl/question-notes/<id:\\d+>' => 'acrl/edit-question-note',
+                'DELETE acrl/question-notes/<id:\\d+>' => 'acrl/delete-question-note',
+                'POST acrl/years/<year:\\d+>/notes/import/preview' => 'acrl/notes-import-preview',
+                'POST acrl/years/<year:\\d+>/notes/import/confirm' => 'acrl/notes-import-confirm',
 
                 'GET local/allocations' => 'folio-query/local-alloc-list',
                 'GET local/allocations/years' => 'folio-query/local-alloc-years',

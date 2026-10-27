@@ -29,6 +29,86 @@ export interface AcrlQuestionPart {
   survey_order: number;
 }
 
+export type AcrlInstructionKind = 'question' | 'group' | 'definition';
+
+export interface AcrlInstructionQuestionRef {
+  sheet: AcrlSheet;
+  question_id: string;
+  part: string;
+  section: string;
+}
+
+export interface AcrlInstructionBlock {
+  blockKey: string;
+  heading: string;
+  text: string;
+  kind: AcrlInstructionKind;
+  sourceFile?: string;
+  sourceSha256?: string;
+}
+
+export interface AcrlInstructionLink {
+  sheet: AcrlSheet;
+  question_id: string;
+  part: string;
+  blockKey: string;
+}
+
+export interface AcrlInstructionAssignment {
+  sheet: AcrlSheet;
+  question_id: string;
+  part: string;
+  blocks: AcrlInstructionBlock[];
+}
+
+export interface AcrlInstructionParseResult {
+  blocks: AcrlInstructionBlock[];
+  links: AcrlInstructionLink[];
+  assignments: AcrlInstructionAssignment[];
+  missingQuestionKeys: string[];
+  duplicateBlockKeys: string[];
+  coverage: { individual: number; grouped: number; missing: number };
+}
+
+export interface AcrlQuestionNote {
+  id: number;
+  note: string;
+  source: string;
+  origin_year: number;
+  created_at: string | null;
+  edited_at: string | null;
+}
+
+export interface AcrlQuestionDetails {
+  instructions: AcrlInstructionBlock[];
+  notes: AcrlQuestionNote[];
+  canAddNote: boolean;
+  canManageNotes: boolean;
+}
+
+export interface AcrlInstructionsSaveResult {
+  success: boolean;
+  surveyYear: number;
+  blockCount: number;
+  linkCount: number;
+}
+
+export interface AcrlNotesImportPreview {
+  surveyYear: number;
+  matchedCount: number;
+  unknownCount: number;
+  invalidCount: number;
+  items: Array<{
+    line: number;
+    questionId?: string;
+    part?: string;
+    originYear?: number;
+    source?: string;
+    status: string;
+    error: string | null;
+  }>;
+}
+
 export interface AcrlWorksheetParseResult {
   items: AcrlQuestionPart[];
   unresolved: string[];
@@ -95,6 +175,7 @@ export interface AcrlEntryQuestion {
   required: AcrlRequired;
   calculatedFrom: string | null;
   surveyOrder: number;
+  hasDetailsNotes: boolean;
   answer: AcrlAnswer;
   previous: {
     value: number | string | null;

@@ -2,43 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmAcrlImport, getAcrlThreshold, previewAcrlImport, saveAcrlThreshold } from '../api/acrl';
 import type { AcrlSurveyYear } from '../types/acrl';
-
-function parseCsv(text: string): Array<Record<string, string>> {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = '';
-  let quoted = false;
-  const source = text.replace(/^\uFEFF/, '');
-  for (let index = 0; index < source.length; index += 1) {
-    const char = source[index];
-    if (quoted && char === '"' && source[index + 1] === '"') {
-      cell += '"';
-      index += 1;
-    } else if (char === '"') {
-      quoted = !quoted;
-    } else if (!quoted && char === ',') {
-      row.push(cell);
-      cell = '';
-    } else if (!quoted && (char === '\n' || char === '\r')) {
-      if (char === '\r' && source[index + 1] === '\n') index += 1;
-      row.push(cell);
-      if (row.some((value) => value.trim() !== '')) rows.push(row);
-      row = [];
-      cell = '';
-    } else {
-      cell += char;
-    }
-  }
-  row.push(cell);
-  if (row.some((value) => value.trim() !== '')) rows.push(row);
-  if (quoted || rows.length < 2) throw new Error('Choose a CSV file with a header and at least one answer row.');
-
-  const headers = rows[0].map((header) => header.trim().toLowerCase());
-  if (!headers.includes('question_id') || !headers.includes('part') || !headers.includes('value')) {
-    throw new Error('CSV needs question_id, part, and value columns.');
-  }
-  return rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
-}
+import { parseCsvRecords } from '../utils/csv';
 
 export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
   const queryClient = useQueryClient();
@@ -87,7 +51,11 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
       return;
     }
     try {
-      setCsvRows(parseCsv(await file.text()));
+      const rows = parseCsvRecords(await file.text());
+      if (!['question_id', 'part', 'value'].every((field) => field in rows[0])) {
+        throw new Error('CSV needs question_id, part, and value columns.');
+      }
+      setCsvRows(rows);
     } catch (error) {
       setCsvRows([]);
       setFileError(error instanceof Error ? error.message : 'Could not read this CSV file.');

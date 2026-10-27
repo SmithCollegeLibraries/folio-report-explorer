@@ -83,3 +83,23 @@ foreach ($audit['nonIdempotentRisks'] as $risk) {
 }
 acrlMigrationAssert(empty($assignmentsRisks), 'Migration 058 must not contain audit-detected non-idempotent operations.');
 echo "PASS: ACRL migration 058 is guarded and migration-audit clean\n";
+
+$detailsMigrationPath = $migrationDir . '/059_acrl_question_details.sql';
+acrlMigrationAssert(file_exists($detailsMigrationPath), 'Migration 059 must create instruction blocks, links, and question notes.');
+$detailsMigration = (string)file_get_contents($detailsMigrationPath);
+$detailsUpper = strtoupper($detailsMigration);
+foreach (['ACRL_INSTRUCTION_BLOCKS', 'ACRL_INSTRUCTION_LINKS', 'ACRL_QUESTION_NOTES'] as $table) {
+    acrlMigrationAssert(strpos($detailsUpper, 'CREATE TABLE IF NOT EXISTS ' . $table) !== false, $table . ' must be created idempotently.');
+}
+acrlMigrationAssert(strpos($detailsUpper, 'ADD COLUMN IF NOT EXISTS') === false, 'Migration 059 must remain compatible with MySQL 8 and MariaDB 10.3.');
+acrlMigrationAssert(strpos($detailsUpper, 'JSON_TABLE') === false, 'Migration 059 must not depend on MySQL 8-only JSON_TABLE.');
+$audit = MigrationService::auditDirectory($migrationDir);
+$detailsRisks = [];
+foreach ($audit['nonIdempotentRisks'] as $risk) {
+    if ($risk['filename'] === '059_acrl_question_details.sql') {
+        $detailsRisks = $risk['reasons'];
+    }
+}
+acrlMigrationAssert(empty($detailsRisks), 'Migration 059 must not contain audit-detected non-idempotent operations.');
+
+echo "PASS: ACRL migration 059 is guarded and migration-audit clean\n";
