@@ -52,6 +52,7 @@ namespace {
 
     require_once __DIR__ . '/../controllers/traits/PersistedAdminAccessTrait.php';
     require_once __DIR__ . '/../controllers/AcrlController.php';
+    require_once __DIR__ . '/../controllers/AcrlAssignmentController.php';
 
     function acrlAccessAssert($condition, string $message): void
     {
@@ -70,6 +71,7 @@ namespace {
     }
 
     $controller = new \app\controllers\AcrlController('acrl', Yii::$app);
+    $assignmentController = new \app\controllers\AcrlAssignmentController('acrl-assignment', Yii::$app);
     $actions = [
         'years' => function () use ($controller) { return $controller->actionYears(); },
         'upload' => function () use ($controller) { return $controller->actionUpload(); },
@@ -102,6 +104,33 @@ namespace {
         acrlAccessAssert(Yii::$app->response->statusCode === 401, $name . ' must return 401 to a guest.');
         acrlAccessAssert(($response['error'] ?? null) === 'Unauthorized', $name . ' must use the stable unauthorized response.');
     }
+
+    $assignmentActions = [
+        'search-users' => function () use ($assignmentController) { return $assignmentController->actionSearchUsers(); },
+        'list-assignments' => function () use ($assignmentController) { return $assignmentController->actionListAssignments(2026); },
+        'save-assignments' => function () use ($assignmentController) { return $assignmentController->actionSaveAssignments(2026, 'Test%20Section'); },
+        'copy-from-previous' => function () use ($assignmentController) { return $assignmentController->actionCopyFromPrevious(2026); },
+    ];
+    foreach ($assignmentActions as $name => $invoke) {
+        acrlAccessAppUser(true, null);
+        $response = $invoke();
+        acrlAccessAssert(Yii::$app->response->statusCode === 403, $name . ' must return 403 for a guest.');
+        acrlAccessAssert(($response['error'] ?? null) === 'Forbidden', $name . ' must use the stable forbidden response.');
+        acrlAccessAppUser(false, new \app\models\User());
+        \app\models\User::$approvedExists = true;
+        \app\models\User::$adminExists = false;
+        $response = $invoke();
+        acrlAccessAssert(Yii::$app->response->statusCode === 403, $name . ' must return 403 for an approved non-admin.');
+        acrlAccessAssert(($response['error'] ?? null) === 'Forbidden', $name . ' must deny approved non-admins.');
+    }
+    $assignmentAccess = $assignmentController->behaviors()['access']['rules'][0] ?? [];
+    acrlAccessAssert(is_callable($assignmentAccess['matchCallback'] ?? null), 'Assignment routes must use a persisted-admin access rule.');
+    acrlAccessAppUser(false, new \app\models\User());
+    \app\models\User::$approvedExists = true;
+    \app\models\User::$adminExists = true;
+    acrlAccessAssert(call_user_func($assignmentAccess['matchCallback'], null, null), 'An approved administrator must match the assignment-route access rule.');
+    \app\models\User::$adminExists = false;
+    acrlAccessAssert(!call_user_func($assignmentAccess['matchCallback'], null, null), 'An approved non-admin must not match the assignment-route access rule.');
 
     acrlAccessAppUser(false, new \app\models\User());
     \app\models\User::$approvedExists = true;
@@ -145,6 +174,14 @@ namespace {
     acrlAccessAssert(strpos($routes, "'GET acrl/years/<year:") !== false && strpos($routes, "/review'") !== false, 'Missing ACRL review route.');
     acrlAccessAssert(strpos($routes, "'POST acrl/years/<year:") !== false && strpos($routes, "/links'") !== false, 'Missing ACRL decision route.');
     acrlAccessAssert(strpos($routes, "'POST acrl/years/<year:") !== false && strpos($routes, "/publish'") !== false, 'Missing ACRL publish route.');
+    foreach ([
+        "'GET acrl/approved-users'",
+        "'GET acrl/years/<year:\\\\d+>/assignments'",
+        "'POST acrl/years/<year:\\\\d+>/sections/<section:[^/]+>/assignments'",
+        "'POST acrl/years/<year:\\\\d+>/assignments/copy-previous'",
+    ] as $route) {
+        acrlAccessAssert(strpos($routes, $route) !== false, 'Missing ACRL assignment route ' . $route . '.');
+    }
 
     echo "PASS: ACRL editor/admin access rules and route registration\n";
 }

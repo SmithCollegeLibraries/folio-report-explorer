@@ -4,7 +4,7 @@ import AcrlReviewPanel from '../components/AcrlReviewPanel';
 import AcrlToolsPanel from '../components/AcrlToolsPanel';
 import { getAcrlReview, listAcrlCatalogueYears, publishAcrlYear, saveAcrlLinks, uploadAcrlWorksheet } from '../api/acrl';
 import { parseWorksheetFile, sha256ForFile } from '../services/acrlWorksheetParser';
-import type { AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
+import type { AcrlAssignmentCopyResponse, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -20,6 +20,7 @@ export default function AcrlPage() {
   const [uploadCanceled, setUploadCanceled] = useState(false);
   const [uploadPhase, setUploadPhase] = useState<'idle' | 'reading' | 'comparing'>('idle');
   const [reviewYear, setReviewYear] = useState<number | null>(null);
+  const [assignmentCopyResult, setAssignmentCopyResult] = useState<AcrlAssignmentCopyResponse | null>(null);
   const [reviewOpenSequence, setReviewOpenSequence] = useState(0);
   const worksheetInputRef = useRef<HTMLInputElement>(null);
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -67,7 +68,9 @@ export default function AcrlPage() {
       if (reviewYear === null) throw new Error('Select a year to review first.');
       return publishAcrlYear(reviewYear);
     },
+    onMutate: () => setAssignmentCopyResult(null),
     onSuccess: (review) => {
+      setAssignmentCopyResult(review.assignmentCopy || null);
       queryClient.setQueryData(['acrl', 'review', review.surveyYear], review);
       queryClient.invalidateQueries({ queryKey: ['acrl', 'years'] });
     },
@@ -238,6 +241,14 @@ export default function AcrlPage() {
           {reviewQuery.isLoading && <p className="text-sm text-gray-500">Loading annual review…</p>}
           {reviewQuery.error && <p role="alert" className="text-sm text-rose-700">Could not load review: {errorMessage(reviewQuery.error)}</p>}
           {reviewError && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{errorMessage(reviewError)}</p>}
+          {assignmentCopyResult && <div role="status" className={`rounded p-3 text-sm ${assignmentCopyResult.failed ? 'bg-amber-50 text-amber-950' : 'bg-emerald-50 text-emerald-900'}`}>
+            {assignmentCopyResult.failed
+              ? <p>FY {assignmentCopyResult.surveyYear} was published, but assignments could not be copied from FY {assignmentCopyResult.sourceYear}.</p>
+              : <p>Assignments copied from FY {assignmentCopyResult.sourceYear} for: {assignmentCopyResult.copiedSections.length ? assignmentCopyResult.copiedSections.join(', ') : 'none'}.</p>}
+            {assignmentCopyResult.alreadyAssigned && <p>FY {assignmentCopyResult.surveyYear} already had assignments, so no copy was made.</p>}
+            {assignmentCopyResult.skippedSections.length > 0 && <p>Already assigned, skipped: {assignmentCopyResult.skippedSections.join(', ')}.</p>}
+            {assignmentCopyResult.unmatchedSections.length > 0 && <p>No matching section: {assignmentCopyResult.unmatchedSections.join(', ')}.</p>}
+          </div>}
           {reviewQuery.data && <AcrlReviewPanel review={reviewQuery.data} reviewHeadingRef={reviewHeadingRef} saving={saveMutation.isPending} publishing={publishMutation.isPending} onSave={(links) => saveMutation.mutate(links)} onPublish={() => publishMutation.mutate()} />}
         </section>
       )}

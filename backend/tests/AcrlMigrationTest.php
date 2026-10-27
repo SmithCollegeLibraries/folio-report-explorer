@@ -15,6 +15,7 @@ function acrlMigrationAssert($condition, string $message): void
 $migrationDir = __DIR__ . '/../../mysql/migrations';
 $migrationPath = $migrationDir . '/054_acrl_question_catalogue.sql';
 $answersMigrationPath = $migrationDir . '/055_acrl_answers.sql';
+$assignmentsMigrationPath = $migrationDir . '/058_acrl_section_assignments.sql';
 acrlMigrationAssert(file_exists($migrationPath), 'Migration 054 must create the ACRL catalogue schema and historical seed.');
 
 $migration = (string)file_get_contents($migrationPath);
@@ -61,3 +62,24 @@ foreach ($audit['nonIdempotentRisks'] as $risk) {
 acrlMigrationAssert(empty($answersRisks), 'Migration 055 must not contain audit-detected non-idempotent operations.');
 
 echo "PASS: ACRL migration 055 is guarded and migration-audit clean\n";
+
+acrlMigrationAssert(file_exists($assignmentsMigrationPath), 'Migration 058 must create the ACRL section assignment table.');
+$assignmentsMigration = (string)file_get_contents($assignmentsMigrationPath);
+$assignmentsUpper = strtoupper($assignmentsMigration);
+acrlMigrationAssert(strpos($assignmentsUpper, 'CREATE TABLE IF NOT EXISTS ACRL_SECTION_ASSIGNMENTS') !== false, 'The section assignment table must be created idempotently.');
+acrlMigrationAssert(strpos($assignmentsUpper, 'UNIQUE KEY') !== false && strpos($assignmentsUpper, 'SURVEY_YEAR, SECTION, USER_ID') !== false, 'A user can be assigned only once to a section in one survey year.');
+acrlMigrationAssert(strpos($assignmentsUpper, 'REFERENCES USERS(ID)') !== false, 'Assignment users and assigners must reference the existing users table.');
+acrlMigrationAssert(strpos($assignmentsUpper, 'ADD COLUMN IF NOT EXISTS') === false, 'Migration 058 must remain compatible with MySQL 8 and MariaDB 10.3.');
+acrlMigrationAssert(strpos($assignmentsUpper, 'JSON_TABLE') === false, 'Migration 058 must not depend on MySQL 8-only JSON_TABLE.');
+foreach (['EMAIL', 'USERNAME', 'FIRST_NAME', 'LAST_NAME'] as $personalColumn) {
+    acrlMigrationAssert(strpos($assignmentsUpper, $personalColumn) === false, 'Migration 058 must not add personal data columns.');
+}
+$audit = MigrationService::auditDirectory($migrationDir);
+$assignmentsRisks = [];
+foreach ($audit['nonIdempotentRisks'] as $risk) {
+    if ($risk['filename'] === '058_acrl_section_assignments.sql') {
+        $assignmentsRisks = $risk['reasons'];
+    }
+}
+acrlMigrationAssert(empty($assignmentsRisks), 'Migration 058 must not contain audit-detected non-idempotent operations.');
+echo "PASS: ACRL migration 058 is guarded and migration-audit clean\n";

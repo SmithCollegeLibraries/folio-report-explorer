@@ -13,6 +13,19 @@ class AcrlEntryTestThreshold
     public function get(): float { return 10.0; }
 }
 
+class AcrlEntryTestAssignments
+{
+    public function forEntry(int $year, ?string $userId): array
+    {
+        return [
+            'Circulation' => [
+                'assignees' => [['id' => 8, 'displayName' => 'Assigned Editor']],
+                'assignedToCurrentUser' => (string)$userId === '8',
+            ],
+        ];
+    }
+}
+
 class AcrlEntryTestRepository
 {
     public $status = ['section' => 'Circulation', 'status' => 'ready'];
@@ -127,12 +140,13 @@ function acrlEntryServiceAssert($condition, string $message): void
 }
 
 $repository = new AcrlEntryTestRepository();
-$service = new AcrlEntryService($repository, null, null, new AcrlEntryTestThreshold());
-$entry = $service->entry(2026);
+$service = new AcrlEntryService($repository, null, null, new AcrlEntryTestThreshold(), null, null, new AcrlEntryTestAssignments());
+$entry = $service->entry(2026, '7');
 $row = $entry['sections'][0]['questions'][0];
 acrlEntryServiceAssert($row['previous']['value'] === 150.0 && $row['previous']['isSum'], 'Approved merged links should display the sum of previous values.');
 acrlEntryServiceAssert($row['comparison']['changePercent'] === 33.33 && $row['comparison']['highlighted'], 'The entry response should include threshold-based advisory comparisons.');
 acrlEntryServiceAssert($entry['sections'][0]['status'] === 'open' && $entry['sections'][0]['filled'] === 2, 'Entry sections report status and do not count unaccepted suggestions as filled.');
+acrlEntryServiceAssert($entry['sections'][0]['assignees'] === [['id' => 8, 'displayName' => 'Assigned Editor']] && !$entry['sections'][0]['assignedToCurrentUser'], 'Entry responses expose section assignees and whether the signed-in user is assigned.');
 $questionsById = [];
 foreach ($entry['sections'][0]['questions'] as $entryQuestion) {
     $questionsById[$entryQuestion['questionId']] = $entryQuestion;
@@ -151,7 +165,7 @@ try {
 }
 $repository->status = ['section' => 'Circulation', 'status' => 'open'];
 $conflict = $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false);
-acrlEntryServiceAssert($conflict['conflict'] && $conflict['current']['value_text'] === '175', 'Optimistic-lock conflicts return the current answer.');
+acrlEntryServiceAssert($conflict['conflict'] && $conflict['current']['value_text'] === '175', 'An unassigned signed-in user can still save an answer and receives the normal optimistic-lock conflict.');
 acrlEntryServiceAssert($repository->savedCalculations[0]['question']['question_id'] === '63'
     && $repository->savedCalculations[0]['values']['value_number'] === '180.00', 'Saving an input should recompute derived values before repository persistence.');
 $accepted = $service->acceptSuggestions(2026, 'Circulation', [['question_id' => '0A', 'part' => '']], 'user-1', false);

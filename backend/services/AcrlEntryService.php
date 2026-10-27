@@ -11,8 +11,9 @@ class AcrlEntryService
     private $values;
     private $thresholds;
     private $history;
+    private $assignments;
 
-    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null)
+    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null)
     {
         $this->repository = $repository ?: new AcrlAnswerRepository();
         $this->rules = $rules ?: new AcrlEntryRulesService();
@@ -20,6 +21,7 @@ class AcrlEntryService
         $this->values = $values ?: new AcrlAnswerValueService();
         $this->thresholds = $thresholds ?: new AcrlThresholdService();
         $this->history = $history ?: new AcrlHistoryService($this->repository, $this->rules);
+        $this->assignments = $assignments ?: new AcrlSectionAssignmentService();
     }
 
     public function latestYear(): int
@@ -31,7 +33,7 @@ class AcrlEntryService
         return (int)$years[0];
     }
 
-    public function entry(?int $year = null): array
+    public function entry(?int $year = null, ?string $userId = null): array
     {
         $year = $year ?: $this->latestYear();
         $yearRow = $this->repository->year($year);
@@ -54,6 +56,7 @@ class AcrlEntryService
         foreach ($this->repository->sectionStatuses($year) as $status) {
             $statuses[$status['section']] = $status;
         }
+        $sectionAssignments = $this->assignments->forEntry($year, $userId);
         $threshold = $this->thresholds->get();
         $sections = [];
 
@@ -97,6 +100,7 @@ class AcrlEntryService
             ];
             if (!isset($sections[$question['section']])) {
                 $status = $statuses[$question['section']] ?? null;
+                $assignment = $sectionAssignments[$question['section']] ?? [];
                 $sections[$question['section']] = [
                     'name' => $question['section'],
                     'status' => $status['status'] ?? 'open',
@@ -104,6 +108,8 @@ class AcrlEntryService
                     'reopenedAt' => $status['reopened_at'] ?? null,
                     'filled' => 0,
                     'total' => 0,
+                    'assignees' => $assignment['assignees'] ?? [],
+                    'assignedToCurrentUser' => $assignment['assignedToCurrentUser'] ?? false,
                     'questions' => [],
                 ];
             }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { acceptAcrlSuggestions, getAcrlEntry, saveAcrlAnswer, setAcrlSectionStatus } from '../api/acrl';
+import AcrlSectionAssignmentPanel from '../components/AcrlSectionAssignmentPanel';
 import { useAuth } from '../hooks/useAuth';
 import type { AcrlEntryQuestion, AcrlEntryResponse, AcrlEntrySection } from '../types/acrl';
 
@@ -136,6 +137,7 @@ function SectionCard({ year, section, isAdmin, id, onChanged }: {
         <div>
           <h2 className="text-lg font-semibold text-gray-900">{section.name}</h2>
           <p className="text-sm text-gray-600">{section.filled} of {section.total} parts filled</p>
+          <p className="text-xs text-gray-600">{section.assignees.length ? `Assigned to: ${section.assignees.map((assignee) => assignee.displayName).join(', ')}` : 'No users assigned to this section.'}</p>
         </div>
         <div className="flex items-center gap-2">
           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${locked ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-700'}`}>{locked ? 'Ready for review' : 'Open'}</span>
@@ -213,6 +215,20 @@ export default function AcrlEntryPage() {
           </label>
           <p className="text-sm text-gray-600">Changes at or above {entry.thresholdPercent}% are highlighted for review.</p>
         </div>
+        {isAdmin && <AcrlSectionAssignmentPanel key={entry.selectedYear} year={entry.selectedYear} sections={entry.sections} hasPreviousYear={entry.years.includes(entry.selectedYear - 1)} />}
+        <section aria-label="Your sections" className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/50 p-4">
+          <div>
+            <h2 className="font-semibold text-gray-900">Your sections</h2>
+            <p className="text-sm text-gray-600">Assignments are a guide. You can edit any section.</p>
+          </div>
+          {entry.sections.some((section) => section.assignedToCurrentUser) ? <div className="flex flex-wrap gap-2">
+            {entry.sections.map((section, index) => section.assignedToCurrentUser && <a key={section.name} href={`#acrl-section-${index + 1}`} className="inline-flex items-center gap-2 rounded-lg border border-folio-300 bg-white px-3 py-2 text-sm text-folio-900 hover:bg-folio-50">
+              <span className="font-medium">{section.name}</span>
+              <span className="font-mono text-xs">{section.filled}/{section.total}</span>
+              <span className="text-xs">{section.status === 'ready' ? 'Ready' : 'Open'}</span>
+            </a>)}
+          </div> : <p className="text-sm text-gray-600">No sections assigned to you.</p>}
+        </section>
         {entry.sections.length > 0 && <nav aria-label="Survey sections" className="sticky top-0 z-20 -mx-4 overflow-x-auto border-y border-gray-200 bg-white/95 shadow-sm backdrop-blur sm:-mx-6">
           <div className="flex w-max min-w-full gap-2 px-4 py-2 sm:px-6">
             {entry.sections.map((section, index) => {
@@ -227,6 +243,7 @@ export default function AcrlEntryPage() {
                 }
               }} className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm ${active ? 'border-folio-700 bg-folio-50 text-folio-900' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'}`}>
                 <span className="font-medium">{section.name}</span>
+                {section.assignedToCurrentUser && <span className="rounded-full bg-folio-100 px-2 py-0.5 text-xs font-semibold text-folio-800">Your section</span>}
                 <span className="font-mono text-xs">{section.filled}/{section.total}</span>
                 <span className={`rounded-full px-2 py-0.5 text-xs ${section.status === 'ready' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}`}>{section.status === 'ready' ? 'Ready' : 'Open'}</span>
               </a>;
