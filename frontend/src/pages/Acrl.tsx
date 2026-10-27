@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import AcrlReviewPanel from '../components/AcrlReviewPanel';
 import AcrlToolsPanel from '../components/AcrlToolsPanel';
+import AcrlInstructionUploadPanel from '../components/AcrlInstructionUploadPanel';
+import AcrlNotesImportPanel from '../components/AcrlNotesImportPanel';
 import { getAcrlReview, listAcrlCatalogueYears, publishAcrlYear, saveAcrlLinks, uploadAcrlWorksheet } from '../api/acrl';
 import { parseWorksheetFile, sha256ForFile } from '../services/acrlWorksheetParser';
 import type { AcrlAssignmentCopyResponse, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
@@ -165,6 +167,8 @@ export default function AcrlPage() {
       </header>
 
       <AcrlToolsPanel years={yearsQuery.data || []} />
+      <AcrlInstructionUploadPanel years={yearsQuery.data || []} />
+      <AcrlNotesImportPanel years={yearsQuery.data || []} />
 
       <section aria-labelledby="upload-heading" className="space-y-4 rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
         <div>

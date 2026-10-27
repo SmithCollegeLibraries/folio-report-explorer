@@ -16,7 +16,7 @@ trait AcrlApiBehaviorTrait
             'class' => Cors::class,
             'cors' => [
                 'Origin' => ['*'],
-                'Access-Control-Request-Method' => ['GET', 'POST', 'OPTIONS'],
+                'Access-Control-Request-Method' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
                 'Access-Control-Request-Headers' => ['*'],
                 'Access-Control-Allow-Credentials' => false,
                 'Access-Control-Max-Age' => 86400,

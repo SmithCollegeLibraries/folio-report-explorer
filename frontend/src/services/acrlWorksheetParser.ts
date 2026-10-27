@@ -1,6 +1,4 @@
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
 import type { AcrlAnswerType, AcrlQuestionPart, AcrlSheet, AcrlWorksheetParseResult } from '../types/acrl';
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 const SECTION_NAMES = [
   'Library characteristics',
@@ -24,28 +22,9 @@ const SECTION_HEADING_ALIASES = [
 
 const PDF_PART_BASES = new Set(['1', '2', '3', '4', '5', '6', '40', '41', '42', '43', '44', '70', '71', '72', '73']);
 
-interface PdfTextItem {
-  str?: string;
-  transform?: number[];
-}
-
 export async function parseWorksheetFile(file: File): Promise<AcrlWorksheetParseResult> {
-  GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const loadingTask = getDocument({ data: bytes });
-  const document = await loadingTask.promise;
-  const pages: string[] = [];
-  try {
-    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-      const page = await document.getPage(pageNumber);
-      const text = await page.getTextContent();
-      pages.push(pdfItemsToText(text.items as PdfTextItem[]));
-      page.cleanup();
-    }
-  } finally {
-    await loadingTask.destroy();
-  }
-  return parseWorksheetPages(pages);
+  const { extractPdfTextPages } = await import('./acrlPdfPages');
+  return parseWorksheetPages(await extractPdfTextPages(file));
 }
 
 export async function sha256ForFile(file: File): Promise<string> {
@@ -289,21 +268,4 @@ function isPromptBoundary(line: string): boolean {
 
 function cleanText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
-}
-
-function pdfItemsToText(items: PdfTextItem[]): string {
-  const positioned = items
-    .filter((item) => typeof item.str === 'string' && item.str.trim())
-    .map((item) => ({ text: item.str as string, x: item.transform?.[4] || 0, y: item.transform?.[5] || 0 }))
-    .sort((left, right) => right.y - left.y || left.x - right.x);
-  const lines: Array<{ y: number; parts: string[] }> = [];
-  positioned.forEach((item) => {
-    let line = lines[lines.length - 1];
-    if (!line || Math.abs(line.y - item.y) > 3) {
-      line = { y: item.y, parts: [] };
-      lines.push(line);
-    }
-    line.parts.push(item.text);
-  });
-  return lines.map((line) => cleanText(line.parts.join(' '))).join('\n');
 }

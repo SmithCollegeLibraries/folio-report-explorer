@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { acceptAcrlSuggestions, getAcrlEntry, saveAcrlAnswer, setAcrlSectionStatus } from '../api/acrl';
 import AcrlSectionAssignmentPanel from '../components/AcrlSectionAssignmentPanel';
+import AcrlQuestionDetailsModal from '../components/AcrlQuestionDetailsModal';
 import { useAuth } from '../hooks/useAuth';
 import type { AcrlEntryQuestion, AcrlEntryResponse, AcrlEntrySection } from '../types/acrl';
 
@@ -14,13 +15,14 @@ function errorText(error: unknown): string {
   return 'The request could not be completed. Please try again.';
 }
 
-function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, onAcceptSuggestion, onSaved }: {
+function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, onAcceptSuggestion, onShowDetails, onSaved }: {
   year: number;
   question: AcrlEntryQuestion;
   locked: boolean;
   isAdmin: boolean;
   acceptingSuggestion: boolean;
   onAcceptSuggestion: (question: AcrlEntryQuestion) => void;
+  onShowDetails: (question: AcrlEntryQuestion, trigger: HTMLButtonElement) => void;
   onSaved: () => void;
 }) {
   const [value, setValue] = useState(question.answer.value_text ?? '');
@@ -54,9 +56,13 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Q{question.questionId}{question.part ? ` · ${question.part}` : ''}{question.required === 'yes' ? ' · Required' : ''}</p>
           <h3 className="mt-1 font-medium text-gray-900">{question.prompt}</h3>
         </div>
-        {question.comparison.changePercent !== null && <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${question.comparison.highlighted ? 'bg-amber-200 text-amber-950' : 'bg-gray-100 text-gray-700'}`} aria-label={`Change ${question.comparison.changePercent}%`}>
-          {question.comparison.changePercent > 0 ? '+' : ''}{question.comparison.changePercent.toFixed(2)}%
-        </span>}
+        <div className="flex items-center gap-2">
+          {question.hasDetailsNotes && <span aria-label="Has collection notes" title="Has collection notes" className="h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-amber-100" />}
+          <button type="button" className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50" onClick={(event) => onShowDetails(question, event.currentTarget)}>Details</button>
+          {question.comparison.changePercent !== null && <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${question.comparison.highlighted ? 'bg-amber-200 text-amber-950' : 'bg-gray-100 text-gray-700'}`} aria-label={`Change ${question.comparison.changePercent}%`}>
+            {question.comparison.changePercent > 0 ? '+' : ''}{question.comparison.changePercent.toFixed(2)}%
+          </span>}
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
         {question.sheet === 'survey' && <>
@@ -110,12 +116,13 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
   );
 }
 
-function SectionCard({ year, section, isAdmin, id, onChanged }: {
+function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
   year: number;
   section: AcrlEntrySection;
   isAdmin: boolean;
   id: string;
   onChanged: () => void;
+  onShowDetails: (question: AcrlEntryQuestion, trigger: HTMLButtonElement) => void;
 }) {
   const locked = section.status === 'ready';
   const suggestions = section.questions.filter((question) => question.suggestion !== null);
@@ -152,7 +159,7 @@ function SectionCard({ year, section, isAdmin, id, onChanged }: {
       {mutation.error && <p role="alert" className="text-sm text-rose-700">Could not update section status.</p>}
       {suggestionMutation.error && <p role="alert" className="text-sm text-rose-700">Could not accept the selected suggestions. Refresh the section and try again.</p>}
       <div className="space-y-3">
-        {section.questions.map((question) => <AcrlAnswerRow key={`${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onSaved={onChanged} />)}
+        {section.questions.map((question) => <AcrlAnswerRow key={`${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onShowDetails={onShowDetails} onSaved={onChanged} />)}
       </div>
     </section>
   );
@@ -164,6 +171,7 @@ export default function AcrlEntryPage() {
   const queryClient = useQueryClient();
   const { isAdmin } = useAuth();
   const [activeSection, setActiveSection] = useState(0);
+  const [detailsQuestion, setDetailsQuestion] = useState<AcrlEntryQuestion | null>(null);
   const entryQuery = useQuery({
     queryKey: ['acrl-entry', yearParam || 'latest'],
     queryFn: () => getAcrlEntry(yearParam ? Number(yearParam) : undefined),
@@ -252,8 +260,9 @@ export default function AcrlEntryPage() {
         </nav>}
         {!entry.sections.length && <p className="rounded-lg border border-dashed border-gray-300 p-5 text-sm text-gray-500">This year has no published Survey questions.</p>}
         <div className="space-y-5">
-          {entry.sections.map((section, index) => <SectionCard key={section.name} year={entry.selectedYear} section={section} isAdmin={isAdmin} id={`acrl-section-${index + 1}`} onChanged={refresh} />)}
+          {entry.sections.map((section, index) => <SectionCard key={section.name} year={entry.selectedYear} section={section} isAdmin={isAdmin} id={`acrl-section-${index + 1}`} onChanged={refresh} onShowDetails={(question) => setDetailsQuestion(question)} />)}
         </div>
+        {detailsQuestion && <AcrlQuestionDetailsModal year={entry.selectedYear} question={detailsQuestion} isAdmin={isAdmin} onClose={() => setDetailsQuestion(null)} />}
       </>}
     </div>
   );

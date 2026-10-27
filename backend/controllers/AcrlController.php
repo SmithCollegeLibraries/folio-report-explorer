@@ -6,6 +6,7 @@ use Yii;
 use yii\web\Controller;
 use app\controllers\traits\AcrlApiBehaviorTrait;
 use app\controllers\traits\PersistedAdminAccessTrait;
+use app\controllers\traits\AcrlDetailsActionsTrait;
 use app\services\AcrlCatalogueService;
 use app\services\AcrlEntryService;
 use app\services\AcrlImportService;
@@ -14,12 +15,14 @@ use app\models\User;
 
 require_once __DIR__ . '/traits/AcrlApiBehaviorTrait.php';
 require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
+require_once __DIR__ . '/traits/AcrlDetailsActionsTrait.php';
 
 /** Admin-only API for the ACRL question catalogue and annual review. */
 class AcrlController extends Controller
 {
     use AcrlApiBehaviorTrait;
     use PersistedAdminAccessTrait;
+    use AcrlDetailsActionsTrait;
 
     public $enableCsrfValidation = false;
 
@@ -32,8 +35,8 @@ class AcrlController extends Controller
                 'class' => \yii\filters\auth\HttpBearerAuth::class,
                 'except' => ['options'],
             ];
-            $userActions = ['entry', 'save-answer', 'section-status', 'accept-suggestions'];
-            $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'import-preview', 'import-confirm'];
+            $userActions = ['entry', 'save-answer', 'section-status', 'accept-suggestions', 'question-details', 'add-question-note'];
+            $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'import-preview', 'import-confirm', 'save-instructions', 'notes-import-preview', 'notes-import-confirm', 'edit-question-note', 'delete-question-note'];
             $behaviors['access'] = [
                 'class' => \yii\filters\AccessControl::class,
                 'except' => ['options'],

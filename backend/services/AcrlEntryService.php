@@ -12,8 +12,9 @@ class AcrlEntryService
     private $thresholds;
     private $history;
     private $assignments;
+    private $questionNotes;
 
-    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null)
+    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null, $questionNotes = null)
     {
         $this->repository = $repository ?: new AcrlAnswerRepository();
         $this->rules = $rules ?: new AcrlEntryRulesService();
@@ -22,6 +23,9 @@ class AcrlEntryService
         $this->thresholds = $thresholds ?: new AcrlThresholdService();
         $this->history = $history ?: new AcrlHistoryService($this->repository, $this->rules);
         $this->assignments = $assignments ?: new AcrlSectionAssignmentService();
+        $this->questionNotes = $questionNotes ?: ($repository
+            ? new AcrlQuestionNotesService($repository, $repository)
+            : new AcrlQuestionNotesService());
     }
 
     public function latestYear(): int
@@ -52,6 +56,7 @@ class AcrlEntryService
         $answers = $this->answerMap($answerRows);
         $calculationResults = $this->calculations->evaluate($questions, $answerRows);
         $questionHistory = $this->history->forQuestions($year, $questions);
+        $questionNoteKeys = $this->questionNotes->questionKeysWithNotes($year);
         $statuses = [];
         foreach ($this->repository->sectionStatuses($year) as $status) {
             $statuses[$status['section']] = $status;
@@ -97,6 +102,7 @@ class AcrlEntryService
                 'suggestion' => $this->suggestion($question, $answer, $history),
                 'comparison' => $comparison,
                 'calculated' => $computed,
+                'hasDetailsNotes' => !empty($questionNoteKeys[$key]),
             ];
             if (!isset($sections[$question['section']])) {
                 $status = $statuses[$question['section']] ?? null;

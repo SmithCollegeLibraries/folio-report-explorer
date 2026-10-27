@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import AcrlEntryPage from './AcrlEntryPage';
 import type { AcrlEntryQuestion, AcrlEntryResponse } from '../types/acrl';
 
-const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, auth } = vi.hoisted(() => ({
+const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, auth } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   saveAnswer: vi.fn(),
   setStatus: vi.fn(),
@@ -15,6 +15,10 @@ const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, sear
   searchUsers: vi.fn().mockResolvedValue({ users: [] }),
   saveAssignments: vi.fn(),
   copyAssignments: vi.fn(),
+  getQuestionDetails: vi.fn(),
+  addQuestionNote: vi.fn(),
+  editQuestionNote: vi.fn(),
+  deleteQuestionNote: vi.fn(),
   auth: { isAdmin: false },
 }));
 
@@ -27,6 +31,10 @@ vi.mock('../api/acrl', () => ({
   searchAcrlApprovedUsers: searchUsers,
   saveAcrlSectionAssignments: saveAssignments,
   copyAcrlAssignmentsFromPrevious: copyAssignments,
+  getAcrlQuestionDetails: getQuestionDetails,
+  addAcrlQuestionNote: addQuestionNote,
+  editAcrlQuestionNote: editQuestionNote,
+  deleteAcrlQuestionNote: deleteQuestionNote,
 }));
 vi.mock('../hooks/useAuth', () => ({ useAuth: () => auth }));
 
@@ -40,6 +48,7 @@ function makeQuestion(overrides: Partial<AcrlEntryQuestion> = {}): AcrlEntryQues
   return {
     sheet: 'survey', questionId: '60', part: 'A', section: 'Circulation', prompt: 'Physical circulation', answerType: 'number', required: 'yes',
     calculatedFrom: null, surveyOrder: 1,
+    hasDetailsNotes: false,
     answer: { value_text: '20', value_number: '20', note: '', source: 'manual', source_label: null, updated_by: 'editor', updated_at: '2026-01-01 00:00:00.000001' },
     previous: { value: 10, label: '10', isSum: false, linkedValues: [{ questionId: '59', part: '', value: 10 }] },
     history: [],
@@ -234,5 +243,96 @@ describe('ACRL entry page', () => {
     vi.spyOn(circulationSection, 'getBoundingClientRect').mockReturnValue({ top: -300, bottom: 20, left: 0, right: 500, width: 500, height: 320, x: 0, y: -300, toJSON: () => ({}) });
     window.dispatchEvent(new Event('scroll'));
     await waitFor(() => expect(within(navigation).getByRole('link', { name: /Services/ })).toHaveAttribute('aria-current', 'location'));
+  });
+
+  it('opens a labelled Details modal with instruction and collection-note tabs, then restores focus on Escape', async () => {
+    getEntry.mockResolvedValue(entry());
+    getQuestionDetails.mockResolvedValue({
+      instructions: [
+        { blockKey: 'question:60', heading: 'Q60. Physical circulation', text: 'Count checkouts from general and reserve collections.', kind: 'question' },
+        { blockKey: 'definition:circulation', heading: 'Circulation', text: 'A checkout is recorded when material leaves the library.', kind: 'definition' },
+      ],
+      notes: [{ id: 8, note: 'Checked the circulation report.', source: '2025 worksheet', origin_year: 2025, created_at: '2026-01-02 10:00:00', edited_at: null }],
+      canAddNote: true,
+      canManageNotes: false,
+    });
+    renderPage();
+
+    const trigger = (await screen.findAllByRole('button', { name: 'Details' }))[0];
+    await userEvent.click(trigger);
+    const dialog = await screen.findByRole('dialog', { name: 'Question details' });
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close details' }));
+    await userEvent.tab({ shift: true });
+    expect(document.activeElement).toBe(within(dialog).getByRole('tab', { name: 'How we collected this' }));
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'Instructions' }));
+    expect(within(dialog).getByRole('tab', { name: 'Instructions' })).toHaveAttribute('aria-selected', 'true');
+    expect(within(dialog).getByText('Count checkouts from general and reserve collections.')).toBeInTheDocument();
+    expect(getQuestionDetails).toHaveBeenCalledWith(2026, 'survey', '60', 'A');
+
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'How we collected this' }));
+    expect(within(dialog).getByText('Checked the circulation report.')).toBeInTheDocument();
+    expect(within(dialog).getByText('2025 worksheet · FY2025')).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Question details' })).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('adds a signed-in collection note with the current year as its origin', async () => {
+    getEntry.mockResolvedValue(entry());
+    getQuestionDetails.mockResolvedValue({ instructions: [], notes: [], canAddNote: true, canManageNotes: false });
+    addQuestionNote.mockResolvedValue({ id: 12, note: 'Compared the sampled items with holdings.', source: 'How I collected this', origin_year: 2026, created_at: '2026-10-27 13:00:00', edited_at: null });
+    renderPage();
+
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Details' }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Question details' });
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'How we collected this' }));
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Collection note' }), 'Compared the sampled items with holdings.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Add note' }));
+
+    await waitFor(() => expect(addQuestionNote).toHaveBeenCalledWith(2026, {
+      sheet: 'survey', question_id: '60', part: 'A', note: 'Compared the sampled items with holdings.', source: 'How I collected this', origin_year: 2026,
+    }));
+  });
+
+  it('lets administrators edit and remove existing collection notes', async () => {
+    auth.isAdmin = true;
+    getEntry.mockResolvedValue(entry());
+    getQuestionDetails.mockResolvedValue({
+      instructions: [],
+      notes: [{ id: 8, note: 'Existing collection method.', source: 'FY2025 notes', origin_year: 2025, created_at: null, edited_at: null }],
+      canAddNote: true,
+      canManageNotes: true,
+    });
+    editQuestionNote.mockResolvedValue({ id: 8, note: 'Updated collection method.', source: 'FY2024 notes', origin_year: 2024, created_at: null, edited_at: null });
+    deleteQuestionNote.mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderPage();
+
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Details' }))[0]);
+    const dialog = await screen.findByRole('dialog', { name: 'Question details' });
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'How we collected this' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Edit note' }));
+    await userEvent.clear(within(dialog).getByRole('textbox', { name: 'Edit note' }));
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Edit note' }), 'Updated collection method.');
+    await userEvent.clear(within(dialog).getByRole('textbox', { name: 'Note source' }));
+    await userEvent.type(within(dialog).getByRole('textbox', { name: 'Note source' }), 'FY2024 notes');
+    await userEvent.clear(within(dialog).getByRole('spinbutton', { name: 'Note year' }));
+    await userEvent.type(within(dialog).getByRole('spinbutton', { name: 'Note year' }), '2024');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(editQuestionNote).toHaveBeenCalledWith(8, { note: 'Updated collection method.', source: 'FY2024 notes', origin_year: 2024 }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Remove note' }));
+    await waitFor(() => expect(deleteQuestionNote).toHaveBeenCalledWith(8));
+    expect(confirm).toHaveBeenCalledWith('Remove this collection note?');
+    confirm.mockRestore();
+  });
+
+  it('marks rows that already have collection notes', async () => {
+    const response = entry();
+    response.sections[0].questions[0].hasDetailsNotes = true;
+    getEntry.mockResolvedValue(response);
+    renderPage();
+
+    expect(await screen.findAllByLabelText('Has collection notes')).toHaveLength(1);
   });
 });
