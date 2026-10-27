@@ -10,12 +10,14 @@ class AcrlCatalogueReviewService
     private $db;
     private $matcher;
     private $publicationPolicy;
+    private $assignmentService;
 
-    public function __construct($db = null, $matcher = null, $publicationPolicy = null)
+    public function __construct($db = null, $matcher = null, $publicationPolicy = null, $assignmentService = null)
     {
         $this->db = $db ?: Yii::$app->db;
         $this->matcher = $matcher ?: new AcrlQuestionMatcherService();
         $this->publicationPolicy = $publicationPolicy ?: new AcrlPublicationPolicyService();
+        $this->assignmentService = $assignmentService ?: new AcrlSectionAssignmentService();
     }
 
     public function listYears(): array
@@ -120,7 +122,28 @@ class AcrlCatalogueReviewService
             'published_by' => $userId,
             'published_at' => date('Y-m-d H:i:s'),
         ], ['survey_year' => $year])->execute();
-        return $this->getReview($year);
+        try {
+            $assignmentCopy = $this->assignmentService->copyOnPublish($year, $userId);
+        } catch (\Throwable $exception) {
+            Yii::error([
+                'message' => 'ACRL assignments could not be copied after publishing.',
+                'surveyYear' => $year,
+                'sourceYear' => $year - 1,
+                'exception' => $exception->getMessage(),
+            ], __METHOD__);
+            $assignmentCopy = [
+                'surveyYear' => $year,
+                'sourceYear' => $year - 1,
+                'copiedSections' => [],
+                'skippedSections' => [],
+                'unmatchedSections' => [],
+                'alreadyAssigned' => false,
+                'failed' => true,
+            ];
+        }
+        $review = $this->getReview($year);
+        $review['assignmentCopy'] = $assignmentCopy;
+        return $review;
     }
 
     public function questionKey(array $question): string

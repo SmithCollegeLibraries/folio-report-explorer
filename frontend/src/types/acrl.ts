@@ -66,6 +66,7 @@ export interface AcrlReviewResponse {
   previousQuestions: AcrlQuestionPart[];
   unresolvedCount: number;
   canPublish: boolean;
+  assignmentCopy?: AcrlAssignmentCopyResponse;
 }
 
 export interface AcrlUploadResponse {
@@ -127,7 +128,34 @@ export interface AcrlEntrySection {
   reopenedAt: string | null;
   filled: number;
   total: number;
+  assignees: AcrlAssignmentUser[];
+  assignedToCurrentUser: boolean;
   questions: AcrlEntryQuestion[];
+}
+
+export interface AcrlAssignmentUser {
+  id: number;
+  displayName: string;
+}
+
+export interface AcrlSectionAssignment {
+  section: string;
+  assignees: AcrlAssignmentUser[];
+}
+
+export interface AcrlSectionAssignmentsResponse {
+  surveyYear: number;
+  sections: AcrlSectionAssignment[];
+}
+
+export interface AcrlAssignmentCopyResponse {
+  surveyYear: number;
+  sourceYear: number;
+  copiedSections: string[];
+  skippedSections: string[];
+  unmatchedSections: string[];
+  alreadyAssigned: boolean;
+  failed: boolean;
 }
 
 export interface AcrlEntryResponse {

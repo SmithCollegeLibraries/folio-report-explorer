@@ -441,4 +441,56 @@ describe('ACRL catalogue page', () => {
     expect(screen.getByText('Review open')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Publish year at the bottom of this review/ })).toHaveAttribute('href', '#acrl-publish');
   });
+
+  it('shows assignment copy results after publishing a year', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    publishYear.mockResolvedValue({
+      ...makeReview(),
+      status: 'published',
+      assignmentCopy: {
+        surveyYear: 2026,
+        sourceYear: 2025,
+        copiedSections: ['Circulation'],
+        skippedSections: [],
+        unmatchedSections: ['Old services'],
+        alreadyAssigned: false,
+        failed: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish year' }));
+
+    expect(await screen.findByText('Assignments copied from FY 2025 for: Circulation.')).toBeInTheDocument();
+    expect(screen.getByText('No matching section: Old services.')).toBeInTheDocument();
+  });
+
+  it('reports assignment copy failure without hiding a successful publish', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    publishYear.mockResolvedValue({
+      ...makeReview(),
+      status: 'published',
+      assignmentCopy: {
+        surveyYear: 2026,
+        sourceYear: 2025,
+        copiedSections: [],
+        skippedSections: [],
+        unmatchedSections: [],
+        alreadyAssigned: false,
+        failed: true,
+      },
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish year' }));
+
+    expect(await screen.findByText('FY 2026 was published, but assignments could not be copied from FY 2025.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Published' })).toBeDisabled();
+  });
 });

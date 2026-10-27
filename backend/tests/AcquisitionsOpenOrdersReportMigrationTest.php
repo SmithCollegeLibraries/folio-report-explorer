@@ -48,6 +48,6 @@ acquisitionsMigrationAssert(
 
 $files = app\services\MigrationService::discoverMigrationFiles();
 $last = end($files);
-acquisitionsMigrationAssert($last['filename'] === '057_acrl_calculated_answer_source.sql', 'Migration 057 is the newest migration.');
+acquisitionsMigrationAssert($last['filename'] === '058_acrl_section_assignments.sql', 'Migration 058 is the newest migration.');
 
 echo "Acquisitions open-orders migration recognition checks passed\n";

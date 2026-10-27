@@ -4,7 +4,7 @@ namespace app\controllers;
 
 use Yii;
 use yii\web\Controller;
-use yii\web\Response;
+use app\controllers\traits\AcrlApiBehaviorTrait;
 use app\controllers\traits\PersistedAdminAccessTrait;
 use app\services\AcrlCatalogueService;
 use app\services\AcrlEntryService;
@@ -12,32 +12,20 @@ use app\services\AcrlImportService;
 use app\services\AcrlThresholdService;
 use app\models\User;
 
+require_once __DIR__ . '/traits/AcrlApiBehaviorTrait.php';
 require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
 
 /** Admin-only API for the ACRL question catalogue and annual review. */
 class AcrlController extends Controller
 {
+    use AcrlApiBehaviorTrait;
     use PersistedAdminAccessTrait;
 
     public $enableCsrfValidation = false;
 
     public function behaviors()
     {
-        $behaviors = parent::behaviors();
-        $behaviors['corsFilter'] = [
-            'class' => \yii\filters\Cors::class,
-            'cors' => [
-                'Origin' => ['*'],
-                'Access-Control-Request-Method' => ['GET', 'POST', 'OPTIONS'],
-                'Access-Control-Request-Headers' => ['*'],
-                'Access-Control-Allow-Credentials' => false,
-                'Access-Control-Max-Age' => 86400,
-            ],
-        ];
-        $behaviors['contentNegotiator'] = [
-            'class' => \yii\filters\ContentNegotiator::class,
-            'formats' => ['application/json' => Response::FORMAT_JSON],
-        ];
+        $behaviors = $this->acrlApiBehaviors(parent::behaviors());
 
         if (YII_ENV !== 'dev') {
             $behaviors['authenticator'] = [
@@ -81,7 +69,7 @@ class AcrlController extends Controller
 
     public function beforeAction($action)
     {
-        Yii::$app->response->format = Response::FORMAT_JSON;
+        $this->setAcrlJsonResponseFormat();
         return parent::beforeAction($action);
     }
 
@@ -164,7 +152,7 @@ class AcrlController extends Controller
             return $forbidden;
         }
         try {
-            return (new AcrlEntryService())->entry($year === null ? null : (int)$year);
+            return (new AcrlEntryService())->entry($year === null ? null : (int)$year, (string)(Yii::$app->user->id ?? ''));
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
         }

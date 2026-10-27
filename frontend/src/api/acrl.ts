@@ -1,4 +1,4 @@
-import type { AcrlReviewResponse, AcrlSurveyYear, AcrlUploadResponse, AcrlQuestionPart, AcrlLinkDecisionInput, AcrlEntryResponse, AcrlImportPreview } from '../types/acrl';
+import type { AcrlReviewResponse, AcrlSurveyYear, AcrlUploadResponse, AcrlQuestionPart, AcrlLinkDecisionInput, AcrlEntryResponse, AcrlImportPreview, AcrlAssignmentUser, AcrlSectionAssignmentsResponse, AcrlAssignmentCopyResponse } from '../types/acrl';
 import type { AcrlStatistic } from '../types/schema';
 import { api } from './client';
 
@@ -64,6 +64,26 @@ export async function publishAcrlYear(year: number): Promise<AcrlReviewResponse>
 
 export async function getAcrlEntry(year?: number): Promise<AcrlEntryResponse> {
   const { data } = await api.get(year ? `/acrl/entry/${year}` : '/acrl/entry');
+  return data;
+}
+
+export async function getAcrlSectionAssignments(year: number): Promise<AcrlSectionAssignmentsResponse> {
+  const { data } = await api.get(`/acrl/years/${year}/assignments`);
+  return data;
+}
+
+export async function searchAcrlApprovedUsers(query: string): Promise<{ users: AcrlAssignmentUser[] }> {
+  const { data } = await api.get('/acrl/approved-users', { params: { q: query } });
+  return data;
+}
+
+export async function saveAcrlSectionAssignments(year: number, section: string, userIds: number[]): Promise<AcrlSectionAssignmentsResponse['sections'][number]> {
+  const { data } = await api.post(`/acrl/years/${year}/sections/${encodeURIComponent(section)}/assignments`, { userIds });
+  return data;
+}
+
+export async function copyAcrlAssignmentsFromPrevious(year: number): Promise<AcrlAssignmentCopyResponse> {
+  const { data } = await api.post(`/acrl/years/${year}/assignments/copy-previous`);
   return data;
 }
 
