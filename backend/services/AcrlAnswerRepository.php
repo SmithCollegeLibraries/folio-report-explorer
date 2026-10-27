@@ -94,7 +94,7 @@ class AcrlAnswerRepository
         return $row ?: null;
     }
 
-    public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null): array
+    public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null, array $calculatedChanges = []): array
     {
         $key = [
             'survey_year' => (int)$question['survey_year'],
@@ -140,6 +140,38 @@ class AcrlAnswerRepository
                 }
             }
             $this->appendHistory($key, $old, $new, $userId);
+            foreach ($calculatedChanges as $change) {
+                $calculatedQuestion = $change['question'];
+                $calculatedKey = [
+                    'survey_year' => (int)$calculatedQuestion['survey_year'],
+                    'sheet' => $calculatedQuestion['sheet'],
+                    'question_id' => $calculatedQuestion['question_id'],
+                    'part' => $calculatedQuestion['part'],
+                ];
+                $oldCalculated = $this->db->createCommand(
+                    'SELECT * FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
+                    [':year' => $calculatedKey['survey_year'], ':sheet' => $calculatedKey['sheet'], ':question_id' => $calculatedKey['question_id'], ':part' => $calculatedKey['part']]
+                )->queryOne();
+                if ($oldCalculated === false) {
+                    $oldCalculated = null;
+                }
+                $calculatedValues = $change['values'];
+                $newCalculated = array_merge($calculatedKey, $calculatedValues, [
+                    'note' => null,
+                    'source' => 'calculated',
+                    'source_label' => null,
+                    'updated_by' => $userId,
+                ]);
+                $this->db->createCommand()->upsert('acrl_answers', $newCalculated, [
+                    'value_text' => $calculatedValues['value_text'],
+                    'value_number' => $calculatedValues['value_number'],
+                    'note' => null,
+                    'source' => 'calculated',
+                    'source_label' => null,
+                    'updated_by' => $userId,
+                ])->execute();
+                $this->appendHistory($calculatedKey, $oldCalculated, $newCalculated, $userId);
+            }
             $transaction->commit();
         } catch (\Throwable $exception) {
             if ($transaction->isActive) {

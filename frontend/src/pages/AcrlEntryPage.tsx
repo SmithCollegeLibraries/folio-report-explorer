@@ -42,6 +42,8 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, onSaved }: {
   const disabled = locked && !isAdmin;
   const numberInput = question.answerType === 'number' || question.answerType === 'currency';
   const currentCalculated = question.answer.value_number ?? question.answer.value_text;
+  const isCalculated = Boolean(question.calculatedFrom);
+  const calculationLabel = question.calculatedFrom?.replace(/^sum of\s+/i, '').replace(/,\s*/g, ' + ');
   return (
     <article className={`space-y-3 rounded-lg border p-4 ${question.comparison.highlighted ? 'border-amber-400 bg-amber-50' : 'border-gray-200 bg-white'}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -58,12 +60,14 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, onSaved }: {
         {question.previous.isSum && <span className="text-xs text-gray-500">Approved linked values summed</span>}
         {question.comparison.highlighted && <span className="font-medium text-amber-900">Change meets the highlight threshold. Add a note explaining the change.</span>}
       </div>
-      {question.calculated && (question.calculated.supported
-        ? <p className={`text-sm ${question.calculated.mismatch ? 'font-medium text-amber-900' : 'text-gray-600'}`}>
-          Calculated value: {question.calculated.value ?? 'Waiting for all inputs'}{question.calculated.mismatch ? ' · Entered value differs (advisory)' : ''}
+      {isCalculated && question.calculated?.supported && <div className="space-y-1 text-sm text-gray-700">
+        <p>Calculated from {calculationLabel}</p>
+        <p className={question.calculated.mismatch ? 'font-medium text-amber-900' : 'text-gray-600'}>
+          Calculated value: {question.calculated.value === null ? `Waiting for ${question.calculated.waitingFor.join(', ') || 'inputs'}` : question.calculated.value}{question.calculated.mismatch ? ' · Entered value differs (advisory)' : ''}
         </p>
-        : <p className="text-sm text-gray-600">Calculation: {question.calculated.raw}</p>)}
-      <div className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto] md:items-end">
+      </div>}
+      {isCalculated && question.calculated && !question.calculated.supported && <p className="text-sm text-gray-600">Calculation: {question.calculated.raw}</p>}
+      {!isCalculated && <div className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto] md:items-end">
         <label className="text-sm font-medium text-gray-700">Answer
           {numberInput ? <input className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 disabled:bg-gray-100" type="number" step="0.01" value={value} disabled={disabled} onChange={(event) => setValue(event.target.value)} />
             : question.answerType === 'yes/no' ? <select className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2 disabled:bg-gray-100" value={value} disabled={disabled} onChange={(event) => setValue(event.target.value)}><option value="">Select…</option><option value="yes">Yes</option><option value="no">No</option></select>
@@ -75,7 +79,7 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, onSaved }: {
         <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={disabled || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
           {saveMutation.isPending ? 'Saving…' : 'Save answer'}
         </button>
-      </div>
+      </div>}
       {conflict && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{conflict}</p>}
       {saveMutation.error && !conflict && <p role="alert" className="text-sm text-rose-700">Could not save this answer.</p>}
       {question.answer.source === 'import' && <p className="text-xs text-gray-500">Imported from {question.answer.source_label || 'an administrator source'}.</p>}

@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../services/AcrlEntryRulesService.php';
+require_once __DIR__ . '/../services/AcrlCalculationService.php';
 require_once __DIR__ . '/../services/AcrlAnswerValueService.php';
 require_once __DIR__ . '/../services/AcrlEntryService.php';
 
@@ -16,6 +17,7 @@ class AcrlEntryTestRepository
     public $status = ['section' => 'Circulation', 'status' => 'ready'];
     public $saveResult = ['conflict' => true, 'current' => ['value_text' => '175', 'updated_at' => '2026-01-01 00:00:00.000001']];
     public $statusWrites = [];
+    public $savedCalculations = [];
 
     public function publishedYears(): array { return [2026, 2025]; }
     public function year(int $year): ?array { return in_array($year, [2025, 2026], true) ? ['survey_year' => $year, 'status' => 'published'] : null; }
@@ -26,6 +28,10 @@ class AcrlEntryTestRepository
                 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A',
                 'section' => 'Circulation', 'prompt' => 'Current value', 'answer_type' => 'number',
                 'required_status' => 'yes', 'calculated_from' => null, 'survey_order' => 1,
+            ], [
+                'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '63', 'part' => '',
+                'section' => 'Circulation', 'prompt' => 'Calculated total', 'answer_type' => 'number',
+                'required_status' => 'yes', 'calculated_from' => 'sum of 60A', 'survey_order' => 2,
             ]];
         }
         if ($year === 2026 && $sheet === 'trends') {
@@ -39,11 +45,14 @@ class AcrlEntryTestRepository
     }
     public function question(int $year, string $sheet, string $questionId, string $part): ?array
     {
-        return $this->questions($year, $sheet)[0] ?? null;
+        foreach ($this->questions($year, $sheet) as $question) {
+            if ($question['question_id'] === $questionId && $question['part'] === $part) return $question;
+        }
+        return null;
     }
     public function answers(int $year, string $sheet = 'survey'): array
     {
-        if ($year === 2026) {
+        if ($year === 2026 && $sheet === 'survey') {
             return [[
                 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'value_text' => '200', 'value_number' => '200.00',
                 'note' => null, 'source' => 'manual', 'source_label' => null, 'updated_by' => 'user-2', 'updated_at' => '2026-02-01 00:00:00.000001',
@@ -66,7 +75,11 @@ class AcrlEntryTestRepository
     }
     public function sectionStatuses(int $year): array { return []; }
     public function sectionStatus(int $year, string $section): ?array { return $this->status; }
-    public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null): array { return $this->saveResult; }
+    public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null, array $calculatedChanges = []): array
+    {
+        $this->savedCalculations = $calculatedChanges;
+        return $this->saveResult;
+    }
     public function setSectionStatus(int $year, string $section, string $status, string $userId): ?array
     {
         $this->statusWrites[] = [$year, $section, $status, $userId];
@@ -101,6 +114,14 @@ try {
 $repository->status = ['section' => 'Circulation', 'status' => 'open'];
 $conflict = $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false);
 acrlEntryServiceAssert($conflict['conflict'] && $conflict['current']['value_text'] === '175', 'Optimistic-lock conflicts return the current answer.');
+acrlEntryServiceAssert($repository->savedCalculations[0]['question']['question_id'] === '63'
+    && $repository->savedCalculations[0]['values']['value_number'] === '180.00', 'Saving an input should recompute derived values before repository persistence.');
+try {
+    $service->saveAnswer(2026, 'survey', '63', '', '99', null, null, 'user-1', false);
+    acrlEntryServiceAssert(false, 'Calculated totals must reject direct saves.');
+} catch (InvalidArgumentException $exception) {
+    acrlEntryServiceAssert($exception->getMessage() === 'This total is calculated.', 'Direct total edits return the exact validation message.');
+}
 
 $service->setSectionStatus(2026, 'Circulation', 'ready', 'user-1', false);
 try {

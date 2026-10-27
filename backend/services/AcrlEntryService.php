@@ -7,13 +7,15 @@ class AcrlEntryService
 {
     private $repository;
     private $rules;
+    private $calculations;
     private $values;
     private $thresholds;
 
-    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null)
+    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null)
     {
         $this->repository = $repository ?: new AcrlAnswerRepository();
         $this->rules = $rules ?: new AcrlEntryRulesService();
+        $this->calculations = $calculations ?: new AcrlCalculationService();
         $this->values = $values ?: new AcrlAnswerValueService();
         $this->thresholds = $thresholds ?: new AcrlThresholdService();
     }
@@ -39,10 +41,12 @@ class AcrlEntryService
             $this->repository->questions($year, 'survey'),
             $this->repository->questions($year, 'trends')
         );
-        $answers = $this->answerMap(array_merge(
+        $answerRows = array_merge(
             $this->repository->answers($year, 'survey'),
             $this->repository->answers($year, 'trends')
-        ));
+        );
+        $answers = $this->answerMap($answerRows);
+        $calculationResults = $this->calculations->evaluate($questions, $answerRows);
         $previousAnswers = $this->answerMap($this->repository->answers($year - 1, 'survey'));
         $links = $this->linksByCurrentKey($this->repository->approvedLinks($year));
         $statuses = [];
@@ -50,7 +54,6 @@ class AcrlEntryService
             $statuses[$status['section']] = $status;
         }
         $threshold = $this->thresholds->get();
-        $calculationInputs = $this->calculationInputs($questions, $answers);
         $sections = [];
 
         foreach ($questions as $question) {
@@ -58,23 +61,22 @@ class AcrlEntryService
             $answer = $answers[$key] ?? $this->emptyAnswer();
             $linked = $links[$key] ?? [];
             $previous = $this->previousValue($linked, $previousAnswers);
+            $calculation = $calculationResults[$this->calculationKey($question['sheet'], $question['question_id'], $question['part'])] ?? null;
+            $currentValue = $answer['value_number'] ?? $answer['value_text'];
             $comparison = $this->rules->compare(
-                $answer['value_number'] ?? $answer['value_text'],
+                $currentValue,
                 $previous['value'],
                 $threshold,
                 !empty($linked),
                 $question['sheet']
             );
-            $computed = null;
-            if (!empty($question['calculated_from'])) {
-                $calculation = $this->rules->calculatedValue($question['calculated_from'], $calculationInputs);
-                $computed = [
-                    'supported' => $calculation['supported'],
-                    'raw' => $calculation['supported'] ? null : $question['calculated_from'],
-                    'value' => $calculation['value'],
-                    'mismatch' => $this->rules->calculatedStatus($answer['value_number'] ?? null, $calculation['value'])['mismatch'],
-                ];
-            }
+            $computed = $calculation ? [
+                'supported' => $calculation['supported'],
+                'raw' => $calculation['supported'] ? null : $question['calculated_from'],
+                'value' => $calculation['value'],
+                'mismatch' => $this->rules->calculatedStatus($answer['value_number'] ?? null, $calculation['value'])['mismatch'],
+                'waitingFor' => $calculation['waitingFor'],
+            ] : null;
             $row = [
                 'questionId' => $question['question_id'],
                 'sheet' => $question['sheet'],
@@ -124,13 +126,45 @@ class AcrlEntryService
             throw new \InvalidArgumentException('Sheet must be survey or trends.');
         }
         $question = $this->publishedQuestion($year, $sheet, $questionId, $part);
+        if (is_string($question['calculated_from'] ?? null) && trim($question['calculated_from']) !== '') {
+            throw new \InvalidArgumentException('This total is calculated.');
+        }
         $status = $this->repository->sectionStatus($year, $question['section']);
         if ($status && $status['status'] === 'ready' && !$isAdmin) {
             throw new \DomainException('This section is ready for review and is read-only.');
         }
         $normalized = $this->values->normalize($question['answer_type'], $value);
         $note = $this->values->normalizeNote($note);
-        $result = $this->repository->saveAnswer($question, $normalized, $note, $userId, $expectedUpdatedAt);
+        $allQuestions = array_merge(
+            $this->repository->questions($year, 'survey'),
+            $this->repository->questions($year, 'trends')
+        );
+        $answerRows = array_merge(
+            $this->repository->answers($year, 'survey'),
+            $this->repository->answers($year, 'trends')
+        );
+        $answerRows = array_values(array_filter($answerRows, function ($answer) use ($question) {
+            return !($answer['sheet'] === $question['sheet']
+                && $answer['question_id'] === $question['question_id']
+                && $answer['part'] === $question['part']);
+        }));
+        $answerRows[] = array_merge($question, $normalized);
+        $calculationResults = $this->calculations->evaluate($allQuestions, $answerRows);
+        $dependentCalculations = $this->calculations->dependentCalculations($allQuestions, $question);
+        $calculatedChanges = [];
+        foreach ($allQuestions as $calculatedQuestion) {
+            $calculatedKey = $this->calculationKey($calculatedQuestion['sheet'], $calculatedQuestion['question_id'], $calculatedQuestion['part']);
+            $calculation = $calculationResults[$calculatedKey] ?? null;
+            if (!isset($dependentCalculations[$calculatedKey]) || !$calculation || !$calculation['supported']) {
+                continue;
+            }
+            $valueNumber = $calculation['value'] === null ? null : number_format($calculation['value'], 2, '.', '');
+            $calculatedChanges[] = [
+                'question' => $calculatedQuestion,
+                'values' => ['value_text' => $valueNumber, 'value_number' => $valueNumber],
+            ];
+        }
+        $result = $this->repository->saveAnswer($question, $normalized, $note, $userId, $expectedUpdatedAt, 'manual', null, $calculatedChanges);
         if ($result['conflict']) {
             return ['conflict' => true, 'current' => $result['current']];
         }
@@ -233,24 +267,14 @@ class AcrlEntryService
         return ['value' => $value, 'label' => $label, 'isSum' => $isSum, 'linkedValues' => $values];
     }
 
-    private function calculationInputs(array $questions, array $answers): array
-    {
-        $inputs = [];
-        foreach ($questions as $question) {
-            $key = $this->questionKey($question['sheet'], $question['question_id'], $question['part']);
-            $answer = $answers[$key] ?? null;
-            if ($answer && $answer['value_number'] !== null) {
-                $id = $question['question_id'] . $question['part'];
-                $inputs[$id] = $answer['value_number'];
-                $inputs[$question['question_id'] . '.' . $question['part']] = $answer['value_number'];
-            }
-        }
-        return $inputs;
-    }
-
     private function questionKey(string $sheet, string $questionId, string $part): string
     {
         return $sheet . ':' . $questionId . ':' . $part;
+    }
+
+    private function calculationKey(string $sheet, string $questionId, string $part): string
+    {
+        return $sheet . '|' . $questionId . '|' . $part;
     }
 
     private function emptyAnswer(): array

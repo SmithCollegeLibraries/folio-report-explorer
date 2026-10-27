@@ -57,6 +57,8 @@ export async function sha256ForFile(file: File): Promise<string> {
 export function parseWorksheetPages(pages: string[]): AcrlWorksheetParseResult {
   const items: AcrlQuestionPart[] = [];
   const unresolved: string[] = [];
+  const unresolvedCalculations: string[] = [];
+  const pendingCalculations: Array<{ key: string; references: string[] }> = [];
   let section = '';
   let sheet: AcrlSheet = 'survey';
   let current: AcrlQuestionPart | null = null;
@@ -117,8 +119,18 @@ export function parseWorksheetPages(pages: string[]): AcrlWorksheetParseResult {
         return;
       }
 
-      if (isCalculatedFrom(line)) {
-        if (current) current.calculated_from = line;
+      const references = calculatedReferences(line);
+      if (references) {
+        if (current) {
+          current.calculated_from = `sum of ${references.join(', ')}`;
+          pendingCalculations.push({ key: itemKey(current), references });
+        } else {
+          unresolved.push(line);
+        }
+        return;
+      }
+      if (isCalculationLine(line)) {
+        if (current) unresolvedCalculations.push(`${current.question_id}${current.part}: unparsed sum rule`);
         else unresolved.push(line);
         return;
       }
@@ -134,7 +146,21 @@ export function parseWorksheetPages(pages: string[]): AcrlWorksheetParseResult {
   });
 
   saveCurrent();
-  return { items, unresolved };
+  pendingCalculations.forEach(({ key, references }) => {
+    const target = items.find((item) => itemKey(item) === key);
+    if (!target) return;
+    const resolved: string[] = [];
+    references.forEach((reference) => {
+      const match = resolveCalculationReference(reference, target, items);
+      if (match) resolved.push(match);
+      else {
+        resolved.push(reference);
+        unresolvedCalculations.push(`${target.question_id}${target.part}: ${reference}`);
+      }
+    });
+    target.calculated_from = `sum of ${resolved.join(', ')}`;
+  });
+  return { items, unresolved, unresolvedCalculations };
 }
 
 function parseQuestionLine(line: string): { id: string; prompt: string; required: boolean } | null {
@@ -178,8 +204,51 @@ function inferAnswerType(sheet: AcrlSheet, id: string, part: string, prompt: str
   return 'number';
 }
 
-function isCalculatedFrom(line: string): boolean {
-  return /^calculated\s+(?:sum\s+of|from)\b/i.test(line);
+function calculatedReferences(line: string): string[] | null {
+  const match = line.match(/^(?:calculated\s+)?sum\s+of\s+(?:questions\s+)?(.+?)\.?$/i);
+  if (!match) return null;
+  const expression = match[1].trim().replace(/\.$/, '');
+  const identifiers = expression.match(/[A-Za-z]?\d+[A-Za-z]?/g) || [];
+  if (identifiers.length < 1) return null;
+  const separatorsOnly = expression.replace(/[A-Za-z]?\d+[A-Za-z]?/g, '#');
+  if (!/^#(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s*\+\s*)#)*$/i.test(separatorsOnly)) return null;
+  return identifiers;
+}
+
+function isCalculationLine(line: string): boolean {
+  return /^(?:calculated\s+)?sum\s+of\b/i.test(line);
+}
+
+function itemKey(item: AcrlQuestionPart): string {
+  return `${item.sheet}:${item.question_id}:${item.part}`;
+}
+
+function resolveCalculationReference(reference: string, target: AcrlQuestionPart, items: AcrlQuestionPart[]): string | null {
+  const find = (questionId: string, part: string) => items.find((item) => item.question_id.toLowerCase() === questionId.toLowerCase()
+    && item.part.toLowerCase() === part.toLowerCase());
+  const exactId = find(reference, '');
+  if (exactId) return `${exactId.question_id}${exactId.part}`;
+  const partId = reference.match(/^(\d+)([A-Za-z])$/);
+  if (partId) {
+    const exactPart = find(partId[1], partId[2]);
+    return exactPart ? `${exactPart.question_id}${exactPart.part}` : null;
+  }
+  if (/^\d+$/.test(reference) && target.part) {
+    const samePart = find(reference, target.part);
+    if (samePart) return `${samePart.question_id}${samePart.part}`;
+    return null;
+  }
+  if (/^\d+$/.test(reference)) {
+    const matches = items.filter((item) => item.sheet === target.sheet
+      && item.question_id.toLowerCase() === reference.toLowerCase()
+      && item.part !== '');
+    const uniqueParts = new Map(matches.map((item) => [item.part.toLowerCase(), item]));
+    if (uniqueParts.size === 1) {
+      const onlyPart = uniqueParts.values().next().value as AcrlQuestionPart | undefined;
+      if (onlyPart) return `${onlyPart.question_id}${onlyPart.part}`;
+    }
+  }
+  return null;
 }
 
 function looksLikeQuestion(line: string): boolean {
