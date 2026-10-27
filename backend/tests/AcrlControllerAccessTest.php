@@ -89,6 +89,7 @@ namespace {
     $newActions = [
         'entry' => function () use ($controller) { return $controller->actionEntry(); },
         'save-answer' => function () use ($controller) { return $controller->actionSaveAnswer(2025); },
+        'accept-suggestions' => function () use ($controller) { return $controller->actionAcceptSuggestions(2025, 'Test%20Section'); },
         'section-status' => function () use ($controller) { return $controller->actionSectionStatus(2025, 'Test%20Section'); },
         'threshold' => function () use ($controller) { return $controller->actionThreshold(); },
         'save-threshold' => function () use ($controller) { return $controller->actionSaveThreshold(); },
@@ -122,7 +123,7 @@ namespace {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must be covered by the framework admin access rule.');
     }
     $userActions = $behaviors['access']['rules'][0]['actions'] ?? [];
-    acrlAccessAssert(in_array('entry', $userActions, true) && in_array('save-answer', $userActions, true) && in_array('section-status', $userActions, true), 'Entry and section-status routes must allow signed-in users.');
+    acrlAccessAssert(in_array('entry', $userActions, true) && in_array('save-answer', $userActions, true) && in_array('section-status', $userActions, true) && in_array('accept-suggestions', $userActions, true), 'Entry, section-status, and suggestion routes must allow signed-in users.');
     foreach (['threshold', 'save-threshold', 'import-preview', 'import-confirm'] as $name) {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must use the persisted-admin rule.');
     }
@@ -134,6 +135,7 @@ namespace {
         "'GET acrl/entry'",
         "'POST acrl/years/<year:\\\\d+>/answers'",
         "'POST acrl/years/<year:\\\\d+>/sections/<section:[^/]+>/status'",
+        "'POST acrl/years/<year:\\\\d+>/sections/<section:[^/]+>/suggestions/accept'",
         "'GET acrl/threshold'",
         "'POST acrl/years/<year:\\\\d+>/import/preview'",
         "'POST acrl/years/<year:\\\\d+>/import/confirm'",

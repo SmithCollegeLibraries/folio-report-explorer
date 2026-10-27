@@ -10,14 +10,16 @@ class AcrlEntryService
     private $calculations;
     private $values;
     private $thresholds;
+    private $history;
 
-    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null)
+    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null)
     {
         $this->repository = $repository ?: new AcrlAnswerRepository();
         $this->rules = $rules ?: new AcrlEntryRulesService();
         $this->calculations = $calculations ?: new AcrlCalculationService();
         $this->values = $values ?: new AcrlAnswerValueService();
         $this->thresholds = $thresholds ?: new AcrlThresholdService();
+        $this->history = $history ?: new AcrlHistoryService($this->repository, $this->rules);
     }
 
     public function latestYear(): int
@@ -47,8 +49,7 @@ class AcrlEntryService
         );
         $answers = $this->answerMap($answerRows);
         $calculationResults = $this->calculations->evaluate($questions, $answerRows);
-        $previousAnswers = $this->answerMap($this->repository->answers($year - 1, 'survey'));
-        $links = $this->linksByCurrentKey($this->repository->approvedLinks($year));
+        $questionHistory = $this->history->forQuestions($year, $questions);
         $statuses = [];
         foreach ($this->repository->sectionStatuses($year) as $status) {
             $statuses[$status['section']] = $status;
@@ -59,15 +60,15 @@ class AcrlEntryService
         foreach ($questions as $question) {
             $key = $this->questionKey($question['sheet'], $question['question_id'], $question['part']);
             $answer = $answers[$key] ?? $this->emptyAnswer();
-            $linked = $links[$key] ?? [];
-            $previous = $this->previousValue($linked, $previousAnswers);
+            $history = $questionHistory[$key] ?? [];
+            $previous = $this->previousFromHistory($history[0] ?? null);
             $calculation = $calculationResults[$this->calculationKey($question['sheet'], $question['question_id'], $question['part'])] ?? null;
             $currentValue = $answer['value_number'] ?? $answer['value_text'];
             $comparison = $this->rules->compare(
                 $currentValue,
                 $previous['value'],
                 $threshold,
-                !empty($linked),
+                !empty($previous['linkedValues']),
                 $question['sheet']
             );
             $computed = $calculation ? [
@@ -89,6 +90,8 @@ class AcrlEntryService
                 'surveyOrder' => (int)$question['survey_order'],
                 'answer' => $answer,
                 'previous' => $previous,
+                'history' => $history,
+                'suggestion' => $this->suggestion($question, $answer, $history),
                 'comparison' => $comparison,
                 'calculated' => $computed,
             ];
@@ -171,6 +174,69 @@ class AcrlEntryService
         return ['conflict' => false, 'answer' => $result['current']];
     }
 
+    public function acceptSuggestions(int $year, string $section, array $items, string $userId, bool $isAdmin): array
+    {
+        $yearRow = $this->repository->year($year);
+        if (!$yearRow || $yearRow['status'] !== 'published') {
+            throw new \DomainException('The selected ACRL year is not published.');
+        }
+        if ($section === '' || empty($items) || count($items) > 200) {
+            throw new \InvalidArgumentException('Select one or more suggestions from a section.');
+        }
+
+        $questions = [];
+        foreach ($this->repository->questions($year, 'survey') as $question) {
+            $questions[$this->questionKey('survey', $question['question_id'], $question['part'])] = $question;
+        }
+        $answerMap = $this->answerMap($this->repository->answers($year, 'survey'));
+        $selected = [];
+        foreach ($items as $item) {
+            if (!is_array($item) || !isset($item['question_id']) || !is_scalar($item['question_id'])) {
+                throw new \InvalidArgumentException('Each suggestion needs a question identifier.');
+            }
+            $questionId = (string)$item['question_id'];
+            $part = isset($item['part']) && is_scalar($item['part']) ? (string)$item['part'] : '';
+            if (isset($item['sheet']) && $item['sheet'] !== 'survey') {
+                throw new \InvalidArgumentException('Suggestions are only available for Survey questions.');
+            }
+            $key = $this->questionKey('survey', $questionId, $part);
+            if (isset($selected[$key])) {
+                throw new \InvalidArgumentException('A suggestion can only be selected once.');
+            }
+            $question = $questions[$key] ?? null;
+            if (!$question || $question['section'] !== $section) {
+                throw new \DomainException('The selected suggestion does not belong to this section.');
+            }
+            if (!in_array($question['answer_type'], ['yes/no', 'choice'], true)) {
+                throw new \InvalidArgumentException('Only yes/no and choice answers can use suggestions.');
+            }
+            if (!$this->values->isEmpty($answerMap[$key] ?? $this->emptyAnswer())) {
+                throw new \DomainException('The selected suggestion is no longer available.');
+            }
+            $selected[$key] = $question;
+        }
+
+        $status = $this->repository->sectionStatus($year, $section);
+        if ($status && $status['status'] === 'ready' && !$isAdmin) {
+            throw new \DomainException('This section is ready for review and is read-only.');
+        }
+
+        $history = $this->history->forQuestions($year, array_values($selected));
+        $suggestions = [];
+        foreach ($selected as $key => $question) {
+            $prior = $history[$key][0]['value'] ?? null;
+            if ($prior === null || $prior === '') {
+                throw new \DomainException('The selected suggestion is no longer available.');
+            }
+            $suggestions[] = [
+                'question' => $question,
+                'values' => $this->values->normalize($question['answer_type'], $prior),
+                'note' => $answerMap[$key]['note'] ?? null,
+            ];
+        }
+        return $this->repository->saveSuggestions($suggestions, $userId);
+    }
+
     public function setSectionStatus(int $year, string $section, string $status, string $userId, bool $isAdmin): array
     {
         $yearRow = $this->repository->year($year);
@@ -222,49 +288,31 @@ class AcrlEntryService
         return $map;
     }
 
-    private function linksByCurrentKey(array $links): array
+    private function previousFromHistory(?array $history): array
     {
-        $map = [];
-        foreach ($links as $link) {
-            if ($link['sheet'] !== 'survey') {
-                continue;
-            }
-            $map[$this->questionKey($link['sheet'], $link['current_question_id'], $link['current_part'])][] = $link;
+        if (!$history || $history['value'] === null || $history['value'] === '') {
+            return ['value' => null, 'label' => 'No previous value', 'isSum' => !empty($history['isSum']), 'linkedValues' => $history['linkedValues'] ?? []];
         }
-        return $map;
+        return [
+            'value' => $history['value'],
+            'label' => $history['label'],
+            'isSum' => $history['isSum'],
+            'linkedValues' => $history['linkedValues'],
+        ];
     }
 
-    private function previousValue(array $links, array $answers): array
+    private function suggestion(array $question, array $answer, array $history): ?array
     {
-        $values = [];
-        foreach ($links as $link) {
-            $key = $this->questionKey($link['sheet'], $link['previous_question_id'], $link['previous_part']);
-            if (isset($answers[$key])) {
-                $row = $answers[$key];
-                $value = $row['value_number'] !== null ? $row['value_number'] : $row['value_text'];
-                if ($value !== null && $value !== '') {
-                    $values[] = [
-                        'questionId' => $link['previous_question_id'],
-                        'part' => $link['previous_part'],
-                        'value' => $value,
-                    ];
-                }
-            }
+        if (!$this->values->isEmpty($answer)
+            || !in_array($question['answer_type'], ['yes/no', 'choice'], true)
+            || empty($history)
+            || $history[0]['value'] === null
+            || $history[0]['value'] === '') {
+            return null;
         }
-        if (empty($values)) {
-            return ['value' => null, 'label' => 'No previous value', 'isSum' => false, 'linkedValues' => []];
-        }
-        $isSum = count($values) > 1 || count(array_filter($links, function ($link) {
-            return in_array($link['match_kind'], ['split', 'merged'], true);
-        })) > 0;
-        $value = count($values) === 1
-            ? $values[0]['value']
-            : $this->rules->sumLinkedValues(array_column($values, 'value'));
-        if (count($values) > 1 && $value === null) {
-            return ['value' => null, 'label' => 'No previous value', 'isSum' => true, 'linkedValues' => $values];
-        }
-        $label = $isSum ? 'Sum of linked values: ' . $this->displayValue($value) : $this->displayValue($value);
-        return ['value' => $value, 'label' => $label, 'isSum' => $isSum, 'linkedValues' => $values];
+        $value = (string)$history[0]['value'];
+        $label = in_array(strtolower($value), ['yes', 'no'], true) ? ucfirst(strtolower($value)) : $value;
+        return ['value' => $value, 'label' => $label, 'year' => $history[0]['year']];
     }
 
     private function questionKey(string $sheet, string $questionId, string $part): string
@@ -290,11 +338,4 @@ class AcrlEntryService
         ];
     }
 
-    private function displayValue($value): string
-    {
-        if (is_numeric($value)) {
-            return number_format((float)$value, floor((float)$value) === (float)$value ? 0 : 2, '.', ',');
-        }
-        return (string)$value;
-    }
 }

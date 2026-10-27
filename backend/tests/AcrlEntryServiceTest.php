@@ -1,6 +1,7 @@
 <?php
 
 require_once __DIR__ . '/../services/AcrlEntryRulesService.php';
+require_once __DIR__ . '/../services/AcrlHistoryService.php';
 require_once __DIR__ . '/../services/AcrlCalculationService.php';
 require_once __DIR__ . '/../services/AcrlAnswerValueService.php';
 require_once __DIR__ . '/../services/AcrlEntryService.php';
@@ -18,6 +19,7 @@ class AcrlEntryTestRepository
     public $saveResult = ['conflict' => true, 'current' => ['value_text' => '175', 'updated_at' => '2026-01-01 00:00:00.000001']];
     public $statusWrites = [];
     public $savedCalculations = [];
+    public $suggestionWrites = [];
 
     public function publishedYears(): array { return [2026, 2025]; }
     public function year(int $year): ?array { return in_array($year, [2025, 2026], true) ? ['survey_year' => $year, 'status' => 'published'] : null; }
@@ -32,6 +34,18 @@ class AcrlEntryTestRepository
                 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '63', 'part' => '',
                 'section' => 'Circulation', 'prompt' => 'Calculated total', 'answer_type' => 'number',
                 'required_status' => 'yes', 'calculated_from' => 'sum of 60A', 'survey_order' => 2,
+            ], [
+                'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '0A', 'part' => '',
+                'section' => 'Circulation', 'prompt' => 'Yes or no answer', 'answer_type' => 'yes/no',
+                'required_status' => 'yes', 'calculated_from' => null, 'survey_order' => 3,
+            ], [
+                'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '0B', 'part' => '',
+                'section' => 'Circulation', 'prompt' => 'Choice answer', 'answer_type' => 'choice',
+                'required_status' => 'no', 'calculated_from' => null, 'survey_order' => 4,
+            ], [
+                'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '1A', 'part' => '',
+                'section' => 'Circulation', 'prompt' => 'Numeric answer', 'answer_type' => 'number',
+                'required_status' => 'no', 'calculated_from' => null, 'survey_order' => 5,
             ]];
         }
         if ($year === 2026 && $sheet === 'trends') {
@@ -56,22 +70,34 @@ class AcrlEntryTestRepository
             return [[
                 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'value_text' => '200', 'value_number' => '200.00',
                 'note' => null, 'source' => 'manual', 'source_label' => null, 'updated_by' => 'user-2', 'updated_at' => '2026-02-01 00:00:00.000001',
+            ], [
+                'sheet' => 'survey', 'question_id' => '0B', 'part' => '', 'value_text' => 'selected', 'value_number' => null,
+                'note' => null, 'source' => 'manual', 'source_label' => null, 'updated_by' => 'user-2', 'updated_at' => '2026-02-01 00:00:00.000002',
             ]];
         }
         if ($year === 2025) {
             return [
                 ['sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'value_text' => '100', 'value_number' => '100.00'],
                 ['sheet' => 'survey', 'question_id' => '61', 'part' => '', 'value_text' => '50', 'value_number' => '50.00'],
+                ['sheet' => 'survey', 'question_id' => '0A', 'part' => '', 'value_text' => 'no', 'value_number' => null],
+                ['sheet' => 'survey', 'question_id' => '0B', 'part' => '', 'value_text' => 'previous-choice', 'value_number' => null],
+                ['sheet' => 'survey', 'question_id' => '1A', 'part' => '', 'value_text' => '17', 'value_number' => '17.00'],
             ];
         }
         return [];
     }
     public function approvedLinks(int $year): array
     {
-        return $year === 2026 ? [
+        if ($year === 2026) {
+            return [
             ['sheet' => 'survey', 'previous_question_id' => '60', 'previous_part' => 'A', 'current_question_id' => '60', 'current_part' => 'A', 'match_kind' => 'merged'],
             ['sheet' => 'survey', 'previous_question_id' => '61', 'previous_part' => '', 'current_question_id' => '60', 'current_part' => 'A', 'match_kind' => 'merged'],
-        ] : [];
+            ['sheet' => 'survey', 'previous_question_id' => '0A', 'previous_part' => '', 'current_question_id' => '0A', 'current_part' => '', 'match_kind' => 'same'],
+            ['sheet' => 'survey', 'previous_question_id' => '0B', 'previous_part' => '', 'current_question_id' => '0B', 'current_part' => '', 'match_kind' => 'same'],
+            ['sheet' => 'survey', 'previous_question_id' => '1A', 'previous_part' => '', 'current_question_id' => '1A', 'current_part' => '', 'match_kind' => 'same'],
+            ];
+        }
+        return [];
     }
     public function sectionStatuses(int $year): array { return []; }
     public function sectionStatus(int $year, string $section): ?array { return $this->status; }
@@ -79,6 +105,11 @@ class AcrlEntryTestRepository
     {
         $this->savedCalculations = $calculatedChanges;
         return $this->saveResult;
+    }
+    public function saveSuggestions(array $suggestions, string $userId): array
+    {
+        $this->suggestionWrites[] = [$suggestions, $userId];
+        return ['conflict' => false, 'accepted' => count($suggestions)];
     }
     public function setSectionStatus(int $year, string $section, string $status, string $userId): ?array
     {
@@ -101,9 +132,16 @@ $entry = $service->entry(2026);
 $row = $entry['sections'][0]['questions'][0];
 acrlEntryServiceAssert($row['previous']['value'] === 150.0 && $row['previous']['isSum'], 'Approved merged links should display the sum of previous values.');
 acrlEntryServiceAssert($row['comparison']['changePercent'] === 33.33 && $row['comparison']['highlighted'], 'The entry response should include threshold-based advisory comparisons.');
-acrlEntryServiceAssert($entry['sections'][0]['status'] === 'open' && $entry['sections'][0]['filled'] === 1, 'Entry sections report status and completed-part progress.');
+acrlEntryServiceAssert($entry['sections'][0]['status'] === 'open' && $entry['sections'][0]['filled'] === 2, 'Entry sections report status and do not count unaccepted suggestions as filled.');
+$questionsById = [];
+foreach ($entry['sections'][0]['questions'] as $entryQuestion) {
+    $questionsById[$entryQuestion['questionId']] = $entryQuestion;
+}
+acrlEntryServiceAssert($questionsById['0A']['suggestion'] === ['value' => 'no', 'label' => 'No', 'year' => 2025], 'A blank yes/no answer should suggest the approved prior-year answer.');
+acrlEntryServiceAssert($questionsById['0B']['suggestion'] === null, 'An already answered choice question must not be suggested.');
+acrlEntryServiceAssert($questionsById['1A']['suggestion'] === null && $questionsById['60']['suggestion'] === null, 'Numeric answers must never be suggested.');
 $trend = $entry['sections'][1]['questions'][0];
-acrlEntryServiceAssert($trend['comparison']['changePercent'] === null && $trend['previous']['label'] === 'No previous value', 'Trends parts do not show previous values or change.');
+acrlEntryServiceAssert($trend['comparison']['changePercent'] === null && $trend['previous']['label'] === 'No previous value' && $trend['history'] === [] && $trend['suggestion'] === null, 'Trends parts do not show history, suggestions, or change.');
 
 try {
     $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false);
@@ -116,6 +154,15 @@ $conflict = $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-0
 acrlEntryServiceAssert($conflict['conflict'] && $conflict['current']['value_text'] === '175', 'Optimistic-lock conflicts return the current answer.');
 acrlEntryServiceAssert($repository->savedCalculations[0]['question']['question_id'] === '63'
     && $repository->savedCalculations[0]['values']['value_number'] === '180.00', 'Saving an input should recompute derived values before repository persistence.');
+$accepted = $service->acceptSuggestions(2026, 'Circulation', [['question_id' => '0A', 'part' => '']], 'user-1', false);
+acrlEntryServiceAssert(!$accepted['conflict'] && $accepted['accepted'] === 1, 'A valid prior yes/no suggestion can be accepted as one manual save.');
+acrlEntryServiceAssert($repository->suggestionWrites[0][0][0]['values'] === ['value_text' => 'no', 'value_number' => null]
+    && $repository->suggestionWrites[0][1] === 'user-1', 'Suggestion acceptance must send the normalized prior value and signed-in editor to persistence.');
+try {
+    $service->acceptSuggestions(2026, 'Circulation', [['question_id' => '1A', 'part' => '']], 'user-1', false);
+    acrlEntryServiceAssert(false, 'Numeric answers cannot be accepted as suggestions.');
+} catch (InvalidArgumentException $exception) {
+}
 try {
     $service->saveAnswer(2026, 'survey', '63', '', '99', null, null, 'user-1', false);
     acrlEntryServiceAssert(false, 'Calculated totals must reject direct saves.');

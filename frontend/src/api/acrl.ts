@@ -79,6 +79,15 @@ export async function saveAcrlAnswer(year: number, input: {
   return data;
 }
 
+export async function acceptAcrlSuggestions(year: number, section: string, items: Array<{
+  sheet: 'survey';
+  question_id: string;
+  part: string;
+}>): Promise<{ conflict: boolean; accepted: number; current?: unknown }> {
+  const { data } = await api.post(`/acrl/years/${year}/sections/${encodeURIComponent(section)}/suggestions/accept`, { items });
+  return data;
+}
+
 export async function setAcrlSectionStatus(year: number, section: string, status: 'open' | 'ready'): Promise<{ section: string; status: 'open' | 'ready' }> {
   const { data } = await api.post(`/acrl/years/${year}/sections/${encodeURIComponent(section)}/status`, { status });
   return data;

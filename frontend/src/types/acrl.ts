@@ -99,8 +99,17 @@ export interface AcrlEntryQuestion {
     value: number | string | null;
     label: string;
     isSum: boolean;
-    linkedValues: Array<{ questionId: string; part: string; value: number | string }>;
+    linkedValues: Array<{ questionId: string; part: string; value: number | string; note?: string | null }>;
   };
+  history: Array<{
+    year: number;
+    value: number | string | null;
+    label: string;
+    isSum: boolean;
+    linkedValues: Array<{ questionId: string; part: string; value: number | string; note: string | null }>;
+    notes: Array<{ questionId: string; part: string; note: string }>;
+  }>;
+  suggestion: { value: string; label: string; year: number } | null;
   comparison: {
     previousValue: number | string | null;
     previousLabel: string;
