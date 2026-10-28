@@ -28,9 +28,38 @@ function datedResult(value: number, queryId = 'acrl-81') {
 
 const methods = [
   {
-    sheet: 'survey' as const, questionId: '40a', part: '', queryId: 'acrl-40a', queryVersion: 2, kind: 'snapshot' as const,
-    summary: ['Smith College and Five College Repository campuses.', 'Changed in v2 (2026-10): journals and serials are now counted.'],
-    sql: 'select count(distinct it.id) as value\nfrom inventory.item__t it;',
+    sheet: 'survey' as const, questionId: '40a', part: '', queryId: 'acrl-40a', queryVersion: 3, kind: 'snapshot' as const,
+    summary: [
+      'Books, scores, theses and other volumes, including serial volumes cataloged as monographs, at Smith College and the Five College Repository.',
+      'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
+      'Includes Archival material, Book, Government Publication, Score, Supplement and Thesis/Dissertation material types; other material types are left out.',
+      'Journal, Newspaper and Serial items are counted only when their instance is cataloged as a single unit (monograph).',
+      'Online and microform locations are left out. This is a current snapshot with no date range.',
+      'Changed in v3 (2026-10): serial items count only when cataloged as monographs; v2 (2026-10) counted all journals, serials and newspapers; FY2023–FY2025 used v1 (books, scores, theses, archival material and government publications; no location exclusions).',
+    ],
+    sql: `with scope_items as (
+    select it.id, it.holdings_record_id, mtt.name as material_type
+    from inventory.item__t it
+        join inventory.material_type__t mtt on mtt.id = it.material_type_id
+        join inventory.location__t lt on lt.id = it.effective_location_id
+    where lt.campus_id in ('7d02e46d-3e60-4eaf-a986-5aa3550e8cb5', 'b23a14ae-b3a8-4cbf-92fb-4b81d1a4b0a1')
+        and it.status__name in ('Awaiting pickup', 'In transit', 'Checked out', 'Available', 'Restricted', 'Paged')
+        and it.effective_location_id not in (
+            '67204874-e4d7-495b-9247-62cd27d9ea31', '409b947f-d67d-4cda-846f-35c9344ae81b', 'b0ecdd73-6416-4bd1-9cf3-483fd40b95cd',
+            '81772d53-e7d0-40d4-8249-a380f3fd33f0', '270dceaa-8100-4e53-bf19-6decf7926f78', '3ffae749-2131-48e1-8bf8-7adf36a92b9c',
+            '38fa998f-5044-4589-a182-2e027af0bb04')
+        and mtt.name in ('Archival material', 'Book', 'Government Publication', 'Score', 'Supplement', 'Thesis/Dissertation',
+                         'Journal', 'Newspaper', 'Serial')
+)
+select
+    (select count(distinct id) from scope_items
+     where material_type in ('Archival material', 'Book', 'Government Publication', 'Score', 'Supplement', 'Thesis/Dissertation'))
+  + (select count(distinct si.id)
+     from scope_items si
+         join inventory.holdings_record__t hrt on hrt.id = si.holdings_record_id
+         join inventory.instance__t inst on inst.id = hrt.instance_id
+         join inventory.mode_of_issuance__t moi on moi.id = inst.mode_of_issuance_id and moi.name = 'single unit'
+     where si.material_type in ('Journal', 'Newspaper', 'Serial')) as value;`,
   },
   {
     sheet: 'survey' as const, questionId: '81', part: '', queryId: 'acrl-81', queryVersion: 1, kind: 'dated' as const,
@@ -62,7 +91,7 @@ describe('ACRL FOLIO auto-fill panel', () => {
     runAutofill.mockResolvedValue({
       value: 2180000,
       queryId: 'acrl-40a',
-      queryVersion: 1,
+      queryVersion: 2,
       ranAt: '2026-10-28T12:00:00-04:00',
       asOf: '2026-10-28',
       fyStart: null,
@@ -73,18 +102,18 @@ describe('ACRL FOLIO auto-fill panel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Fill from FOLIO' }));
     const method = await screen.findByRole('region', { name: 'How Fill from FOLIO counts this now' });
-    expect(within(method).getByText('Smith College and Five College Repository campuses.')).toBeInTheDocument();
-    expect(within(method).getByText(/Changed in v2/)).toBeInTheDocument();
-    expect(screen.getByText('query acrl-40a v1')).toBeInTheDocument();
-    expect(within(method).getByText('This value came from v1; the rules below are v2')).toBeInTheDocument();
+    expect(within(method).getByText('Books, scores, theses and other volumes, including serial volumes cataloged as monographs, at Smith College and the Five College Repository.')).toBeInTheDocument();
+    expect(within(method).getByText(/Changed in v3/)).toBeInTheDocument();
+    expect(screen.getByText('query acrl-40a v2')).toBeInTheDocument();
+    expect(within(method).getByText('This value came from v2; the rules below are v3')).toBeInTheDocument();
     const sqlDetails = within(method).getByText('SQL').closest('details');
     expect(sqlDetails).not.toHaveAttribute('open');
     await userEvent.click(within(method).getByText('SQL'));
-    expect(method.querySelector('pre')?.textContent).toBe('select count(distinct it.id) as value\nfrom inventory.item__t it;');
+    expect(method.querySelector('pre')?.textContent).toBe(methods[0].sql);
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     await userEvent.click(within(method).getByRole('button', { name: 'Copy SQL' }));
-    expect(writeText).toHaveBeenCalledWith('select count(distinct it.id) as value\nfrom inventory.item__t it;');
+    expect(writeText).toHaveBeenCalledWith(methods[0].sql);
   });
 
   it('adds typed ILLiad counts to the FOLIO suggestion and appends provenance to the existing note', async () => {
