@@ -42,16 +42,37 @@ export function parseInstructionPages(pages: string[], questions: AcrlInstructio
   const duplicateBlockKeys: string[] = [];
   let current: InstructionDraft | null = null;
   let scopeHeading = '';
+  let subsectionIntroLines: string[] = [];
+  let subsectionIntroGroup: InstructionDraft | null = null;
+  let subsectionHasHeading = false;
   let inFaq = false;
   let inQuestionIndex = false;
 
+  const addDraft = (draft: InstructionDraft) => {
+    if (drafts.some((existing) => existing.blockKey === draft.blockKey)) {
+      if (!duplicateBlockKeys.includes(draft.blockKey)) duplicateBlockKeys.push(draft.blockKey);
+    } else {
+      drafts.push(draft);
+    }
+  };
+
   const saveCurrent = () => {
-    if (current && (current.kind !== 'definition' || current.lines.some((line) => line.trim()))) {
+    if (current) {
       current.text = current.lines.join('\n').trim();
-      if (drafts.some((draft) => draft.blockKey === current?.blockKey)) {
-        if (!duplicateBlockKeys.includes(current.blockKey)) duplicateBlockKeys.push(current.blockKey);
-      } else {
-        drafts.push(current);
+      if (!current.text && current.kind === 'question' && subsectionIntroLines.length) {
+        if (subsectionIntroGroup) {
+          subsectionIntroGroup.questionKeys.push(...current.questionKeys);
+        } else {
+          subsectionIntroGroup = createDraft('group', `group:${slug(scopeHeading)}`, scopeHeading, current.questionKeys);
+          subsectionIntroGroup.lines = [...subsectionIntroLines];
+          subsectionIntroGroup.text = subsectionIntroLines.join('\n').trim();
+          addDraft(subsectionIntroGroup);
+        }
+      } else if (current.text) {
+        addDraft(current);
+      }
+      if (current.kind === 'question') {
+        subsectionHasHeading = true;
       }
     }
     current = null;
@@ -85,6 +106,9 @@ export function parseInstructionPages(pages: string[], questions: AcrlInstructio
       const group = parseGroupHeading(headingLine, questionByKey);
       if (group) {
         saveCurrent();
+        subsectionIntroLines = [];
+        subsectionIntroGroup = null;
+        subsectionHasHeading = true;
         current = createDraft(group.kind, group.blockKey, headingLine, group.questionKeys);
         return;
       }
@@ -97,6 +121,7 @@ export function parseInstructionPages(pages: string[], questions: AcrlInstructio
           return;
         }
         saveCurrent();
+        subsectionHasHeading = true;
         current = createDraft('question', questionBlockKey(question.token, question.questionKeys, questionByKey), headingLine, question.questionKeys);
         return;
       }
@@ -104,11 +129,17 @@ export function parseInstructionPages(pages: string[], questions: AcrlInstructio
       if (isSectionHeading(headingLine)) {
         saveCurrent();
         scopeHeading = headingLine;
+        subsectionIntroLines = [];
+        subsectionIntroGroup = null;
+        subsectionHasHeading = false;
         return;
       }
 
       if (isDefinitionHeading(headingLine)) {
         saveCurrent();
+        subsectionIntroLines = [];
+        subsectionIntroGroup = null;
+        subsectionHasHeading = true;
         const scope = definitionScope(headingLine, scopeHeading);
         const keys = questionsInScope(surveyQuestions, scope);
         current = createDraft('definition', `definition:${slug(headingLine)}`, headingLine, keys);
@@ -127,6 +158,8 @@ export function parseInstructionPages(pages: string[], questions: AcrlInstructio
               return question ? parentIds.includes(rootQuestionId(question)) : false;
             }));
         }
+      } else if (scopeHeading && !subsectionHasHeading) {
+        subsectionIntroLines.push(line);
       }
     });
   });

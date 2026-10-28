@@ -101,12 +101,12 @@ describe('parseInstructionPages', () => {
     const result = parser.parseInstructionPages([
       `Contents\n*1A–6A. Staffing FTEs ........ 7\n*1B–6B. Staffing salaries ........ 8\n91A-D. Headcounts ........ 30`,
       `*0A. Table of contents row ..................................................................................................... 9\n*68. Another contents row ........................................................................................................... 9`,
-      `Library characteristics\n*0A. Does the data include a law library?\n*68. Number of branch libraries`,
+      `Library characteristics\n*0A. Does the data include a law library?\nReport whether the library has a law library.\n*68. Number of branch libraries`,
       `*24. Preservation services`,
       `ACRL Trends & Statistics Survey IPEDS Academic Library Component\nSurvey section Question\n*30. Contents row`,
       `*31. Contents row continuation`,
       `Expenses\n*30. & 31. Total expenses with and without fringe benefits\nReport the paired expense measures.`,
-      `Collections\nTitle\nCount titles, not individual copies.\n*40A. Physical book titles\nCount titles available through the catalogue.\n*40B. Electronic book titles\n40a. Physical book volumes\n*41A. Physical book volumes\n*41B. Electronic book volumes\n*42A. Physical media\nCount physical media titles. Do not duplicate question 40.\n*42B. Electronic media\n*43A. Physical serials\n*43B. Electronic serials\n*44A. Physical total\n*44B. Electronic total`,
+      `Collections\nTitle\nCount titles, not individual copies.\n*40A. Physical book titles\nCount titles available through the catalogue.\n*40B. Electronic book titles\nList electronic titles separately.\n40a. Physical book volumes\nReport physical volumes separately.\n*41A. Physical book volumes\n*41B. Electronic book volumes\n*42A. Physical media\nCount physical media titles. Do not duplicate question 40.\n*42B. Electronic media\n*43A. Physical serials\n*43B. Electronic serials\n*44A. Physical total\n*44B. Electronic total`,
       `Staffing\n*1A–6A. Staffing Types and FTEs\nReport FTE values.\n*1B–6B. Staffing Expenses\nQuestion 6B Total salaries and wages.\n5.1.1) Parser version note.\nThis section covers questions 1B–6C.`,
       `Library Services\n*60. Physical circulation\nCount checkouts.\n*81. Loans supplied\nInclude questions 81a-c.\n*82. Loans received\nInclude questions 82a-d.`,
       `Local characteristics and enrollment\n*91/91A-D. Headcounts\nTotal is calculated on line 91e.`,
@@ -136,8 +136,8 @@ describe('parseInstructionPages', () => {
     expect(linksFor('question:40-b')).toEqual(['40B']);
     expect(titleLinks).not.toContain('60A');
     expect(result.blocks.some((block) => block.heading === 'Library Services' && block.kind === 'definition')).toBe(false);
-    expect(result.missingQuestionKeys).toEqual([]);
-    expect(result.coverage.missing).toBe(0);
+    expect(result.missingQuestionKeys).toEqual(['68', '24', '41A', '41B', '42B', '43A', '43B', '44A', '44B']);
+    expect(result.coverage.missing).toBe(9);
   });
 
   it('reports repeated body block keys while emitting one unique block for preview to reject', async () => {
@@ -184,5 +184,55 @@ describe('parseInstructionPages', () => {
       .toContain('Final sentence of question 74.');
     expect(result.blocks.find((block) => block.blockKey === 'question:75')?.text)
       .toContain('Report additional details.');
+  });
+
+  it('links bodyless questions to their subsection introduction without absorbing the next subsection', async () => {
+    const parser = Object.values(import.meta.glob('./acrlInstructionParser.ts', { eager: true }))[0] as {
+      parseInstructionPages: (pages: string[], questions: TestQuestion[]) => {
+        blocks: Array<{ blockKey: string; heading: string; text: string; kind: string }>;
+        links: Array<{ question_id: string; part: string; blockKey: string }>;
+        missingQuestionKeys: string[];
+      };
+    } | undefined;
+    expect(parser).toBeDefined();
+    if (!parser) return;
+
+    const result = parser.parseInstructionPages([
+      `Reporting Structure\nReport the administrative structure of the library.\n0A. Library administration\n0B. Reporting relationship\nBranch/Independent Libraries\nDescribe branch locations.\n1. Branch count\nCount all branches.`,
+    ], [question('0', 'A'), question('0', 'B'), question('1')]);
+
+    const reporting = result.blocks.find((block) => block.blockKey === 'group:reporting-structure');
+    expect(reporting).toEqual({
+      blockKey: 'group:reporting-structure',
+      heading: 'Reporting Structure',
+      text: 'Report the administrative structure of the library.',
+      kind: 'group',
+    });
+    expect(result.links.filter((link) => link.blockKey === 'group:reporting-structure')
+      .map(({ question_id, part }) => `${question_id}${part}`)).toEqual(['0A', '0B']);
+    expect(result.blocks.some((block) => block.blockKey === 'question:0-a' || block.blockKey === 'question:0-b')).toBe(false);
+    expect(result.blocks.find((block) => block.blockKey === 'question:1')?.text).toBe('Count all branches.');
+    expect(result.blocks.find((block) => block.blockKey === 'group:reporting-structure')?.text)
+      .not.toContain('Branch/Independent Libraries');
+    expect(result.blocks.every((block) => block.text.trim().length > 0)).toBe(true);
+    expect(result.missingQuestionKeys).toEqual([]);
+  });
+
+  it('counts bodyless questions without a subsection introduction as missing and emits no empty blocks', async () => {
+    const parser = Object.values(import.meta.glob('./acrlInstructionParser.ts', { eager: true }))[0] as {
+      parseInstructionPages: (pages: string[], questions: TestQuestion[]) => {
+        blocks: Array<{ blockKey: string; text: string }>;
+        missingQuestionKeys: string[];
+      };
+    } | undefined;
+    expect(parser).toBeDefined();
+    if (!parser) return;
+
+    const result = parser.parseInstructionPages([
+      `Reporting Structure\n0A. Library administration\n0B. Reporting relationship`,
+    ], [question('0', 'A'), question('0', 'B')]);
+
+    expect(result.blocks).toEqual([]);
+    expect(result.missingQuestionKeys).toEqual(['0A', '0B']);
   });
 });

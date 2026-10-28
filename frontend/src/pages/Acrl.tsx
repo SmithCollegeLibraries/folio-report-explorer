@@ -7,12 +7,8 @@ import AcrlNotesImportPanel from '../components/AcrlNotesImportPanel';
 import AcrlFileStatus from '../components/AcrlFileStatus';
 import { getAcrlReview, listAcrlCatalogueYears, publishAcrlYear, saveAcrlLinks, uploadAcrlWorksheet } from '../api/acrl';
 import { parseWorksheetFile, sha256ForFile } from '../services/acrlWorksheetParser';
+import { errorMessage } from '../utils/errorMessage';
 import type { AcrlAssignmentCopyResponse, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return 'The request could not be completed.';
-}
 
 export default function AcrlPage() {
   const queryClient = useQueryClient();

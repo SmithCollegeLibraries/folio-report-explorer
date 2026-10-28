@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { describe, expect, it } from 'vitest';
 import { parseInstructionPages } from './acrlInstructionParser';
+import { validateInstructionSaveRules } from './acrlInstructionSaveRules';
 import { pdfItemsToText, type PdfTextItem } from './acrlPdfText';
 import { parseWorksheetPages } from './acrlWorksheetParser';
 
@@ -51,9 +52,15 @@ describe('real 2026 ACRL PDFs (local only)', () => {
     }, null, 2));
 
     expect(surveyQuestions).toHaveLength(73);
-    expect(parsed.coverage).toEqual({ individual: 48, grouped: 25, missing: 0 });
+    expect(parsed.coverage).toEqual({ individual: 46, grouped: 27, missing: 0 });
     expect(parsed.missingQuestionKeys).toEqual([]);
     expect(parsed.duplicateBlockKeys).toEqual([]);
+    const reportingQuestionLinks = parsed.links.filter((link) => link.blockKey === 'group:reporting-structure'
+      && ['0A', '0B'].includes(`${link.question_id}${link.part}`.toUpperCase()));
+    expect(reportingQuestionLinks.map((link) => `${link.question_id}${link.part}`.toUpperCase()).sort()).toEqual(['0A', '0B']);
+    expect(parsed.blocks.find((block) => block.blockKey === 'group:reporting-structure')?.text).toHaveLength(171);
+    expect(parsed.blocks.every((block) => block.text.trim().length > 0)).toBe(true);
+    expect(validateInstructionSaveRules(parsed.blocks, parsed.links, surveyQuestions)).toEqual([]);
     expect(bodyKeyLines.map(({ key }) => key)).toEqual(['72B']);
     expect(affectedLengths).toEqual([
       { questionId: '74', blockKey: 'question:74', textLength: 332 },

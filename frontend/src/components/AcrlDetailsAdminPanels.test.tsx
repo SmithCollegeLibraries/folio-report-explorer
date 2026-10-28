@@ -69,7 +69,9 @@ describe('ACRL details administrator panels', () => {
     const input = await screen.findByLabelText('Instructions PDF');
     await waitFor(() => expect(input).toBeEnabled());
     await userEvent.upload(input, new File(['pdf bytes'], 'instructions.pdf', { type: 'application/pdf' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Duplicate instruction block keys: question:40');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('These instruction blocks or links cannot be saved:');
+    expect(alert).toHaveTextContent('question:40: block key is duplicated.');
     expect(screen.getByRole('button', { name: 'Save instructions' })).toBeDisabled();
     expect(saveInstructions).not.toHaveBeenCalled();
   });
