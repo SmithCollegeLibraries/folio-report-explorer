@@ -2,6 +2,7 @@ import type {
   AcrlAssignmentCopyResponse,
   AcrlAssignmentUser,
   AcrlAutofillResponse,
+  AcrlAutofillMethodsResponse,
   AcrlEntryResponse,
   AcrlImportPreview,
   AcrlInstructionsSaveResult,
@@ -120,6 +121,11 @@ export async function saveAcrlAnswer(year: number, input: {
 export async function runAcrlAutofill(year: number, sheet: 'survey' | 'trends', questionId: string, part: string): Promise<AcrlAutofillResponse> {
   const pathPart = encodeURIComponent(part || '_');
   const { data } = await api.post(`/acrl/years/${year}/autofill/${encodeURIComponent(sheet)}/${encodeURIComponent(questionId)}/${pathPart}`);
+  return data;
+}
+
+export async function getAcrlAutofillMethods(): Promise<AcrlAutofillMethodsResponse> {
+  const { data } = await api.get('/acrl/autofill/methods');
   return data;
 }
 

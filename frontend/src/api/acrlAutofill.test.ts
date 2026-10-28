@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runAcrlAutofill } from './acrl';
+import { getAcrlAutofillMethods, runAcrlAutofill } from './acrl';
 
-const { post } = vi.hoisted(() => ({ post: vi.fn() }));
-vi.mock('./client', () => ({ api: { post } }));
+const { get, post } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock('./client', () => ({ api: { get, post } }));
 
 afterEach(() => vi.clearAllMocks());
 
@@ -22,5 +22,15 @@ describe('runAcrlAutofill', () => {
 
     await expect(runAcrlAutofill(2026, 'survey', '60', '')).resolves.toEqual(response);
     expect(post).toHaveBeenCalledWith('/acrl/years/2026/autofill/survey/60/_');
+  });
+});
+
+describe('getAcrlAutofillMethods', () => {
+  it('gets the methods catalog from the ACRL methods route', async () => {
+    const response = { methods: [] };
+    get.mockResolvedValue({ data: response });
+
+    await expect(getAcrlAutofillMethods()).resolves.toEqual(response);
+    expect(get).toHaveBeenCalledWith('/acrl/autofill/methods');
   });
 });

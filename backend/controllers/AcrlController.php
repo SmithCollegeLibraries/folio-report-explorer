@@ -37,7 +37,7 @@ class AcrlController extends Controller
                 'class' => \yii\filters\auth\HttpBearerAuth::class,
                 'except' => ['options'],
             ];
-            $userActions = ['entry', 'autofill', 'save-answer', 'section-status', 'accept-suggestions', 'question-details', 'add-question-note'];
+            $userActions = ['entry', 'autofill', 'autofill-methods', 'save-answer', 'section-status', 'accept-suggestions', 'question-details', 'add-question-note'];
             $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'import-preview', 'import-confirm', 'save-instructions', 'notes-import-preview', 'notes-import-confirm', 'edit-question-note', 'delete-question-note'];
             $behaviors['access'] = [
                 'class' => \yii\filters\AccessControl::class,
@@ -186,6 +186,14 @@ class AcrlController extends Controller
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
         }
+    }
+
+    public function actionAutofillMethods()
+    {
+        if (($forbidden = $this->requireAcrlUser()) !== null) {
+            return $forbidden;
+        }
+        return ['methods' => $this->createAcrlAutofillService()->methods()];
     }
 
     protected function createAcrlAutofillService()

@@ -269,6 +269,21 @@ export interface AcrlAutofillResponse {
   kind: 'dated' | 'snapshot';
 }
 
+export interface AcrlAutofillMethod {
+  sheet: AcrlSheet;
+  questionId: string;
+  part: string;
+  queryId: string;
+  queryVersion: number;
+  kind: 'dated' | 'snapshot';
+  summary: string[];
+  sql: string;
+}
+
+export interface AcrlAutofillMethodsResponse {
+  methods: AcrlAutofillMethod[];
+}
+
 export interface AcrlImportPreview {
   surveyYear: number;
   sourceLabel: string;

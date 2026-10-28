@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addAcrlQuestionNote, deleteAcrlQuestionNote, editAcrlQuestionNote, getAcrlQuestionDetails } from '../api/acrl';
+import useAcrlAutofillMethods from '../hooks/useAcrlAutofillMethods';
+import AcrlCountingMethod from './AcrlCountingMethod';
 import type { AcrlEntryQuestion, AcrlQuestionNote } from '../types/acrl';
 
 interface Props {
@@ -26,6 +28,7 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
     queryKey,
     queryFn: () => getAcrlQuestionDetails(year, question.sheet, question.questionId, question.part),
   });
+  const methodsQuery = useAcrlAutofillMethods(question.sheet, question.questionId, question.part);
 
   useEffect(() => { closeHandler.current = onClose; }, [onClose]);
   useEffect(() => {
@@ -39,8 +42,18 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
       }
       if (event.key !== 'Tab' || !dialogRef.current) return;
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
-      ));
+        'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [href], summary, [tabindex]:not([tabindex="-1"])'
+      )).filter((element) => {
+        let ancestor = element.parentElement;
+        while (ancestor) {
+          if (ancestor.tagName.toLowerCase() === 'details' && !ancestor.hasAttribute('open')) {
+            const isSummary = element.tagName.toLowerCase() === 'summary' && ancestor === element.parentElement;
+            if (!isSummary) return false;
+          }
+          ancestor = ancestor.parentElement;
+        }
+        return true;
+      });
       if (!focusable.length) {
         event.preventDefault();
         dialogRef.current.focus();
@@ -135,6 +148,12 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
               {block.sourceFile && <p className="mt-3 text-xs text-gray-500">Source: {block.sourceFile}</p>}
             </article>)}
           </div>}
+
+          {tab === 'instructions' && (methodsQuery.method || methodsQuery.isError) && <AcrlCountingMethod
+            title="How Fill from FOLIO counts this now"
+            method={methodsQuery.method}
+            isError={methodsQuery.isError}
+          />}
 
           {tab === 'notes' && detailsQuery.data && <div id="acrl-details-panel-notes" role="tabpanel" aria-labelledby="acrl-details-tab-notes" className="space-y-4">
             {notes.length === 0 && <p className="rounded border border-dashed border-gray-300 p-4 text-sm text-gray-600">No collection notes yet.</p>}

@@ -60,6 +60,21 @@ class AcrlAutofillTestDb
     }
 }
 
+class AcrlAutofillMethodsNeverUseDb
+{
+    public $calls = 0;
+    public function beginTransaction()
+    {
+        $this->calls++;
+        throw new RuntimeException('The methods catalog must not query FOLIO.');
+    }
+    public function createCommand($sql, array $params = [])
+    {
+        $this->calls++;
+        throw new RuntimeException('The methods catalog must not issue FOLIO commands.');
+    }
+}
+
 class AcrlAutofillTestCommand
 {
     private $db;
@@ -222,6 +237,47 @@ foreach ($expectedQueries as $expected) {
         acrlAutofillAssert($queryCommand->params === [], $expected[2] . ' snapshot SQL must not receive dated parameters.');
     } else {
         acrlAutofillAssert(($queryCommand->params[':fy_start'] ?? null) === '2025-07-01' && ($queryCommand->params[':fy_end'] ?? null) === '2026-07-01', $expected[2] . ' must bind the survey-year fiscal range.');
+    }
+}
+
+$methodsDb = new AcrlAutofillMethodsNeverUseDb();
+$methodsService = new \app\services\AcrlAutofillService(
+    new AcrlAutofillTestRepository(),
+    $methodsDb,
+    function () { return new DateTimeImmutable('2026-10-28T12:34:56-04:00'); },
+    __DIR__ . '/../sql/acrl'
+);
+$methods = $methodsService->methods();
+acrlAutofillAssert(count($methods) === count($expectedQueries), 'The methods catalog must return one entry for every auto-fill definition.');
+foreach ($methods as $method) {
+    acrlAutofillAssert(!empty($method['summary']) && is_array($method['summary']), $method['queryId'] . ' must have a non-empty rule summary.');
+    foreach ($method['summary'] as $summaryLine) {
+        acrlAutofillAssert(is_string($summaryLine) && trim($summaryLine) !== '', $method['queryId'] . ' summary lines must be non-empty text.');
+    }
+    $sourceSql = file_get_contents(__DIR__ . '/../sql/acrl/' . array_column($expectedQueries, 3, 2)[$method['queryId']]);
+    $expectedSql = preg_replace('/^[ \t]*--[^\r\n]*(?:\r?\n|$)/m', '', $sourceSql);
+    acrlAutofillAssert($method['sql'] === $expectedSql, $method['queryId'] . ' methods SQL must exactly match the executed, stripped SQL.');
+    acrlAutofillAssert(preg_match('/^[ \t]*--/m', $method['sql']) !== 1, $method['queryId'] . ' methods SQL must not include full-line comments.');
+}
+$physicalVolumesMethod = null;
+foreach ($methods as $method) {
+    if ($method['queryId'] === 'acrl-40a') $physicalVolumesMethod = $method;
+}
+acrlAutofillAssert($physicalVolumesMethod !== null, 'The Q40a methods entry must be present.');
+acrlAutofillAssert($physicalVolumesMethod['queryVersion'] === 2, 'The Q40a methods entry must reflect ACR-021 version 2.');
+acrlAutofillAssert(strpos($physicalVolumesMethod['sql'], 'Journal') !== false && strpos($physicalVolumesMethod['sql'], 'Serial') !== false, 'The Q40a methods SQL must reflect its journal and serial material types.');
+acrlAutofillAssert($methodsDb->calls === 0, 'The methods catalog must not call the FOLIO database.');
+$circulationRules = [
+    'acrl-60' => ['q60_physical_circulation', 'checked out at a Smith service point and returned at Smith or still checked out'],
+    'acrl-81' => ['q81_consortial_lending', 'checked out at a non-Smith service point'],
+    'acrl-82' => ['q82_consortial_borrowing', 'checked out at a Smith service point'],
+];
+foreach ($circulationRules as $queryId => $rules) {
+    foreach ($methods as $method) {
+        if ($method['queryId'] !== $queryId) continue;
+        $summaryText = implode(' ', $method['summary']);
+        acrlAutofillAssert(strpos($summaryText, $rules[0]) !== false, $queryId . ' must name its result column in the summary.');
+        acrlAutofillAssert(strpos($summaryText, $rules[1]) !== false, $queryId . ' must explain its service-point rule in the summary.');
     }
 }
 

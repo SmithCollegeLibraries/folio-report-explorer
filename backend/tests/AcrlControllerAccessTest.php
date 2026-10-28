@@ -57,11 +57,40 @@ namespace {
     require_once __DIR__ . '/../controllers/traits/PersistedAdminAccessTrait.php';
     require_once __DIR__ . '/../controllers/AcrlController.php';
     require_once __DIR__ . '/../controllers/AcrlAssignmentController.php';
+    require_once __DIR__ . '/../services/AcrlAutofillService.php';
+
+    class AcrlControllerAccessMethodsNeverUseFolioDb
+    {
+        public $calls = 0;
+        public function beginTransaction()
+        {
+            $this->calls++;
+            throw new \RuntimeException('The methods route must not start an FOLIO transaction.');
+        }
+        public function createCommand($sql, array $params = [])
+        {
+            $this->calls++;
+            throw new \RuntimeException('The methods route must not issue an FOLIO command.');
+        }
+    }
 
     class AcrlControllerAccessAutofillService
     {
         public $mode = 'success';
         public $arguments = [];
+        public function methods()
+        {
+            return [[
+                'sheet' => 'survey',
+                'questionId' => '40a',
+                'part' => '',
+                'queryId' => 'acrl-40a',
+                'queryVersion' => 2,
+                'kind' => 'snapshot',
+                'summary' => ['Smith and Five College Repository campuses.'],
+                'sql' => 'select 1',
+            ]];
+        }
         public function run($year, $sheet, $questionId, $part)
         {
             $this->arguments = [$year, $sheet, $questionId, $part];
@@ -257,6 +286,29 @@ namespace {
     acrlAccessAssert(strpos($routes, "'POST acrl/years/<year:") !== false && strpos($routes, "/links'") !== false, 'Missing ACRL decision route.');
     acrlAccessAssert(strpos($routes, "'POST acrl/years/<year:") !== false && strpos($routes, "/publish'") !== false, 'Missing ACRL publish route.');
     $autofillController = new AcrlControllerAccessAutofillHarness('acrl', Yii::$app);
+    $autofillController->autofillService = new AcrlControllerAccessAutofillService();
+    acrlAccessAssert(method_exists($autofillController, 'actionAutofillMethods'), 'The methods action must be registered.');
+    acrlAccessAssert(in_array('autofill-methods', $userActions, true), 'The methods action must be in the approved-user access allowlist.');
+    acrlAccessAssert(strpos($routes, "'GET acrl/autofill/methods'") !== false, 'The GET methods route must be registered.');
+    acrlAccessAppUser(true, null);
+    $guestMethods = $autofillController->actionAutofillMethods();
+    acrlAccessAssert(Yii::$app->response->statusCode === 401 && ($guestMethods['error'] ?? null) === 'Unauthorized', 'The methods route must return 401 for guests.');
+    acrlAccessAppUser(false, new \app\models\User());
+    \app\models\User::$approvedExists = false;
+    $unapprovedMethods = $autofillController->actionAutofillMethods();
+    acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($unapprovedMethods['error'] ?? null) === 'Forbidden', 'The methods route must return 403 for unapproved users.');
+    acrlAccessAppUser(false, new \app\models\User());
+    \app\models\User::$approvedExists = true;
+    $methodsDb = new AcrlControllerAccessMethodsNeverUseFolioDb();
+    $autofillController->autofillService = new \app\services\AcrlAutofillService(
+        new \stdClass(),
+        $methodsDb,
+        null,
+        __DIR__ . '/../sql/acrl'
+    );
+    $approvedMethods = $autofillController->actionAutofillMethods();
+    acrlAccessAssert(count($approvedMethods['methods'] ?? []) === 9 && $approvedMethods['methods'][4]['queryVersion'] === 2, 'Approved ACRL users must receive all methods and the Q40a version.');
+    acrlAccessAssert($methodsDb->calls === 0, 'The methods route must not make any FOLIO database calls.');
     $autofillController->autofillService = new AcrlControllerAccessAutofillService();
     acrlAccessAppUser(false, new \app\models\User());
     \app\models\User::$approvedExists = true;
