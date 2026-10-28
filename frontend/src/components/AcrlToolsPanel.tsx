@@ -11,6 +11,7 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
   const [year, setYear] = useState<number | ''>('');
   const [sourceLabel, setSourceLabel] = useState('');
   const [csvRows, setCsvRows] = useState<Array<Record<string, string>>>([]);
+  const [csvFileName, setCsvFileName] = useState('');
   const [overwrite, setOverwrite] = useState(false);
   const [threshold, setThreshold] = useState('10');
   const [fileError, setFileError] = useState('');
@@ -20,10 +21,6 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
   useEffect(() => {
     if (thresholdQuery.data) setThreshold(String(thresholdQuery.data.thresholdPercent));
   }, [thresholdQuery.data]);
-  useEffect(() => {
-    if (year === '' && publishedYears.length) setYear(publishedYears[0]);
-  }, [publishedYears.join(','), year]);
-
   const thresholdMutation = useMutation({
     mutationFn: () => saveAcrlThreshold(Number(threshold)),
     onSuccess: (result) => {
@@ -39,10 +36,25 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
     mutationFn: () => confirmAcrlImport(Number(year), { rows: csvRows, sourceLabel, overwrite }),
     onSuccess: (result) => {
       setImportResult(`Imported ${result.result.imported}; unchanged ${result.result.unchanged}; skipped ${result.result.skipped}.`);
+      setYear('');
       previewMutation.reset();
     },
   });
   const preview = previewMutation.data;
+  const confirmIssues = preview
+    ? [
+        preview.unknownCount > 0
+          ? `${preview.unknownCount} ${preview.unknownCount === 1 ? 'row has' : 'rows have'} unknown IDs`
+          : null,
+        preview.typeErrorCount > 0
+          ? `${preview.typeErrorCount} ${preview.typeErrorCount === 1 ? 'row has' : 'rows have'} type errors`
+          : null,
+      ].filter((issue): issue is string => issue !== null)
+    : [];
+  const canConfirm = Boolean(preview) && confirmIssues.length === 0;
+  const confirmHint = preview && !canConfirm
+    ? `Confirm is unavailable: ${confirmIssues.join(' and ')}. Check the survey year, or fix those rows in the CSV.`
+    : null;
 
   const handleFile = async (file?: File) => {
     setFileError('');
@@ -50,10 +62,12 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
     previewMutation.reset();
     confirmMutation.reset();
     if (!file) {
+      setCsvFileName('');
       setCsvRows([]);
       setReadingFile(false);
       return;
     }
+    setCsvFileName(file.name);
     setReadingFile(true);
     try {
       const rows = parseCsvRecords(await file.text());
@@ -69,6 +83,23 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
     }
   };
   const busy = readingFile || previewMutation.isPending || confirmMutation.isPending;
+  const hasPublishedYear = year !== '' && publishedYears.includes(year);
+  const hasSourceLabel = Boolean(sourceLabel.trim());
+  const hasCsvRows = csvRows.length > 0;
+  const canPreview = hasPublishedYear && hasSourceLabel && hasCsvRows;
+  const fileYear = csvFileName.match(/(?:^|[^0-9])([0-9]{4})(?![0-9])/)?.[1];
+  const fileYearWarning = fileYear && year !== '' && Number(fileYear) !== year
+    ? `This file looks like FY${fileYear} data, but the selected survey year is ${year}.`
+    : null;
+  const previewHint = busy || canPreview
+    ? null
+    : publishedYears.length === 0
+      ? "No published survey years yet. Publish a year's catalogue first."
+      : !hasPublishedYear
+        ? 'Choose a published survey year.'
+        : !hasSourceLabel
+          ? 'Add a source label to preview this import.'
+          : 'Choose a CSV file.';
   const statusMessage = readingFile
     ? 'Reading file…'
     : previewMutation.isPending
@@ -96,12 +127,13 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
         <p className="text-sm text-gray-600">Preview matched parts, unknown IDs, type errors, and existing values before confirming. CSV columns: sheet (optional), question_id, part, value, note (optional).</p>
         <div className="grid gap-3 md:grid-cols-3 md:items-end">
           <label className="text-sm font-medium text-gray-700">Published survey year
-            <select className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2" value={year} disabled={busy} onChange={(event) => setYear(event.target.value ? Number(event.target.value) : '')}>
+            <select className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2" value={year} disabled={busy} onChange={(event) => { setYear(event.target.value ? Number(event.target.value) : ''); previewMutation.reset(); confirmMutation.reset(); setImportResult(''); }}>
+              <option value="">Choose a year…</option>
               {publishedYears.map((publishedYear) => <option key={publishedYear} value={publishedYear}>{publishedYear}</option>)}
             </select>
           </label>
-          <label className="text-sm font-medium text-gray-700">Source label
-            <input className="mt-1 block w-full rounded border border-gray-300 px-3 py-2" value={sourceLabel} disabled={busy} onChange={(event) => setSourceLabel(event.target.value)} maxLength={255} />
+          <label className="text-sm font-medium text-gray-700">Source label <span>(required)</span>
+            <input className="mt-1 block w-full rounded border border-gray-300 px-3 py-2" value={sourceLabel} disabled={busy} onChange={(event) => setSourceLabel(event.target.value)} maxLength={255} required aria-required="true" placeholder="e.g. FY2025 Benchmark submission" />
           </label>
           <label className="text-sm font-medium text-gray-700">CSV file
             <input className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2" type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; void handleFile(file); }} />
@@ -111,10 +143,13 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
         {fileError && <p role="alert" className="text-sm text-rose-700">{fileError}</p>}
         {csvRows.length > 0 && <p className="text-sm text-gray-600">{csvRows.length} CSV answer rows loaded.</p>}
         <AcrlFileStatus message={statusMessage || null} busy={busy} className={busy ? 'font-medium' : 'rounded bg-emerald-50 p-3 text-emerald-800'} />
+        {fileYearWarning && <p role="status" className="text-sm text-amber-800">{fileYearWarning}</p>}
         <div className="flex flex-wrap gap-2">
-          <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={busy || !year || !sourceLabel.trim() || !csvRows.length} onClick={() => previewMutation.mutate()}>Preview import</button>
-          <button className="rounded border border-folio-700 px-4 py-2 text-sm font-semibold text-folio-800 disabled:opacity-50" disabled={busy || !preview || preview.unknownCount > 0 || preview.typeErrorCount > 0} onClick={() => confirmMutation.mutate()}>Confirm import</button>
+          <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={busy || !canPreview} aria-describedby={previewHint ? 'acrl-import-preview-hint' : undefined} onClick={() => previewMutation.mutate()}>Preview import</button>
+          <button className="rounded border border-folio-700 px-4 py-2 text-sm font-semibold text-folio-800 disabled:opacity-50" disabled={busy || !canConfirm} aria-describedby={confirmHint ? 'acrl-confirm-import-hint' : undefined} onClick={() => confirmMutation.mutate()}>Confirm import</button>
         </div>
+        {previewHint && <p id="acrl-import-preview-hint" className="text-sm text-gray-600">{previewHint}</p>}
+        {confirmHint && <p id="acrl-confirm-import-hint" className="text-sm text-gray-600">{confirmHint}</p>}
         {previewMutation.error && <p role="alert" className="text-sm text-rose-700">Could not preview this import.</p>}
         {confirmMutation.error && <p role="alert" className="text-sm text-rose-700">Could not confirm this import.</p>}
         {preview && <div aria-label="Import preview" className="space-y-2 rounded border border-gray-200 bg-gray-50 p-3">
