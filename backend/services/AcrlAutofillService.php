@@ -8,15 +8,91 @@ use Yii;
 class AcrlAutofillService
 {
     private const DEFINITIONS = [
-        'survey|60|' => ['queryId' => 'acrl-60', 'version' => 1, 'column' => 'q60_physical_circulation', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
-        'survey|81|' => ['queryId' => 'acrl-81', 'version' => 1, 'column' => 'q81_consortial_lending', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
-        'survey|82|' => ['queryId' => 'acrl-82', 'version' => 1, 'column' => 'q82_consortial_borrowing', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
-        'survey|40|A' => ['queryId' => 'acrl-40A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-40A-physical-titles.sql', 'kind' => 'snapshot'],
-        'survey|40a|' => ['queryId' => 'acrl-40a', 'version' => 2, 'column' => 'value', 'file' => 'acr003-40a-physical-volumes.sql', 'kind' => 'snapshot'],
-        'survey|40|B' => ['queryId' => 'acrl-40B', 'version' => 1, 'column' => 'value', 'file' => 'acr003-40B-digital-titles.sql', 'kind' => 'snapshot'],
-        'survey|42|A' => ['queryId' => 'acrl-42A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-42A-physical-media.sql', 'kind' => 'snapshot'],
-        'survey|42|B' => ['queryId' => 'acrl-42B', 'version' => 1, 'column' => 'value', 'file' => 'acr003-42B-digital-media.sql', 'kind' => 'snapshot'],
-        'survey|43|A' => ['queryId' => 'acrl-43A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-43A-physical-serials.sql', 'kind' => 'snapshot'],
+        'survey|60|' => [
+            'queryId' => 'acrl-60', 'version' => 1, 'column' => 'q60_physical_circulation', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated',
+            'summary' => [
+                'Counts Smith-owned items held at Smith College or the Five College Repository.',
+                'Uses the q60_physical_circulation result column.',
+                'Includes Book, Journal, Serial, Newspaper, Score, Thesis/Dissertation, Government Publication, Microform, DVD/Blu-ray, Audio CD, CD-ROM, Videocassette, LP Phonorecord, Audiocassette and Film; other material types are left out.',
+                'Counts loans checked out at a Smith service point and returned at Smith or still checked out; the survey\'s fiscal year, 1 July to 30 June.',
+                'Counts one row per checkout; renewals are not filtered, and loans outside these campus and service-point rules are left out.',
+            ],
+        ],
+        'survey|81|' => [
+            'queryId' => 'acrl-81', 'version' => 1, 'column' => 'q81_consortial_lending', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated',
+            'summary' => [
+                'Counts Smith-owned items held at Smith College or the Five College Repository.',
+                'Uses the q81_consortial_lending result column.',
+                'Includes Book, Journal, Serial, Newspaper, Score, Thesis/Dissertation, Government Publication, Microform, DVD/Blu-ray, Audio CD, CD-ROM, Videocassette, LP Phonorecord, Audiocassette and Film; other material types are left out.',
+                'Counts loans checked out at a non-Smith service point; the survey\'s fiscal year, 1 July to 30 June.',
+                'Counts one row per checkout; renewals are not filtered, and Smith service-point loans and loans outside these campuses are left out.',
+            ],
+        ],
+        'survey|82|' => [
+            'queryId' => 'acrl-82', 'version' => 1, 'column' => 'q82_consortial_borrowing', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated',
+            'summary' => [
+                'Counts partner-owned items held outside Smith College and the Five College Repository.',
+                'Uses the q82_consortial_borrowing result column.',
+                'Includes Book, Journal, Serial, Newspaper, Score, Thesis/Dissertation, Government Publication, Microform, DVD/Blu-ray, Audio CD, CD-ROM, Videocassette, LP Phonorecord, Audiocassette and Film; other material types are left out.',
+                'Counts loans checked out at a Smith service point; the survey\'s fiscal year, 1 July to 30 June.',
+                'Counts one row per checkout; renewals are not filtered, and Smith-owned items and loans outside Smith service points are left out.',
+            ],
+        ],
+        'survey|40|A' => [
+            'queryId' => 'acrl-40A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-40A-physical-titles.sql', 'kind' => 'snapshot',
+            'summary' => [
+                'Counts distinct physical book titles at the Smith College campus only.',
+                'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
+                'Includes Archival material, Book, Government Publication, Score and Thesis/Dissertation material types; other campuses, statuses and material types are left out.',
+                'This is a current snapshot with no date range.',
+            ],
+        ],
+        'survey|40a|' => [
+            'queryId' => 'acrl-40a', 'version' => 2, 'column' => 'value', 'file' => 'acr003-40a-physical-volumes.sql', 'kind' => 'snapshot',
+            'summary' => [
+                'Counts distinct physical volumes (items) at Smith College and the Five College Repository.',
+                'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
+                'Includes Archival material, Book, Government Publication, Journal, Newspaper, Score, Serial, Supplement and Thesis/Dissertation material types; other statuses and material types are left out.',
+                'Online and microform locations are left out. This is a current snapshot with no date range.',
+                'Changed in v2 (2026-10): journals, serials, newspapers and supplements are now counted, and online and microform locations are left out. FY2023–FY2025 used v1 (books, scores, theses, archival material and government publications only).',
+            ],
+        ],
+        'survey|40|B' => [
+            'queryId' => 'acrl-40B', 'version' => 1, 'column' => 'value', 'file' => 'acr003-40B-digital-titles.sql', 'kind' => 'snapshot',
+            'summary' => [
+                'Counts distinct FOLIO digital book titles at Smith College and the Five College Repository.',
+                'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
+                'Includes E-Book, E-Book Package, E-Score and E-Thesis/Dissertation material types; other campuses, statuses and material types are left out.',
+                'EDS custom-catalog counts are outside FOLIO and are entered separately. This is a current snapshot with no date range.',
+            ],
+        ],
+        'survey|42|A' => [
+            'queryId' => 'acrl-42A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-42A-physical-media.sql', 'kind' => 'snapshot',
+            'summary' => [
+                'Counts distinct physical media titles at Smith College and the Five College Repository.',
+                'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
+                'Includes Audio CD, Audiocassette, CD-ROM, DVD/Blu-ray, Film, Image, LP Phonorecord, Map, Microform, Video Game and Videocassette material types; other campuses, statuses and material types are left out.',
+                'This is a current snapshot with no date range.',
+            ],
+        ],
+        'survey|42|B' => [
+            'queryId' => 'acrl-42B', 'version' => 1, 'column' => 'value', 'file' => 'acr003-42B-digital-media.sql', 'kind' => 'snapshot',
+            'summary' => [
+                'Counts distinct FOLIO digital media titles at Smith College and the Five College Repository.',
+                'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
+                'Includes Data File, Streaming Audio and Streaming Video material types; other campuses, statuses and material types are left out.',
+                'EDS custom-catalog counts are outside FOLIO and are entered separately. This is a current snapshot with no date range.',
+            ],
+        ],
+        'survey|43|A' => [
+            'queryId' => 'acrl-43A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-43A-physical-serials.sql', 'kind' => 'snapshot',
+            'summary' => [
+                'Counts distinct physical serial titles at Smith College and the Five College Repository.',
+                'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
+                'Includes Journal, Newspaper and Serial material types; other campuses, statuses and material types are left out.',
+                'This is a current snapshot with no date range.',
+            ],
+        ],
     ];
 
     private $repository;
@@ -61,15 +137,7 @@ class AcrlAutofillService
         $params = $definition['kind'] === 'dated'
             ? [':fy_start' => $fyStart, ':fy_end' => $fyEnd]
             : [];
-        $sqlPath = $this->sqlDirectory . '/' . $definition['file'];
-        $sql = file_get_contents($sqlPath);
-        if ($sql === false || trim($sql) === '') {
-            throw new \RuntimeException('The configured ACRL auto-fill query could not be loaded.');
-        }
-        $sql = preg_replace('/^[ \t]*--[^\r\n]*(?:\r?\n|$)/m', '', $sql);
-        if ($sql === null) {
-            throw new \RuntimeException('The configured ACRL auto-fill query comments could not be removed.');
-        }
+        $sql = $this->loadSql($definition);
 
         $transaction = $this->folioDb->beginTransaction();
         try {
@@ -110,5 +178,38 @@ class AcrlAutofillService
             'fyEnd' => $definition['kind'] === 'dated' ? $fyEnd : null,
             'kind' => $definition['kind'],
         ];
+    }
+
+    public function methods(): array
+    {
+        $methods = [];
+        foreach (self::DEFINITIONS as $key => $definition) {
+            list($sheet, $questionId, $part) = explode('|', $key);
+            $methods[] = [
+                'sheet' => $sheet,
+                'questionId' => $questionId,
+                'part' => $part,
+                'queryId' => $definition['queryId'],
+                'queryVersion' => $definition['version'],
+                'kind' => $definition['kind'],
+                'summary' => $definition['summary'],
+                'sql' => $this->loadSql($definition),
+            ];
+        }
+        return $methods;
+    }
+
+    private function loadSql(array $definition): string
+    {
+        $sqlPath = $this->sqlDirectory . '/' . $definition['file'];
+        $sql = file_get_contents($sqlPath);
+        if ($sql === false || trim($sql) === '') {
+            throw new \RuntimeException('The configured ACRL auto-fill query could not be loaded.');
+        }
+        $sql = preg_replace('/^[ \t]*--[^\r\n]*(?:\r?\n|$)/m', '', $sql);
+        if ($sql === null) {
+            throw new \RuntimeException('The configured ACRL auto-fill query comments could not be removed.');
+        }
+        return $sql;
     }
 }

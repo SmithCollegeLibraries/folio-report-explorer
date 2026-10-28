@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { runAcrlAutofill } from '../api/acrl';
+import useAcrlAutofillMethods from '../hooks/useAcrlAutofillMethods';
 import { errorMessage } from '../utils/errorMessage';
+import AcrlCountingMethod from './AcrlCountingMethod';
 import AcrlFileStatus from './AcrlFileStatus';
 import type { AcrlAutofillResponse, AcrlSheet } from '../types/acrl';
 
@@ -10,7 +12,6 @@ interface TypedPart {
 }
 
 interface AutofillDefinition {
-  description: string;
   noteLabel: string;
   typedParts: TypedPart[];
 }
@@ -30,12 +31,10 @@ const NO_TYPED_PARTS: TypedPart[] = [];
 
 const definitions: Record<string, AutofillDefinition> = {
   'survey|60|': {
-    description: 'Physical Smith-owned loans checked out and checked in at Smith, or still out.',
     noteLabel: 'physical circulation',
     typedParts: NO_TYPED_PARTS,
   },
   'survey|81|': {
-    description: 'Smith-owned physical loans checked out at a non-Smith service point; FOLIO consortial lending only.',
     noteLabel: 'consortial lending',
     typedParts: [
       { key: 'illiadReturnables', label: 'ILLiad returnables' },
@@ -43,7 +42,6 @@ const definitions: Record<string, AutofillDefinition> = {
     ],
   },
   'survey|82|': {
-    description: 'Partner-owned physical loans checked out at a Smith service point; FOLIO consortial borrowing only.',
     noteLabel: 'consortial borrowing',
     typedParts: [
       { key: 'illiadReturnables', label: 'ILLiad returnables' },
@@ -51,32 +49,26 @@ const definitions: Record<string, AutofillDefinition> = {
     ],
   },
   'survey|40|A': {
-    description: 'Physical book titles at the Smith College campus.',
     noteLabel: 'physical book titles',
     typedParts: NO_TYPED_PARTS,
   },
   'survey|40a|': {
-    description: 'Books, scores, theses, journals and other bound serial volumes at Smith College and the Five College Repository.',
     noteLabel: 'physical volumes',
     typedParts: NO_TYPED_PARTS,
   },
   'survey|40|B': {
-    description: 'FOLIO digital book titles at Smith College and the Five College Repository.',
     noteLabel: 'digital book titles',
     typedParts: [{ key: 'edsCustomCatalog', label: 'EDS custom catalog (minus DDA packages)' }],
   },
   'survey|42|A': {
-    description: 'Physical media titles at Smith College and the Five College Repository.',
     noteLabel: 'physical media',
     typedParts: NO_TYPED_PARTS,
   },
   'survey|42|B': {
-    description: 'FOLIO digital media titles at Smith College and the Five College Repository.',
     noteLabel: 'digital media titles',
     typedParts: [{ key: 'edsCustomCatalog', label: 'EDS custom catalog (minus DDA packages)' }],
   },
   'survey|43|A': {
-    description: 'Physical serial titles at Smith College and the Five College Repository.',
     noteLabel: 'physical serials',
     typedParts: NO_TYPED_PARTS,
   },
@@ -110,6 +102,7 @@ export default function AcrlAutofillPanel({ year, sheet, questionId, part, curre
   const [error, setError] = useState('');
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const definition = definitions[`${sheet}|${questionId}|${part}`];
+  const methodsQuery = useAcrlAutofillMethods(sheet, questionId, part, Boolean(definition));
 
   if (!definition) return null;
 
@@ -165,14 +158,15 @@ export default function AcrlAutofillPanel({ year, sheet, questionId, part, curre
           ? <p className="text-xs font-medium text-gray-600">As of {formatDate(result.asOf)}</p>
           : <p className="text-xs font-medium text-gray-600">FY{year}</p>}
       </div>
-      <p className="text-sm leading-5 text-gray-700">{definition.description}</p>
+      <p className="text-xs font-medium text-gray-600">query {result.queryId} v{result.queryVersion}</p>
+      <AcrlCountingMethod title="How Fill from FOLIO counts this now" method={methodsQuery.method} isError={methodsQuery.isError} resultVersion={result.queryVersion} />
       {isSnapshotFarFromYearEnd(year, result) && <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">This counts FOLIO today, not on June 30.</p>}
       {definition.typedParts.length > 0 && <div className="grid gap-3 sm:grid-cols-2">
         {definition.typedParts.map(({ key, label }) => <label key={key} className="text-sm font-medium text-gray-700">{label}
           <input type="number" min="0" step="1" className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2" value={typedValues[key] ?? ''} onChange={(event) => setTypedValues((values) => ({ ...values, [key]: event.target.value }))} />
         </label>)}
       </div>}
-      {definition.typedParts.length > 0 && !typedPartsReady && <p className="text-xs text-gray-600">Enter a number for each outside-FOLIO count; enter 0 when there is none.</p>}
+      {definition.typedParts.length > 0 && <p className="text-xs text-gray-600">These typed-in counts come from outside FOLIO.{!typedPartsReady && ' Enter a number for each; enter 0 when there is none.'}</p>}
       <p className="border-t border-folio-200 pt-2 text-sm font-semibold text-gray-900">Total: {formatCount(total)}</p>
       {hasCurrentValue && <div className="space-y-2 rounded border border-amber-300 bg-white p-3 text-sm text-amber-950">
         <p>Current value: {formatCount(Number(currentValue))}</p>

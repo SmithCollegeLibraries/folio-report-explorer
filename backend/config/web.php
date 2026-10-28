@@ -113,6 +113,7 @@ $config = [
                 'POST acrl/years/<year:\\d+>/publish' => 'acrl/publish',
                 'GET acrl/entry' => 'acrl/entry',
                 'GET acrl/entry/<year:\\d+>' => 'acrl/entry',
+                'GET acrl/autofill/methods' => 'acrl/autofill-methods',
                 'POST acrl/years/<year:\\d+>/autofill/<sheet:[^/]+>/<question:[^/]+>/<part:[^/]+>' => 'acrl/autofill',
                 'POST acrl/years/<year:\\d+>/answers' => 'acrl/save-answer',
                 'POST acrl/years/<year:\\d+>/sections/<section:[^/]+>/status' => 'acrl/section-status',

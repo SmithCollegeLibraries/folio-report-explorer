@@ -6,10 +6,11 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import AcrlEntryPage from './AcrlEntryPage';
 import type { AcrlEntryQuestion, AcrlEntryResponse } from '../types/acrl';
 
-const { getEntry, saveAnswer, runAutofill, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
+const { getEntry, saveAnswer, runAutofill, getAutofillMethods, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   saveAnswer: vi.fn(),
   runAutofill: vi.fn(),
+  getAutofillMethods: vi.fn().mockResolvedValue({ methods: [] }),
   setStatus: vi.fn(),
   acceptSuggestions: vi.fn(),
   getAssignments: vi.fn().mockResolvedValue({ surveyYear: 2026, sections: [] }),
@@ -28,6 +29,7 @@ vi.mock('../api/acrl', () => ({
   getAcrlEntry: getEntry,
   saveAcrlAnswer: saveAnswer,
   runAcrlAutofill: runAutofill,
+  getAcrlAutofillMethods: getAutofillMethods,
   setAcrlSectionStatus: setStatus,
   acceptAcrlSuggestions: acceptSuggestions,
   getAcrlSectionAssignments: getAssignments,
