@@ -9,6 +9,8 @@ use app\controllers\traits\PersistedAdminAccessTrait;
 use app\controllers\traits\AcrlDetailsActionsTrait;
 use app\services\AcrlCatalogueService;
 use app\services\AcrlEntryService;
+use app\services\AcrlAutofillBusyException;
+use app\services\AcrlAutofillService;
 use app\services\AcrlImportService;
 use app\services\AcrlThresholdService;
 use app\models\User;
@@ -35,7 +37,7 @@ class AcrlController extends Controller
                 'class' => \yii\filters\auth\HttpBearerAuth::class,
                 'except' => ['options'],
             ];
-            $userActions = ['entry', 'save-answer', 'section-status', 'accept-suggestions', 'question-details', 'add-question-note'];
+            $userActions = ['entry', 'autofill', 'save-answer', 'section-status', 'accept-suggestions', 'question-details', 'add-question-note'];
             $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'import-preview', 'import-confirm', 'save-instructions', 'notes-import-preview', 'notes-import-confirm', 'edit-question-note', 'delete-question-note'];
             $behaviors['access'] = [
                 'class' => \yii\filters\AccessControl::class,
@@ -159,6 +161,36 @@ class AcrlController extends Controller
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
         }
+    }
+
+    public function actionAutofill($year, $sheet, $question, $part)
+    {
+        if (($forbidden = $this->requireAcrlUser()) !== null) {
+            return $forbidden;
+        }
+        if ((string)$part === '_') {
+            $part = '';
+        }
+        try {
+            set_time_limit(180);
+            return $this->createAcrlAutofillService()->run(
+                (int)$year,
+                rawurldecode((string)$sheet),
+                rawurldecode((string)$question),
+                rawurldecode((string)$part)
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        } catch (AcrlAutofillBusyException $exception) {
+            return $this->errorResponse(409, $exception->getMessage());
+        } catch (\DomainException $exception) {
+            return $this->errorResponse(404, $exception->getMessage());
+        }
+    }
+
+    protected function createAcrlAutofillService()
+    {
+        return new AcrlAutofillService();
     }
 
     public function actionSaveAnswer($year)

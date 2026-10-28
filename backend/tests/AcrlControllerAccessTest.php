@@ -29,6 +29,10 @@ namespace app\models {
     }
 }
 
+namespace app\services {
+    class AcrlAutofillBusyException extends \RuntimeException {}
+}
+
 namespace {
     if (!defined('YII_ENV')) {
         define('YII_ENV', 'test');
@@ -53,6 +57,38 @@ namespace {
     require_once __DIR__ . '/../controllers/traits/PersistedAdminAccessTrait.php';
     require_once __DIR__ . '/../controllers/AcrlController.php';
     require_once __DIR__ . '/../controllers/AcrlAssignmentController.php';
+
+    class AcrlControllerAccessAutofillService
+    {
+        public $mode = 'success';
+        public $arguments = [];
+        public function run($year, $sheet, $questionId, $part)
+        {
+            $this->arguments = [$year, $sheet, $questionId, $part];
+            if ($this->mode === 'invalid') throw new \InvalidArgumentException('Bad year.');
+            if ($this->mode === 'missing') throw new \DomainException('No auto-fill query is defined for this question.');
+            if ($this->mode === 'busy') throw new \app\services\AcrlAutofillBusyException('An auto-fill query is already running for this question.');
+            return [
+                'value' => 6017,
+                'queryId' => 'acrl-81',
+                'queryVersion' => 1,
+                'ranAt' => '2026-10-28T12:34:56-04:00',
+                'asOf' => null,
+                'fyStart' => '2024-07-01',
+                'fyEnd' => '2025-07-01',
+                'kind' => 'dated',
+            ];
+        }
+    }
+
+    class AcrlControllerAccessAutofillHarness extends \app\controllers\AcrlController
+    {
+        public $autofillService;
+        protected function createAcrlAutofillService()
+        {
+            return $this->autofillService;
+        }
+    }
 
     function acrlAccessAssert($condition, string $message): void
     {
@@ -94,6 +130,7 @@ namespace {
 
     $newActions = [
         'entry' => function () use ($controller) { return $controller->actionEntry(); },
+        'autofill' => function () use ($controller) { return $controller->actionAutofill(2025, 'survey', '81', ''); },
         'save-answer' => function () use ($controller) { return $controller->actionSaveAnswer(2025); },
         'accept-suggestions' => function () use ($controller) { return $controller->actionAcceptSuggestions(2025, 'Test%20Section'); },
         'section-status' => function () use ($controller) { return $controller->actionSectionStatus(2025, 'Test%20Section'); },
@@ -156,7 +193,7 @@ namespace {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must be covered by the framework admin access rule.');
     }
     $userActions = $behaviors['access']['rules'][0]['actions'] ?? [];
-    acrlAccessAssert(in_array('entry', $userActions, true) && in_array('save-answer', $userActions, true) && in_array('section-status', $userActions, true) && in_array('accept-suggestions', $userActions, true), 'Entry, section-status, and suggestion routes must allow signed-in users.');
+    acrlAccessAssert(in_array('entry', $userActions, true) && in_array('autofill', $userActions, true) && in_array('save-answer', $userActions, true) && in_array('section-status', $userActions, true) && in_array('accept-suggestions', $userActions, true), 'Entry, auto-fill, section-status, and suggestion routes must allow approved signed-in users.');
     foreach (['threshold', 'save-threshold', 'import-preview', 'import-confirm'] as $name) {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must use the persisted-admin rule.');
     }
@@ -199,6 +236,7 @@ namespace {
         "'GET acrl/years'",
         "'POST acrl/worksheets'",
         "'GET acrl/entry'",
+        "'POST acrl/years/<year:\\\\d+>/autofill/<sheet:[^/]+>/<question:[^/]+>/<part:[^/]+>'",
         "'POST acrl/years/<year:\\\\d+>/answers'",
         "'POST acrl/years/<year:\\\\d+>/sections/<section:[^/]+>/status'",
         "'POST acrl/years/<year:\\\\d+>/sections/<section:[^/]+>/suggestions/accept'",
@@ -218,6 +256,30 @@ namespace {
     acrlAccessAssert(strpos($routes, "'GET acrl/years/<year:") !== false && strpos($routes, "/review'") !== false, 'Missing ACRL review route.');
     acrlAccessAssert(strpos($routes, "'POST acrl/years/<year:") !== false && strpos($routes, "/links'") !== false, 'Missing ACRL decision route.');
     acrlAccessAssert(strpos($routes, "'POST acrl/years/<year:") !== false && strpos($routes, "/publish'") !== false, 'Missing ACRL publish route.');
+    $autofillController = new AcrlControllerAccessAutofillHarness('acrl', Yii::$app);
+    $autofillController->autofillService = new AcrlControllerAccessAutofillService();
+    acrlAccessAppUser(false, new \app\models\User());
+    \app\models\User::$approvedExists = true;
+    \app\models\User::$adminExists = false;
+    $autofillResult = $autofillController->actionAutofill(2025, 'survey', '81', '_');
+    acrlAccessAssert($autofillResult['queryId'] === 'acrl-81' && $autofillResult['value'] === 6017, 'Approved users must receive the auto-fill suggestion response.');
+    acrlAccessAssert($autofillController->autofillService->arguments === [2025, 'survey', '81', ''], 'The route must pass the requested question key to the service.');
+    acrlAccessAssert((int)ini_get('max_execution_time') === 180, 'The auto-fill action must allow 180 seconds for the slowest collection query.');
+    acrlAccessAppUser(false, new \app\models\User());
+    \app\models\User::$approvedExists = false;
+    $unapproved = $autofillController->actionAutofill(2025, 'survey', '81', '_');
+    acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($unapproved['error'] ?? null) === 'Forbidden', 'The auto-fill route must reject unapproved signed-in users.');
+    foreach ([['missing', 404], ['invalid', 422], ['busy', 409]] as $case) {
+        $autofillController->autofillService->mode = $case[0];
+        acrlAccessAppUser(false, new \app\models\User());
+        \app\models\User::$approvedExists = true;
+        $error = $autofillController->actionAutofill(2025, 'survey', '81', '');
+        acrlAccessAssert(Yii::$app->response->statusCode === $case[1] && isset($error['error']), 'The auto-fill route must return the expected error status for ' . $case[0] . '.');
+        if ($case[0] === 'busy') {
+            acrlAccessAssert($error['error'] === 'An auto-fill query is already running for this question.', 'A busy route response must include the server reason for the panel.');
+        }
+    }
+
     foreach ([
         "'GET acrl/approved-users'",
         "'GET acrl/years/<year:\\\\d+>/assignments'",
