@@ -38,8 +38,8 @@ const review: AcrlReviewResponse = {
 };
 
 const parsed: AcrlInstructionParseResult = {
-  blocks: [{ blockKey: 'question:60A', heading: 'Question 60A', text: 'Synthetic instructions', kind: 'question' }],
-  links: [{ sheet: 'survey', question_id: '60', part: 'A', blockKey: 'question:60A' }],
+  blocks: [{ blockKey: 'question:60-a', heading: 'Question 60A', text: 'Synthetic instructions', kind: 'question' }],
+  links: [{ sheet: 'survey', question_id: '60', part: 'A', blockKey: 'question:60-a' }],
   assignments: [], missingQuestionKeys: [], duplicateBlockKeys: [], coverage: { individual: 1, grouped: 0, missing: 0 },
 };
 
@@ -131,5 +131,45 @@ describe('ACRL instruction upload', () => {
     expect(screen.queryByText('Could not load the selected year’s question catalogue.')).not.toBeInTheDocument();
     finishRetry(review);
     await waitFor(() => expect(saveInstructions).toHaveBeenCalledOnce());
+  });
+
+  it('lists save-rule problems and disables Save for an invalid preview', async () => {
+    getReview.mockResolvedValue(review);
+    parseInstructions.mockResolvedValue({
+      ...parsed,
+      blocks: [{ ...parsed.blocks[0], heading: '' }],
+    });
+    const user = userEvent.setup();
+    renderPanel();
+    const input = await screen.findByLabelText('Instructions PDF');
+    await waitFor(() => expect(input).toBeEnabled());
+
+    await user.upload(input, new File(['synthetic'], 'instructions.pdf', { type: 'application/pdf' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('question:60-a: heading is required.');
+    expect(screen.getByRole('button', { name: 'Save instructions' })).toBeDisabled();
+    expect(saveInstructions).not.toHaveBeenCalled();
+  });
+
+  it('shows the API error text when saving is rejected with a 422 response', async () => {
+    getReview.mockResolvedValue(review);
+    parseInstructions.mockResolvedValue(parsed);
+    sha256ForFile.mockResolvedValue('synthetic-hash');
+    saveInstructions.mockRejectedValue(Object.assign(new Error('Request failed with status code 422'), {
+      response: { data: { error: 'Instruction blocks need a unique key, heading, text, and supported kind.' } },
+    }));
+    const user = userEvent.setup();
+    renderPanel();
+    const input = await screen.findByLabelText('Instructions PDF');
+    await waitFor(() => expect(input).toBeEnabled());
+
+    await user.upload(input, new File(['synthetic'], 'instructions.pdf', { type: 'application/pdf' }));
+    await screen.findByText('Preview ready: 1 instruction block and 1 question link.');
+    await user.click(screen.getByRole('button', { name: 'Save instructions' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Could not save the instruction blocks: Instruction blocks need a unique key, heading, text, and supported kind.',
+    );
   });
 });

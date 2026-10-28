@@ -18,6 +18,7 @@ const DEFINITION_HEADINGS = [
 const SECTION_HEADINGS = [
   'library characteristics', 'staffing', 'staffing expenses', 'expenses', 'collections', 'library collections',
   'institutional repositories', 'library services', 'local characteristics and enrollment', 'student enrollment',
+  'reporting structure', 'branch/independent libraries',
 ];
 
 export function parseGroupHeading(line: string, questionByKey: Map<string, AcrlInstructionQuestionRef>): { blockKey: string; questionKeys: string[]; kind: AcrlInstructionKind } | null {

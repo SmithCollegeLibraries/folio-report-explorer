@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getAcrlReview, saveAcrlInstructions } from '../api/acrl';
 import { parseInstructionFile } from '../services/acrlInstructionParser';
+import { validateInstructionSaveRules } from '../services/acrlInstructionSaveRules';
 import { sha256ForFile } from '../services/acrlWorksheetParser';
+import { errorMessage } from '../utils/errorMessage';
 import AcrlFileStatus from './AcrlFileStatus';
 import type { AcrlInstructionParseResult, AcrlSurveyYear } from '../types/acrl';
 
@@ -23,6 +25,10 @@ export default function AcrlInstructionUploadPanel({ years }: { years: AcrlSurve
     part: item.current.part,
     section: item.current.section,
   }] : []);
+  const instructionProblems = parsed ? [
+    ...validateInstructionSaveRules(parsed.blocks, parsed.links, questions),
+    ...parsed.duplicateBlockKeys.map((blockKey) => `${blockKey}: block key is duplicated.`),
+  ] : [];
   const save = useMutation({
     mutationFn: async () => {
       if (!file || !parsed || year === '') throw new Error('Choose and parse an instructions PDF first.');
@@ -127,7 +133,10 @@ export default function AcrlInstructionUploadPanel({ years }: { years: AcrlSurve
       <p className="text-sm text-gray-700">Coverage: {parsed.coverage.individual} individual · {parsed.coverage.grouped} grouped · {parsed.coverage.missing} missing</p>
       <p className="text-sm text-gray-700">{parsed.blocks.length} instruction blocks · {parsed.links.length} question links · {questions.length} Survey questions</p>
       {parsed.missingQuestionKeys.length > 0 && <p role="alert" className="text-sm text-rose-700">Questions without individual or grouped instructions: {parsed.missingQuestionKeys.join(', ')}</p>}
-      {parsed.duplicateBlockKeys.length > 0 && <p role="alert" className="text-sm text-rose-700">Duplicate instruction block keys: {parsed.duplicateBlockKeys.join(', ')}. Review the PDF assignments before saving.</p>}
+      {instructionProblems.length > 0 && <div role="alert" className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+        <p>These instruction blocks or links cannot be saved:</p>
+        <ul className="mt-1 list-disc space-y-1 pl-5">{instructionProblems.map((problem, index) => <li key={`${problem}-${index}`}>{problem}</li>)}</ul>
+      </div>}
       <ul aria-label="Instruction blocks" className="max-h-64 space-y-1 overflow-auto text-sm text-gray-700">
         {parsed.blocks.map((block) => <li key={block.blockKey} className="rounded border border-gray-200 bg-white p-3">
           <p><span className="font-medium">{block.kind}: {block.heading}</span><span className="text-gray-500"> · {parsed.links.filter((link) => link.blockKey === block.blockKey).length} questions</span></p>
@@ -135,10 +144,10 @@ export default function AcrlInstructionUploadPanel({ years }: { years: AcrlSurve
           <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-gray-600">{block.text}</p>
         </li>)}
       </ul>
-      <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" type="button" disabled={busy || !file || !parsed.links.length || parsed.duplicateBlockKeys.length > 0} onClick={() => save.mutate()}>
+      <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50" type="button" disabled={busy || !file || !parsed.links.length || instructionProblems.length > 0} onClick={() => save.mutate()}>
         Save instructions
       </button>
-      {save.error && <p role="alert" className="text-sm text-rose-700">{saveFailureStage === 'checking' ? 'Could not check the selected year’s question catalogue' : 'Could not save the instruction blocks'}: {save.error instanceof Error ? save.error.message : 'Request failed.'}</p>}
+      {save.error && <p role="alert" className="text-sm text-rose-700">{saveFailureStage === 'checking' ? 'Could not check the selected year’s question catalogue' : 'Could not save the instruction blocks'}: {errorMessage(save.error, 'Request failed.')}</p>}
     </div>}
   </section>;
 }
