@@ -55,7 +55,7 @@ export default function AcrlSectionAssignmentPanel({ year, sections, hasPrevious
   }
 
   return (
-    <section aria-label="Section assignments" className="space-y-4 rounded-xl border border-folio-200 bg-folio-50/50 p-4 sm:p-5">
+    <section id="section-assignments" aria-label="Section assignments" className="space-y-4 rounded-xl border border-folio-200 bg-folio-50/50 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">Section assignments</h2>

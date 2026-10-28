@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import AcrlReviewPanel from '../components/AcrlReviewPanel';
 import AcrlToolsPanel from '../components/AcrlToolsPanel';
+import AcrlSectionAssignmentsCard from '../components/AcrlSectionAssignmentsCard';
 import AcrlInstructionUploadPanel from '../components/AcrlInstructionUploadPanel';
 import AcrlNotesImportPanel from '../components/AcrlNotesImportPanel';
 import AcrlFileStatus from '../components/AcrlFileStatus';
@@ -187,6 +188,7 @@ export default function AcrlPage() {
       </header>
 
       <AcrlToolsPanel years={yearsQuery.data || []} />
+      <AcrlSectionAssignmentsCard years={yearsQuery.data || []} />
       <AcrlInstructionUploadPanel years={yearsQuery.data || []} />
       <AcrlNotesImportPanel years={yearsQuery.data || []} />
 

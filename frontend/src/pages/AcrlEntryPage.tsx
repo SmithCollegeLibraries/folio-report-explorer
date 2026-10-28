@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { acceptAcrlSuggestions, getAcrlEntry, saveAcrlAnswer, setAcrlSectionStatus } from '../api/acrl';
 import AcrlSectionAssignmentPanel from '../components/AcrlSectionAssignmentPanel';
 import AcrlAutofillPanel from '../components/AcrlAutofillPanel';
@@ -186,6 +186,7 @@ function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
 
 export default function AcrlEntryPage() {
   const { year: yearParam } = useParams<{ year: string }>();
+  const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { isAdmin } = useAuth();
@@ -201,6 +202,10 @@ export default function AcrlEntryPage() {
     if (!yearParam && entryQuery.data) navigate(`/acrl/entry/${entryQuery.data.selectedYear}`, { replace: true });
   }, [entryQuery.data, navigate, yearParam]);
   const entry = entryQuery.data as AcrlEntryResponse | undefined;
+  useEffect(() => {
+    if (!entry || !isAdmin || location.hash !== '#section-assignments') return;
+    document.getElementById('section-assignments')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
+  }, [entry, isAdmin, location.hash]);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['acrl-entry', String(entry?.selectedYear)] });
   const exportBenchmarkCsv = async () => {
     setExporting(true);

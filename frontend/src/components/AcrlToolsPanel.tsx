@@ -3,11 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmAcrlImport, getAcrlThreshold, previewAcrlImport, saveAcrlThreshold } from '../api/acrl';
 import AcrlFileStatus from './AcrlFileStatus';
 import type { AcrlSurveyYear } from '../types/acrl';
+import { getPublishedAcrlYears } from '../utils/acrl';
 import { parseCsvRecords } from '../utils/csv';
 
 export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
   const queryClient = useQueryClient();
-  const publishedYears = years.filter((year) => year.status === 'published').map((year) => year.surveyYear);
+  const publishedYears = getPublishedAcrlYears(years);
   const [year, setYear] = useState<number | ''>('');
   const [sourceLabel, setSourceLabel] = useState('');
   const [csvRows, setCsvRows] = useState<Array<Record<string, string>>>([]);
