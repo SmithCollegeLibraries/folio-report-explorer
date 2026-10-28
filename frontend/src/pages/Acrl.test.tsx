@@ -6,7 +6,7 @@ import AcrlPage from './Acrl';
 import AcrlReviewPanel from '../components/AcrlReviewPanel';
 import type { AcrlQuestionPart, AcrlReviewResponse, AcrlSurveyYear } from '../types/acrl';
 
-const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWorksheetFile, sha256ForFile, getThreshold, saveThreshold, previewImport, confirmImport } = vi.hoisted(() => ({
+const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWorksheetFile, sha256ForFile, getThreshold, saveThreshold, previewImport, confirmImport, getAssignments } = vi.hoisted(() => ({
   listYears: vi.fn(),
   getReview: vi.fn(),
   saveLinks: vi.fn(),
@@ -18,10 +18,11 @@ const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWork
   saveThreshold: vi.fn().mockResolvedValue({ thresholdPercent: 10 }),
   previewImport: vi.fn(),
   confirmImport: vi.fn(),
+  getAssignments: vi.fn(),
 }));
 let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
-vi.mock('../api/acrl', () => ({ listAcrlCatalogueYears: listYears, getAcrlReview: getReview, saveAcrlLinks: saveLinks, publishAcrlYear: publishYear, uploadAcrlWorksheet: uploadWorksheet, getAcrlThreshold: getThreshold, saveAcrlThreshold: saveThreshold, previewAcrlImport: previewImport, confirmAcrlImport: confirmImport }));
+vi.mock('../api/acrl', () => ({ listAcrlCatalogueYears: listYears, getAcrlReview: getReview, saveAcrlLinks: saveLinks, publishAcrlYear: publishYear, uploadAcrlWorksheet: uploadWorksheet, getAcrlThreshold: getThreshold, saveAcrlThreshold: saveThreshold, previewAcrlImport: previewImport, confirmAcrlImport: confirmImport, getAcrlSectionAssignments: getAssignments }));
 vi.mock('../services/acrlWorksheetParser', () => ({ parseWorksheetFile, sha256ForFile }));
 
 afterEach(() => {
@@ -169,6 +170,59 @@ describe('ACRL review panel bulk decisions', () => {
 });
 
 describe('ACRL catalogue page', () => {
+  it('offers only published years and links to the selected section assignments with a count', async () => {
+    listYears.mockResolvedValue([makeYear(2026), makeYear(2025, 'published'), makeYear(2024, 'published')]);
+    getAssignments.mockResolvedValue({
+      surveyYear: 2025,
+      sections: [
+        { section: 'Circulation', assignees: [{ id: 1, displayName: 'Editor' }] },
+        { section: 'Services', assignees: [] },
+      ],
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+
+    const yearSelect = await screen.findByLabelText('Published year for section assignments');
+    await within(yearSelect).findByRole('option', { name: '2025' });
+    expect(within(yearSelect).getAllByRole('option').map((option) => option.textContent)).toEqual(['Choose a year…', '2025', '2024']);
+    await user.selectOptions(yearSelect, '2025');
+
+    const assignmentLink = await screen.findByRole('link', { name: 'Assign sections for FY 2025' });
+    expect(assignmentLink).toHaveAttribute('href', '/acrl/entry/2025#section-assignments');
+    expect(await screen.findByText('1 of 2 sections have someone assigned')).toBeInTheDocument();
+    expect(getAssignments).toHaveBeenCalledWith(2025);
+  });
+
+  it('shows a zero assignment count', async () => {
+    listYears.mockResolvedValue([makeYear(2025, 'published')]);
+    getAssignments.mockResolvedValue({
+      surveyYear: 2025,
+      sections: [{ section: 'Circulation', assignees: [] }, { section: 'Services', assignees: [] }],
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+
+    const yearSelect = await screen.findByLabelText('Published year for section assignments');
+    await within(yearSelect).findByRole('option', { name: '2025' });
+    await user.selectOptions(yearSelect, '2025');
+
+    expect(await screen.findByText('0 of 2 sections have someone assigned')).toBeInTheDocument();
+  });
+
+  it('keeps the assignment link available when the count request fails', async () => {
+    listYears.mockResolvedValue([makeYear(2025, 'published')]);
+    getAssignments.mockRejectedValue(new Error('Assignments unavailable'));
+    const user = userEvent.setup();
+    renderAcrl();
+
+    const yearSelect = await screen.findByLabelText('Published year for section assignments');
+    await within(yearSelect).findByRole('option', { name: '2025' });
+    await user.selectOptions(yearSelect, '2025');
+
+    expect(await screen.findByText('Could not load section assignments.')).toHaveAttribute('role', 'alert');
+    expect(screen.getByRole('link', { name: 'Assign sections for FY 2025' })).toHaveAttribute('href', '/acrl/entry/2025#section-assignments');
+  });
+
   it('shows grouped annual changes and approves unchanged matches in bulk', async () => {
     listYears.mockResolvedValue([
       { surveyYear: 2026, status: 'draft', sourceFileName: 'worksheet.pdf', surveyPromptCount: 73, trendsPromptCount: 9, surveyItemCount: 73, trendsItemCount: 9, totalItemCount: 82, publishedAt: null },

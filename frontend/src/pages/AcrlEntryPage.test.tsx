@@ -23,6 +23,7 @@ const { getEntry, saveAnswer, runAutofill, setStatus, acceptSuggestions, getAssi
   downloadCsv: vi.fn(),
   auth: { isAdmin: false },
 }));
+let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
 vi.mock('../api/acrl', () => ({
   getAcrlEntry: getEntry,
@@ -46,6 +47,9 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   auth.isAdmin = false;
+  if (scrollIntoViewDescriptor) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', scrollIntoViewDescriptor);
+  else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+  scrollIntoViewDescriptor = undefined;
 });
 
 function makeQuestion(overrides: Partial<AcrlEntryQuestion> = {}): AcrlEntryQuestion {
@@ -102,6 +106,38 @@ function renderPage(options: { staleTime?: number; initialEntry?: string } = {})
 }
 
 describe('ACRL entry page', () => {
+  it('scrolls to section assignments after entry loads when the hash targets the panel', async () => {
+    const scrolledElements: HTMLElement[] = [];
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: function (this: HTMLElement) { scrolledElements.push(this); },
+    });
+    auth.isAdmin = true;
+    getEntry.mockResolvedValue(entry());
+    renderPage({ initialEntry: '/acrl/entry/2026#section-assignments' });
+
+    const panel = await screen.findByRole('region', { name: 'Section assignments' });
+    expect(panel).toHaveAttribute('id', 'section-assignments');
+    await waitFor(() => expect(scrolledElements).toContain(panel));
+  });
+
+  it('does not try to scroll to an assignment panel for non-admins', async () => {
+    const scrolledElements: HTMLElement[] = [];
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: function (this: HTMLElement) { scrolledElements.push(this); },
+    });
+    getEntry.mockResolvedValue(entry());
+    renderPage({ initialEntry: '/acrl/entry/2026#section-assignments' });
+
+    await screen.findByRole('region', { name: 'Your sections' });
+
+    expect(screen.queryByRole('region', { name: 'Section assignments' })).not.toBeInTheDocument();
+    expect(scrolledElements).toHaveLength(0);
+  });
+
   it('saves an accepted FOLIO suggestion through the normal answer API with query provenance', async () => {
     const response = entry();
     response.sections[0].questions.push(makeQuestion({
