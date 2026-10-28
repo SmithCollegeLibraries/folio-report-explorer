@@ -30,13 +30,35 @@ const method = {
   questionId: '40a',
   part: '',
   queryId: 'acrl-40a',
-  queryVersion: 2,
+  queryVersion: 3,
   kind: 'snapshot' as const,
   summary: [
-    'Smith College and Five College Repository campuses.',
-    'Changed in v2 (2026-10): journals, serials, newspapers and supplements are now counted.',
+    'Books, scores, theses and other volumes, including serial volumes cataloged as monographs, at Smith College and the Five College Repository.',
+    'Changed in v3 (2026-10): serial items count only when cataloged as monographs; v2 (2026-10) counted all journals, serials and newspapers; FY2023–FY2025 used v1 (books, scores, theses, archival material and government publications; no location exclusions).',
   ],
-  sql: 'select count(distinct it.id) as value\nfrom inventory.item__t it;',
+  sql: `with scope_items as (
+    select it.id, it.holdings_record_id, mtt.name as material_type
+    from inventory.item__t it
+        join inventory.material_type__t mtt on mtt.id = it.material_type_id
+        join inventory.location__t lt on lt.id = it.effective_location_id
+    where lt.campus_id in ('7d02e46d-3e60-4eaf-a986-5aa3550e8cb5', 'b23a14ae-b3a8-4cbf-92fb-4b81d1a4b0a1')
+        and it.status__name in ('Awaiting pickup', 'In transit', 'Checked out', 'Available', 'Restricted', 'Paged')
+        and it.effective_location_id not in (
+            '67204874-e4d7-495b-9247-62cd27d9ea31', '409b947f-d67d-4cda-846f-35c9344ae81b', 'b0ecdd73-6416-4bd1-9cf3-483fd40b95cd',
+            '81772d53-e7d0-40d4-8249-a380f3fd33f0', '270dceaa-8100-4e53-bf19-6decf7926f78', '3ffae749-2131-48e1-8bf8-7adf36a92b9c',
+            '38fa998f-5044-4589-a182-2e027af0bb04')
+        and mtt.name in ('Archival material', 'Book', 'Government Publication', 'Score', 'Supplement', 'Thesis/Dissertation',
+                         'Journal', 'Newspaper', 'Serial')
+)
+select
+    (select count(distinct id) from scope_items
+     where material_type in ('Archival material', 'Book', 'Government Publication', 'Score', 'Supplement', 'Thesis/Dissertation'))
+  + (select count(distinct si.id)
+     from scope_items si
+         join inventory.holdings_record__t hrt on hrt.id = si.holdings_record_id
+         join inventory.instance__t inst on inst.id = hrt.instance_id
+         join inventory.mode_of_issuance__t moi on moi.id = inst.mode_of_issuance_id and moi.name = 'single unit'
+     where si.material_type in ('Journal', 'Newspaper', 'Serial')) as value;`,
 };
 
 function question(questionId = '40a'): AcrlEntryQuestion {
@@ -69,7 +91,7 @@ describe('ACRL question details counting method', () => {
     renderWithClient(<AcrlQuestionDetailsModal year={2026} question={question()} isAdmin={false} onClose={vi.fn()} />);
 
     const methodSection = await screen.findByRole('region', { name: 'How Fill from FOLIO counts this now' });
-    expect(methodSection).toHaveTextContent('Changed in v2 (2026-10)');
+    expect(methodSection).toHaveTextContent('Changed in v3 (2026-10)');
     const sqlDetails = screen.getByText('SQL').closest('details');
     expect(sqlDetails).not.toHaveAttribute('open');
     await userEvent.click(screen.getByText('SQL'));
@@ -114,7 +136,7 @@ describe('ACRL question details counting method', () => {
     await user.click(screen.getByRole('button', { name: 'Close details' }));
     await user.click(screen.getByRole('button', { name: 'Open details' }));
 
-    expect(await screen.findByRole('region', { name: 'How Fill from FOLIO counts this now' })).toHaveTextContent('Changed in v2');
+    expect(await screen.findByRole('region', { name: 'How Fill from FOLIO counts this now' })).toHaveTextContent('Changed in v3');
     expect(getMethods).toHaveBeenCalledTimes(2);
   });
 
@@ -133,7 +155,7 @@ describe('ACRL question details counting method', () => {
     await screen.findByRole('region', { name: 'How Fill from FOLIO counts this now' });
     await userEvent.click(screen.getByRole('button', { name: 'Fill from FOLIO' }));
     const suggestion = await screen.findByRole('region', { name: 'FOLIO suggestion' });
-    expect(within(suggestion).getByRole('region', { name: 'How Fill from FOLIO counts this now' })).toHaveTextContent('Changed in v2');
+    expect(within(suggestion).getByRole('region', { name: 'How Fill from FOLIO counts this now' })).toHaveTextContent('Changed in v3');
     expect(getMethods).toHaveBeenCalledTimes(1);
   });
 });

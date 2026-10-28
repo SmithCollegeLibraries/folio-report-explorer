@@ -85,9 +85,9 @@ namespace {
                 'questionId' => '40a',
                 'part' => '',
                 'queryId' => 'acrl-40a',
-                'queryVersion' => 2,
+                'queryVersion' => 3,
                 'kind' => 'snapshot',
-                'summary' => ['Smith and Five College Repository campuses.'],
+                'summary' => ['Books, scores, theses and other volumes, including serial volumes cataloged as monographs, at Smith College and the Five College Repository.'],
                 'sql' => 'select 1',
             ]];
         }
@@ -307,7 +307,7 @@ namespace {
         __DIR__ . '/../sql/acrl'
     );
     $approvedMethods = $autofillController->actionAutofillMethods();
-    acrlAccessAssert(count($approvedMethods['methods'] ?? []) === 9 && $approvedMethods['methods'][4]['queryVersion'] === 2, 'Approved ACRL users must receive all methods and the Q40a version.');
+    acrlAccessAssert(count($approvedMethods['methods'] ?? []) === 9 && $approvedMethods['methods'][4]['queryVersion'] === 3, 'Approved ACRL users must receive all methods and the Q40a v3 version.');
     acrlAccessAssert($methodsDb->calls === 0, 'The methods route must not make any FOLIO database calls.');
     $autofillController->autofillService = new AcrlControllerAccessAutofillService();
     acrlAccessAppUser(false, new \app\models\User());

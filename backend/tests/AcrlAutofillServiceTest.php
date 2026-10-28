@@ -96,6 +96,9 @@ class AcrlAutofillTestCommand
     }
     public function queryOne(): array
     {
+        if (strpos($this->sql, 'with scope_items as') !== false) {
+            return ['value' => 1287533];
+        }
         if (strpos($this->sql, 'q60_physical_circulation') !== false) {
             return [
                 'q60_physical_circulation' => 18438,
@@ -151,7 +154,7 @@ $expectedQueries = [
     ['81', '', 'acrl-81', 'acr003-60-81-82-circulation.sql', 'q81_consortial_lending', 'dated', 6017],
     ['82', '', 'acrl-82', 'acr003-60-81-82-circulation.sql', 'q82_consortial_borrowing', 'dated', 6897],
     ['40', 'A', 'acrl-40A', 'acr003-40A-physical-titles.sql', 'value', 'snapshot', 1077455],
-    ['40a', '', 'acrl-40a', 'acr003-40a-physical-volumes.sql', 'value', 'snapshot', 1282072],
+    ['40a', '', 'acrl-40a', 'acr003-40a-physical-volumes.sql', 'value', 'snapshot', 1287533],
     ['40', 'B', 'acrl-40B', 'acr003-40B-digital-titles.sql', 'value', 'snapshot', 1077455],
     ['42', 'A', 'acrl-42A', 'acr003-42A-physical-media.sql', 'value', 'snapshot', 1077455],
     ['42', 'B', 'acrl-42B', 'acr003-42B-digital-media.sql', 'value', 'snapshot', 1077455],
@@ -168,7 +171,7 @@ foreach ($expectedQueries as $expected) {
     $result = $service->run(2026, 'survey', $expected[0], $expected[1]);
     acrlAutofillAssert($result['value'] === $expected[6], $expected[2] . ' must return its SQL result column.');
     acrlAutofillAssert($result['queryId'] === $expected[2], $expected[0] . $expected[1] . ' must map to its approved query id.');
-    $expectedVersion = $expected[2] === 'acrl-40a' ? 2 : 1;
+    $expectedVersion = $expected[2] === 'acrl-40a' ? 3 : ($expected[2] === 'acrl-40A' ? 2 : 1);
     acrlAutofillAssert($result['queryVersion'] === $expectedVersion, $expected[2] . ' must report version ' . $expectedVersion . '.');
     acrlAutofillAssert($result['kind'] === $expected[5], $expected[2] . ' must report its dated or snapshot kind.');
     if ($expected[5] === 'snapshot') {
@@ -177,17 +180,38 @@ foreach ($expectedQueries as $expected) {
         acrlAutofillAssert($result['fyStart'] === '2025-07-01' && $result['fyEnd'] === '2026-07-01' && $result['asOf'] === null, $expected[2] . ' must use the requested FY2026 range.');
     }
     $sourceSql = file_get_contents(__DIR__ . '/../sql/acrl/' . $expected[3]);
+    if ($expected[2] === 'acrl-40A') {
+        acrlAutofillAssert(strpos($sourceSql, "lt.campus_id in ('7d02e46d-3e60-4eaf-a986-5aa3550e8cb5', 'b23a14ae-b3a8-4cbf-92fb-4b81d1a4b0a1')") !== false, 'Q40A must include Smith and the Five College Repository campuses.');
+        acrlAutofillAssert(strpos($sourceSql, 'count(distinct it2.id)') !== false, 'Q40A must continue counting distinct physical book titles.');
+        acrlAutofillAssert(strpos($sourceSql, "it.status__name in ('Awaiting pickup', 'In transit', 'Checked out', 'Available', 'Restricted', 'Paged')") !== false, 'Q40A must preserve its approved statuses.');
+        acrlAutofillAssert(strpos($sourceSql, "mtt.name in ('Archival material', 'Book', 'Government Publication', 'Score', 'Thesis/Dissertation')") !== false, 'Q40A must preserve its approved material types.');
+    }
     if ($expected[2] === 'acrl-40a') {
-        $materialTypeMatch = [];
-        acrlAutofillAssert(preg_match('/\bmtt\.name\s+in\s*\(([^)]*)\)/i', $sourceSql, $materialTypeMatch) === 1, 'Q40a must filter by its approved material types.');
+        $sourceMaterialTypeMatch = [];
+        acrlAutofillAssert(preg_match('/\bmtt\.name\s+in\s*\(([^)]*)\)/i', $sourceSql, $sourceMaterialTypeMatch) === 1, 'Q40a must limit its item scope to the approved material types.');
+        $sourceMaterialTypeValues = [];
+        preg_match_all("/'([^']*)'/", $sourceMaterialTypeMatch[1], $sourceMaterialTypeValues);
+        acrlAutofillAssert($sourceMaterialTypeValues[1] === ['Archival material', 'Book', 'Government Publication', 'Score', 'Supplement', 'Thesis/Dissertation', 'Journal', 'Newspaper', 'Serial'], 'Q40a must not add material types outside the approved six types and three serial types.');
         $materialTypeMatches = [];
-        preg_match_all("/'([^']*)'/", $materialTypeMatch[1], $materialTypeMatches);
-        $materialTypes = $materialTypeMatches[1];
-        $expectedMaterialTypes = ['Archival material', 'Book', 'Government Publication', 'Journal', 'Newspaper', 'Score', 'Serial', 'Supplement', 'Thesis/Dissertation'];
-        acrlAutofillAssert($materialTypes === $expectedMaterialTypes, 'Q40a must use the approved bound-volume material types.');
-        acrlAutofillAssert(in_array('Journal', $materialTypes, true), 'Q40a must include Journal material types.');
-        acrlAutofillAssert(in_array('Serial', $materialTypes, true), 'Q40a must include Serial material types.');
-        acrlAutofillAssert(!in_array('Microform', $materialTypes, true) && !in_array('Map', $materialTypes, true), 'Q40a must not include Microform or Map material types.');
+        acrlAutofillAssert(preg_match_all('/\b(?:si\.)?material_type\s+in\s*\(([^)]*)\)/i', $sourceSql, $materialTypeMatches) === 2, 'Q40a must have separate base-volume and serial material type scopes.');
+        $materialTypeGroups = [];
+        foreach ($materialTypeMatches[1] as $materialTypeSql) {
+            $materialTypeValues = [];
+            preg_match_all("/'([^']*)'/", $materialTypeSql, $materialTypeValues);
+            $materialTypeGroups[] = $materialTypeValues[1];
+        }
+        $expectedMaterialTypeGroups = [
+            ['Archival material', 'Book', 'Government Publication', 'Score', 'Supplement', 'Thesis/Dissertation'],
+            ['Journal', 'Newspaper', 'Serial'],
+        ];
+        acrlAutofillAssert($materialTypeGroups === $expectedMaterialTypeGroups, 'Q40a must count the six base types and scope serial types separately.');
+        acrlAutofillAssert(strpos($sourceSql, "join inventory.mode_of_issuance__t moi on moi.id = inst.mode_of_issuance_id and moi.name = 'single unit'") !== false, 'Q40a must count serial types only for single-unit instances.');
+        acrlAutofillAssert(strpos($sourceSql, "lt.campus_id in ('7d02e46d-3e60-4eaf-a986-5aa3550e8cb5', 'b23a14ae-b3a8-4cbf-92fb-4b81d1a4b0a1')") !== false, 'Q40a must include Smith and the Five College Repository campuses.');
+        acrlAutofillAssert(strpos($sourceSql, "it.status__name in ('Awaiting pickup', 'In transit', 'Checked out', 'Available', 'Restricted', 'Paged')") !== false, 'Q40a must preserve its approved statuses.');
+        $serialFilterPosition = strpos($sourceSql, "where si.material_type in ('Journal', 'Newspaper', 'Serial')");
+        $singleUnitFilterPosition = strpos($sourceSql, "moi.name = 'single unit'");
+        acrlAutofillAssert($serialFilterPosition !== false && $singleUnitFilterPosition !== false && $singleUnitFilterPosition < $serialFilterPosition, 'Q40a must apply the single-unit mode before counting serial items.');
+        acrlAutofillAssert(strpos($sourceSql, '(select count(distinct id) from scope_items') !== false && strpos($sourceSql, '(select count(distinct si.id)') !== false, 'Q40a must keep the approved two-part count form.');
         $excludedLocationIds = [
             '67204874-e4d7-495b-9247-62cd27d9ea31',
             '409b947f-d67d-4cda-846f-35c9344ae81b',
@@ -264,8 +288,20 @@ foreach ($methods as $method) {
     if ($method['queryId'] === 'acrl-40a') $physicalVolumesMethod = $method;
 }
 acrlAutofillAssert($physicalVolumesMethod !== null, 'The Q40a methods entry must be present.');
-acrlAutofillAssert($physicalVolumesMethod['queryVersion'] === 2, 'The Q40a methods entry must reflect ACR-021 version 2.');
-acrlAutofillAssert(strpos($physicalVolumesMethod['sql'], 'Journal') !== false && strpos($physicalVolumesMethod['sql'], 'Serial') !== false, 'The Q40a methods SQL must reflect its journal and serial material types.');
+acrlAutofillAssert($physicalVolumesMethod['queryVersion'] === 3, 'The Q40a methods entry must reflect ACR-024 version 3.');
+acrlAutofillAssert(strpos($physicalVolumesMethod['sql'], "moi.name = 'single unit'") !== false, 'The Q40a methods SQL must limit serial materials to single-unit instances.');
+acrlAutofillAssert(strpos($physicalVolumesMethod['sql'], 'Journal') !== false && strpos($physicalVolumesMethod['sql'], 'Serial') !== false && strpos($physicalVolumesMethod['sql'], 'Newspaper') !== false, 'The Q40a methods SQL must include all three serial material types.');
+$physicalVolumesSummary = implode(' ', $physicalVolumesMethod['summary']);
+acrlAutofillAssert(strpos($physicalVolumesSummary, 'serial volumes cataloged as monographs') !== false, 'The Q40a summary must explain the single-unit rule in plain language.');
+acrlAutofillAssert(strpos($physicalVolumesSummary, 'Changed in v3 (2026-10): serial items count only when cataloged as monographs; v2 (2026-10) counted all journals, serials and newspapers; FY2023–FY2025 used v1') !== false, 'The Q40a summary must state the approved version history.');
+$physicalTitlesMethod = null;
+foreach ($methods as $method) {
+    if ($method['queryId'] === 'acrl-40A') $physicalTitlesMethod = $method;
+}
+acrlAutofillAssert($physicalTitlesMethod !== null && $physicalTitlesMethod['queryVersion'] === 2, 'The Q40A methods entry must reflect ACR-024 version 2.');
+$physicalTitlesSummary = implode(' ', $physicalTitlesMethod['summary']);
+acrlAutofillAssert(strpos($physicalTitlesSummary, 'at Smith College and the Five College Repository') !== false, 'The Q40A summary must name both campuses.');
+acrlAutofillAssert(strpos($physicalTitlesSummary, 'Changed in v2 (2026-10): Five College Repository titles are now included, as in past reporting; v1 counted the Smith campus only.') !== false, 'The Q40A summary must explain its version change.');
 acrlAutofillAssert($methodsDb->calls === 0, 'The methods catalog must not call the FOLIO database.');
 $circulationRules = [
     'acrl-60' => ['q60_physical_circulation', 'checked out at a Smith service point and returned at Smith or still checked out'],

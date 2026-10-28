@@ -39,22 +39,24 @@ class AcrlAutofillService
             ],
         ],
         'survey|40|A' => [
-            'queryId' => 'acrl-40A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-40A-physical-titles.sql', 'kind' => 'snapshot',
+            'queryId' => 'acrl-40A', 'version' => 2, 'column' => 'value', 'file' => 'acr003-40A-physical-titles.sql', 'kind' => 'snapshot',
             'summary' => [
-                'Counts distinct physical book titles at the Smith College campus only.',
+                'Counts distinct physical book titles at Smith College and the Five College Repository.',
                 'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
                 'Includes Archival material, Book, Government Publication, Score and Thesis/Dissertation material types; other campuses, statuses and material types are left out.',
                 'This is a current snapshot with no date range.',
+                'Changed in v2 (2026-10): Five College Repository titles are now included, as in past reporting; v1 counted the Smith campus only.',
             ],
         ],
         'survey|40a|' => [
-            'queryId' => 'acrl-40a', 'version' => 2, 'column' => 'value', 'file' => 'acr003-40a-physical-volumes.sql', 'kind' => 'snapshot',
+            'queryId' => 'acrl-40a', 'version' => 3, 'column' => 'value', 'file' => 'acr003-40a-physical-volumes.sql', 'kind' => 'snapshot',
             'summary' => [
-                'Counts distinct physical volumes (items) at Smith College and the Five College Repository.',
+                'Books, scores, theses and other volumes, including serial volumes cataloged as monographs, at Smith College and the Five College Repository.',
                 'Includes items with status Awaiting pickup, In transit, Checked out, Available, Restricted or Paged.',
-                'Includes Archival material, Book, Government Publication, Journal, Newspaper, Score, Serial, Supplement and Thesis/Dissertation material types; other statuses and material types are left out.',
+                'Includes Archival material, Book, Government Publication, Score, Supplement and Thesis/Dissertation material types; other material types are left out.',
+                'Journal, Newspaper and Serial items are counted only when their instance is cataloged as a single unit (monograph).',
                 'Online and microform locations are left out. This is a current snapshot with no date range.',
-                'Changed in v2 (2026-10): journals, serials, newspapers and supplements are now counted, and online and microform locations are left out. FY2023–FY2025 used v1 (books, scores, theses, archival material and government publications only).',
+                'Changed in v3 (2026-10): serial items count only when cataloged as monographs; v2 (2026-10) counted all journals, serials and newspapers; FY2023–FY2025 used v1 (books, scores, theses, archival material and government publications; no location exclusions).',
             ],
         ],
         'survey|40|B' => [
