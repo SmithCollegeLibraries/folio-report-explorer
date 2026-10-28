@@ -56,8 +56,8 @@ const definitions: Record<string, AutofillDefinition> = {
     typedParts: NO_TYPED_PARTS,
   },
   'survey|40a|': {
-    description: 'Physical book volumes at Smith College and the Five College Repository.',
-    noteLabel: 'physical book volumes',
+    description: 'Books, scores, theses, journals and other bound serial volumes at Smith College and the Five College Repository.',
+    noteLabel: 'physical volumes',
     typedParts: NO_TYPED_PARTS,
   },
   'survey|40|B': {
