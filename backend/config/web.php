@@ -5,6 +5,7 @@
  */
 
 $db = require __DIR__ . '/db.php';
+$dbLocalReport = require __DIR__ . '/db_local_report.php';
 $dbFolio = require __DIR__ . '/db-folio.php';
 $params = require __DIR__ . '/params.php';
 
@@ -211,6 +212,7 @@ $config = [
             ],
         ],
         'db' => $db,
+        'localReportDb' => $dbLocalReport,
         'folioDb' => $dbFolio,
         'user' => [
             'identityClass' => 'app\models\User',

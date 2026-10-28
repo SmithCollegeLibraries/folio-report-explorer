@@ -11,12 +11,18 @@ use app\commands\QueryWorkerController;
 use app\services\ReportExecutionContractService;
 use yii\console\Application;
 
+$localReportUser = bin2hex(random_bytes(8));
+$localReportPassword = bin2hex(random_bytes(16));
+putenv('LOCAL_REPORT_DB_USER=' . $localReportUser);
+putenv('LOCAL_REPORT_DB_PASS=' . $localReportPassword);
+
 new Application([
     'id' => 'query-worker-report-cap-test',
     'basePath' => dirname(__DIR__),
     'controllerNamespace' => 'app\\commands',
     'components' => [
         'db' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
+        'localReportDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
         'folioDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
     ],
 ]);

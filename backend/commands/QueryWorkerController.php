@@ -6,6 +6,7 @@ use Yii;
 use yii\console\Controller;
 use app\models\QueryJob;
 use app\services\DatabaseRetryService;
+use app\services\LocalReportSqlService;
 use app\services\QueryJobCancellationService;
 use app\services\ReportExecutionContractService;
 
@@ -197,13 +198,13 @@ class QueryWorkerController extends Controller
                 return;
             }
 
-            $db = $dataSource === 'local' ? Yii::$app->db : Yii::$app->folioDb;
             $params = $job->getDecodedParams();
-
-            $runQuery = function () use ($db, $dataSource, $job, $params) {
-                $transaction = $db->beginTransaction();
-                try {
-                    if ($dataSource === 'folio') {
+            if ($dataSource === 'local') $rows = LocalReportSqlService::queryAll($job->sql_text, $params);
+            else {
+                $db = Yii::$app->folioDb;
+                $runQuery = function () use ($db, $job, $params) {
+                    $transaction = $db->beginTransaction();
+                    try {
                         $db->createCommand("SET TRANSACTION READ ONLY")->execute();
                         $db->createCommand(
                             "SELECT set_config('application_name', :application_name, true)",
@@ -224,34 +225,32 @@ class QueryWorkerController extends Controller
                         if ($this->isCancellationRequested($job)) {
                             throw new \RuntimeException('Query cancellation requested.');
                         }
-                    }
 
-                    $command = $db->createCommand($job->sql_text);
-                    foreach ($params as $key => $value) {
-                        $command->bindValue($key, $value);
-                    }
-
-                    $rows = $command->queryAll();
-                    $transaction->commit();
-                    return $rows;
-                } catch (\Throwable $e) {
-                    if ($transaction->isActive) {
-                        try {
-                            $transaction->rollBack();
-                        } catch (\Throwable $rollbackError) {
-                            Yii::warning(
-                                'Rollback failed in query-worker executeJob: ' . $rollbackError->getMessage(),
-                                'db.retry'
-                            );
+                        $command = $db->createCommand($job->sql_text);
+                        foreach ($params as $key => $value) {
+                            $command->bindValue($key, $value);
                         }
-                    }
-                    throw $e;
-                }
-            };
 
-            $rows = $dataSource === 'folio'
-                ? DatabaseRetryService::runWithReconnectRetry($db, $runQuery, 'query-worker.execute_job.folio')
-                : $runQuery();
+                        $rows = $command->queryAll();
+                        $transaction->commit();
+                        return $rows;
+                    } catch (\Throwable $e) {
+                        if ($transaction->isActive) {
+                            try {
+                                $transaction->rollBack();
+                            } catch (\Throwable $rollbackError) {
+                                Yii::warning(
+                                    'Rollback failed in query-worker executeJob: ' . $rollbackError->getMessage(),
+                                    'db.retry'
+                                );
+                            }
+                        }
+                        throw $e;
+                    }
+                };
+
+                $rows = DatabaseRetryService::runWithReconnectRetry($db, $runQuery, 'query-worker.execute_job.folio');
+            }
 
             // Check if the job was cancelled while the query was running
             if ($this->isCancellationRequested($job)) {
@@ -282,6 +281,7 @@ class QueryWorkerController extends Controller
                 $this->finishCancellation($job, 'during execution');
                 return;
             }
+            if (isset($dataSource) && in_array($dataSource, ['local', 'composite'], true)) LocalReportSqlService::resetConnection();
             $job->markFailed($e->getMessage(), $executionTime);
             $this->stderr("Job {$job->id} failed: {$e->getMessage()}\n");
 
@@ -388,15 +388,14 @@ class QueryWorkerController extends Controller
 
             // --- Run secondary (local MySQL) ---
             // Secondary SQL may use the same :params as the primary (e.g. :fiscalYear)
-            $mysql = Yii::$app->db;
-            $cmd2 = $mysql->createCommand($secondarySql);
+            $secondaryParams = [];
             foreach ($primaryParams as $key => $value) {
                 // Bind only params that appear in the secondary SQL
                 if (strpos($secondarySql, $key) !== false) {
-                    $cmd2->bindValue($key, $value);
+                    $secondaryParams[$key] = $value;
                 }
             }
-            $secondaryRows = $cmd2->queryAll();
+            $secondaryRows = LocalReportSqlService::queryAll($secondarySql, $secondaryParams);
 
             if ($this->isCancellationRequested($job)) {
                 $this->finishCancellation($job, 'after composite secondary query');
@@ -470,6 +469,7 @@ class QueryWorkerController extends Controller
                 $this->finishCancellation($job, 'during composite execution');
                 return;
             }
+            LocalReportSqlService::resetConnection();
             $job->markFailed($e->getMessage(), $executionTime);
             $this->stderr("Composite job {$job->id} failed: {$e->getMessage()}\n");
             $this->logQuery($job);

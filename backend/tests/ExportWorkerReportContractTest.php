@@ -12,6 +12,11 @@ use app\models\QueryJob;
 use app\services\ReportExecutionContractService;
 use yii\console\Application;
 
+$localReportUser = bin2hex(random_bytes(8));
+$localReportPassword = bin2hex(random_bytes(16));
+putenv('LOCAL_REPORT_DB_USER=' . $localReportUser);
+putenv('LOCAL_REPORT_DB_PASS=' . $localReportPassword);
+
 $exportWorkerContractRoot = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'export-worker-report-contract-' . bin2hex(random_bytes(8));
 mkdir($exportWorkerContractRoot, 0700, true);
 register_shutdown_function(static function () use ($exportWorkerContractRoot): void {
@@ -32,6 +37,7 @@ new Application([
     'controllerNamespace' => 'app\\commands',
     'components' => [
         'db' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
+        'localReportDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
         'folioDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
     ],
     'params' => [

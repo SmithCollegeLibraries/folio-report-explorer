@@ -31,6 +31,8 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - LOCAL_REPORT_DB_USER=${LOCAL_REPORT_DB_USER:-}
+      - LOCAL_REPORT_DB_PASS=${LOCAL_REPORT_DB_PASS:-}
       - AI_PROVIDER=${AI_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -92,6 +94,8 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - LOCAL_REPORT_DB_USER=${LOCAL_REPORT_DB_USER:-}
+      - LOCAL_REPORT_DB_PASS=${LOCAL_REPORT_DB_PASS:-}
       - AI_PROVIDER=${AI_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -123,6 +127,8 @@ services:
       - MYSQL_DATABASE=${MYSQL_DATABASE:-folio_reports}
       - MYSQL_USER=${MYSQL_USER:-folio_app}
       - MYSQL_PASSWORD=${MYSQL_PASSWORD:-folio_app_pass}
+      - LOCAL_REPORT_DB_USER=${LOCAL_REPORT_DB_USER:-}
+      - LOCAL_REPORT_DB_PASS=${LOCAL_REPORT_DB_PASS:-}
       - AI_PROVIDER=${AI_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
