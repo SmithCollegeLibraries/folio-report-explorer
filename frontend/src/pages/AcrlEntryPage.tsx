@@ -6,7 +6,9 @@ import AcrlSectionAssignmentPanel from '../components/AcrlSectionAssignmentPanel
 import AcrlStructuredAnswerInput from '../components/AcrlStructuredAnswerInput';
 import AcrlQuestionDetailsModal from '../components/AcrlQuestionDetailsModal';
 import { useAuth } from '../hooks/useAuth';
+import { acrlBenchmarkColumns, buildAcrlBenchmarkRows } from '../services/acrlBenchmarkExport';
 import type { AcrlEntryQuestion, AcrlEntryResponse, AcrlEntrySection } from '../types/acrl';
+import { downloadCsv } from '../utils/csv';
 
 function errorText(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -177,6 +179,8 @@ export default function AcrlEntryPage() {
   const { isAdmin } = useAuth();
   const [activeSection, setActiveSection] = useState(0);
   const [detailsQuestion, setDetailsQuestion] = useState<AcrlEntryQuestion | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(false);
   const entryQuery = useQuery({
     queryKey: ['acrl-entry', yearParam || 'latest'],
     queryFn: () => getAcrlEntry(yearParam ? Number(yearParam) : undefined),
@@ -186,6 +190,24 @@ export default function AcrlEntryPage() {
   }, [entryQuery.data, navigate, yearParam]);
   const entry = entryQuery.data as AcrlEntryResponse | undefined;
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['acrl-entry', String(entry?.selectedYear)] });
+  const exportBenchmarkCsv = async () => {
+    setExporting(true);
+    setExportError(false);
+    try {
+      const refreshed = await entryQuery.refetch({ throwOnError: true });
+      if (!refreshed.data) throw new Error('The survey could not be refreshed.');
+      downloadCsv(
+        [...acrlBenchmarkColumns],
+        buildAcrlBenchmarkRows(refreshed.data),
+        `acrl-fy${refreshed.data.selectedYear}-benchmark`,
+        { bom: true },
+      );
+    } catch {
+      setExportError(true);
+    } finally {
+      setExporting(false);
+    }
+  };
   useEffect(() => {
     if (!entry || entry.sections.length === 0) {
       setActiveSection(0);
@@ -226,8 +248,14 @@ export default function AcrlEntryPage() {
               {entry.years.map((year) => <option key={year} value={year}>{year}</option>)}
             </select>
           </label>
-          <p className="text-sm text-gray-600">Changes at or above {entry.thresholdPercent}% are highlighted for review.</p>
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-gray-600">Changes at or above {entry.thresholdPercent}% are highlighted for review.</p>
+            <button type="button" className="rounded border border-folio-700 px-3 py-2 text-sm font-semibold text-folio-800 hover:bg-folio-50 disabled:opacity-50" aria-busy={exporting} disabled={exporting} onClick={() => void exportBenchmarkCsv()}>
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+          </div>
         </div>
+        {exportError && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">Could not refresh the survey answers for export. Please try again.</p>}
         {isAdmin && <AcrlSectionAssignmentPanel key={entry.selectedYear} year={entry.selectedYear} sections={entry.sections} hasPreviousYear={entry.years.includes(entry.selectedYear - 1)} />}
         <section aria-label="Your sections" className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/50 p-4">
           <div>
