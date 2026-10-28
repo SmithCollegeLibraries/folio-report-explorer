@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { acceptAcrlSuggestions, getAcrlEntry, saveAcrlAnswer, setAcrlSectionStatus } from '../api/acrl';
 import AcrlSectionAssignmentPanel from '../components/AcrlSectionAssignmentPanel';
+import AcrlAutofillPanel from '../components/AcrlAutofillPanel';
 import AcrlStructuredAnswerInput from '../components/AcrlStructuredAnswerInput';
 import AcrlQuestionDetailsModal from '../components/AcrlQuestionDetailsModal';
 import { useAuth } from '../hooks/useAuth';
@@ -36,12 +37,12 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
     setNote(question.answer.note ?? '');
   }, [question.answer.updated_at]);
   const saveMutation = useMutation({
-    mutationFn: () => saveAcrlAnswer(year, {
+    mutationFn: ({ value: nextValue, note: nextNote }: { value: string; note: string }) => saveAcrlAnswer(year, {
       sheet: question.sheet,
       question_id: question.questionId,
       part: question.part,
-      value,
-      note,
+      value: nextValue,
+      note: nextNote,
       expected_updated_at: question.answer.updated_at,
     }),
     onSuccess: () => { setConflict(''); onSaved(); },
@@ -111,10 +112,21 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
         <label className="text-sm font-medium text-gray-700">Note
           <textarea className="mt-1 block min-h-10 w-full rounded border border-gray-300 px-3 py-2 disabled:bg-gray-100" value={note} disabled={disabled} onChange={(event) => setNote(event.target.value)} />
         </label>
-        <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={disabled || saveMutation.isPending} onClick={() => saveMutation.mutate()}>
+        <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={disabled || saveMutation.isPending} onClick={() => saveMutation.mutate({ value, note })}>
           {saveMutation.isPending ? 'Saving…' : 'Save answer'}
         </button>
       </div>}
+      {!isCalculated && <AcrlAutofillPanel
+        key={`${year}|${question.sheet}|${question.questionId}|${question.part}`}
+        year={year}
+        sheet={question.sheet}
+        questionId={question.questionId}
+        part={question.part}
+        currentValue={value.trim() !== '' ? value : question.answer.value_number ?? question.answer.value_text}
+        currentNote={note}
+        disabled={disabled || saveMutation.isPending}
+        onUseValue={(nextValue, nextNote) => saveMutation.mutate({ value: nextValue, note: nextNote })}
+      />}
       {conflict && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{conflict}</p>}
       {saveMutation.error && !conflict && <p role="alert" className="text-sm text-rose-700">Could not save this answer.</p>}
       {question.answer.source === 'import' && <p className="text-xs text-gray-500">Imported from {question.answer.source_label || 'an administrator source'}.</p>}

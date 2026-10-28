@@ -6,9 +6,10 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import AcrlEntryPage from './AcrlEntryPage';
 import type { AcrlEntryQuestion, AcrlEntryResponse } from '../types/acrl';
 
-const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
+const { getEntry, saveAnswer, runAutofill, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   saveAnswer: vi.fn(),
+  runAutofill: vi.fn(),
   setStatus: vi.fn(),
   acceptSuggestions: vi.fn(),
   getAssignments: vi.fn().mockResolvedValue({ surveyYear: 2026, sections: [] }),
@@ -26,6 +27,7 @@ const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, sear
 vi.mock('../api/acrl', () => ({
   getAcrlEntry: getEntry,
   saveAcrlAnswer: saveAnswer,
+  runAcrlAutofill: runAutofill,
   setAcrlSectionStatus: setStatus,
   acceptAcrlSuggestions: acceptSuggestions,
   getAcrlSectionAssignments: getAssignments,
@@ -94,12 +96,68 @@ function entry(status: 'open' | 'ready' = 'open'): AcrlEntryResponse {
   };
 }
 
-function renderPage() {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/acrl/entry/2026']}><Routes><Route path="/acrl/entry/:year" element={<AcrlEntryPage />} /></Routes></MemoryRouter></QueryClientProvider>);
+function renderPage(options: { staleTime?: number; initialEntry?: string } = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: options.staleTime } } });
+  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[options.initialEntry ?? '/acrl/entry/2026']}><Routes><Route path="/acrl/entry/:year" element={<AcrlEntryPage />} /></Routes></MemoryRouter></QueryClientProvider>);
 }
 
 describe('ACRL entry page', () => {
+  it('saves an accepted FOLIO suggestion through the normal answer API with query provenance', async () => {
+    const response = entry();
+    response.sections[0].questions.push(makeQuestion({
+      questionId: '60', part: '', prompt: 'Total Physical Circulation',
+      answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
+    }));
+    getEntry.mockResolvedValue(response);
+    runAutofill.mockResolvedValue({
+      value: 18438, queryId: 'acrl-60', queryVersion: 1, ranAt: '2026-10-28T12:34:56-04:00',
+      asOf: null, fyStart: '2025-07-01', fyEnd: '2026-07-01', kind: 'dated',
+    });
+    saveAnswer.mockResolvedValue({ conflict: false, answer: response.sections[0].questions[0].answer });
+    renderPage();
+
+    const row = (await screen.findByRole('heading', { name: 'Total Physical Circulation' })).closest('article') as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Fill from FOLIO' }));
+    expect(await within(row).findByText('Total: 18,438')).toBeInTheDocument();
+    await userEvent.click(within(row).getByRole('button', { name: 'Use this value' }));
+    await waitFor(() => expect(saveAnswer).toHaveBeenCalledWith(2026, expect.objectContaining({
+      sheet: 'survey', question_id: '60', part: '', value: '18438',
+      note: 'FOLIO physical circulation 18,438 (query acrl-60 v1, FY2026, run 2026-10-28)',
+    })));
+  });
+
+  it('clears an autofill suggestion when returning to another cached survey year', async () => {
+    const currentYear = entry();
+    const previousYear = entry();
+    previousYear.selectedYear = 2025;
+    previousYear.previousYear = 2024;
+    for (const response of [currentYear, previousYear]) {
+      response.sections[0].questions.push(makeQuestion({
+        questionId: '60', part: '', prompt: 'Total Physical Circulation',
+        answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
+      }));
+    }
+    getEntry.mockResolvedValueOnce(currentYear).mockResolvedValueOnce(previousYear);
+    runAutofill.mockResolvedValue({
+      value: 18438, queryId: 'acrl-60', queryVersion: 1, ranAt: '2026-10-28T12:34:56-04:00',
+      asOf: null, fyStart: '2024-07-01', fyEnd: '2025-07-01', kind: 'dated',
+    });
+    renderPage({ staleTime: Infinity });
+
+    await screen.findByRole('heading', { name: 'Total Physical Circulation' });
+    await userEvent.selectOptions(screen.getByLabelText('Survey year'), '2025');
+    const previousRow = (await screen.findByRole('heading', { name: 'Total Physical Circulation' })).closest('article') as HTMLElement;
+    await userEvent.click(within(previousRow).getByRole('button', { name: 'Fill from FOLIO' }));
+    expect(await within(previousRow).findByText('Total: 18,438')).toBeInTheDocument();
+
+    await userEvent.selectOptions(await screen.findByLabelText('Survey year'), '2026');
+    await waitFor(() => expect(screen.getByLabelText('Survey year')).toHaveValue('2026'));
+    expect(screen.queryByRole('region', { name: 'FOLIO suggestion' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Fill from FOLIO' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Use this value' })).not.toBeInTheDocument();
+    expect(saveAnswer).not.toHaveBeenCalled();
+  });
+
   it('refetches the displayed survey year before exporting the refreshed answers', async () => {
     const initial = entry();
     const refreshed = entry();

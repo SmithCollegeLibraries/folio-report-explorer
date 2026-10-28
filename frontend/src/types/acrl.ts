@@ -258,6 +258,17 @@ export interface AcrlEntryResponse {
   sections: AcrlEntrySection[];
 }
 
+export interface AcrlAutofillResponse {
+  value: number;
+  queryId: string;
+  queryVersion: number;
+  ranAt: string;
+  asOf: string | null;
+  fyStart: string | null;
+  fyEnd: string | null;
+  kind: 'dated' | 'snapshot';
+}
+
 export interface AcrlImportPreview {
   surveyYear: number;
   sourceLabel: string;
