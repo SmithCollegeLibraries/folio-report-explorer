@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import AcrlEntryPage from './AcrlEntryPage';
 import type { AcrlEntryQuestion, AcrlEntryResponse } from '../types/acrl';
 
-const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, auth } = vi.hoisted(() => ({
+const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   saveAnswer: vi.fn(),
   setStatus: vi.fn(),
@@ -19,6 +19,7 @@ const { getEntry, saveAnswer, setStatus, acceptSuggestions, getAssignments, sear
   addQuestionNote: vi.fn(),
   editQuestionNote: vi.fn(),
   deleteQuestionNote: vi.fn(),
+  downloadCsv: vi.fn(),
   auth: { isAdmin: false },
 }));
 
@@ -36,6 +37,7 @@ vi.mock('../api/acrl', () => ({
   editAcrlQuestionNote: editQuestionNote,
   deleteAcrlQuestionNote: deleteQuestionNote,
 }));
+vi.mock('../utils/csv', () => ({ downloadCsv }));
 vi.mock('../hooks/useAuth', () => ({ useAuth: () => auth }));
 
 afterEach(() => {
@@ -98,6 +100,34 @@ function renderPage() {
 }
 
 describe('ACRL entry page', () => {
+  it('refetches the displayed survey year before exporting the refreshed answers', async () => {
+    const initial = entry();
+    const refreshed = entry();
+    refreshed.sections[0].questions[0].answer.value_text = '999';
+    refreshed.sections[0].questions[0].answer.value_number = '999';
+    let resolveRefresh: (value: AcrlEntryResponse) => void = () => undefined;
+    getEntry.mockResolvedValueOnce(initial);
+    const user = userEvent.setup();
+    renderPage();
+
+    const exportButton = await screen.findByRole('button', { name: 'Export CSV' });
+    getEntry.mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve; }));
+    await user.click(exportButton);
+    await waitFor(() => expect(getEntry).toHaveBeenCalledTimes(2));
+    expect(getEntry).toHaveBeenLastCalledWith(2026);
+    expect(exportButton).toBeDisabled();
+    expect(exportButton).toHaveTextContent('Exporting…');
+
+    resolveRefresh(refreshed);
+    await waitFor(() => expect(downloadCsv).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.arrayContaining([expect.objectContaining({ question_id: '60', value: '999' })]),
+      'acrl-fy2026-benchmark',
+      { bom: true },
+    ));
+    expect(exportButton).toBeEnabled();
+  });
+
   it('renders stored radio options and saves the selected answer as JSON text', async () => {
     const response = entry();
     response.sections[0].questions.push(makeQuestion({

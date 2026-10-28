@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { parseCsvRecords } from './csv';
+import { parseCsvRecords, serializeCsv } from './csv';
+
+describe('serializeCsv', () => {
+  it('adds a UTF-8 BOM only when requested', () => {
+    expect(serializeCsv(['answer'], [{ answer: 'Yes' }])).toBe('answer\r\nYes');
+    expect(serializeCsv(['answer'], [{ answer: 'Yes' }], { bom: true })).toBe('\uFEFFanswer\r\nYes');
+  });
+});
 
 describe('parseCsvRecords', () => {
   it('parses UTF-8 CSV with escaped quotes, embedded newlines, and uneven rows', () => {

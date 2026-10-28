@@ -47,6 +47,18 @@ export function parseCsvRecords(text: string): Array<Record<string, string>> {
   return rows.slice(1).map((values) => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
 }
 
+/** Serialize CSV rows, optionally adding a UTF-8 BOM for spreadsheet applications. */
+export function serializeCsv(
+  columns: string[],
+  rows: Record<string, unknown>[],
+  options: { bom?: boolean } = {},
+): string {
+  const header = columns.map(escapeCell).join(',');
+  const body = rows.map((row) => columns.map((column) => escapeCell(row[column])).join(','));
+  const csv = [header, ...body].join('\r\n');
+  return options.bom ? `\uFEFF${csv}` : csv;
+}
+
 /**
  * Build a CSV string from column names and row data, then trigger a browser download.
  *
@@ -58,10 +70,9 @@ export function downloadCsv(
   columns: string[],
   rows: Record<string, unknown>[],
   filename: string,
+  options: { bom?: boolean } = {},
 ): void {
-  const header = columns.map(escapeCell).join(',');
-  const body = rows.map((r) => columns.map((c) => escapeCell(r[c])).join(','));
-  const csv = [header, ...body].join('\r\n');
+  const csv = serializeCsv(columns, rows, options);
 
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
