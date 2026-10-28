@@ -78,6 +78,11 @@ namespace app\models {
 }
 
 namespace app\services {
+    class LocalReportSqlService
+    {
+        public const POLICY_MESSAGE = 'This query is blocked by reporting data policy.';
+        public static function validateSql($sql, $rawSql = null) {}
+    }
     class GeminiService { public const NL2SQL_TELEMETRY_CATEGORY = 'nl2sql.telemetry'; }
     class SqlBuilderService
     {

@@ -9,6 +9,7 @@ use app\services\BuilderQueryDefinitionNormalizerService;
 use app\services\BuilderSchemaService;
 use app\services\FolioSchemaService;
 use app\services\SqlBuilderService;
+use app\services\LocalReportSqlService;
 use app\services\GeminiService;
 use app\services\SettingsService;
 use app\services\DatabaseRetryService;
@@ -254,16 +255,6 @@ class FolioQueryController extends Controller
             return 'composite';
         }
         return 'folio';
-    }
-
-    /**
-     * Resolve DB component name for a datasource.
-     * @param string $dataSource
-     * @return string
-     */
-    private function resolveDbComponent($dataSource)
-    {
-        return $this->normalizeDataSource($dataSource) === 'local' ? 'db' : 'folioDb';
     }
 
     /**
@@ -1217,6 +1208,7 @@ class FolioQueryController extends Controller
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
         }
 
+        $rawSql = (string) $sql;
         if ((string)$source === 'nl') {
             $sql = GeminiService::normalizeGeneratedSql((string)$sql);
         }
@@ -1225,8 +1217,12 @@ class FolioQueryController extends Controller
 
         // Safety validation
         try {
-            SqlBuilderService::validateSafety($sql);
-            SqlBuilderService::validateTablePolicy($sql);
+            if ($dataSource === 'local') {
+                LocalReportSqlService::validateSql($sql, $rawSql);
+            } else {
+                SqlBuilderService::validateSafety($sql);
+                SqlBuilderService::validateTablePolicy($sql);
+            }
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
             return ['error' => 'This query is blocked by reporting data policy.'];
@@ -1263,42 +1259,42 @@ class FolioQueryController extends Controller
         $log->user_id = $this->getCurrentUserId();
 
         try {
-            $dbComponent = $this->resolveDbComponent($dataSource);
-            $db = Yii::$app->{$dbComponent};
-
-            $runQuery = function () use ($db, $dataSource, $sql, $params) {
-                $transaction = $db->beginTransaction();
-                try {
-                    if ($dataSource === 'folio') {
-                        $db->createCommand("SET TRANSACTION READ ONLY")->execute();
-                    }
-
-                    $command = $db->createCommand($sql);
-                    foreach ($params as $key => $value) {
-                        $command->bindValue($key, $value);
-                    }
-
-                    $rows = $command->queryAll();
-                    $transaction->commit();
-                    return $rows;
-                } catch (\Throwable $e) {
-                    if ($transaction->isActive) {
-                        try {
-                            $transaction->rollBack();
-                        } catch (\Throwable $rollbackError) {
-                            Yii::warning(
-                                'Rollback failed in actionExecute: ' . $rollbackError->getMessage(),
-                                'db.retry'
-                            );
+            if ($dataSource === 'local') {
+                $rows = LocalReportSqlService::queryAll($sql, (array) $params);
+            } else {
+                $db = Yii::$app->folioDb;
+                $runQuery = function () use ($db, $dataSource, $sql, $params) {
+                    $transaction = $db->beginTransaction();
+                    try {
+                        if ($dataSource === 'folio') {
+                            $db->createCommand("SET TRANSACTION READ ONLY")->execute();
                         }
-                    }
-                    throw $e;
-                }
-            };
 
-            $rows = $dataSource === 'folio'
-                ? DatabaseRetryService::runWithReconnectRetry($db, $runQuery, 'api.execute.folio')
-                : $runQuery();
+                        $command = $db->createCommand($sql);
+                        foreach ($params as $key => $value) {
+                            $command->bindValue($key, $value);
+                        }
+
+                        $rows = $command->queryAll();
+                        $transaction->commit();
+                        return $rows;
+                    } catch (\Throwable $e) {
+                        if ($transaction->isActive) {
+                            try {
+                                $transaction->rollBack();
+                            } catch (\Throwable $rollbackError) {
+                                Yii::warning(
+                                    'Rollback failed in actionExecute: ' . $rollbackError->getMessage(),
+                                    'db.retry'
+                                );
+                            }
+                        }
+                        throw $e;
+                    }
+                };
+
+                $rows = DatabaseRetryService::runWithReconnectRetry($db, $runQuery, 'api.execute.folio');
+            }
 
             $executionTime = round((microtime(true) - $startTime) * 1000);
 
@@ -1323,6 +1319,15 @@ class FolioQueryController extends Controller
             $log->execution_time_ms = $executionTime;
             $log->error_message = $e->getMessage();
             $log->save(false);
+
+            if ($e instanceof \app\exceptions\PolicyViolationException) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => LocalReportSqlService::POLICY_MESSAGE];
+            }
+            if ($e instanceof \yii\base\InvalidConfigException) {
+                Yii::$app->response->statusCode = 403;
+                return ['error' => LocalReportSqlService::NOT_CONFIGURED_MESSAGE];
+            }
 
             Yii::$app->response->statusCode = 422;
             return [
@@ -1370,6 +1375,7 @@ class FolioQueryController extends Controller
             return ['error' => 'Either "sql" or "queryDefinition" is required'];
         }
 
+        $rawSql = (string) $sql;
         if ((string)$source === 'nl') {
             $sql = GeminiService::normalizeGeneratedSql((string)$sql);
         }
@@ -1455,8 +1461,12 @@ class FolioQueryController extends Controller
 
         // Safety validation
         try {
-            SqlBuilderService::validateSafety($sql);
-            SqlBuilderService::validateTablePolicy($sql);
+            if ($dataSource === 'local') {
+                LocalReportSqlService::validateSql($sql, $rawSql);
+            } else {
+                SqlBuilderService::validateSafety($sql);
+                SqlBuilderService::validateTablePolicy($sql);
+            }
         } catch (\InvalidArgumentException $e) {
             Yii::$app->response->statusCode = 403;
             return ['error' => 'This query is blocked by reporting data policy.'];
@@ -4753,20 +4763,24 @@ class FolioQueryController extends Controller
             $bound['sql'] = $this->normalizeLegacyReportSql($report, $bound['sql']);
         }
 
-        // Safety validation
-        try {
-            SqlBuilderService::validateSafety($bound['sql']);
-            SqlBuilderService::validateTablePolicy($bound['sql']);
-        } catch (\InvalidArgumentException $e) {
-            Yii::$app->response->statusCode = 403;
-            return ['error' => 'This query is blocked by reporting data policy.'];
-        }
-
         // Determine data source from report template
         $rawDataSource = $report->hasAttribute('data_source') ? $report->data_source : null;
         $dataSource = in_array($rawDataSource, ['folio', 'local', 'composite'])
             ? $rawDataSource
             : 'folio';
+
+        // Safety validation
+        try {
+            if ($dataSource === 'local') {
+                LocalReportSqlService::validateSql($bound['sql']);
+            } else {
+                SqlBuilderService::validateSafety($bound['sql']);
+                SqlBuilderService::validateTablePolicy($bound['sql']);
+            }
+        } catch (\InvalidArgumentException $e) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'This query is blocked by reporting data policy.'];
+        }
 
         // For composite reports, attach the composite_config as job metadata.
         $metadata = null;
@@ -4775,6 +4789,14 @@ class FolioQueryController extends Controller
             if (!$compositeConfig) {
                 Yii::$app->response->statusCode = 400;
                 return ['error' => 'Composite report is missing composite_config'];
+            }
+            if (isset($compositeConfig['secondary_sql'])) {
+                try {
+                    LocalReportSqlService::validateSql($compositeConfig['secondary_sql']);
+                } catch (\InvalidArgumentException $exception) {
+                    Yii::$app->response->statusCode = 403;
+                    return ['error' => LocalReportSqlService::POLICY_MESSAGE];
+                }
             }
             // Bind secondary SQL params too (secondary uses same param set)
             $metadata = [
@@ -6398,6 +6420,13 @@ SQL;
             'computed_columns' => [['name' => 'Remaining', 'formula' => 'Allocation - Total Payments - Total Encumbrances']],
         ];
 
+        try {
+            LocalReportSqlService::validateSql($compositeConfig['secondary_sql']);
+        } catch (\InvalidArgumentException $exception) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => LocalReportSqlService::POLICY_MESSAGE];
+        }
+
         $metadata = ['composite_config' => $compositeConfig, 'bound_params' => $params];
 
         $job = QueryJob::createJob($sql, $params, 'report', 'composite', $metadata);
@@ -6493,14 +6522,18 @@ SQL;
                         // For select params, fetch options from FOLIO immediately so
                         // the UI doesn't need an extra round-trip.
                         if ($def['type'] === 'select' && !empty($def['options_sql'])) {
+                            $usesLocalOptions = !empty($def['options_db'])
+                                ? $def['options_db'] !== 'folio'
+                                : in_array($rt->data_source, ['local', 'composite'], true);
                             try {
-                                $db = !empty($def['options_db']) && $def['options_db'] === 'folio'
-                                    ? Yii::$app->folioDb
-                                    : Yii::$app->folioDb; // report widgets are FOLIO by default
-                                $opts = $db->createCommand($def['options_sql'])->queryAll();
+                                $opts = $usesLocalOptions
+                                    ? LocalReportSqlService::queryAll($def['options_sql'])
+                                    : Yii::$app->folioDb->createCommand($def['options_sql'])->queryAll();
                                 $param['options'] = $opts;
                             } catch (\Exception $e) {
-                                // Let the frontend fall back to manual input
+                                if ($usesLocalOptions) {
+                                    Yii::warning("Failed to load local options for param '{$def['name']}': " . $e->getMessage());
+                                }
                             }
                         }
                         $setupParams[] = $param;

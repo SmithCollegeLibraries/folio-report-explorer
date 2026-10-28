@@ -231,14 +231,17 @@ class ReportTemplate extends ActiveRecord
         foreach ($params as $def) {
             if (in_array(($def['type'] ?? ''), ['select', 'multiselect'], true) && !empty($def['options_sql'])) {
                 try {
+                    $optionsSql = $def['options_sql'];
                     // options_db on the parameter definition takes explicit precedence.
                     // Without it, composite/local reports default to MySQL and folio reports to Postgres.
                     if (!empty($def['options_db'])) {
-                        $db = $def['options_db'] === 'folio' ? Yii::$app->folioDb : Yii::$app->db;
+                        $useLocalOptions = $def['options_db'] !== 'folio';
                     } else {
-                        $db = $useLocalDb ? Yii::$app->db : Yii::$app->folioDb;
+                        $useLocalOptions = $useLocalDb;
                     }
-                    $rows = $db->createCommand($def['options_sql'])->queryAll();
+                    $rows = $useLocalOptions
+                        ? \app\services\LocalReportSqlService::queryAll($optionsSql)
+                        : Yii::$app->folioDb->createCommand($optionsSql)->queryAll();
                     $opts = [];
                     foreach ($rows as $row) {
                         $vals = array_values($row);

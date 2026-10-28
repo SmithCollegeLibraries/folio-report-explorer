@@ -7,6 +7,7 @@ use yii\console\Controller;
 use app\models\QueryJob;
 use app\services\DatabaseRetryService;
 use app\services\FolioIdentifierCsvService;
+use app\services\LocalReportSqlService;
 use app\services\QueryJobCancellationService;
 use app\services\ReportExecutionContractService;
 
@@ -162,13 +163,13 @@ class ExportWorkerController extends Controller
         $startTime = microtime(true);
         $filePath = null;
         $fileHandle = null;
+        $stmt = null; $dataSource = 'folio';
 
         try {
             if ($this->isCancellationRequested($job)) {
                 $this->finishCancellation($job, $fileHandle, $filePath, 'before export');
                 return;
             }
-
             $dataSource = $job->hasAttribute('data_source') ? strtolower((string) ($job->data_source ?: 'folio')) : 'folio';
             if ($dataSource === 'composite') {
                 throw new \RuntimeException('Composite exports are not yet supported for file mode.');
@@ -176,8 +177,6 @@ class ExportWorkerController extends Controller
             if (!in_array($dataSource, ['folio', 'local'], true)) {
                 $dataSource = 'folio';
             }
-
-            $db = $dataSource === 'local' ? Yii::$app->db : Yii::$app->folioDb;
             $params = $job->getDecodedParams();
 
             $exportDir = Yii::getAlias('@runtime/exports');
@@ -193,10 +192,12 @@ class ExportWorkerController extends Controller
 
             $genericMaxRows = (int) (Yii::$app->params['exportRowLimit'] ?? 500000);
             $contract = ReportExecutionContractService::fromJob($job);
+            if ($dataSource === 'local') LocalReportSqlService::validateSql($job->sql_text);
             $sql = $this->prepareExportSql($job, $genericMaxRows);
-
-            $prepareAndExecute = function () use ($db, $dataSource, $job, $sql, $params) {
-                if ($dataSource === 'folio') {
+            if ($dataSource === 'local') $stmt = LocalReportSqlService::openStatementWithReconnectRetry($sql, $params, 'export-worker.execute_export.local');
+            else {
+                $db = Yii::$app->folioDb;
+                $prepareAndExecute = function () use ($db, $job, $sql, $params) {
                     $db->createCommand("SET statement_timeout = " . (int) Yii::$app->params['queryTimeoutMs'])->execute();
                     $db->createCommand(
                         "SELECT set_config('application_name', :application_name, false)",
@@ -216,21 +217,17 @@ class ExportWorkerController extends Controller
                     if ($this->isCancellationRequested($job)) {
                         throw new \RuntimeException('Query cancellation requested.');
                     }
-                }
 
-                $pdo = $db->getMasterPdo();
-                $stmt = $pdo->prepare($sql);
-                foreach ($params as $key => $value) {
-                    $stmt->bindValue($key, $value);
-                }
-                $stmt->execute();
+                    $pdo = $db->getMasterPdo();
+                    $stmt = $pdo->prepare($sql);
+                    foreach ($params as $key => $value) $stmt->bindValue($key, $value);
+                    $stmt->execute();
 
-                return $stmt;
-            };
+                    return $stmt;
+                };
 
-            $stmt = $dataSource === 'folio'
-                ? DatabaseRetryService::runWithReconnectRetry($db, $prepareAndExecute, 'export-worker.execute_export.folio')
-                : $prepareAndExecute();
+                $stmt = DatabaseRetryService::runWithReconnectRetry($db, $prepareAndExecute, 'export-worker.execute_export.folio');
+            }
 
             $columnCount = $stmt->columnCount();
             $headers = [];
@@ -325,6 +322,9 @@ class ExportWorkerController extends Controller
             $job->markFailed($e->getMessage(), $executionTime);
             $this->stderr("Export job {$job->id} failed: {$e->getMessage()}\n");
             $this->logQuery($job);
+        } finally {
+            if ($stmt instanceof \PDOStatement) $stmt->closeCursor();
+            if ($dataSource === 'local' && $job->status !== 'completed') LocalReportSqlService::resetConnection();
         }
     }
 

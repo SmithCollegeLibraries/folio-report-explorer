@@ -19,20 +19,22 @@ if (!defined('YII_DEBUG')) {
 }
 
 $dbStubPath = tempnam(sys_get_temp_dir(), 'fre-db-stub-');
+$dbLocalReportStubPath = tempnam(sys_get_temp_dir(), 'fre-local-report-db-stub-');
 $dbFolioStubPath = tempnam(sys_get_temp_dir(), 'fre-folio-db-stub-');
 $paramsStubPath = tempnam(sys_get_temp_dir(), 'fre-params-stub-');
 
-if ($dbStubPath === false || $dbFolioStubPath === false || $paramsStubPath === false) {
+if ($dbStubPath === false || $dbLocalReportStubPath === false || $dbFolioStubPath === false || $paramsStubPath === false) {
     fwrite(STDERR, "Failed to create temporary config stubs.\n");
     exit(1);
 }
 
 file_put_contents($dbStubPath, "<?php\nreturn ['class' => 'db-stub'];\n");
+file_put_contents($dbLocalReportStubPath, "<?php\nreturn ['class' => 'local-report-db-stub'];\n");
 file_put_contents($dbFolioStubPath, "<?php\nreturn ['class' => 'folio-db-stub'];\n");
 file_put_contents($paramsStubPath, "<?php\nreturn [];\n");
 
-register_shutdown_function(static function () use ($dbStubPath, $dbFolioStubPath, $paramsStubPath): void {
-    foreach ([$dbStubPath, $dbFolioStubPath, $paramsStubPath] as $path) {
+register_shutdown_function(static function () use ($dbStubPath, $dbLocalReportStubPath, $dbFolioStubPath, $paramsStubPath): void {
+    foreach ([$dbStubPath, $dbLocalReportStubPath, $dbFolioStubPath, $paramsStubPath] as $path) {
         if (is_string($path) && file_exists($path)) {
             unlink($path);
         }
@@ -46,6 +48,7 @@ if ($configSource === false) {
 }
 
 $configSource = str_replace("require __DIR__ . '/db.php';", "require '{$dbStubPath}';", $configSource);
+$configSource = str_replace("require __DIR__ . '/db_local_report.php';", "require '{$dbLocalReportStubPath}';", $configSource);
 $configSource = str_replace("require __DIR__ . '/db-folio.php';", "require '{$dbFolioStubPath}';", $configSource);
 $configSource = str_replace("require __DIR__ . '/params.php';", "require '{$paramsStubPath}';", $configSource);
 $configSource = str_replace("yii\\web\\Response::FORMAT_JSON", "'json'", $configSource);
@@ -74,6 +77,11 @@ function assertSameValue($expected, $actual, string $message): void
 }
 
 $targets = $config['components']['log']['targets'] ?? null;
+assertSameValue(
+    ['class' => 'local-report-db-stub'],
+    $config['components']['localReportDb'] ?? null,
+    'The copied web config resolves the dedicated local-report config fixture.'
+);
 if (!is_array($targets) || $targets === []) {
     fwrite(STDERR, "Web config should define at least one log target.\n");
     exit(1);
