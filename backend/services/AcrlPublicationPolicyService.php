@@ -9,7 +9,7 @@ class AcrlPublicationPolicyService
     {
         $unresolved = 0;
         foreach ($items as $item) {
-            if (in_array($item['status'] ?? null, ['new', 'removed'], true)) {
+            if (!empty($item['topical']) || in_array($item['status'] ?? null, ['new', 'removed'], true)) {
                 continue;
             }
             if (!in_array($item['decision'] ?? null, ['approved', 'rejected'], true)) {
