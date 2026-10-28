@@ -25,6 +25,23 @@ function datedResult(value: number, queryId = 'acrl-81') {
 }
 
 describe('ACRL FOLIO auto-fill panel', () => {
+  it('describes Q40a as including bound serial volumes', async () => {
+    runAutofill.mockResolvedValue({
+      value: 2180000,
+      queryId: 'acrl-40a',
+      queryVersion: 2,
+      ranAt: '2026-10-28T12:00:00-04:00',
+      asOf: '2026-10-28',
+      fyStart: null,
+      fyEnd: null,
+      kind: 'snapshot' as const,
+    });
+    render(<AcrlAutofillPanel year={2026} sheet="survey" questionId="40a" part="" currentValue={null} currentNote="" disabled={false} onUseValue={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from FOLIO' }));
+    expect(await screen.findByText('Books, scores, theses, journals and other bound serial volumes at Smith College and the Five College Repository.')).toBeInTheDocument();
+  });
+
   it('adds typed ILLiad counts to the FOLIO suggestion and appends provenance to the existing note', async () => {
     runAutofill.mockResolvedValue(datedResult(6017));
     const onUseValue = vi.fn();

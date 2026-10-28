@@ -153,7 +153,8 @@ foreach ($expectedQueries as $expected) {
     $result = $service->run(2026, 'survey', $expected[0], $expected[1]);
     acrlAutofillAssert($result['value'] === $expected[6], $expected[2] . ' must return its SQL result column.');
     acrlAutofillAssert($result['queryId'] === $expected[2], $expected[0] . $expected[1] . ' must map to its approved query id.');
-    acrlAutofillAssert($result['queryVersion'] === 1, $expected[2] . ' must report version 1.');
+    $expectedVersion = $expected[2] === 'acrl-40a' ? 2 : 1;
+    acrlAutofillAssert($result['queryVersion'] === $expectedVersion, $expected[2] . ' must report version ' . $expectedVersion . '.');
     acrlAutofillAssert($result['kind'] === $expected[5], $expected[2] . ' must report its dated or snapshot kind.');
     if ($expected[5] === 'snapshot') {
         acrlAutofillAssert($result['asOf'] === '2026-10-28' && $result['fyStart'] === null && $result['fyEnd'] === null, $expected[2] . ' must report its snapshot date.');
@@ -161,6 +162,31 @@ foreach ($expectedQueries as $expected) {
         acrlAutofillAssert($result['fyStart'] === '2025-07-01' && $result['fyEnd'] === '2026-07-01' && $result['asOf'] === null, $expected[2] . ' must use the requested FY2026 range.');
     }
     $sourceSql = file_get_contents(__DIR__ . '/../sql/acrl/' . $expected[3]);
+    if ($expected[2] === 'acrl-40a') {
+        $materialTypeMatch = [];
+        acrlAutofillAssert(preg_match('/\bmtt\.name\s+in\s*\(([^)]*)\)/i', $sourceSql, $materialTypeMatch) === 1, 'Q40a must filter by its approved material types.');
+        $materialTypeMatches = [];
+        preg_match_all("/'([^']*)'/", $materialTypeMatch[1], $materialTypeMatches);
+        $materialTypes = $materialTypeMatches[1];
+        $expectedMaterialTypes = ['Archival material', 'Book', 'Government Publication', 'Journal', 'Newspaper', 'Score', 'Serial', 'Supplement', 'Thesis/Dissertation'];
+        acrlAutofillAssert($materialTypes === $expectedMaterialTypes, 'Q40a must use the approved bound-volume material types.');
+        acrlAutofillAssert(in_array('Journal', $materialTypes, true), 'Q40a must include Journal material types.');
+        acrlAutofillAssert(in_array('Serial', $materialTypes, true), 'Q40a must include Serial material types.');
+        acrlAutofillAssert(!in_array('Microform', $materialTypes, true) && !in_array('Map', $materialTypes, true), 'Q40a must not include Microform or Map material types.');
+        $excludedLocationIds = [
+            '67204874-e4d7-495b-9247-62cd27d9ea31',
+            '409b947f-d67d-4cda-846f-35c9344ae81b',
+            'b0ecdd73-6416-4bd1-9cf3-483fd40b95cd',
+            '81772d53-e7d0-40d4-8249-a380f3fd33f0',
+            '270dceaa-8100-4e53-bf19-6decf7926f78',
+            '3ffae749-2131-48e1-8bf8-7adf36a92b9c',
+            '38fa998f-5044-4589-a182-2e027af0bb04',
+        ];
+        acrlAutofillAssert(strpos($sourceSql, 'it.effective_location_id not in') !== false, 'Q40a must exclude non-physical locations by effective location id.');
+        foreach ($excludedLocationIds as $locationId) {
+            acrlAutofillAssert(strpos($sourceSql, $locationId) !== false, 'Q40a must exclude location ' . $locationId . '.');
+        }
+    }
     acrlAutofillAssert(preg_match('/--[^\r\n]*:[A-Za-z]/', $sourceSql) !== 1, $expected[2] . ' SQL comments must not contain a colon followed by a letter.');
     $expectedSql = preg_replace('/^[ \t]*--[^\r\n]*(?:\r?\n|$)/m', '', $sourceSql);
     $queryCommand = null;

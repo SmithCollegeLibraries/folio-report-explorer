@@ -8,15 +8,15 @@ use Yii;
 class AcrlAutofillService
 {
     private const DEFINITIONS = [
-        'survey|60|' => ['queryId' => 'acrl-60', 'column' => 'q60_physical_circulation', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
-        'survey|81|' => ['queryId' => 'acrl-81', 'column' => 'q81_consortial_lending', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
-        'survey|82|' => ['queryId' => 'acrl-82', 'column' => 'q82_consortial_borrowing', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
-        'survey|40|A' => ['queryId' => 'acrl-40A', 'column' => 'value', 'file' => 'acr003-40A-physical-titles.sql', 'kind' => 'snapshot'],
-        'survey|40a|' => ['queryId' => 'acrl-40a', 'column' => 'value', 'file' => 'acr003-40a-physical-volumes.sql', 'kind' => 'snapshot'],
-        'survey|40|B' => ['queryId' => 'acrl-40B', 'column' => 'value', 'file' => 'acr003-40B-digital-titles.sql', 'kind' => 'snapshot'],
-        'survey|42|A' => ['queryId' => 'acrl-42A', 'column' => 'value', 'file' => 'acr003-42A-physical-media.sql', 'kind' => 'snapshot'],
-        'survey|42|B' => ['queryId' => 'acrl-42B', 'column' => 'value', 'file' => 'acr003-42B-digital-media.sql', 'kind' => 'snapshot'],
-        'survey|43|A' => ['queryId' => 'acrl-43A', 'column' => 'value', 'file' => 'acr003-43A-physical-serials.sql', 'kind' => 'snapshot'],
+        'survey|60|' => ['queryId' => 'acrl-60', 'version' => 1, 'column' => 'q60_physical_circulation', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
+        'survey|81|' => ['queryId' => 'acrl-81', 'version' => 1, 'column' => 'q81_consortial_lending', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
+        'survey|82|' => ['queryId' => 'acrl-82', 'version' => 1, 'column' => 'q82_consortial_borrowing', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated'],
+        'survey|40|A' => ['queryId' => 'acrl-40A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-40A-physical-titles.sql', 'kind' => 'snapshot'],
+        'survey|40a|' => ['queryId' => 'acrl-40a', 'version' => 2, 'column' => 'value', 'file' => 'acr003-40a-physical-volumes.sql', 'kind' => 'snapshot'],
+        'survey|40|B' => ['queryId' => 'acrl-40B', 'version' => 1, 'column' => 'value', 'file' => 'acr003-40B-digital-titles.sql', 'kind' => 'snapshot'],
+        'survey|42|A' => ['queryId' => 'acrl-42A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-42A-physical-media.sql', 'kind' => 'snapshot'],
+        'survey|42|B' => ['queryId' => 'acrl-42B', 'version' => 1, 'column' => 'value', 'file' => 'acr003-42B-digital-media.sql', 'kind' => 'snapshot'],
+        'survey|43|A' => ['queryId' => 'acrl-43A', 'version' => 1, 'column' => 'value', 'file' => 'acr003-43A-physical-serials.sql', 'kind' => 'snapshot'],
     ];
 
     private $repository;
@@ -103,7 +103,7 @@ class AcrlAutofillService
         return [
             'value' => $value,
             'queryId' => $definition['queryId'],
-            'queryVersion' => 1,
+            'queryVersion' => $definition['version'],
             'ranAt' => $now->format(DATE_ATOM),
             'asOf' => $definition['kind'] === 'snapshot' ? $now->format('Y-m-d') : null,
             'fyStart' => $definition['kind'] === 'dated' ? $fyStart : null,
