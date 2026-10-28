@@ -20,15 +20,18 @@ describe('ACRL PDF page extraction', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    document.numPages = 1;
     page.getTextContent.mockResolvedValue({ items });
     document.getPage.mockResolvedValue(page);
     mocks.getDocument.mockReturnValue(loadingTask);
   });
 
   it('keeps the text-only extraction API used by instruction parsing', async () => {
-    const pages = await extractPdfTextPages(new File(['pdf'], 'instructions.pdf', { type: 'application/pdf' }));
+    const onPageProgress = vi.fn();
+    const pages = await extractPdfTextPages(new File(['pdf'], 'instructions.pdf', { type: 'application/pdf' }), onPageProgress);
 
     expect(pages).toEqual(['First Second']);
+    expect(onPageProgress).toHaveBeenCalledWith(1, 1);
     expect(page.cleanup).toHaveBeenCalledOnce();
     expect(loadingTask.destroy).toHaveBeenCalledOnce();
   });
@@ -38,5 +41,14 @@ describe('ACRL PDF page extraction', () => {
 
     expect(pages).toEqual([items]);
     expect(loadingTask.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('reports progress after each page is read', async () => {
+    document.numPages = 3;
+    const onPageProgress = vi.fn();
+
+    await extractPdfItemPages(new File(['pdf'], 'worksheet.pdf', { type: 'application/pdf' }), onPageProgress);
+
+    expect(onPageProgress.mock.calls).toEqual([[1, 3], [2, 3], [3, 3]]);
   });
 });

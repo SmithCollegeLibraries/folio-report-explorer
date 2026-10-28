@@ -264,7 +264,7 @@ describe('ACRL catalogue page', () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
   });
 
-  it('shows parsing and comparison progress while a clean worksheet is processed', async () => {
+  it('shows reading and saving progress while a clean worksheet is processed', async () => {
     listYears.mockResolvedValue([]);
     getReview.mockResolvedValue(makeReview());
     let resolveParse!: (result: { items: AcrlQuestionPart[]; unresolved: string[] }) => void;
@@ -276,10 +276,10 @@ describe('ACRL catalogue page', () => {
     renderAcrl();
 
     await user.upload(screen.getByLabelText('Worksheet PDF'), new File(['worksheet'], 'worksheet.pdf', { type: 'application/pdf' }));
-    expect(await screen.findByText('Reading PDF…')).toBeInTheDocument();
+    expect(await screen.findByText('Reading file…')).toBeInTheDocument();
 
     await act(async () => resolveParse({ items: [makeQuestion('survey', '1')], unresolved: [] }));
-    expect(await screen.findByText('Comparing with FY2025…')).toBeInTheDocument();
+    expect(await screen.findByText('Saving draft…')).toBeInTheDocument();
     await act(async () => resolveUpload(makeUploadResponse()));
     expect(await screen.findByText('FY 2026 compared with FY 2025')).toBeInTheDocument();
   });

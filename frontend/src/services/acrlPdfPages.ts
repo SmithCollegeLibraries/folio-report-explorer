@@ -3,7 +3,9 @@ import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { type PdfTextItem } from './acrlPdfText';
 import { pdfItemsToText } from './acrlPdfText';
 
-export async function extractPdfItemPages(file: File): Promise<PdfTextItem[][]> {
+export type PdfPageProgress = (currentPage: number, totalPages: number) => void;
+
+export async function extractPdfItemPages(file: File, onPageProgress?: PdfPageProgress): Promise<PdfTextItem[][]> {
   GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const loadingTask = getDocument({ data: bytes });
@@ -15,6 +17,7 @@ export async function extractPdfItemPages(file: File): Promise<PdfTextItem[][]> 
       const text = await page.getTextContent();
       pages.push(text.items as PdfTextItem[]);
       page.cleanup();
+      onPageProgress?.(pageNumber, document.numPages);
     }
   } finally {
     await loadingTask.destroy();
@@ -22,6 +25,6 @@ export async function extractPdfItemPages(file: File): Promise<PdfTextItem[][]> 
   return pages;
 }
 
-export async function extractPdfTextPages(file: File): Promise<string[]> {
-  return (await extractPdfItemPages(file)).map((items) => pdfItemsToText(items));
+export async function extractPdfTextPages(file: File, onPageProgress?: PdfPageProgress): Promise<string[]> {
+  return (await extractPdfItemPages(file, onPageProgress)).map((items) => pdfItemsToText(items));
 }
