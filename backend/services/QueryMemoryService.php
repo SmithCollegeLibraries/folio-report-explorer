@@ -388,6 +388,12 @@ class QueryMemoryService
             if (!is_array($candidate)) {
                 continue;
             }
+            $exampleText = (string)($candidate['question'] ?? $candidate['normalizedQuestion'] ?? '')
+                . "\n" . (string)($candidate['sql'] ?? $candidate['generatedSql'] ?? '');
+            if (FolioSchemaService::containsRetiredLocalTableReference($exampleText)) {
+                self::recordCandidateRejected($candidate, 'retired_local_table', 'example');
+                continue;
+            }
             $baseRejection = self::baseRejectionReason($request, $candidate);
             if ($baseRejection !== null) {
                 self::recordBaseRejection($request, $candidate, $baseRejection, 'example');

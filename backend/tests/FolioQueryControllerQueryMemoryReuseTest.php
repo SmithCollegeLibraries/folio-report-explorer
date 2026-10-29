@@ -214,7 +214,7 @@ $schemaMetadata = [
     'contextHash' => substr(hash('sha256', (string)$schemaContext), 0, 16),
 ];
 $jobId = 'job-verified-reuse';
-$jobSql = 'SELECT category FROM acrl_statistics';
+$jobSql = 'SELECT expense_class_code FROM report_expense_allocations';
 $db->createCommand()->insert('query_jobs', [
     'id' => $jobId,
     'user_id' => 22,
@@ -309,7 +309,7 @@ function seedAiEndpointCandidate(
         'contextHash' => substr(hash('sha256', (string)$schemaContext), 0, 16),
     ];
     $jobId = 'job-ai-' . $suffix;
-    $sql = (string)($overrides['sql'] ?? ('SELECT category AS category_' . $suffix . ' FROM acrl_statistics'));
+    $sql = (string)($overrides['sql'] ?? ('SELECT expense_class_code AS category_' . $suffix . ' FROM report_expense_allocations'));
     $scope = $overrides['scope'] ?? ['campus' => 'Smith College'];
     $db->createCommand()->insert('query_jobs', [
         'id' => $jobId,
@@ -409,7 +409,7 @@ seedAiEndpointCandidate($service, $db, 'other', $otherUserPrompt, 22, 'accurate'
 queryMemoryReuseAssert((invokeReuseEndpoint($otherUserPrompt)['match'] ?? null) === null, 'Other-user Accurate AI-built SQL must not be directly reused without approval.');
 
 $foreignFeedbackPrompt = 'Show ACRL categories for foreign feedback memory';
-$foreignFeedbackSql = 'SELECT category AS category_foreign_feedback FROM acrl_statistics';
+$foreignFeedbackSql = 'SELECT expense_class_code AS category_foreign_feedback FROM report_expense_allocations';
 $foreignFeedbackSource = seedAiEndpointCandidate(
     $service,
     $db,
@@ -456,7 +456,7 @@ seedAiEndpointCandidate($service, $db, 'stale', $stalePrompt, 17, 'accurate', fa
 queryMemoryReuseAssert((invokeReuseEndpoint($stalePrompt)['match'] ?? null) === null, 'A changed strict prompt-scoped fingerprint must reject direct reuse.');
 
 $unsafePrompt = 'Show ACRL categories for unsafe memory';
-seedAiEndpointCandidate($service, $db, 'unsafe', $unsafePrompt, 17, 'accurate', false, ['sql' => 'DELETE FROM acrl_statistics']);
+seedAiEndpointCandidate($service, $db, 'unsafe', $unsafePrompt, 17, 'accurate', false, ['sql' => 'DELETE FROM report_expense_allocations']);
 queryMemoryReuseAssert((invokeReuseEndpoint($unsafePrompt)['match'] ?? null) === null, 'Unsafe stored SQL must be rejected as a candidate without blocking the request.');
 
 $unknownTablePrompt = 'Show ACRL categories for unknown-table memory';

@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { checkJobStatus } from '../api/client';
+import { checkJobStatus, refreshDashboardCard } from '../api/client';
 import type { DashboardItem, JobStatusResponse } from '../types';
 import { DashboardCard } from './Dashboard';
 
@@ -87,5 +87,33 @@ describe('Dashboard cached file exports', () => {
       }),
       'Cached export',
     );
+  });
+
+  it('shows a retired refresh error while keeping the cached result available', async () => {
+    vi.mocked(refreshDashboardCard).mockRejectedValue({
+      response: { data: { error: 'This report has been retired.' } },
+    });
+    render(
+      <DashboardCard
+        item={dashboardItem}
+        isAdmin={false}
+        isDragging={false}
+        isDragOver={false}
+        onDragStart={() => undefined}
+        onDragOver={() => undefined}
+        onDrop={() => undefined}
+        onDragEnd={() => undefined}
+        onUnpin={() => undefined}
+        onHide={() => undefined}
+        onToggleGlobal={() => undefined}
+        onExpand={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByTitle('Expand results')).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Re-run query'));
+
+    expect(await screen.findByText('This report has been retired.')).toBeInTheDocument();
+    expect(screen.getByTitle('Expand results')).toBeInTheDocument();
   });
 });

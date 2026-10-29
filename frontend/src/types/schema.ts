@@ -1056,17 +1056,6 @@ export interface IndexRecommendationResponse {
   error?: string;
 }
 
-export interface AcrlStatistic {
-  id: number;
-  category: string;
-  subcategory: string;
-  year: number;
-  value: number | null;
-  notes: string | null;
-  created_at?: string;
-  updated_at?: string;
-}
-
 export interface ExpenseAllocation {
   id: number;
   fiscal_year: number;

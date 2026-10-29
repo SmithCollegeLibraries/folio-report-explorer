@@ -88,7 +88,7 @@ function replacementAssert($condition, string $message): void
 }
 
 $question = 'Show vendor receipt time for the last three fiscal years';
-$rejectedSql = 'SELECT category FROM acrl_statistics';
+$rejectedSql = 'SELECT expense_class_code FROM report_expense_allocations';
 $scope = ['campus' => 'Smith College'];
 $scopeFingerprint = QueryMemoryService::scopeFingerprint('local', $scope);
 $db->createCommand()->insert('query_jobs', [
@@ -143,7 +143,7 @@ $same = $sameController->actionQueryFeedbackReplacement($feedbackId);
 replacementAssert(($same['errorType'] ?? null) === 'sql_generation_failed', 'An identical replacement SQL hash must be rejected and exhaust this explicit replacement attempt.');
 replacementAssert($db->createCommand('SELECT replacement_generation_id FROM ai_query_feedback WHERE id = :id', [':id' => $feedbackId])->queryScalar() === null, 'A rejected identical candidate must not create replacement lineage.');
 
-$differentSql = 'SELECT subcategory FROM acrl_statistics';
+$differentSql = 'SELECT fiscal_year FROM report_expense_allocations';
 Yii::$app->request->setBodyParams(['resolvedContext' => $scope]);
 $controller = replacementController([
     'sql' => $differentSql,

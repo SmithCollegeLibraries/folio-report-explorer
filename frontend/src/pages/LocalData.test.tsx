@@ -57,6 +57,7 @@ describe('Local Data access', () => {
 
     expect(screen.queryByRole('button', { name: 'ACRL Statistics' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Expense Allocations' })).not.toBeInTheDocument();
+    expect(screen.getByText('Choose a college to view or manage its expense-class allocations.')).toBeInTheDocument();
     expect(screen.getByLabelText('College')).toHaveValue('');
     await user.selectOptions(screen.getByLabelText('College'), 'MH');
     await waitFor(() => expect(getBudgetYearExpenseClassOptions).toHaveBeenCalledWith('MH'));
@@ -66,7 +67,7 @@ describe('Local Data access', () => {
     expect(listAcrl).not.toHaveBeenCalled();
   });
 
-  it('keeps the ACRL and allocation sections for administrators', async () => {
+  it('shows expense allocations and keeps the ACRL question catalogue link for administrators', async () => {
     auth.current = {
       user: { role: 'admin' },
       isAdmin: true,
@@ -77,17 +78,16 @@ describe('Local Data access', () => {
     listAcrlYears.mockResolvedValue([]);
     listAcrl.mockResolvedValue({ items: [] });
     getBudgetYearExpenseClassOptions.mockResolvedValue({ prefix: 'SC', funds: [], expenseClasses: [], fiscalYears: [] });
-    const user = userEvent.setup();
     renderLocalData();
 
-    expect(screen.getByRole('button', { name: 'ACRL Statistics' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'ACRL Statistics' })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'ACRL question catalogue' })).toHaveAttribute('href', '/acrl');
-    await user.click(screen.getByRole('button', { name: 'Expense Allocations' }));
+    expect(screen.getByText('Choose a college to view or manage its expense-class allocations.')).toBeInTheDocument();
     const college = screen.getByLabelText('College');
     expect(college).toHaveValue('');
     expect(screen.getByRole('option', { name: 'Mount Holyoke College (MH)' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Smith College (SC)' })).toBeInTheDocument();
-    await waitFor(() => expect(listAcrlYears).toHaveBeenCalled());
-    await waitFor(() => expect(listAcrl).toHaveBeenCalled());
+    expect(listAcrlYears).not.toHaveBeenCalled();
+    expect(listAcrl).not.toHaveBeenCalled();
   });
 });

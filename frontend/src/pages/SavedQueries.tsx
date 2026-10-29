@@ -16,6 +16,7 @@ export default function SavedQueries() {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, ExecuteResponse>>({});
   const [runningIds, setRunningIds] = useState<Set<number>>(new Set());
+  const [runErrors, setRunErrors] = useState<Record<number, string>>({});
   const pollingTimersRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
@@ -110,17 +111,26 @@ export default function SavedQueries() {
       }
     }
 
+    setRunErrors((prev) => {
+      const next = { ...prev };
+      delete next[q.id];
+      return next;
+    });
     setRunningIds((prev) => new Set(prev).add(q.id));
 
     try {
       const { jobId } = await refreshDashboardCard(q.id);
       await pollJobUntilDone(q.id, jobId);
-    } catch {
+    } catch (error: any) {
       setRunningIds((prev) => {
         const next = new Set(prev);
         next.delete(q.id);
         return next;
       });
+      setRunErrors((prev) => ({
+        ...prev,
+        [q.id]: error.response?.data?.error || 'Failed to refresh saved query',
+      }));
     }
   };
 
@@ -263,6 +273,7 @@ export default function SavedQueries() {
                 {/* Expanded content */}
                 {isExpanded && (
                   <div className="px-4 pb-4 border-t pt-3 space-y-3">
+                    {runErrors[q.id] && <p role="alert" className="text-sm text-red-600">{runErrors[q.id]}</p>}
                     {/* NL prompt */}
                     {q.nl_prompt && (
                       <div className="flex items-start gap-2 bg-purple-50 rounded p-2 text-xs text-purple-800">

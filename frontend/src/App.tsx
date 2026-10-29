@@ -46,7 +46,7 @@ const libraryItems = [
 const adminItems = [
   { to: '/report-reviews', label: 'AI Report Review', icon: ClipboardCheck, desc: 'Review uncertain Ask AI reports' },
   { to: '/training',label: 'AI Training',   icon: Brain,         desc: 'Tune AI query generation' },
-  { to: '/local-data',label: 'Local Data',  icon: Database,      desc: 'Manage ACRL and allocations' },
+  { to: '/local-data',label: 'Local Data',  icon: Database,      desc: 'Manage expense allocations' },
   { to: '/acrl',    label: 'ACRL',           icon: ClipboardCheck, desc: 'Survey questions and yearly review' },
   { to: '/users',   label: 'Users',         icon: UsersIcon,     desc: 'Manage user access' },
   { to: '/setup',   label: 'Setup',         icon: Settings,      desc: 'System settings' },

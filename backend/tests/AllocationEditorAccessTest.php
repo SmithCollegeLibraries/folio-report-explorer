@@ -80,24 +80,6 @@ Yii::$app->db->createCommand()->batchInsert(
     ]
 )->execute();
 
-$createAcrlSql = <<<'SQL'
-CREATE TABLE acrl_statistics (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category VARCHAR(255) NOT NULL,
-    subcategory VARCHAR(255) NOT NULL,
-    year INTEGER NOT NULL,
-    value NUMERIC NULL,
-    notes TEXT NULL
-)
-SQL;
-Yii::$app->db->createCommand($createAcrlSql)->execute();
-Yii::$app->db->createCommand()->insert('acrl_statistics', [
-    'category' => 'Collections',
-    'subcategory' => 'Books',
-    'year' => 2025,
-    'value' => 100,
-])->execute();
-
 final class AllocationEditorFolioCommand
 {
     private $sql;
@@ -265,8 +247,6 @@ allocationEditorAssert(
     allocationEditorRouteAccess(2, 'report-run')['allowed'],
     'An ordinary authenticated user can run report 36 through the report-run route.'
 );
-$acrlEditor = allocationEditorRouteAccess(3, 'local-acrl-list');
-allocationEditorAssert(!$acrlEditor['allowed'] && $acrlEditor['status'] === 403, 'Allocation editors remain unable to access ACRL actions.');
 $allocationAssignmentEditor = allocationEditorRouteAccess(3, 'user-allocation-colleges');
 allocationEditorAssert(!$allocationAssignmentEditor['allowed'], 'Allocation editors cannot access the administrator allocation-assignment route.');
 $allocationAssignmentPlain = allocationEditorRouteAccess(2, 'user-allocation-colleges');
@@ -291,8 +271,5 @@ foreach ([
     $adminResult = allocationEditorCall(1, $case[0], $query, $body, $params);
     allocationEditorAssert($adminResult['status'] !== 403, 'An administrator retains access to ' . $case[0] . '.');
 }
-
-$acrlAdmin = allocationEditorRouteAccess(1, 'local-acrl-list');
-allocationEditorAssert($acrlAdmin['allowed'], 'An administrator retains ACRL access.');
 
 fwrite(STDOUT, "Allocation editor access matrix test passed\n");

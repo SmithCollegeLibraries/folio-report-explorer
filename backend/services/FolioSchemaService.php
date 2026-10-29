@@ -117,20 +117,9 @@ class FolioSchemaService
     /**
      * Local supplementary tables stored in MySQL.
      */
+    const RETIRED_LOCAL_TABLES = ['acrl_statistics', 'acrl_statistics_retired'];
+
     const LOCAL_TABLES = [
-        'acrl_statistics' => [
-            'remarks' => 'Historical institutional statistics reported to ACRL',
-            'columns' => [
-                ['name' => 'id', 'type' => 'int'],
-                ['name' => 'category', 'type' => 'varchar'],
-                ['name' => 'subcategory', 'type' => 'varchar'],
-                ['name' => 'year', 'type' => 'int'],
-                ['name' => 'value', 'type' => 'decimal'],
-                ['name' => 'notes', 'type' => 'varchar'],
-                ['name' => 'created_at', 'type' => 'datetime'],
-                ['name' => 'updated_at', 'type' => 'datetime'],
-            ],
-        ],
         'report_expense_allocations' => [
             'remarks' => 'Per-fiscal-year expense class allocations for subject librarians',
             'columns' => [
@@ -143,6 +132,17 @@ class FolioSchemaService
             ],
         ],
     ];
+
+    public static function containsRetiredLocalTableReference(string $text): bool
+    {
+        foreach (self::RETIRED_LOCAL_TABLES as $table) {
+            $pattern = '/(?<![A-Za-z0-9_])' . preg_quote($table, '/') . '(?![A-Za-z0-9_])/i';
+            if (preg_match($pattern, $text) === 1) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * Check if a JSON cache file is still valid (exists and within TTL).
@@ -1724,6 +1724,9 @@ class FolioSchemaService
      */
     private static function sanitizePromptText(string $text, ?string $parsedRecordContentType = null): string
     {
+        if (self::containsRetiredLocalTableReference($text)) {
+            return '';
+        }
         $text = self::normalizeParsedRecordPromptText(trim($text), $parsedRecordContentType);
         if ($text === '' || !self::containsBlockedPromptReference($text)) {
             return $text;
@@ -1767,7 +1770,8 @@ class FolioSchemaService
     {
         $clean = [];
         foreach ($map as $key => $value) {
-            if (self::containsBlockedPromptReference((string)$key)) {
+            if (self::containsBlockedPromptReference((string)$key)
+                || self::containsRetiredLocalTableReference((string)$key)) {
                 continue;
             }
 
@@ -1815,12 +1819,16 @@ class FolioSchemaService
     {
         $clean = [];
         foreach ($patterns as $tableName => $info) {
-            if (self::containsBlockedPromptReference((string)$tableName)) {
+            if (self::containsBlockedPromptReference((string)$tableName)
+                || self::containsRetiredLocalTableReference((string)$tableName)) {
                 continue;
             }
 
             $columnWarnings = [];
             foreach (($info['columnWarnings'] ?? []) as $column => $warning) {
+                if (self::containsRetiredLocalTableReference((string)$column)) {
+                    continue;
+                }
                 $sanitized = self::sanitizePromptText((string)$warning, $parsedRecordContentType);
                 if ($sanitized === '') {
                     continue;
@@ -1846,7 +1854,18 @@ class FolioSchemaService
                 }
             }
 
-            $sampleValues = $info['sampleValues'] ?? [];
+            $sampleValues = [];
+            foreach (($info['sampleValues'] ?? []) as $column => $values) {
+                if (self::containsRetiredLocalTableReference((string)$column)) {
+                    continue;
+                }
+                $values = array_values(array_filter((array)$values, function ($value) {
+                    return !self::containsRetiredLocalTableReference((string)$value);
+                }));
+                if (!empty($values)) {
+                    $sampleValues[(string)$column] = $values;
+                }
+            }
             if (empty($columnWarnings) && empty($preferredApproach) && empty($sampleValues)) {
                 continue;
             }
@@ -2666,12 +2685,8 @@ class FolioSchemaService
 
         $lines[] = "\n--- Local Supplementary Tables (MySQL) ---";
         $lines[] = "These local tables are in a separate MySQL database and support institutional reporting.";
-        $lines[] = "When a user asks about ACRL statistics or local budget allocations, use these tables.";
+        $lines[] = "When a user asks about local budget allocations, use these tables.";
         $lines[] = "IMPORTANT: Queries that reference ONLY local tables should be executed with data_source=local.";
-        $lines[] = "";
-        $lines[] = "TABLE acrl_statistics";
-        $lines[] = "  Columns: id:int, category:varchar, subcategory:varchar, year:int, value:decimal, notes:varchar";
-        $lines[] = "  Notes: Historical annual ACRL data; one row per category/subcategory/year.";
         $lines[] = "";
         $lines[] = "TABLE report_expense_allocations";
         $lines[] = "  Columns: id:int, fiscal_year:int, expense_class_code:varchar, allocation_amount:decimal, created_at:datetime, updated_at:datetime";
