@@ -1601,7 +1601,7 @@ RULES:
 12. For item location joins, ALWAYS use inventory.item__t.effective_location_id (NOT
     holdings_record__t.permanent_location_id). The effective location reflects the item's
     current/temporary location and is the correct column for circulation and item-level queries.
-13. If the query references ONLY local supplementary tables (acrl_statistics, report_expense_allocations),
+13. If the query references ONLY local supplementary tables (report_expense_allocations),
     generate MySQL-compatible SELECT and set DATA SOURCE to "local".
 14. Otherwise set DATA SOURCE to "folio" and use PostgreSQL syntax.
 15. NEVER use the PostgreSQL ? operator (JSONB key-exists). Our query layer treats ? as a bind-parameter
@@ -2005,7 +2005,7 @@ PROMPT;
         self::validateResolvedReferenceSql($sql, $resolvedFilters);
 
         $dataSource = 'folio';
-        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
+        if (preg_match('/\breport_expense_allocations\b/i', $sql)) {
             $dataSource = 'local';
         }
 
@@ -6177,7 +6177,7 @@ PROMPT;
         }
 
         $dataSource = 'folio';
-        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
+        if (preg_match('/\breport_expense_allocations\b/i', $sql)) {
             $dataSource = 'local';
         }
 
@@ -7749,7 +7749,7 @@ PROMPT;
         SqlBuilderService::validateTablePolicy($sql);
         self::validateTableReferences($sql);
 
-        if (preg_match('/\b(acrl_statistics|report_expense_allocations)\b/i', $sql)) {
+        if (preg_match('/\breport_expense_allocations\b/i', $sql)) {
             $dataSource = 'local';
         }
 
@@ -8453,7 +8453,7 @@ PROMPT;
         foreach (array_keys(is_array($subtableCache['subtables'] ?? null) ? $subtableCache['subtables'] : []) as $metadbName) {
             $metadbValues[strtolower((string)$metadbName)] = true;
         }
-        $localTables = ['acrl_statistics' => true, 'report_expense_allocations' => true];
+        $localTables = ['report_expense_allocations' => true];
         $cteAliases = [];
         $identifierPattern = '"(?:[^"]|"")*"|[\w$-]+';
 

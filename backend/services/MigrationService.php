@@ -5,6 +5,7 @@ namespace app\services;
 require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
 require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
 require_once __DIR__ . '/CatalogingReportMigrationRecognitionService.php';
+require_once __DIR__ . '/AcrlRetirementMigrationRecognitionService.php';
 
 class MigrationService
 {
@@ -330,6 +331,7 @@ class MigrationService
 
     private static function databaseAppearsCurrent($db): bool
     {
+        if (!AcrlRetirementMigrationRecognitionService::retirementAppearsComplete($db)) return false;
         foreach (['users', 'query_jobs', 'report_templates', 'ai_clarification_events', 'ai_query_feedback', 'folio_reference_tables', 'ai_report_generations', 'ai_report_reviews'] as $table) {
             if ($db->schema->getTableSchema($table, true) === null) {
                 return false;
@@ -366,12 +368,9 @@ class MigrationService
             case '009_user_default_campus.sql':
                 return self::hasColumn($db, 'users', 'default_campus');
             case '010_local_supplementary_data.sql':
-                return self::hasTable($db, 'acrl_statistics')
-                    && self::hasTable($db, 'report_expense_allocations')
-                    && self::hasColumn($db, 'query_log', 'data_source')
-                    && self::hasColumn($db, 'query_jobs', 'data_source');
+                return AcrlRetirementMigrationRecognitionService::supplementaryDataAppearsComplete($db);
             case '011_seed_acrl_data.sql':
-                return self::hasTable($db, 'acrl_statistics') && self::tableRowCount($db, 'acrl_statistics') > 0;
+                return AcrlRetirementMigrationRecognitionService::acrlSeedAppearsComplete($db);
             case '012_seed_allocation_data.sql':
                 return self::hasTable($db, 'report_expense_allocations') && self::tableRowCount($db, 'report_expense_allocations') > 0;
             case '013_report_template_datasource.sql':
@@ -441,6 +440,7 @@ class MigrationService
             case '049_acquisitions_invoice_status_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db);
             case '050_orders_missing_acquisitions_unit.sql': return CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);
             case '051_budget_year_expense_class_report.sql': case '053_acquisitions_feedback_report_filters.sql': case '056_open_order_report_expansion.sql': return CatalogingReportMigrationRecognitionService::migrationDefinitionAppearsComplete($db, $filename);
+            case '061_retire_acrl_statistics.sql': return AcrlRetirementMigrationRecognitionService::retirementAppearsComplete($db);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [
                     'generation_id',

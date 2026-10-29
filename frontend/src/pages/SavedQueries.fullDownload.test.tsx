@@ -83,4 +83,21 @@ describe('SavedQueries full CSV download', () => {
 
     expect(downloadExportCsv).toHaveBeenCalledWith('job-42');
   });
+
+  it('shows the retired report error when a saved query refresh is refused', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(listSaved).mockResolvedValue([{
+      ...savedQuery,
+      source: 'report',
+      query_definition: { report_template_id: 7, bound_params: {} },
+    }]);
+    vi.mocked(refreshDashboardCard).mockRejectedValue({
+      response: { data: { error: 'This report has been retired.' } },
+    });
+    renderSavedQueries();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+
+    expect(await screen.findByText('This report has been retired.')).toBeInTheDocument();
+  });
 });

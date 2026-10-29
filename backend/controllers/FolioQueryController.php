@@ -35,7 +35,6 @@ use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
 use app\models\ReportTemplate;
-use app\models\AcrlStatistic;
 use app\models\ExpenseAllocation;
 use app\models\User;
 use app\models\DummyIdentity;
@@ -130,8 +129,6 @@ class FolioQueryController extends Controller
                             'training-update', 'training-delete', 'training-correct',
                             'report-create', 'report-update', 'report-delete',
                             'report-generate', 'report-convert',
-                            'local-acrl-list', 'local-acrl-years', 'local-acrl-create',
-                            'local-acrl-update', 'local-acrl-delete', 'local-acrl-copy-year',
                             'user-list', 'user-allocation-colleges', 'user-approve', 'user-role', 'user-delete', 'user-notifications',
                             'admin-widget-create', 'admin-widget-update', 'admin-widget-delete',
                             'report-review-list', 'report-review-detail', 'report-review-claim', 'report-review-update',
@@ -4006,19 +4003,24 @@ class FolioQueryController extends Controller
         $jobParams = [];
         if ($sq->source === 'report') {
             $def = json_decode($sq->query_definition ?: '{}', true);
+            $def = is_array($def) ? $def : [];
+            $rt = !empty($def['report_template_id'])
+                ? ReportTemplate::findOne((int)$def['report_template_id'])
+                : null;
+            if ($rt && (int)$rt->is_active === 0) {
+                Yii::$app->response->statusCode = 410;
+                return ['error' => 'This report has been retired.'];
+            }
             if (isset($def['bound_params']) && is_array($def['bound_params'])) {
                 $jobParams = $def['bound_params'];
-            } elseif (!empty($def['report_template_id'])) {
+            } elseif ($rt) {
                 // Legacy row: re-derive bound_params from the stored user params
-                $rt = ReportTemplate::findOne((int)$def['report_template_id']);
-                if ($rt) {
-                    $bound = $rt->bindParams($def['params'] ?? []);
-                    $jobParams = $bound['params'];
-                    // Back-fill so future refreshes skip this work
-                    $def['bound_params'] = $jobParams;
-                    $sq->query_definition = json_encode($def);
-                    $sq->save(false);
-                }
+                $bound = $rt->bindParams($def['params'] ?? []);
+                $jobParams = $bound['params'];
+                // Back-fill so future refreshes skip this work
+                $def['bound_params'] = $jobParams;
+                $sq->query_definition = json_encode($def);
+                $sq->save(false);
             }
         }
 
@@ -5243,186 +5245,6 @@ class FolioQueryController extends Controller
     // ─── Local supplementary data (admin) ─────────────────────────
 
     /**
-     * GET /api/local/acrl
-     */
-    public function actionLocalAcrlList()
-    {
-        $year = Yii::$app->request->get('year');
-        $category = Yii::$app->request->get('category');
-
-        $query = AcrlStatistic::find()->orderBy(['year' => SORT_DESC, 'category' => SORT_ASC, 'subcategory' => SORT_ASC]);
-        if ($year !== null && $year !== '') {
-            $query->andWhere(['year' => (int) $year]);
-        }
-        if ($category) {
-            $query->andWhere(['category' => $category]);
-        }
-
-        $rows = $query->asArray()->all();
-        return [
-            'items' => $rows,
-            'years' => AcrlStatistic::getAvailableYears(),
-        ];
-    }
-
-    /**
-     * GET /api/local/acrl/years
-     */
-    public function actionLocalAcrlYears()
-    {
-        return ['years' => AcrlStatistic::getAvailableYears()];
-    }
-
-    /**
-     * POST /api/local/acrl
-     * Body: {rows: [{category, subcategory, year, value, notes}], row?: {...}}
-     */
-    public function actionLocalAcrlCreate()
-    {
-        $body = Yii::$app->request->getBodyParams();
-        $rows = $body['rows'] ?? null;
-        if ($rows === null && isset($body['row'])) {
-            $rows = [$body['row']];
-        }
-        if (!is_array($rows) || empty($rows)) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'rows is required'];
-        }
-
-        $created = 0;
-        $updated = 0;
-        foreach ($rows as $row) {
-            $category = trim((string) ($row['category'] ?? ''));
-            $subcategory = trim((string) ($row['subcategory'] ?? ''));
-            $year = (int) ($row['year'] ?? 0);
-            if ($category === '' || $subcategory === '' || $year <= 0) {
-                continue;
-            }
-
-            $model = AcrlStatistic::findOne([
-                'category' => $category,
-                'subcategory' => $subcategory,
-                'year' => $year,
-            ]);
-            if (!$model) {
-                $model = new AcrlStatistic();
-                $created++;
-            } else {
-                $updated++;
-            }
-
-            $model->category = $category;
-            $model->subcategory = $subcategory;
-            $model->year = $year;
-            $model->value = array_key_exists('value', $row) ? $row['value'] : null;
-            $model->notes = $row['notes'] ?? null;
-
-            if (!$model->save()) {
-                Yii::$app->response->statusCode = 422;
-                return ['error' => 'Validation failed', 'details' => $model->errors];
-            }
-        }
-
-        return ['success' => true, 'created' => $created, 'updated' => $updated];
-    }
-
-    /**
-     * PUT /api/local/acrl/<id>
-     */
-    public function actionLocalAcrlUpdate($id)
-    {
-        $model = AcrlStatistic::findOne((int) $id);
-        if (!$model) {
-            Yii::$app->response->statusCode = 404;
-            return ['error' => 'Row not found'];
-        }
-
-        $body = Yii::$app->request->getBodyParams();
-        foreach (['category', 'subcategory', 'year', 'value', 'notes'] as $field) {
-            if (array_key_exists($field, $body)) {
-                $model->{$field} = $body[$field];
-            }
-        }
-
-        if (!$model->save()) {
-            Yii::$app->response->statusCode = 422;
-            return ['error' => 'Validation failed', 'details' => $model->errors];
-        }
-
-        return ['success' => true, 'item' => $model->toArray()];
-    }
-
-    /**
-     * DELETE /api/local/acrl/<id>
-     */
-    public function actionLocalAcrlDelete($id)
-    {
-        $model = AcrlStatistic::findOne((int) $id);
-        if (!$model) {
-            Yii::$app->response->statusCode = 404;
-            return ['error' => 'Row not found'];
-        }
-        $model->delete();
-        return ['success' => true];
-    }
-
-    /**
-     * POST /api/local/acrl/copy-year
-     * Body: {fromYear: number, toYear: number, overwrite?: boolean}
-     */
-    public function actionLocalAcrlCopyYear()
-    {
-        $body = Yii::$app->request->getBodyParams();
-        $fromYear = (int) ($body['fromYear'] ?? 0);
-        $toYear = (int) ($body['toYear'] ?? 0);
-        $overwrite = !empty($body['overwrite']);
-
-        if ($fromYear <= 0 || $toYear <= 0) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'fromYear and toYear are required'];
-        }
-
-        $sourceRows = AcrlStatistic::find()->where(['year' => $fromYear])->asArray()->all();
-        if (empty($sourceRows)) {
-            Yii::$app->response->statusCode = 404;
-            return ['error' => 'No rows found for source year'];
-        }
-
-        $copied = 0;
-        $updated = 0;
-        $skipped = 0;
-        foreach ($sourceRows as $row) {
-            $existing = AcrlStatistic::findOne([
-                'category' => $row['category'],
-                'subcategory' => $row['subcategory'],
-                'year' => $toYear,
-            ]);
-            if ($existing) {
-                if (!$overwrite) {
-                    $skipped++;
-                    continue;
-                }
-                $existing->value = $row['value'];
-                $existing->notes = $row['notes'];
-                $existing->save(false);
-                $updated++;
-                continue;
-            }
-
-            $new = new AcrlStatistic();
-            $new->category = $row['category'];
-            $new->subcategory = $row['subcategory'];
-            $new->year = $toYear;
-            $new->value = $row['value'];
-            $new->notes = $row['notes'];
-            $new->save(false);
-            $copied++;
-        }
-
-        return ['success' => true, 'copied' => $copied, 'updated' => $updated, 'skipped' => $skipped];
-    }
-
-    /**
      * GET /api/local/allocations
      */
     public function actionLocalAllocList()
@@ -6493,53 +6315,54 @@ SQL;
 
             if ($tpl['widget_type'] === 'report' && $tpl['report_template_id']) {
                 $rt = ReportTemplate::findOne((int)$tpl['report_template_id']);
-                if ($rt) {
-                    // Only surface required select/text params that are NOT date or
-                    // fiscal-year params (those are auto-filled from academic year defaults).
-                    $setupParams = [];
-                    foreach ($rt->getResolvedParameters() as $def) {
-                        if (empty($def['required'])) {
-                            continue;
-                        }
-                        $skipTypes = ['date'];
-                        if (in_array($def['type'] ?? 'text', $skipTypes, true)) {
-                            continue;
-                        }
-                        // Skip $current_year / $fiscal_year_* defaulted number params
-                        $default = $def['default'] ?? '';
-                        if (strpos($default, '$fiscal_year') === 0 || $default === '$current_year') {
-                            continue;
-                        }
-                        $param = [
-                            'name'      => $def['name'],
-                            'label'     => $def['label'],
-                            'type'      => $def['type'],
-                            'required'  => true,
-                            'placeholder' => $def['placeholder'] ?? '',
-                            'description' => $def['description'] ?? '',
-                            'options'   => [],
-                        ];
-                        // For select params, fetch options from FOLIO immediately so
-                        // the UI doesn't need an extra round-trip.
-                        if ($def['type'] === 'select' && !empty($def['options_sql'])) {
-                            $usesLocalOptions = !empty($def['options_db'])
-                                ? $def['options_db'] !== 'folio'
-                                : in_array($rt->data_source, ['local', 'composite'], true);
-                            try {
-                                $opts = $usesLocalOptions
-                                    ? LocalReportSqlService::queryAll($def['options_sql'])
-                                    : Yii::$app->folioDb->createCommand($def['options_sql'])->queryAll();
-                                $param['options'] = $opts;
-                            } catch (\Exception $e) {
-                                if ($usesLocalOptions) {
-                                    Yii::warning("Failed to load local options for param '{$def['name']}': " . $e->getMessage());
-                                }
+                if (!$rt || (int)$rt->is_active === 0) {
+                    continue;
+                }
+                // Only surface required select/text params that are NOT date or
+                // fiscal-year params (those are auto-filled from academic year defaults).
+                $setupParams = [];
+                foreach ($rt->getResolvedParameters() as $def) {
+                    if (empty($def['required'])) {
+                        continue;
+                    }
+                    $skipTypes = ['date'];
+                    if (in_array($def['type'] ?? 'text', $skipTypes, true)) {
+                        continue;
+                    }
+                    // Skip $current_year / $fiscal_year_* defaulted number params
+                    $default = $def['default'] ?? '';
+                    if (strpos($default, '$fiscal_year') === 0 || $default === '$current_year') {
+                        continue;
+                    }
+                    $param = [
+                        'name'      => $def['name'],
+                        'label'     => $def['label'],
+                        'type'      => $def['type'],
+                        'required'  => true,
+                        'placeholder' => $def['placeholder'] ?? '',
+                        'description' => $def['description'] ?? '',
+                        'options'   => [],
+                    ];
+                    // For select params, fetch options from FOLIO immediately so
+                    // the UI doesn't need an extra round-trip.
+                    if ($def['type'] === 'select' && !empty($def['options_sql'])) {
+                        $usesLocalOptions = !empty($def['options_db'])
+                            ? $def['options_db'] !== 'folio'
+                            : in_array($rt->data_source, ['local', 'composite'], true);
+                        try {
+                            $opts = $usesLocalOptions
+                                ? LocalReportSqlService::queryAll($def['options_sql'])
+                                : Yii::$app->folioDb->createCommand($def['options_sql'])->queryAll();
+                            $param['options'] = $opts;
+                        } catch (\Exception $e) {
+                            if ($usesLocalOptions) {
+                                Yii::warning("Failed to load local options for param '{$def['name']}': " . $e->getMessage());
                             }
                         }
-                        $setupParams[] = $param;
                     }
-                    $tpl['setup_params'] = $setupParams;
+                    $setupParams[] = $param;
                 }
+                $tpl['setup_params'] = $setupParams;
             }
 
             $result[] = $tpl;
@@ -6597,6 +6420,10 @@ SQL;
             if (!$rt) {
                 Yii::$app->response->statusCode = 422;
                 return ['error' => 'Report template not found'];
+            }
+            if ((int)$rt->is_active === 0) {
+                Yii::$app->response->statusCode = 410;
+                return ['error' => 'This report has been retired.'];
             }
 
             // Merge: template default_params < user-supplied params

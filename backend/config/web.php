@@ -98,14 +98,6 @@ $config = [
                 'POST reports/convert' => 'folio-query/report-convert',
                 'GET budget-year-expense-class/options' => 'folio-query/budget-year-expense-class-options',
 
-                // Local supplementary data (admin)
-                'GET local/acrl' => 'folio-query/local-acrl-list',
-                'GET local/acrl/years' => 'folio-query/local-acrl-years',
-                'POST local/acrl' => 'folio-query/local-acrl-create',
-                'PUT local/acrl/<id:\d+>' => 'folio-query/local-acrl-update',
-                'DELETE local/acrl/<id:\d+>' => 'folio-query/local-acrl-delete',
-                'POST local/acrl/copy-year' => 'folio-query/local-acrl-copy-year',
-
                 // ACRL survey question catalogue and review (admin only)
                 'GET acrl/years' => 'acrl/years',
                 'POST acrl/worksheets' => 'acrl/upload',

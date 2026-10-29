@@ -144,6 +144,8 @@ function assertContainsText(string $needle, string $haystack, string $message): 
 $schemaContext = FolioSchemaService::buildSchemaContext(
     'Show all FOLIO instances of Smith College books that are missing a MARC 300 field, including their call number and current location.'
 );
+assertFalseValue(strpos($schemaContext, 'acrl_statistics') !== false, 'Retired ACRL tables must not appear in Ask AI schema context.');
+assertFalseValue(strpos($schemaContext, 'acrl_statistics_retired') !== false, 'The renamed retired table must not appear in Ask AI schema context.');
 
 assertContainsText(
     'marctab.mt300',
@@ -373,11 +375,11 @@ assertContainsText(
     'Only-location prompts should steer exclusion through NOT EXISTS rather than a row-count HAVING clause.'
 );
 
-fwrite(STDOUT, "FolioSchemaService prompt policy filter test passed\n");
-
 $holdinglessContext = FolioSchemaService::buildSchemaContext(
     'Find Amherst instances without holdings and without a 035$a starting (SMHASLKR), excluding discovery suppression only.'
 );
 assertContainsText('Instances Without Holdings: Cataloging Rules', $holdinglessContext, 'Holding-less guidance must reach actual schema context.');
 assertContainsText("Amherst 'AM'", $holdinglessContext, 'Ownership and campus codes must remain distinct.');
 assertFalseValue(strpos($holdinglessContext, 'scope inventory.instance__t first with holdings/location predicates') !== false, 'Do not inject contradictory positive holdings scope for holding-less requests.');
+
+fwrite(STDOUT, "FolioSchemaService prompt policy filter test passed\n");

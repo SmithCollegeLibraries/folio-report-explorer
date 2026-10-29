@@ -52,6 +52,7 @@ describe('Local Data navigation', () => {
     await user.click(screen.getByRole('button', { name: 'Admin' }));
 
     expect(screen.getByRole('link', { name: /Local Data/ })).toHaveAttribute('href', '/local-data');
+    expect(screen.getByText('Manage expense allocations')).toBeInTheDocument();
   });
 });
 

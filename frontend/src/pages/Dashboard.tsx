@@ -61,16 +61,14 @@ export function DashboardCard({
   onToggleGlobal: () => void;
   onExpand: (data: ExecuteResponse, title: string) => void;
 }) {
-  // ── Cached / live results ──
   const [cachedResults, setCachedResults] = useState<ExecuteResponse | null>(null);
   const [loadingCache, setLoadingCache] = useState(false);
   const [lastJobId, setLastJobId] = useState<string | null>(item.last_job_id);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
-  // ── Refresh polling ──
   const [pollingJobId, setPollingJobId] = useState<string | null>(null);
   const { results: polledResults, isRunning, error: pollError } = useJobPolling(pollingJobId);
 
-  // ── Display type ──
   const [displayType, setDisplayType] = useState<ChartType | 'table'>(item.display_type ?? 'table');
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(item.chart_config ?? null);
 
@@ -101,12 +99,13 @@ export function DashboardCard({
   const results = polledResults ?? cachedResults;
 
   const handleRefresh = async () => {
+    setRefreshError(null);
     try {
       const { jobId } = await refreshDashboardCard(item.id);
       setLastJobId(jobId);
       setPollingJobId(jobId);
-    } catch {
-      // surface via pollError
+    } catch (error: any) {
+      setRefreshError(error.response?.data?.error || 'Failed to refresh report');
     }
   };
 
@@ -225,6 +224,7 @@ export function DashboardCard({
             <span className="text-sm text-gray-500">{isRunning ? 'Running…' : 'Loading…'}</span>
           </div>
         )}
+        {refreshError && <div role="alert" className="flex items-center gap-2 text-sm text-red-600 px-4 py-2"><AlertCircle size={14} />{refreshError}</div>}
         {pollError && (
           <div className="flex items-center gap-2 text-sm text-red-600 p-4">
             <AlertCircle size={14} />

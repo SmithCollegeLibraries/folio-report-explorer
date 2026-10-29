@@ -42,18 +42,6 @@ final class AllocationEditorAccessService
                     Yii::$app->response->data = ['error' => 'Forbidden'];
                 },
             ],
-            [
-                'allow' => false,
-                'actions' => [
-                    'local-acrl-list', 'local-acrl-years', 'local-acrl-create',
-                    'local-acrl-update', 'local-acrl-delete', 'local-acrl-copy-year',
-                ],
-                'roles' => ['@'],
-                'denyCallback' => function ($rule, $action) {
-                    Yii::$app->response->statusCode = 403;
-                    Yii::$app->response->data = ['error' => 'Forbidden'];
-                },
-            ],
         ];
     }
 

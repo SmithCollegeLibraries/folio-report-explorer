@@ -217,8 +217,14 @@ $excludedExamples = QueryMemoryService::selectAiExamples($exampleRequest, [
     memoryCandidate(['id' => 'wrong-source', 'dataSource' => 'local']),
     memoryCandidate(['id' => 'unsafe', 'sql' => 'UPDATE inventory.instance__t SET title = NULL']),
     memoryCandidate(['id' => 'blocked-table', 'sql' => 'SELECT * FROM users.users__t']),
+    memoryCandidate(['id' => 'retired-table', 'sql' => 'SELECT category FROM acrl_statistics']),
+    memoryCandidate(['id' => 'renamed-retired-table', 'sql' => 'SELECT category FROM acrl_statistics_retired']),
+    memoryCandidate([
+        'id' => 'retired-name-in-question',
+        'question' => 'Show acrl_statistics by year',
+    ]),
 ]);
-assertQueryMemory($excludedExamples === [], 'Stale, suppressed, inaccurate, unauthorized, and unsafe examples must be absent.');
+assertQueryMemory($excludedExamples === [], 'Stale, suppressed, inaccurate, unauthorized, unsafe, and both retired-table examples must be absent.');
 
 $weakOnlyCandidate = memoryCandidate([
     'id' => 'weak-only',
