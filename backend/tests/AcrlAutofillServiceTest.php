@@ -129,7 +129,7 @@ function acrlAutofillService(AcrlAutofillTestRepository $repository, AcrlAutofil
 $repository = new AcrlAutofillTestRepository();
 $db = new AcrlAutofillTestDb();
 $service = acrlAutofillService($repository, $db);
-$circulation = $service->run(2025, 'survey', '60', '');
+$circulation = $service->run(2025, 'survey', '60', 'A');
 acrlAutofillAssert($circulation['value'] === 18438, 'Q60 should return the Q60 alias from the combined circulation query.');
 acrlAutofillAssert($circulation['queryId'] === 'acrl-60' && $circulation['queryVersion'] === 1, 'Q60 must report its fixed query identity and version.');
 acrlAutofillAssert($circulation['fyStart'] === '2024-07-01' && $circulation['fyEnd'] === '2025-07-01', 'FY2025 must use the half-open July-to-July range.');
@@ -150,7 +150,7 @@ $executableFySql = preg_replace('/--.*$/m', '', $fyCommand->sql);
 acrlAutofillAssert(strpos($executableFySql, '2024-07-01') === false && strpos($executableFySql, '2025-07-01') === false, 'FY dates must not be interpolated into SQL.');
 
 $expectedQueries = [
-    ['60', '', 'acrl-60', 'acr003-60-81-82-circulation.sql', 'q60_physical_circulation', 'dated', 18438],
+    ['60', 'A', 'acrl-60', 'acr003-60-81-82-circulation.sql', 'q60_physical_circulation', 'dated', 18438],
     ['81', '', 'acrl-81', 'acr003-60-81-82-circulation.sql', 'q81_consortial_lending', 'dated', 6017],
     ['82', '', 'acrl-82', 'acr003-60-81-82-circulation.sql', 'q82_consortial_borrowing', 'dated', 6897],
     ['40', 'A', 'acrl-40A', 'acr003-40A-physical-titles.sql', 'value', 'snapshot', 1077455],
@@ -160,6 +160,15 @@ $expectedQueries = [
     ['42', 'B', 'acrl-42B', 'acr003-42B-digital-media.sql', 'value', 'snapshot', 1077455],
     ['43', 'A', 'acrl-43A', 'acr003-43A-physical-serials.sql', 'value', 'snapshot', 51600],
 ];
+
+$beforeBlankPart = count($db->commands);
+try {
+    $service->run(2025, 'survey', '60', '');
+    acrlAutofillAssert(false, 'Question 60 without part A must not have an auto-fill query.');
+} catch (\DomainException $exception) {
+    acrlAutofillAssert(count($db->commands) === $beforeBlankPart, 'A blank part for question 60 must be rejected before opening an FOLIO transaction.');
+}
+
 $expectedSqlFiles = array_values(array_unique(array_column($expectedQueries, 3)));
 sort($expectedSqlFiles);
 $actualSqlFiles = array_map('basename', glob(__DIR__ . '/../sql/acrl/*.sql'));
@@ -273,6 +282,11 @@ $methodsService = new \app\services\AcrlAutofillService(
 );
 $methods = $methodsService->methods();
 acrlAutofillAssert(count($methods) === count($expectedQueries), 'The methods catalog must return one entry for every auto-fill definition.');
+$circulationMethod = null;
+foreach ($methods as $method) {
+    if ($method['queryId'] === 'acrl-60') $circulationMethod = $method;
+}
+acrlAutofillAssert($circulationMethod !== null && $circulationMethod['questionId'] === '60' && $circulationMethod['part'] === 'A', 'The methods catalog must identify the circulation query as question 60 part A.');
 foreach ($methods as $method) {
     acrlAutofillAssert(!empty($method['summary']) && is_array($method['summary']), $method['queryId'] . ' must have a non-empty rule summary.');
     foreach ($method['summary'] as $summaryLine) {

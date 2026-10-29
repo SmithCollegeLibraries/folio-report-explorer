@@ -8,7 +8,7 @@ use Yii;
 class AcrlAutofillService
 {
     private const DEFINITIONS = [
-        'survey|60|' => [
+        'survey|60|A' => [
             'queryId' => 'acrl-60', 'version' => 1, 'column' => 'q60_physical_circulation', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated',
             'summary' => [
                 'Counts Smith-owned items held at Smith College or the Five College Repository.',

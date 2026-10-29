@@ -30,7 +30,7 @@ interface AcrlAutofillPanelProps {
 const NO_TYPED_PARTS: TypedPart[] = [];
 
 const definitions: Record<string, AutofillDefinition> = {
-  'survey|60|': {
+  'survey|60|A': {
     noteLabel: 'physical circulation',
     typedParts: NO_TYPED_PARTS,
   },

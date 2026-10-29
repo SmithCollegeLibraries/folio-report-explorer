@@ -142,10 +142,10 @@ describe('ACRL entry page', () => {
 
   it('saves an accepted FOLIO suggestion through the normal answer API with query provenance', async () => {
     const response = entry();
-    response.sections[0].questions.push(makeQuestion({
-      questionId: '60', part: '', prompt: 'Total Physical Circulation',
+    response.sections[0].questions[0] = makeQuestion({
+      questionId: '60', part: 'A', prompt: 'Total Physical Circulation',
       answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
-    }));
+    });
     getEntry.mockResolvedValue(response);
     runAutofill.mockResolvedValue({
       value: 18438, queryId: 'acrl-60', queryVersion: 1, ranAt: '2026-10-28T12:34:56-04:00',
@@ -159,7 +159,7 @@ describe('ACRL entry page', () => {
     expect(await within(row).findByText('Total: 18,438')).toBeInTheDocument();
     await userEvent.click(within(row).getByRole('button', { name: 'Use this value' }));
     await waitFor(() => expect(saveAnswer).toHaveBeenCalledWith(2026, expect.objectContaining({
-      sheet: 'survey', question_id: '60', part: '', value: '18438',
+      sheet: 'survey', question_id: '60', part: 'A', value: '18438',
       note: 'FOLIO physical circulation 18,438 (query acrl-60 v1, FY2026, run 2026-10-28)',
     })));
   });
@@ -170,10 +170,10 @@ describe('ACRL entry page', () => {
     previousYear.selectedYear = 2025;
     previousYear.previousYear = 2024;
     for (const response of [currentYear, previousYear]) {
-      response.sections[0].questions.push(makeQuestion({
-        questionId: '60', part: '', prompt: 'Total Physical Circulation',
+      response.sections[0].questions[0] = makeQuestion({
+        questionId: '60', part: 'A', prompt: 'Total Physical Circulation',
         answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
-      }));
+      });
     }
     getEntry.mockResolvedValueOnce(currentYear).mockResolvedValueOnce(previousYear);
     runAutofill.mockResolvedValue({
