@@ -67,7 +67,7 @@ select
     sql: 'select q81_consortial_lending;',
   },
   {
-    sheet: 'survey' as const, questionId: '60', part: '', queryId: 'acrl-60', queryVersion: 1, kind: 'dated' as const,
+    sheet: 'survey' as const, questionId: '60', part: 'A', queryId: 'acrl-60', queryVersion: 1, kind: 'dated' as const,
     summary: ['Smith-owned physical loans checked out at Smith service points.'], sql: 'select q60_physical_circulation;',
   },
   {
@@ -193,31 +193,37 @@ describe('ACRL FOLIO auto-fill panel', () => {
     expect(screen.queryByRole('button', { name: 'Fill from FOLIO' })).not.toBeInTheDocument();
   });
 
+  it('hides auto-fill for question 60 when its part is blank', () => {
+    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: '', currentValue: null, currentNote: '', disabled: false, onUseValue: vi.fn() });
+    expect(screen.queryByRole('button', { name: 'Fill from FOLIO' })).not.toBeInTheDocument();
+  });
+
   it('shows the query failure without creating an answer', async () => {
     runAutofill.mockRejectedValue(new Error('offline'));
     const onUseValue = vi.fn();
-    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: '', currentValue: null, currentNote: '', disabled: false, onUseValue }, () => Promise.reject(new Error('offline')));
+    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: 'A', currentValue: null, currentNote: '', disabled: false, onUseValue }, () => Promise.reject(new Error('offline')));
     await userEvent.click(screen.getByRole('button', { name: 'Fill from FOLIO' }));
     expect(await screen.findByRole('status')).toHaveTextContent('Could not get a FOLIO value.');
     expect(onUseValue).not.toHaveBeenCalled();
+    expect(runAutofill).toHaveBeenCalledWith(2026, 'survey', '60', 'A');
   });
 
   it('keeps the FOLIO result usable when the methods catalog cannot be loaded', async () => {
-    runAutofill.mockResolvedValue(datedResult(42));
+    runAutofill.mockResolvedValue(datedResult(42, 'acrl-60'));
     const onUseValue = vi.fn();
-    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: '', currentValue: null, currentNote: '', disabled: false, onUseValue }, () => Promise.reject(new Error('offline')));
+    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: 'A', currentValue: null, currentNote: '', disabled: false, onUseValue }, () => Promise.reject(new Error('offline')));
 
     await userEvent.click(screen.getByRole('button', { name: 'Fill from FOLIO' }));
     expect(await screen.findByText("Couldn't load how this is counted")).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Use this value' }));
-    expect(onUseValue).toHaveBeenCalledWith('42', expect.stringContaining('query acrl-81 v1'));
+    expect(onUseValue).toHaveBeenCalledWith('42', expect.stringContaining('query acrl-60 v1'));
   });
 
   it('shows the server reason when a query is already running', async () => {
     runAutofill.mockRejectedValue({
       response: { status: 409, data: { error: 'An auto-fill query is already running for this question.' } },
     });
-    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: '', currentValue: null, currentNote: '', disabled: false, onUseValue: vi.fn() });
+    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: 'A', currentValue: null, currentNote: '', disabled: false, onUseValue: vi.fn() });
 
     await userEvent.click(screen.getByRole('button', { name: 'Fill from FOLIO' }));
     expect(await screen.findByRole('status')).toHaveTextContent('Could not get a FOLIO value. An auto-fill query is already running for this question.');
@@ -225,7 +231,7 @@ describe('ACRL FOLIO auto-fill panel', () => {
 
   it('uses the long-running collection hint while a query is in flight', async () => {
     runAutofill.mockReturnValue(new Promise(() => undefined));
-    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: '', currentValue: null, currentNote: '', disabled: false, onUseValue: vi.fn() });
+    renderPanel({ year: 2026, sheet: 'survey', questionId: '60', part: 'A', currentValue: null, currentNote: '', disabled: false, onUseValue: vi.fn() });
 
     await userEvent.click(screen.getByRole('button', { name: 'Fill from FOLIO' }));
     expect(screen.getByRole('button', { name: 'Querying FOLIO… collection counts can take a minute or more.' })).toBeDisabled();
