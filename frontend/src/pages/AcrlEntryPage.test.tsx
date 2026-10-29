@@ -224,7 +224,7 @@ describe('ACRL entry page', () => {
     expect(exportButton).toBeEnabled();
   });
 
-  it('renders stored radio options and saves the selected answer as JSON text', async () => {
+  it('renders stored rating options as a dropdown and saves the selected answer as JSON text', async () => {
     const response = entry();
     response.sections[0].questions.push(makeQuestion({
       sheet: 'trends', questionId: 'T1', part: '', prompt: 'Rating question', answerType: 'choice',
@@ -238,9 +238,10 @@ describe('ACRL entry page', () => {
     renderPage();
 
     const row = (await screen.findByRole('heading', { name: 'Rating question' })).closest('article') as HTMLElement;
-    expect(within(row).getByRole('radio', { name: 'Higher' })).toBeChecked();
+    const answerSelect = within(row).getByRole('combobox', { name: 'Rating question' });
+    expect(answerSelect).toHaveValue('Higher');
     expect(within(row).getByText('Current value: Higher')).toBeInTheDocument();
-    await user.click(within(row).getByRole('radio', { name: 'Lower' }));
+    await user.selectOptions(answerSelect, 'Lower');
     await user.click(within(row).getByRole('button', { name: 'Save answer' }));
 
     await waitFor(() => expect(saveAnswer).toHaveBeenCalledWith(2026, expect.objectContaining({ value: '{"value":"Lower"}' })));

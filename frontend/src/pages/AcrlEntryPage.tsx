@@ -103,7 +103,7 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
       {!isCalculated && <div className="grid gap-3 md:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_auto] md:items-end">
         {question.answerOptions ? <div className="text-sm font-medium text-gray-700">
           <span>Answer</span>
-          <AcrlStructuredAnswerInput options={question.answerOptions} value={value} disabled={disabled} onChange={setValue} />
+          <AcrlStructuredAnswerInput question={question.prompt} options={question.answerOptions} value={value} disabled={disabled} onChange={setValue} />
         </div> : <label className="text-sm font-medium text-gray-700">Answer
           {numberInput ? <input className="mt-1 block w-full rounded border border-gray-300 px-3 py-2 disabled:bg-gray-100" type="number" step="0.01" value={value} disabled={disabled} onChange={(event) => setValue(event.target.value)} />
             : question.answerType === 'yes/no' ? <select className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2 disabled:bg-gray-100" value={value} disabled={disabled} onChange={(event) => setValue(event.target.value)}><option value="">Select…</option><option value="yes">Yes</option><option value="no">No</option></select>
