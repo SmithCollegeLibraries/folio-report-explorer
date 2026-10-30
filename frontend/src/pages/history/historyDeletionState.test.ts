@@ -71,6 +71,21 @@ describe('deriveHistoryDeletionState', () => {
     expect(state.offset).toBe(0);
   });
 
+  it('clamps the last page when its only row is deleted from a 51-row history', () => {
+    const state = deriveHistoryDeletionState(
+      [historyItem('only-row-on-last-page')],
+      51,
+      50,
+      50,
+      ['only-row-on-last-page'],
+      null,
+    );
+
+    expect(state.offset).toBe(0);
+    expect(state.total).toBe(50);
+    expect(state.items).toEqual([]);
+  });
+
   it('closes the modal only when its item was successfully deleted', () => {
     const deletedModal = deriveHistoryDeletionState(
       [historyItem('deleted'), historyItem('kept')],

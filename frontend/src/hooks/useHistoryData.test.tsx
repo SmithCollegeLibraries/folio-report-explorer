@@ -44,6 +44,7 @@ function historyResponse(items: HistoryItem[]): HistoryResponse {
 
 describe('useHistoryData load generations', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -160,5 +161,28 @@ describe('useHistoryData load generations', () => {
 
     expect(result.current.error).toBe('Newest load failed');
     expect(result.current.items).toEqual([]);
+  });
+});
+
+describe('useHistoryData grouped active polling', () => {
+  it('keeps polling a completed representative while any grouped member is active', async () => {
+    vi.useFakeTimers();
+    const groupedCompletedRepresentative = {
+      ...historyItem('completed-representative'),
+      activeRunCount: 1,
+    } as HistoryItem;
+    vi.mocked(fetchQueryHistory).mockResolvedValue(historyResponse([groupedCompletedRepresentative]));
+
+    const { result } = renderHook(() => useHistoryData());
+    await act(async () => { await Promise.resolve(); });
+
+    expect(result.current.hasActive).toBe(true);
+    expect(fetchQueryHistory).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(fetchQueryHistory).toHaveBeenCalledTimes(2);
   });
 });
