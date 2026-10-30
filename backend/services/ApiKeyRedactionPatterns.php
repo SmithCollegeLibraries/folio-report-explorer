@@ -110,11 +110,13 @@ final class ApiKeyRedactionPatterns
             return false;
         }
         $equals = $nameStart + $nameLength;
+        $encodedValue = false;
         if ($equals < $limit && $text[$equals] === '=') {
             $valueStart = $equals + 1;
         } elseif ($equals + 2 < $limit && $text[$equals] === '%'
             && strncasecmp(substr($text, $equals, 3), '%3d', 3) === 0) {
             $valueStart = $equals + 3;
+            $encodedValue = true;
         } else {
             return false;
         }
@@ -126,7 +128,7 @@ final class ApiKeyRedactionPatterns
                 || $character === '"' || $character === "'" || $character === '<' || $character === '>') {
                 break;
             }
-            if ($valueEnd + 2 < $limit && $character === '%'
+            if ($encodedValue && $valueEnd + 2 < $limit && $character === '%'
                 && (strncasecmp(substr($text, $valueEnd, 3), '%26', 3) === 0
                     || strncasecmp(substr($text, $valueEnd, 3), '%3f', 3) === 0)) {
                 break;
@@ -179,64 +181,4 @@ final class ApiKeyRedactionPatterns
         return true;
     }
 
-    public static function serializedExpressionAt($text, $index, $limit, &$expressionEnd)
-    {
-        if ($index + 11 > $limit || strncasecmp(substr($text, $index, 11), 'unserialize', 11) !== 0) {
-            return false;
-        }
-        $open = ApiKeyRedactionSyntax::skipWhitespace($text, $index + 11, $limit);
-        if ($open >= $limit || $text[$open] !== '(') {
-            return false;
-        }
-        $quoteStart = ApiKeyRedactionSyntax::skipWhitespace($text, $open + 1, $limit);
-        if (ApiKeyRedactionSyntax::quoteAt($text, $quoteStart, $limit) === null) {
-            return false;
-        }
-        $quoteEnd = ApiKeyRedactionSyntax::quotedEnd($text, $quoteStart, $limit);
-        if ($quoteEnd >= $limit) {
-            return false;
-        }
-        $close = ApiKeyRedactionSyntax::skipWhitespace($text, $quoteEnd + 1, $limit);
-        if ($close >= $limit || $text[$close] !== ')') {
-            return false;
-        }
-        $expressionEnd = $close + 1;
-        return true;
-    }
-
-    public static function serializedValueHasSensitiveField($text, $start, $expressionEnd)
-    {
-        $open = strpos($text, '(', $start);
-        if ($open === false || $open >= $expressionEnd) {
-            return false;
-        }
-        $quoteStart = ApiKeyRedactionSyntax::skipWhitespace($text, $open + 1, $expressionEnd);
-        $contentStart = $quoteStart + 1;
-        $contentEnd = ApiKeyRedactionSyntax::quotedEnd($text, $quoteStart, $expressionEnd);
-        for ($index = $contentStart; $index + 3 < $contentEnd; $index++) {
-            if ($text[$index] !== 's' || $text[$index + 1] !== ':') {
-                continue;
-            }
-            $lengthStart = $index + 2;
-            $lengthEnd = $lengthStart;
-            $fieldLength = 0;
-            while ($lengthEnd < $contentEnd && $text[$lengthEnd] >= '0' && $text[$lengthEnd] <= '9') {
-                if ($fieldLength <= 128) {
-                    $fieldLength = $fieldLength * 10 + (ord($text[$lengthEnd]) - 48);
-                }
-                $lengthEnd++;
-            }
-            if ($lengthEnd === $lengthStart || $fieldLength > 128
-                || $lengthEnd + 2 >= $contentEnd || $text[$lengthEnd] !== ':' || $text[$lengthEnd + 1] !== '"') {
-                continue;
-            }
-            $fieldStart = $lengthEnd + 2;
-            $fieldEnd = $fieldStart + $fieldLength;
-            if ($fieldEnd + 1 < $contentEnd && $text[$fieldEnd] === '"' && $text[$fieldEnd + 1] === ';'
-                && ApiKeyRedactionSyntax::isSensitiveName(substr($text, $fieldStart, $fieldLength))) {
-                return true;
-            }
-        }
-        return false;
-    }
 }
