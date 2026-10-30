@@ -65,7 +65,7 @@ ops006Test('redacts sk-style keys', function () {
 });
 
 ops006Test('redacts key and api_key query values including percent-encoded values', function () {
-    $input = 'https://example.invalid/generate?key=SYNTHETIC_QUERY_KEY_123456&api_key=SYNTHETIC_QUERY_API_KEY_123456&next=keep&other=SYNTHETIC%2DENCODED%2DQUERY%2DKEY';
+    $input = 'https://example.invalid/generate?key=SYNTHETIC_QUERY_KEY_123456&api_key=SYNTHETIC_QUERY_API_KEY_123456&next=keep&key=SYNTHETIC%2DENCODED%2DQUERY%2DKEY';
     $actual = ops006Redact($input);
     foreach (['SYNTHETIC_QUERY_KEY_123456', 'SYNTHETIC_QUERY_API_KEY_123456', 'SYNTHETIC%2DENCODED%2DQUERY%2DKEY'] as $secret) {
         ops006Assert(strpos($actual, $secret) === false, 'A query parameter value remains in the output.');
