@@ -278,9 +278,12 @@ export async function togglePin(id: number): Promise<SavedQuery> {
   return data;
 }
 
-export async function promoteToReport(id: number): Promise<{ id: number; slug: string; name: string }> {
-  const { data } = await api.post(`/saved/${id}/promote`);
-  return data;
+export async function promoteToReport(id: number): Promise<{
+  data: { id: number; slug: string; name: string };
+  status: number;
+}> {
+  const { data, status } = await api.post(`/saved/${id}/promote`);
+  return { data, status };
 }
 
 // ─── Settings (dev) ───────────────────────────────────────────────

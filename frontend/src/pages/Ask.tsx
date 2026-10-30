@@ -2,9 +2,10 @@ import { useState, useRef, useEffect, type CSSProperties, type PointerEvent as R
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { isAxiosError } from 'axios';
-import { askNl, submitQuery, saveQuery, promoteToReport, submitCorrection, saveCampusPreference, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision, recordQueryMemorySignal } from '../api/client';
+import { askNl, submitQuery, saveQuery, submitCorrection, saveCampusPreference, saveClarificationResolution, saveQueryFeedback, replaceQueryFeedback, fetchQueryReuseCandidate, recordQueryReuseDecision, recordQueryMemorySignal } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
+import { useSavedQueryPromotion } from '../hooks/useSavedQueryPromotion';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
@@ -715,6 +716,8 @@ export default function Ask() {
   const [saveDesc, setSaveDesc] = useState('');
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [lastSavedId, setLastSavedId] = useState<number | null>(null);
+  const promoteMut = useSavedQueryPromotion();
+  const savedQueryPromotion = lastSavedId === null ? undefined : promoteMut.promotionFor(lastSavedId);
   const [feedbackNote, setFeedbackNote] = useState('');
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [feedbackResult, setFeedbackResult] = useState<QueryFeedbackResponse | null>(null);
@@ -979,14 +982,6 @@ export default function Ask() {
       setLastSavedId(data.id);
       setSaveSuccess(`Saved as "${data.name}"`);
       recordMemorySignal('saved');
-      setTimeout(() => setSaveSuccess(null), 4000);
-    },
-  });
-
-  const promoteMut = useMutation({
-    mutationFn: (id: number) => promoteToReport(id),
-    onSuccess: (data) => {
-      setSaveSuccess(`Promoted to report "${data.name}"`);
       setTimeout(() => setSaveSuccess(null), 4000);
     },
   });
@@ -2489,13 +2484,23 @@ export default function Ask() {
                         </button>
                         {lastSavedId && (
                           <button
-                            onClick={() => promoteMut.mutate(lastSavedId)}
-                            disabled={promoteMut.isPending}
+                            onClick={() => promoteMut.promote(lastSavedId)}
+                            disabled={promoteMut.isPending(lastSavedId) || Boolean(savedQueryPromotion)}
                             className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800"
                           >
                             <FileBarChart size={12} />
-                            {promoteMut.isPending ? 'Promoting…' : 'Save as Report'}
+                            {promoteMut.isPending(lastSavedId) ? 'Promoting…' : savedQueryPromotion ? 'Saved as report' : 'Save as Report'}
                           </button>
+                        )}
+                        {savedQueryPromotion?.status === 200 && (
+                          <span role="status" className="text-xs text-gray-600">
+                            Report already exists: {savedQueryPromotion.data.name}
+                          </span>
+                        )}
+                        {savedQueryPromotion && (
+                          <Link to={`/reports/${savedQueryPromotion.data.id}`} className="text-xs text-indigo-600 hover:underline">
+                            View report
+                          </Link>
                         )}
                         {!isRunning ? (
                           <button

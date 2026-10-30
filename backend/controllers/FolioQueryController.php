@@ -4122,25 +4122,17 @@ class FolioQueryController extends Controller
             return ['error' => 'No SQL to promote — run the query first'];
         }
 
-        // Generate a URL-safe slug from the name
-        $slug = preg_replace('/[^a-z0-9]+/', '-', strtolower($query->name));
-        $slug = trim($slug, '-');
-        // Ensure uniqueness
-        $existing = ReportTemplate::findOne(['slug' => $slug]);
-        if ($existing) {
-            $slug .= '-' . time();
+        $existingReport = \app\services\SavedQueryPromotionService::findActiveMatch($query);
+        if ($existingReport) {
+            Yii::$app->response->statusCode = 200;
+            return [
+                'id' => $existingReport->id,
+                'slug' => $existingReport->slug,
+                'name' => $existingReport->name,
+            ];
         }
 
-        $report = new ReportTemplate();
-        $report->slug = $slug;
-        $report->name = $query->name;
-        $report->description = $query->description ?: ($query->nl_prompt ?: '');
-        $report->category = 'other';
-        $report->sql_template = $query->generated_sql;
-        $report->parameters = '[]';
-        $report->default_limit = 100;
-        $report->is_active = 1;
-        $report->created_by = $query->source === 'nl' ? 'ai' : 'manual';
+        $report = \app\services\SavedQueryPromotionService::buildReport($query);
 
         if (!$report->save()) {
             Yii::$app->response->statusCode = 422;

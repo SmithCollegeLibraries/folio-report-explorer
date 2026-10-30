@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { listSaved, deleteSaved, togglePin, promoteToReport, refreshDashboardCard, checkJobStatus } from '../api/client';
+import { listSaved, deleteSaved, togglePin, refreshDashboardCard, checkJobStatus } from '../api/client';
+import { useSavedQueryPromotion } from '../hooks/useSavedQueryPromotion';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import { fmtDate } from '../utils/format';
@@ -142,9 +143,7 @@ export default function SavedQueries() {
     },
   });
 
-  const promoteMut = useMutation({
-    mutationFn: (id: number) => promoteToReport(id),
-  });
+  const promoteMut = useSavedQueryPromotion();
 
   if (isLoading) {
     return (
@@ -181,6 +180,7 @@ export default function SavedQueries() {
             const isExpanded = expanded === q.id;
             const qResults = results[q.id];
             const isRunning = runningIds.has(q.id);
+            const promotion = promoteMut.promotionFor(q.id);
 
             return (
               <div key={q.id} className="border rounded-lg bg-white">
@@ -241,13 +241,23 @@ export default function SavedQueries() {
                       {q.is_pinned ? <PinOff size={14} /> : <Pin size={14} />}
                     </button>
                     <button
-                      onClick={() => promoteMut.mutate(q.id)}
-                      disabled={promoteMut.isPending}
+                      onClick={() => promoteMut.promote(q.id)}
+                      disabled={promoteMut.isPending(q.id) || Boolean(promotion)}
                       className="text-gray-400 hover:text-indigo-600 p-1"
-                      title="Save as Report"
+                      title={promotion ? 'Saved as report' : 'Save as Report'}
                     >
-                      <FileBarChart size={14} />
+                      {promotion ? 'Saved as report' : <FileBarChart size={14} />}
                     </button>
+                    {promotion?.status === 200 && (
+                      <span role="status" className="text-xs text-gray-600">
+                        Report already exists: {promotion.data.name}
+                      </span>
+                    )}
+                    {promotion && (
+                      <a href={`/reports/${promotion.data.id}`} className="text-xs text-indigo-600 hover:underline">
+                        View report
+                      </a>
+                    )}
                     {q.generated_sql && (
                       <button
                         onClick={() => void runSavedQuery(q)}
