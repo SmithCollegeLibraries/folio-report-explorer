@@ -113,9 +113,19 @@ function storedTextReadString(string $sql, int &$offset): string
 
 final class StoredTextReportSchema
 {
+    private $hasHelpText;
+
+    public function __construct(bool $hasHelpText)
+    {
+        $this->hasHelpText = $hasHelpText;
+    }
+
     public function getTableSchema(string $table, bool $refresh = false)
     {
-        return $table === 'report_templates' ? (object)['columns' => ['help_text' => new stdClass()]] : null;
+        if ($table !== 'report_templates') {
+            return null;
+        }
+        return (object)['columns' => $this->hasHelpText ? ['help_text' => new stdClass()] : []];
     }
 }
 
@@ -124,11 +134,13 @@ final class StoredTextReportDatabase
     public $schema;
     public $row;
     public $queries = [];
+    public $hasHelpText;
 
-    public function __construct(array $row)
+    public function __construct(array $row, bool $hasHelpText = true)
     {
-        $this->schema = new StoredTextReportSchema();
+        $this->schema = new StoredTextReportSchema($hasHelpText);
         $this->row = $row;
+        $this->hasHelpText = $hasHelpText;
     }
 
     public function createCommand(string $sql = '', array $params = []): StoredTextReportCommand
@@ -139,6 +151,9 @@ final class StoredTextReportDatabase
     public function evaluate(string $sql, array $params): int
     {
         $this->queries[] = ['sql' => $sql, 'params' => $params];
+        if (!$this->hasHelpText && strpos($sql, 'help_text') !== false) {
+            throw new RuntimeException('Unknown column report_templates.help_text.');
+        }
         if (strpos($sql, 'SELECT COUNT(*) FROM report_templates WHERE ') !== 0) {
             return 0;
         }
@@ -232,11 +247,15 @@ final class StoredTextReportCommand
     }
 }
 
-function storedTextRecognizes(string $method, array $row): array
+function storedTextRecognizes(string $method, array $row, bool $hasHelpText = true): array
 {
-    $database = new StoredTextReportDatabase($row);
-    $result = BudgetYearFundReportMigrationRecognitionService::$method($database);
-    return [$result, $database];
+    $database = new StoredTextReportDatabase($row, $hasHelpText);
+    try {
+        $result = BudgetYearFundReportMigrationRecognitionService::$method($database);
+        return [$result, $database, null];
+    } catch (Throwable $exception) {
+        return [null, $database, $exception->getMessage()];
+    }
 }
 
 $migrationDirectory = __DIR__ . '/../../mysql/migrations/';
@@ -261,6 +280,18 @@ foreach ($testCases as $case) {
     [$result, $database] = storedTextRecognizes($case[0], $rows[$case[1]]);
     storedTextAssert($result === $case[2], $case[3]);
     storedTextAssert($database->queries !== [], $case[3] . ' Recognition must query the stored row.');
+}
+
+foreach ([
+    'budgetYearFundReportAppearsComplete',
+    'budgetYearFundReportFiscalYearOptionsAppearComplete',
+    'budgetYearFundReportPaymentDistributionsAppearComplete',
+    'budgetYearFundReportEncumbranceStatusAppearComplete',
+] as $method) {
+    [$result, $database, $error] = storedTextRecognizes($method, $rows['062'], false);
+    storedTextAssert($result === false, "{$method} must return false when report_templates.help_text is missing.");
+    storedTextAssert($error === null, "{$method} must not query report_templates.help_text when the column is missing.");
+    storedTextAssert($database->queries === [], "{$method} must stop before querying a definition without help_text.");
 }
 
 if ($storedTextFailures !== []) {

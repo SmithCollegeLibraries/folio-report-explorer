@@ -81,6 +81,10 @@ final class BudgetYearFundReportMigrationRecognitionService
 
     private static function reportDefinitionAppearsComplete($db, array $definition): bool
     {
+        if (!self::hasColumn($db, 'report_templates', 'help_text')) {
+            return false;
+        }
+
         $where = 'id = 37 AND slug = :slug AND name = :name AND description = :description'
             . ' AND category = :category AND data_source = :data_source AND default_limit = :default_limit'
             . ' AND is_active = 1 AND created_by = :created_by AND JSON_LENGTH(parameters) = 2';
@@ -132,8 +136,8 @@ final class BudgetYearFundReportMigrationRecognitionService
     private static function encumbranceStatusDefinition(): array
     {
         return [
-            'parameter_names_only' => true,
-            'parameters' => ['fiscalYearEndYear', 'acqUnitId'],
+            'parameter_names_only' => false,
+            'parameters' => self::paymentDistributionDefinition()['parameters'],
             'description' => 'Shows allocation, payments, released and unreleased encumbrances, calculated remaining, and FOLIO budget balances for every allocated fund in a selected fiscal year and acquisition unit.',
             'aliases' => ['Fund Code', 'Fund Name', 'Fiscal Year', 'Allocated', 'Payments', 'Calculated Current Encumbrances', 'Unreleased Count', 'Released Encumbrances', 'Released Count', 'Total Committed', 'Calculated Remaining', 'FOLIO Expenditures', 'FOLIO Encumbered', 'FOLIO Available'],
             'sql_markers' => [
@@ -148,6 +152,10 @@ final class BudgetYearFundReportMigrationRecognitionService
                 'released_count_marker' => "SUM(CASE WHEN t.encumbrance__status = 'Released' THEN 1 ELSE 0 END) AS released_count",
                 'encumbrance_group_marker' => 'GROUP BY t.from_fund_id, t.fiscal_year_id',
                 'fund_year_join_marker' => "e.fund_id = b.fund_id\n AND e.fiscal_year_id = b.fiscal_year_id",
+                'unreleased_count_output_marker' => 'COALESCE(e.unreleased_count, 0) AS "Unreleased Count"',
+                'released_encumbrances_output_marker' => 'ROUND(COALESCE(e.released_encumbrances, 0), 2) AS "Released Encumbrances"',
+                'released_count_output_marker' => 'COALESCE(e.released_count, 0) AS "Released Count"',
+                'encumbrance_left_join_marker' => "LEFT JOIN encumbrances e\n  ON e.fund_id = b.fund_id\n AND e.fiscal_year_id = b.fiscal_year_id",
                 'calculated_remaining_marker' => 'COALESCE(b.allocated, 0) - COALESCE(p.payment, 0) - COALESCE(e.current_encumbrance, 0)',
             ],
             'help_markers' => [

@@ -39,6 +39,10 @@ function budgetRecognitionSqlMarkers(): array
         'released_count_marker' => "SUM(CASE WHEN t.encumbrance__status = 'Released' THEN 1 ELSE 0 END) AS released_count",
         'encumbrance_group_marker' => 'GROUP BY t.from_fund_id, t.fiscal_year_id',
         'fund_year_join_marker' => 'e.fund_id = b.fund_id AND e.fiscal_year_id = b.fiscal_year_id',
+        'unreleased_count_output_marker' => 'COALESCE(e.unreleased_count, 0) AS "Unreleased Count"',
+        'released_encumbrances_output_marker' => 'ROUND(COALESCE(e.released_encumbrances, 0), 2) AS "Released Encumbrances"',
+        'released_count_output_marker' => 'COALESCE(e.released_count, 0) AS "Released Count"',
+        'encumbrance_left_join_marker' => "LEFT JOIN encumbrances e\n  ON e.fund_id = b.fund_id\n AND e.fiscal_year_id = b.fiscal_year_id",
         'calculated_remaining_marker' => 'COALESCE(b.allocated, 0) - COALESCE(p.payment, 0) - COALESCE(e.current_encumbrance, 0)',
     ];
 }
@@ -67,16 +71,55 @@ function budgetRecognitionDescription(): string
     return 'Shows allocation, payments, released and unreleased encumbrances, calculated remaining, and FOLIO budget balances for every allocated fund in a selected fiscal year and acquisition unit.';
 }
 
+function budgetRecognitionParameters(): array
+{
+    return [
+        [
+            'name' => 'fiscalYearEndYear', 'type' => 'select', 'label' => 'Fiscal Year', 'default' => '',
+            'description' => 'Campus-neutral fiscal year; the selected acquisition unit determines the matching FOLIO fiscal-year series.',
+            'options_sql' => "SELECT DISTINCT EXTRACT(YEAR FROM period_end::date)::int AS value, 'FY' || EXTRACT(YEAR FROM period_end::date)::int::text AS label FROM finance.fiscal_year__t WHERE period_end IS NOT NULL ORDER BY value DESC",
+            'options_db' => 'folio', 'placeholder' => 'Select fiscal year', 'required' => true,
+        ],
+        [
+            'name' => 'acqUnitId', 'type' => 'select', 'label' => 'Acquisition Unit', 'default' => '',
+            'description' => 'Determines both fund membership and the campus fiscal-year series.',
+            'options_sql' => 'SELECT id AS value, TRIM(name) AS label FROM orders.acquisitions_unit__t WHERE NOT is_deleted ORDER BY TRIM(name)',
+            'options_db' => 'folio', 'placeholder' => 'Select acquisition unit', 'required' => true,
+        ],
+    ];
+}
+
+function budgetRecognitionAliasOrderFragments(): array
+{
+    $fragments = [];
+    $aliases = budgetRecognitionAliases();
+    for ($index = 0; $index < count($aliases) - 1; $index++) {
+        $fragments[] = "AND LOCATE('AS \"{$aliases[$index]}\"', sql_template) < LOCATE('AS \"{$aliases[$index + 1]}\"', sql_template)";
+    }
+    return $fragments;
+}
+
 function budgetRecognitionDefinition(array $overrides = []): array
 {
     $sqlMarkers = budgetRecognitionSqlMarkers();
     $helpMarkers = budgetRecognitionHelpMarkers();
     $select = [];
+    $selectExpressions = [
+        'Unreleased Count' => $sqlMarkers['unreleased_count_output_marker'],
+        'Released Encumbrances' => $sqlMarkers['released_encumbrances_output_marker'],
+        'Released Count' => $sqlMarkers['released_count_output_marker'],
+    ];
     foreach (budgetRecognitionAliases() as $alias) {
-        $select[] = '0 AS "' . $alias . '"';
+        $select[] = $selectExpressions[$alias] ?? ('0 AS "' . $alias . '"');
     }
-    $sql = implode("\n", $sqlMarkers) . "\nSELECT " . implode(",\n       ", $select)
-        . "\nFROM budgets b LEFT JOIN encumbrances e ON {$sqlMarkers['fund_year_join_marker']}";
+    $sqlDefinitionMarkers = $sqlMarkers;
+    unset(
+        $sqlDefinitionMarkers['unreleased_count_output_marker'],
+        $sqlDefinitionMarkers['released_encumbrances_output_marker'],
+        $sqlDefinitionMarkers['released_count_output_marker']
+    );
+    $sql = implode("\n", $sqlDefinitionMarkers) . "\nSELECT " . implode(",\n       ", $select)
+        . "\nFROM budgets b\n{$sqlMarkers['encumbrance_left_join_marker']}";
     $help = implode(' ', $helpMarkers);
     return array_merge([
         'id' => 37,
@@ -87,8 +130,8 @@ function budgetRecognitionDefinition(array $overrides = []): array
         'category' => 'finance',
         'sql_template' => $sql,
         'parameters' => [
-            ['name' => 'fiscalYearEndYear'],
-            ['name' => 'acqUnitId'],
+            budgetRecognitionParameters()[0],
+            budgetRecognitionParameters()[1],
         ],
         'data_source' => 'folio',
         'default_limit' => 1000,
@@ -109,9 +152,17 @@ function budgetRecognitionRequiredWhereFragments(): array
         'AND is_active = 1',
         'AND created_by = :created_by',
         'AND JSON_LENGTH(parameters) = 2',
-        "AND JSON_UNQUOTE(JSON_EXTRACT(parameters, '$[0].name')) = :fiscal_year_parameter",
-        "AND JSON_UNQUOTE(JSON_EXTRACT(parameters, '$[1].name')) = :acq_unit_parameter",
     ];
+    $parameterFields = ['name', 'type', 'label', 'default', 'description', 'options_sql', 'options_db', 'placeholder'];
+    foreach ([0 => 'fiscal_year', 1 => 'acq_unit'] as $index => $prefix) {
+        foreach ($parameterFields as $field) {
+            $fragments[] = "AND BINARY JSON_UNQUOTE(JSON_EXTRACT(parameters, '$[{$index}].{$field}')) = BINARY :{$prefix}_{$field}";
+        }
+        $fragments[] = "AND JSON_EXTRACT(parameters, '$[{$index}].required') = true";
+    }
+    foreach (budgetRecognitionAliasOrderFragments() as $fragment) {
+        $fragments[] = $fragment;
+    }
     foreach (budgetRecognitionAliases() as $index => $alias) {
         $fragments[] = 'AND sql_template LIKE :output_alias_' . $index;
     }
@@ -134,9 +185,13 @@ function budgetRecognitionExpectedParameters(): array
         ':data_source' => 'folio',
         ':default_limit' => 1000,
         ':created_by' => 'manual',
-        ':fiscal_year_parameter' => 'fiscalYearEndYear',
-        ':acq_unit_parameter' => 'acqUnitId',
     ];
+    $parameterFields = ['name', 'type', 'label', 'default', 'description', 'options_sql', 'options_db', 'placeholder'];
+    foreach ([0 => 'fiscal_year', 1 => 'acq_unit'] as $index => $prefix) {
+        foreach ($parameterFields as $field) {
+            $params[":" . $prefix . '_' . $field] = budgetRecognitionParameters()[$index][$field];
+        }
+    }
     foreach (budgetRecognitionAliases() as $index => $alias) {
         $params[':output_alias_' . $index] = '%AS "' . $alias . '"%';
     }
@@ -222,10 +277,19 @@ final class BudgetRecognitionTestDatabase
         }
 
         $parameters = $this->definition['parameters'] ?? [];
-        if (count($parameters) !== 2
-            || ($parameters[0]['name'] ?? null) !== $params[':fiscal_year_parameter']
-            || ($parameters[1]['name'] ?? null) !== $params[':acq_unit_parameter']) {
+        if (count($parameters) !== 2) {
             return false;
+        }
+        $parameterFields = ['name', 'type', 'label', 'default', 'description', 'options_sql', 'options_db', 'placeholder'];
+        foreach ([0 => 'fiscal_year', 1 => 'acq_unit'] as $index => $prefix) {
+            foreach ($parameterFields as $field) {
+                if (($parameters[$index][$field] ?? null) !== ($params[":" . $prefix . '_' . $field] ?? null)) {
+                    return false;
+                }
+            }
+            if (($parameters[$index]['required'] ?? null) !== true) {
+                return false;
+            }
         }
 
         foreach (budgetRecognitionAliases() as $index => $alias) {
@@ -357,11 +421,12 @@ $legacyHelp = str_replace(
     ['', '', '', ''],
     $canonical['help_text']
 );
-$legacySql = str_replace(
-    "0 AS \"Unreleased Count\",\n       0 AS \"Released Encumbrances\",\n       0 AS \"Released Count\",\n       ",
-    '',
-    $legacySql
-);
+$legacyOutputExpressions = [
+    $sqlMarkers['unreleased_count_output_marker'],
+    $sqlMarkers['released_encumbrances_output_marker'],
+    $sqlMarkers['released_count_output_marker'],
+];
+$legacySql = str_replace(implode(",\n       ", $legacyOutputExpressions) . ",\n       ", '', $legacySql);
 $legacy037 = budgetRecognitionDefinition([
     'description' => 'Shows allocation, paid invoice distributions, current encumbrances, calculated remaining, and FOLIO budget balances for every allocated fund in a selected fiscal year and acquisition unit.',
     'sql_template' => $legacySql,
@@ -409,6 +474,29 @@ $wrongAliasOrder = budgetRecognitionDefinition([
         $canonical['sql_template']
     ),
 ]);
+$wrongReleasedCountExpression = budgetRecognitionDefinition([
+    'sql_template' => str_replace(
+        $sqlMarkers['released_count_output_marker'],
+        '0 AS "Released Count"',
+        $canonical['sql_template']
+    ),
+]);
+$wrongEncumbranceJoin = budgetRecognitionDefinition([
+    'sql_template' => str_replace(
+        $sqlMarkers['encumbrance_left_join_marker'],
+        str_replace('LEFT JOIN', 'JOIN', $sqlMarkers['encumbrance_left_join_marker']),
+        $canonical['sql_template']
+    ),
+]);
+$parametersMissingOptionsSql = $canonical['parameters'];
+$parametersMissingOptionsSql[0]['options_sql'] = '';
+$missingOptionsSql = budgetRecognitionDefinition(['parameters' => $parametersMissingOptionsSql]);
+$parametersWithWrongType = $canonical['parameters'];
+$parametersWithWrongType[0]['type'] = 'text';
+$wrongParameterType = budgetRecognitionDefinition(['parameters' => $parametersWithWrongType]);
+$parametersNotRequired = $canonical['parameters'];
+$parametersNotRequired[0]['required'] = false;
+$parameterNotRequired = budgetRecognitionDefinition(['parameters' => $parametersNotRequired]);
 
 $fakeComplete = new BudgetRecognitionTestDatabase($canonical);
 $expectedQuery = budgetRecognitionExpectedQuery();
@@ -422,6 +510,11 @@ $negativeDefinitions = [
     'wrong parameter order' => $wrongParameterOrder,
     'renamed existing alias' => $renamedExistingAlias,
     'wrong alias order' => $wrongAliasOrder,
+    'missing options_sql' => $missingOptionsSql,
+    'changed parameter type' => $wrongParameterType,
+    'required false' => $parameterNotRequired,
+    'wrong Released Count output expression' => $wrongReleasedCountExpression,
+    'encumbrances JOIN instead of LEFT JOIN' => $wrongEncumbranceJoin,
     '037-only definition' => $legacy037,
 ];
 $completeFixtureResult = $fakeComplete->createCommand($expectedQuery, $expectedParams)->queryScalar();
@@ -445,6 +538,17 @@ $ignoredDefinitionResult = $fakeNoCheck->createCommand(
 )->queryScalar();
 budgetRecognitionAssert($ignoredDefinitionResult === 0, 'The fake database must reject an id/slug-only query that ignores the 062 definition markers.');
 budgetRecognitionAssert($fakeNoCheck->acceptedQueries === 0, 'A query missing 062 markers must not be recorded as accepted.');
+$queryWithoutAliasOrdering = str_replace(budgetRecognitionAliasOrderFragments(), '', $expectedQuery);
+$fakeWithoutAliasOrdering = new BudgetRecognitionTestDatabase($canonical);
+$unorderedQueryResult = $fakeWithoutAliasOrdering->createCommand($queryWithoutAliasOrdering, $expectedParams)->queryScalar();
+budgetRecognitionAssert($unorderedQueryResult === 0, 'The fake database must reject a query missing the submitted LOCATE alias-order predicates.');
+$wrongDefinitionCases = [
+    'missing options_sql' => $missingOptionsSql,
+    'changed parameter type' => $wrongParameterType,
+    'required false' => $parameterNotRequired,
+    'wrong Released Count output expression' => $wrongReleasedCountExpression,
+    'encumbrances JOIN instead of LEFT JOIN' => $wrongEncumbranceJoin,
+];
 
 $recognitionMethod = 'budgetYearFundReportEncumbranceStatusAppearComplete';
 $completeCall = budgetRecognitionInvoke($recognitionMethod, $canonical, 'A complete 062 definition must be recognized');
@@ -469,6 +573,13 @@ foreach ([
     if ($call['result'] !== null) {
         budgetRecognitionAssert($call['result'] === true, "Migration recognition {$method} must accept the complete 062 successor.");
         budgetRecognitionAssert($call['db']->acceptedQueries > 0, "Migration recognition {$method} must validate the 062 definition.");
+    }
+    foreach ($wrongDefinitionCases as $case => $definition) {
+        $driftCall = budgetRecognitionInvoke($method, $definition, "{$method} must reject {$case}");
+        if ($driftCall['result'] !== null) {
+            budgetRecognitionAssert($driftCall['result'] === false, "Migration recognition {$method} must reject {$case}.");
+            budgetRecognitionAssert($driftCall['db']->acceptedQueries === 0, "Migration recognition {$method} must not accept {$case}.");
+        }
     }
 }
 
