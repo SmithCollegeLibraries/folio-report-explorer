@@ -433,7 +433,8 @@ namespace {
     $ordinaryResult = (new \app\controllers\FolioQueryController('folio-query', null))->actionReportRun(38);
     catalogingAssertSame('table', $ordinaryResult['outputMode'] ?? null, 'Ordinary reports must retain their existing output path.');
     catalogingAssertSame(1, $ordinary->bindCalls, 'Ordinary reports must retain the legacy binder path.');
-    catalogingAssertSame(null, catalogingLastJob()->metadata, 'Ordinary reports without execution config must not gain governed metadata.');
+    catalogingAssertSame(false, array_key_exists('reportExecution', catalogingLastJob()->metadata), 'Ordinary reports without execution config must not gain governed metadata.');
+    catalogingAssertSame(38, catalogingLastJob()->metadata['reportTemplateId'] ?? null, 'Ordinary report jobs must retain their report template id.');
 
     resetCatalogingState();
     $ordinaryRequired = catalogingReport();
