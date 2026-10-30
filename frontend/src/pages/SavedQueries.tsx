@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link, useInRouterContext } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { listSaved, deleteSaved, togglePin, refreshDashboardCard, checkJobStatus } from '../api/client';
 import { useSavedQueryPromotion } from '../hooks/useSavedQueryPromotion';
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 
 export default function SavedQueries() {
+  const isInRouter = useInRouterContext();
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, ExecuteResponse>>({});
@@ -254,9 +256,15 @@ export default function SavedQueries() {
                       </span>
                     )}
                     {promotion && (
-                      <a href={`/reports/${promotion.data.id}`} className="text-xs text-indigo-600 hover:underline">
-                        View report
-                      </a>
+                      isInRouter ? (
+                        <Link to={`/reports/${promotion.data.id}`} className="text-xs text-indigo-600 hover:underline">
+                          View report
+                        </Link>
+                      ) : (
+                        <a href={`/reports/${promotion.data.id}`} className="text-xs text-indigo-600 hover:underline">
+                          View report
+                        </a>
+                      )
                     )}
                     {q.generated_sql && (
                       <button
