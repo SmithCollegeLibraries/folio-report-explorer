@@ -2,6 +2,12 @@
 
 require __DIR__ . '/Ops006TestSupport.php';
 
+exec('command -v jq >/dev/null 2>&1', $jqOutput, $jqStatus);
+if ($jqStatus !== 0) {
+    fwrite(STDOUT, "SKIP: jq is required for report_shadow_metrics.sh\n");
+    exit(0);
+}
+
 ops006Test('configured redacting telemetry target emits parser-readable telemetry with a redacted error', function () {
     $config = ops006LoadConfig('web');
     $targets = $config['components']['log']['targets'] ?? [];

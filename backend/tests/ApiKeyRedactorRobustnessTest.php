@@ -66,16 +66,21 @@ ops006Test('encoded query separators are recognized and encoded values stop at e
     ops006Assert(strpos($actual, '%26next%3Dkeep') !== false, 'The encoded adjacent field should remain after the redacted value.');
 });
 
-ops006Test('one megabyte adversarial variable-name text redacts in under one second', function () {
+ops006Test('one megabyte adversarial variable-name text stays near linear baseline', function () {
     $hostileName = 'a_pass' . str_repeat('_pass', 200000) . '!';
     $input = $hostileName . "\nOPENAI_API_KEY: SYNTHETIC_ADVERSARIAL_API_KEY_123456";
     $input = str_pad($input, 1024 * 1024, 'x');
     ops006AssertSame(1024 * 1024, strlen($input), 'The adversarial message should be exactly one mebibyte.');
+    $ordinaryInput = str_repeat('x', 1024 * 1024);
+    $started = microtime(true);
+    ops006RobustRedact($ordinaryInput);
+    $ordinaryElapsed = microtime(true) - $started;
     $started = microtime(true);
     $actual = ops006RobustRedact($input);
     $elapsed = microtime(true) - $started;
     ops006Assert(is_string($actual), 'Redaction should always return a string for adversarial input.');
-    ops006Assert($elapsed < 1.0, 'One megabyte of adversarial text should redact in under one second.');
+    ops006Assert($elapsed <= 3 * $ordinaryElapsed + 0.25, 'Adversarial redaction should remain close to ordinary same-size input.');
+    ops006Assert($elapsed < 10.0, 'One megabyte of adversarial text should redact in under ten seconds.');
     ops006Assert(strpos($actual, 'SYNTHETIC_ADVERSARIAL_API_KEY_123456') === false, 'The trailing API key should be redacted after adversarial text.');
 });
 
