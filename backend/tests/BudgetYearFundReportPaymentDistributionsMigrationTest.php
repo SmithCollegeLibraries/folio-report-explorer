@@ -30,6 +30,10 @@ assertPaymentDistributionTrue(
     hash_file('sha256', $migration036) === 'cb90cd367bee5943c10c9922315f78a0ff16e0465c1eb283df7defa915c19c76',
     'Applied migration 036 must not change.'
 );
+assertPaymentDistributionTrue(
+    hash_file('sha256', $migration037) === '552c75e498996e6f65c8bcb846676002380e549cd30d6317b57798d8fcaa3ed2',
+    'Applied migration 037 must remain byte-identical.'
+);
 assertPaymentDistributionTrue(file_exists($migration037), 'Migration 037 must exist.');
 
 $sql = file_exists($migration037) ? (string)file_get_contents($migration037) : '';
