@@ -353,7 +353,7 @@ class QueryWorkerController extends Controller
                         // Bind only params that appear in the primary SQL to avoid
                         // "Invalid parameter number" errors when shared params (like
                         // :fiscalYear) are present only in the secondary SQL.
-                        if (strpos($job->sql_text, $key) !== false) {
+                        if (\app\services\SqlPlaceholderMatcher::containsPlaceholder($job->sql_text, $key)) {
                             $cmd->bindValue($key, $value);
                         }
                     }
@@ -391,7 +391,7 @@ class QueryWorkerController extends Controller
             $secondaryParams = [];
             foreach ($primaryParams as $key => $value) {
                 // Bind only params that appear in the secondary SQL
-                if (strpos($secondarySql, $key) !== false) {
+                if (\app\services\SqlPlaceholderMatcher::containsPlaceholder($secondarySql, $key)) {
                     $secondaryParams[$key] = $value;
                 }
             }
