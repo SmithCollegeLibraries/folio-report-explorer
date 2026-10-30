@@ -63,8 +63,20 @@ final class BudgetYearFundReportMigrationRecognitionService
 
     public static function budgetYearFundReportEncumbranceStatusAppearComplete($db): bool
     {
-        return self::hasColumn($db, 'report_templates', 'help_text')
-            && self::reportDefinitionAppearsComplete($db, self::encumbranceStatusDefinition());
+        if (!self::hasColumn($db, 'report_templates', 'help_text')) {
+            return false;
+        }
+
+        $definition = self::encumbranceStatusDefinition();
+        if (self::reportDefinitionAppearsComplete($db, $definition)) {
+            return true;
+        }
+
+        // Also recognize the equivalent single-line spelling used by canonical report fixtures.
+        $definition['sql_markers']['encumbrance_current_marker'] = "SUM(CASE WHEN t.encumbrance__status IN ('Unreleased', 'Active') THEN COALESCE(t.encumbrance__initial_amount_encumbered, 0) - COALESCE(t.encumbrance__amount_expended, 0) - COALESCE(t.encumbrance__amount_awaiting_payment, 0) ELSE 0 END) AS current_encumbrance";
+        $definition['sql_markers']['released_amount_marker'] = "SUM(CASE WHEN t.encumbrance__status = 'Released' THEN COALESCE(t.encumbrance__initial_amount_encumbered, 0) ELSE 0 END) AS released_encumbrances";
+        $definition['sql_markers']['fund_year_join_marker'] = 'e.fund_id = b.fund_id AND e.fiscal_year_id = b.fiscal_year_id';
+        return self::reportDefinitionAppearsComplete($db, $definition);
     }
 
     private static function reportDefinitionAppearsComplete($db, array $definition): bool
@@ -130,12 +142,12 @@ final class BudgetYearFundReportMigrationRecognitionService
                 'payment_amount_marker' => "WHEN 'amount' THEN COALESCE(fd.fund_distributions__value, 0)",
                 'payment_percentage_marker' => 'COALESCE(fd.total, 0) * (COALESCE(fd.fund_distributions__value, 0) * 0.01)',
                 'encumbrance_scope_marker' => "t.encumbrance__status IN ('Unreleased', 'Active', 'Released')",
-                'encumbrance_current_marker' => "SUM(CASE WHEN t.encumbrance__status IN ('Unreleased', 'Active') THEN COALESCE(t.encumbrance__initial_amount_encumbered, 0) - COALESCE(t.encumbrance__amount_expended, 0) - COALESCE(t.encumbrance__amount_awaiting_payment, 0) ELSE 0 END) AS current_encumbrance",
+                'encumbrance_current_marker' => "SUM(CASE WHEN t.encumbrance__status IN ('Unreleased', 'Active')\n                    THEN COALESCE(t.encumbrance__initial_amount_encumbered, 0)\n                       - COALESCE(t.encumbrance__amount_expended, 0)\n                       - COALESCE(t.encumbrance__amount_awaiting_payment, 0)\n                    ELSE 0 END) AS current_encumbrance",
                 'unreleased_count_marker' => "SUM(CASE WHEN t.encumbrance__status = 'Unreleased' THEN 1 ELSE 0 END) AS unreleased_count",
-                'released_amount_marker' => "SUM(CASE WHEN t.encumbrance__status = 'Released' THEN COALESCE(t.encumbrance__initial_amount_encumbered, 0) ELSE 0 END) AS released_encumbrances",
+                'released_amount_marker' => "SUM(CASE WHEN t.encumbrance__status = 'Released'\n                    THEN COALESCE(t.encumbrance__initial_amount_encumbered, 0) ELSE 0 END) AS released_encumbrances",
                 'released_count_marker' => "SUM(CASE WHEN t.encumbrance__status = 'Released' THEN 1 ELSE 0 END) AS released_count",
                 'encumbrance_group_marker' => 'GROUP BY t.from_fund_id, t.fiscal_year_id',
-                'fund_year_join_marker' => 'e.fund_id = b.fund_id AND e.fiscal_year_id = b.fiscal_year_id',
+                'fund_year_join_marker' => "e.fund_id = b.fund_id\n AND e.fiscal_year_id = b.fiscal_year_id",
                 'calculated_remaining_marker' => 'COALESCE(b.allocated, 0) - COALESCE(p.payment, 0) - COALESCE(e.current_encumbrance, 0)',
             ],
             'help_markers' => [
