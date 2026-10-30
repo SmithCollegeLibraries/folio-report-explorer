@@ -30,7 +30,7 @@ class QueryWorkerController extends Controller
      */
     public function actionRun()
     {
-        $this->stdout("Query worker started. Polling every {$this->sleep}s. FOLIO concurrency limit: " . $this->maxConcurrentFolioJobs() . "...\n");
+        \app\services\WorkerOutput::stdout("Query worker started. Polling every {$this->sleep}s. FOLIO concurrency limit: " . $this->maxConcurrentFolioJobs() . "...\n");
 
         while (true) {
             try {
@@ -41,7 +41,7 @@ class QueryWorkerController extends Controller
                     sleep($this->sleep);
                 }
             } catch (\Exception $e) {
-                $this->stderr("Worker error: {$e->getMessage()}\n");
+                \app\services\WorkerOutput::stderr("Worker error: {$e->getMessage()}\n");
                 sleep($this->sleep);
             }
         }
@@ -63,12 +63,12 @@ class QueryWorkerController extends Controller
                 $this->executeJob($job);
                 $processed++;
             } catch (\Exception $e) {
-                $this->stderr("Worker error: {$e->getMessage()}\n");
+                \app\services\WorkerOutput::stderr("Worker error: {$e->getMessage()}\n");
                 break;
             }
         }
         if ($processed > 0) {
-            $this->stdout("Processed {$processed} job(s).\n");
+            \app\services\WorkerOutput::stdout("Processed {$processed} job(s).\n");
         }
         return 0;
     }
@@ -177,7 +177,7 @@ class QueryWorkerController extends Controller
      */
     private function executeJob(QueryJob $job)
     {
-        $this->stdout("Executing job {$job->id}: " . substr($job->sql_text, 0, 80) . "...\n");
+        \app\services\WorkerOutput::stdout("Executing job {$job->id}: " . substr($job->sql_text, 0, 80) . "...\n");
         $startTime = microtime(true);
 
         try {
@@ -270,7 +270,7 @@ class QueryWorkerController extends Controller
             $columns = !empty($rows) ? array_keys($rows[0]) : [];
 
             $job->markCompleted($columns, $rows, $executionTime, $truncated);
-            $this->stdout("Job {$job->id} completed: {$job->row_count} rows in {$executionTime}ms\n");
+            \app\services\WorkerOutput::stdout("Job {$job->id} completed: {$job->row_count} rows in {$executionTime}ms\n");
 
             // Also log to query_log for history
             $this->logQuery($job);
@@ -283,7 +283,7 @@ class QueryWorkerController extends Controller
             }
             if (isset($dataSource) && in_array($dataSource, ['local', 'composite'], true)) LocalReportSqlService::resetConnection();
             $job->markFailed($e->getMessage(), $executionTime);
-            $this->stderr("Job {$job->id} failed: {$e->getMessage()}\n");
+            \app\services\WorkerOutput::stderr("Job {$job->id} failed: {$e->getMessage()}\n");
 
             // Log the failure too
             $this->logQuery($job);
@@ -301,7 +301,7 @@ class QueryWorkerController extends Controller
      */
     private function executeCompositeJob(QueryJob $job, $startTime)
     {
-        $this->stdout("Executing COMPOSITE job {$job->id}\n");
+        \app\services\WorkerOutput::stdout("Executing COMPOSITE job {$job->id}\n");
         try {
             if ($this->isCancellationRequested($job)) {
                 $this->finishCancellation($job, 'before composite execution');
@@ -460,7 +460,7 @@ class QueryWorkerController extends Controller
             }
 
             $job->markCompleted($columns, $mergedRows, $executionTime);
-            $this->stdout("Composite job {$job->id} completed: " . count($mergedRows) . " rows in {$executionTime}ms\n");
+            \app\services\WorkerOutput::stdout("Composite job {$job->id} completed: " . count($mergedRows) . " rows in {$executionTime}ms\n");
             $this->logQuery($job);
 
         } catch (\Throwable $e) {
@@ -471,7 +471,7 @@ class QueryWorkerController extends Controller
             }
             LocalReportSqlService::resetConnection();
             $job->markFailed($e->getMessage(), $executionTime);
-            $this->stderr("Composite job {$job->id} failed: {$e->getMessage()}\n");
+            \app\services\WorkerOutput::stderr("Composite job {$job->id} failed: {$e->getMessage()}\n");
             $this->logQuery($job);
         }
     }
@@ -499,7 +499,7 @@ class QueryWorkerController extends Controller
         if ($job->status !== 'cancelled') {
             $job->markCancelled();
         }
-        $this->stdout("Job {$job->id} cancelled {$phase}.\n");
+        \app\services\WorkerOutput::stdout("Job {$job->id} cancelled {$phase}.\n");
     }
 
     /**
@@ -591,7 +591,7 @@ class QueryWorkerController extends Controller
             $log->error_message = $job->error_message;
             $log->save(false);
         } catch (\Exception $e) {
-            $this->stderr("Failed to log query: {$e->getMessage()}\n");
+            \app\services\WorkerOutput::stderr("Failed to log query: {$e->getMessage()}\n");
         }
     }
 }

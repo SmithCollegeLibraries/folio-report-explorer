@@ -26,11 +26,20 @@ return [
         'cache' => [
             'class' => 'yii\caching\FileCache',
         ],
+        'errorHandler' => [
+            'class' => 'app\components\RedactingConsoleErrorHandler',
+        ],
         'log' => [
             'targets' => [
                 [
-                    'class' => 'yii\log\FileTarget',
-                    'levels' => ['error', 'warning', 'info'],
+                    'class' => 'app\components\RedactingFileTarget',
+                    'levels' => ['error', 'warning'],
+                    'logVars' => [],
+                ],
+                [
+                    'class' => 'app\components\RedactingFileTarget',
+                    'levels' => ['info'],
+                    'except' => ['yii\httpclient\*'],
                     'logVars' => [],
                 ],
             ],

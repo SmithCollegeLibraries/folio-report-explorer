@@ -215,16 +215,19 @@ $config = [
         'cache' => [
             'class' => 'yii\caching\FileCache',
         ],
+        'errorHandler' => [
+            'class' => 'app\components\RedactingWebErrorHandler',
+        ],
         'log' => [
             'traceLevel' => YII_DEBUG ? 3 : 0,
             'targets' => [
                 [
-                    'class' => 'yii\log\FileTarget',
+                    'class' => 'app\components\RedactingFileTarget',
                     'levels' => ['error', 'warning'],
                     'logVars' => [],
                 ],
                 [
-                    'class' => 'yii\log\FileTarget',
+                    'class' => 'app\components\RedactingFileTarget',
                     'levels' => ['info'],
                     'categories' => ['nl2sql.telemetry'],
                     'logVars' => [],

@@ -11,15 +11,11 @@ if (file_exists($envLoader)) {
     require $envLoader;
 }
 
-// Default to 'prod' for security — dev mode must be explicitly opted into.
-// Docker dev: docker-compose.yml injects YII_ENV=dev, so the fallback never fires.
-// Bare-metal production: deploy.sh writes putenv('YII_ENV=prod') into env.php,
-// loaded above, so getenv('YII_ENV') returns 'prod' before this define().
-defined('YII_DEBUG') or define('YII_DEBUG', getenv('YII_DEBUG') !== 'false');
 defined('YII_ENV') or define('YII_ENV', getenv('YII_ENV') ?: 'prod');
+require __DIR__ . '/../config/debug_mode.php';
+defined('YII_DEBUG') or define('YII_DEBUG', resolveYiiDebugMode(getenv('YII_DEBUG'), YII_ENV));
 
 if (!YII_DEBUG) {
-    error_reporting(0);
     ini_set('display_errors', '0');
 }
 
