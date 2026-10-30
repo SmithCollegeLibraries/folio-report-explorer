@@ -1,11 +1,16 @@
 <?php
+/**
+ * @link https://www.yiiframework.com/
+ * @copyright Copyright (c) 2008 Yii Software LLC
+ * @license https://www.yiiframework.com/license/
+ */
 
 namespace app\components;
 
 use app\services\ApiKeyRedactor;
 use yii\base\ErrorException;
-use yii\base\Exception;
 use yii\base\UserException;
+use yii\console\Exception;
 use yii\console\UnknownCommandException;
 use yii\helpers\Console;
 

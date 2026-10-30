@@ -11,7 +11,7 @@ if (file_exists($envLoader)) {
     require $envLoader;
 }
 
-defined('YII_ENV') or define('YII_ENV', getenv('YII_ENV') ?: 'dev');
+defined('YII_ENV') or define('YII_ENV', getenv('YII_ENV') ?: 'prod');
 require __DIR__ . '/config/debug_mode.php';
 defined('YII_DEBUG') or define('YII_DEBUG', resolveYiiDebugMode(getenv('YII_DEBUG'), YII_ENV));
 if (!YII_DEBUG) {
