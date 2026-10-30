@@ -76,9 +76,9 @@ async function saveAskQuery() {
   fireEvent.click(await screen.findByRole('button', { name: 'Output SQL' }));
   await screen.findByText('SELECT 1');
 
-  fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
   fireEvent.change(screen.getByPlaceholderText('Query name'), { target: { value: 'Synthetic saved query' } });
-  const saveButtons = screen.getAllByRole('button', { name: 'Save', exact: true });
+  const saveButtons = screen.getAllByRole('button', { name: /^Save$/ });
   fireEvent.click(saveButtons[saveButtons.length - 1]);
 
   return screen.findByRole('button', { name: 'Save as Report' });
