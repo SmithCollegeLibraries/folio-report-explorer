@@ -27,6 +27,56 @@ function budgetEncumbrancePostgresCte(string $migration, string $number): string
     return str_replace("''", "'", $matches[1]);
 }
 
+function budgetEncumbrancePostgresOutputExpressions(string $migration, array $wantedAliases): array
+{
+    if (preg_match('/(SELECT sf\.code AS "Fund Code".*?)(?:\nFROM budgets b)/s', $migration, $matches) !== 1) {
+        budgetEncumbrancePostgresFail('Could not extract the final SELECT from migration 062.');
+    }
+    $select = preg_replace('/^SELECT\s+/i', '', str_replace("''", "'", trim($matches[1])));
+    $parts = [];
+    $start = 0;
+    $depth = 0;
+    $quote = '';
+    $length = strlen($select);
+    for ($index = 0; $index < $length; $index++) {
+        $character = $select[$index];
+        if ($quote !== '') {
+            if ($character === $quote) {
+                if ($quote === "'" && $index + 1 < $length && $select[$index + 1] === "'") {
+                    $index++;
+                } else {
+                    $quote = '';
+                }
+            }
+            continue;
+        }
+        if ($character === "'" || $character === '"') {
+            $quote = $character;
+        } elseif ($character === '(') {
+            $depth++;
+        } elseif ($character === ')') {
+            $depth--;
+        } elseif ($character === ',' && $depth === 0) {
+            $parts[] = trim(substr($select, $start, $index - $start));
+            $start = $index + 1;
+        }
+    }
+    $parts[] = trim(substr($select, $start));
+
+    $expressions = [];
+    foreach ($parts as $part) {
+        if (preg_match('/^(.*?)\s+AS\s+"([^"]+)"$/s', $part, $aliasMatch) === 1) {
+            $expressions[$aliasMatch[2]] = trim($aliasMatch[1]);
+        }
+    }
+    foreach ($wantedAliases as $alias) {
+        if (!isset($expressions[$alias])) {
+            budgetEncumbrancePostgresFail("Could not extract output expression for {$alias} from migration 062.");
+        }
+    }
+    return $expressions;
+}
+
 function budgetEncumbrancePostgresRunCte(PDO $pdo, string $cte, bool $newColumns): array
 {
     $cte = preg_replace('/FROM\s+finance\.transaction__t\s+t/i', 'FROM transaction_fixture t', $cte, 1);
@@ -94,6 +144,10 @@ try {
 
 $newMigration = (string)file_get_contents($migration062Path);
 $oldMigration = (string)file_get_contents($migration037Path);
+$newExpressions = budgetEncumbrancePostgresOutputExpressions(
+    $newMigration,
+    ['Unreleased Count', 'Released Encumbrances', 'Released Count']
+);
 $newCte = budgetEncumbrancePostgresCte($newMigration, '062');
 $oldCte = budgetEncumbrancePostgresCte($oldMigration, '037');
 $newRows = budgetEncumbrancePostgresRunCte($pdo, $newCte, true);
@@ -129,14 +183,17 @@ foreach ($expected as $key => $values) {
 }
 budgetEncumbrancePostgresAssert(!isset($newByKey['fund-c:2026']), 'Pending-only transactions must not create an encumbrance aggregate row.');
 
-$zeroRows = $pdo->query(
-    "WITH budgets_fixture(fund_id, fiscal_year_id) AS (VALUES ('fund-c', 2026)),\n"
-        . "encumbrances(fund_id, fiscal_year_id, unreleased_count, released_encumbrances, released_count) AS (VALUES ('fund-b', 2026, 1, 1.00, 1))\n"
-        . "SELECT COALESCE(e.released_encumbrances, 0)::numeric(12,2)::text AS released_amount,\n"
-        . "       COALESCE(e.unreleased_count, 0)::text AS unreleased_count,\n"
-        . "       COALESCE(e.released_count, 0)::text AS released_count\n"
-        . "FROM budgets_fixture b LEFT JOIN encumbrances e ON e.fund_id = b.fund_id AND e.fiscal_year_id = b.fiscal_year_id"
-)->fetch(PDO::FETCH_ASSOC);
-budgetEncumbrancePostgresAssert($zeroRows === ['released_amount' => '0.00', 'unreleased_count' => '0', 'released_count' => '0'], 'Funds with no encumbrances must show 0.00 and zero counts.');
+$zeroSql = "WITH budgets_fixture(fund_id, fiscal_year_id) AS (VALUES ('fund-no-encumbrance', 2026)),\n"
+    . "encumbrances_fixture(fund_id, fiscal_year_id, current_encumbrance, unreleased_count, released_encumbrances, released_count) AS (\n"
+    . "    SELECT NULL::text, NULL::integer, NULL::numeric, NULL::bigint, NULL::numeric, NULL::bigint WHERE FALSE\n"
+    . ")\nSELECT (" . $newExpressions['Unreleased Count'] . ")::text AS \"Unreleased Count\",\n"
+    . "       (" . $newExpressions['Released Encumbrances'] . ")::text AS \"Released Encumbrances\",\n"
+    . "       (" . $newExpressions['Released Count'] . ")::text AS \"Released Count\"\n"
+    . "FROM budgets_fixture b LEFT JOIN encumbrances_fixture e ON e.fund_id = b.fund_id AND e.fiscal_year_id = b.fiscal_year_id";
+$zeroRows = $pdo->query($zeroSql)->fetch(PDO::FETCH_ASSOC);
+budgetEncumbrancePostgresAssert(
+    $zeroRows === ['Unreleased Count' => '0', 'Released Encumbrances' => '0.00', 'Released Count' => '0'],
+    'The 062 output expressions must show 0.00 and zero counts for a fund with no matching encumbrances.'
+);
 
 fwrite(STDOUT, "PASS: Budget Year Fund Report encumbrance PostgreSQL synthetic fixtures\n");
