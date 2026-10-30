@@ -21,7 +21,7 @@ function budgetEncumbranceMigrationContains(string $needle, string $haystack, st
 
 function budgetEncumbranceMigrationFinalSelect(string $sql): string
 {
-    return preg_match('/SELECT sf\.code AS "Fund Code".*?\nFROM budgets b/s', $sql, $matches) === 1
+    return preg_match('/SELECT sf\.code AS "Fund Code".*?(?=\nFROM budgets b)/s', $sql, $matches) === 1
         ? $matches[0]
         : '';
 }
