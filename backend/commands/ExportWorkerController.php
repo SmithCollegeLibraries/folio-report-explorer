@@ -26,7 +26,7 @@ class ExportWorkerController extends Controller
      */
     public function actionRun()
     {
-        $this->stdout("Export worker started. Polling every {$this->sleep}s. FOLIO concurrency limit: " . $this->maxConcurrentFolioJobs() . "...\n");
+        \app\services\WorkerOutput::stdout("Export worker started. Polling every {$this->sleep}s. FOLIO concurrency limit: " . $this->maxConcurrentFolioJobs() . "...\n");
 
         while (true) {
             try {
@@ -37,7 +37,7 @@ class ExportWorkerController extends Controller
                     sleep($this->sleep);
                 }
             } catch (\Exception $e) {
-                $this->stderr("Export worker error: {$e->getMessage()}\n");
+                \app\services\WorkerOutput::stderr("Export worker error: {$e->getMessage()}\n");
                 sleep($this->sleep);
             }
         }
@@ -58,13 +58,13 @@ class ExportWorkerController extends Controller
                 $this->executeExportJob($job);
                 $processed++;
             } catch (\Exception $e) {
-                $this->stderr("Export worker error: {$e->getMessage()}\n");
+                \app\services\WorkerOutput::stderr("Export worker error: {$e->getMessage()}\n");
                 break;
             }
         }
 
         if ($processed > 0) {
-            $this->stdout("Processed {$processed} export job(s).\n");
+            \app\services\WorkerOutput::stdout("Processed {$processed} export job(s).\n");
         }
 
         return 0;
@@ -159,7 +159,7 @@ class ExportWorkerController extends Controller
      */
     private function executeExportJob(QueryJob $job)
     {
-        $this->stdout("Exporting job {$job->id}...\n");
+        \app\services\WorkerOutput::stdout("Exporting job {$job->id}...\n");
         $startTime = microtime(true);
         $filePath = null;
         $fileHandle = null;
@@ -304,7 +304,7 @@ class ExportWorkerController extends Controller
 
             $executionTime = (int) round((microtime(true) - $startTime) * 1000);
             $job->markExportCompleted($filePath, $rowCount, $executionTime, $headers, $previewRows, $truncated, $identifierSkippedCount);
-            $this->stdout("Export job {$job->id} completed: {$rowCount} rows in {$executionTime}ms\n");
+            \app\services\WorkerOutput::stdout("Export job {$job->id} completed: {$rowCount} rows in {$executionTime}ms\n");
 
             $this->logQuery($job);
         } catch (\Throwable $e) {
@@ -320,7 +320,7 @@ class ExportWorkerController extends Controller
             }
             $executionTime = (int) round((microtime(true) - $startTime) * 1000);
             $job->markFailed($e->getMessage(), $executionTime);
-            $this->stderr("Export job {$job->id} failed: {$e->getMessage()}\n");
+            \app\services\WorkerOutput::stderr("Export job {$job->id} failed: {$e->getMessage()}\n");
             $this->logQuery($job);
         } finally {
             if ($stmt instanceof \PDOStatement) $stmt->closeCursor();
@@ -360,7 +360,7 @@ class ExportWorkerController extends Controller
         if ($job->status !== 'cancelled') {
             $job->markCancelled();
         }
-        $this->stdout("Job {$job->id} cancelled {$phase}.\n");
+        \app\services\WorkerOutput::stdout("Job {$job->id} cancelled {$phase}.\n");
     }
 
     /**
@@ -462,7 +462,7 @@ class ExportWorkerController extends Controller
             $log->error_message = $job->error_message;
             $log->save(false);
         } catch (\Exception $e) {
-            $this->stderr("Failed to log query: {$e->getMessage()}\n");
+            \app\services\WorkerOutput::stderr("Failed to log query: {$e->getMessage()}\n");
         }
     }
 }
