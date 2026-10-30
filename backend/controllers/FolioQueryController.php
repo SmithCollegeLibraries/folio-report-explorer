@@ -31,6 +31,8 @@ use app\services\AskResponseContractService;
 use app\services\AskUserExplanationService;
 use app\services\CatalogingReportCompilerService;
 use app\services\ReportExecutionContractService;
+use app\services\ReportRunTitleService;
+use app\services\ReportRunTitleOptionSource;
 use app\models\SavedQuery;
 use app\models\QueryLog;
 use app\models\QueryJob;
@@ -52,6 +54,8 @@ require_once __DIR__ . '/../services/AskResponseContractService.php';
 require_once __DIR__ . '/../services/AskUserExplanationService.php';
 require_once __DIR__ . '/../services/ExpenseClassScopeService.php';
 require_once __DIR__ . '/../services/ExpenseAllocationApiService.php';
+require_once __DIR__ . '/../services/ReportRunTitleService.php';
+require_once __DIR__ . '/../services/ReportRunTitleOptionSource.php';
 require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
 
 /**
@@ -4855,11 +4859,25 @@ class FolioQueryController extends Controller
             $metadata[ReportExecutionContractService::METADATA_KEY] = $reportExecution;
         }
 
+        $titleService = new ReportRunTitleService(
+            new ReportRunTitleOptionSource(),
+            function ($title) {
+                return $this->normalizeQueryJobName($title);
+            }
+        );
+        $metadata = $titleService->mergeReportTemplateId($metadata, (int) $report->id);
+        try {
+            $jobName = $titleService->buildTitle($report, $userParams, $exportKind === 'identifier');
+        } catch (\Throwable $exception) {
+            $jobName = $this->normalizeQueryJobName($report->name);
+        }
+
         // Create async job
         $jobParams = is_array($metadata)
             ? array_merge($bound['params'], $metadata['bound_params'] ?? [])
             : $bound['params'];
         $job = QueryJob::createJob($bound['sql'], $jobParams, 'report', $dataSource, $metadata);
+        $job->name = $jobName;
         $job->user_id = $this->getCurrentUserId();
         if ($job->hasAttribute('output_mode')) {
             $job->output_mode = $outputMode;
