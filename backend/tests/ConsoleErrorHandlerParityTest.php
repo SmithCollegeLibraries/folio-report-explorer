@@ -18,6 +18,8 @@ if (strpos($ops006Mode, '--child-render-') === 0) {
         $exception = new \yii\base\UserException('synthetic user-facing message');
     } elseif ($exceptionKind === 'console') {
         $exception = new \yii\console\Exception('synthetic console message');
+    } elseif ($exceptionKind === 'quoted-secret') {
+        $exception = new \RuntimeException('{"error":"OPENAI_API_KEY: SYNTHETIC_CONSOLE_QUOTED_KEY_123456"}');
     } else {
         $exception = new \RuntimeException('synthetic internal message');
     }
@@ -58,6 +60,13 @@ ops006Test('yii console Exception rendering matches Yii in debug mode', function
 
 ops006Test('ordinary Exception rendering matches Yii in debug mode', function () {
     ops006AssertConsoleRenderParity('on', 'runtime');
+});
+
+ops006Test('debug console rendering redacts assignments inside quoted exception messages', function () {
+    list($status, , $stderr) = ops006RunChild(['--child-render-parity', 'redacting', 'on', 'quoted-secret']);
+    ops006AssertSame(0, $status, 'The redacting console handler should render the exception.');
+    ops006Assert(strpos($stderr, 'SYNTHETIC_CONSOLE_QUOTED_KEY_123456') === false, 'The quoted exception key should not reach stderr.');
+    ops006Assert(strpos($stderr, '[REDACTED]') !== false, 'The rendered exception should show a redaction marker.');
 });
 
 exit(ops006Finish());

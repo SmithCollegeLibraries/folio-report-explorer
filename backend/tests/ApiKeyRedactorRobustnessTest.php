@@ -57,6 +57,25 @@ ops006Test('raw headers inside JSON preserve the closing quote and valid JSON', 
     ops006Assert(strpos($actual, 'SYNTHETIC_JSON_RAW_HEADER_123456') === false, 'The embedded raw header value should be removed.');
 });
 
+ops006Test('raw secret assignments inside quoted JSON preserve valid JSON', function () {
+    $input = '{"error":"OPENAI_API_KEY: SYNTHETIC_QUOTED_JSON_ASSIGNMENT_123456"}';
+    $actual = ops006RobustRedact($input);
+    $decoded = json_decode($actual, true);
+    ops006AssertSame(JSON_ERROR_NONE, json_last_error(), 'A quoted environment assignment should leave valid JSON.');
+    ops006Assert(is_array($decoded), 'The quoted assignment JSON should still decode.');
+    ops006Assert(strpos($actual, 'SYNTHETIC_QUOTED_JSON_ASSIGNMENT_123456') === false, 'The quoted environment assignment should be redacted.');
+});
+
+ops006Test('PHP-exported JSON headers are redacted without breaking the exported string', function () {
+    $input = "'response' => '{\"headers\":{\"x-api-key\":\"SYNTHETIC_EXPORTED_JSON_HEADER_123456\"}}'";
+    $actual = ops006RobustRedact($input);
+    ops006Assert(preg_match("/'response' => '(.*)'$/s", $actual, $matches) === 1, 'The PHP-exported response string should remain delimited.');
+    $decoded = json_decode($matches[1], true);
+    ops006AssertSame(JSON_ERROR_NONE, json_last_error(), 'The JSON inside the PHP-exported string should remain valid.');
+    ops006Assert(is_array($decoded), 'The exported JSON should still decode.');
+    ops006Assert(strpos($matches[1], 'SYNTHETIC_EXPORTED_JSON_HEADER_123456') === false, 'The exported JSON header should be redacted.');
+});
+
 ops006Test('encoded query separators are recognized and encoded values stop at encoded delimiters', function () {
     $input = 'https%3A%2F%2Fexample.invalid%3Fkey%3DSYNTHETIC_ENCODED_QUERY_KEY_123456%26api_key%3DSYNTHETIC_ENCODED_API_KEY_123456 key%3DSYNTHETIC_ENCODED_END_KEY_123456%26next%3Dkeep';
     $actual = ops006RobustRedact($input);
@@ -64,6 +83,15 @@ ops006Test('encoded query separators are recognized and encoded values stop at e
         ops006Assert(strpos($actual, $secret) === false, 'An encoded query value remains in output.');
     }
     ops006Assert(strpos($actual, '%26next%3Dkeep') !== false, 'The encoded adjacent field should remain after the redacted value.');
+});
+
+ops006Test('encoded delimiters remain part of ordinary URL query values', function () {
+    $input = 'https://example.invalid/?key=prefix%26SYNTHETIC_ORDINARY_PERCENT26_QUERY_123456&next=keep&api_key=prefix%3FSYNTHETIC_ORDINARY_PERCENT3F_QUERY_123456&after=kept';
+    $actual = ops006RobustRedact($input);
+    ops006Assert(strpos($actual, 'SYNTHETIC_ORDINARY_PERCENT26_QUERY_123456') === false, 'The percent-26 portion of an ordinary query secret should be redacted.');
+    ops006Assert(strpos($actual, 'SYNTHETIC_ORDINARY_PERCENT3F_QUERY_123456') === false, 'The percent-3f portion of an ordinary query secret should be redacted.');
+    ops006Assert(strpos($actual, '&next=keep') !== false, 'The ordinary adjacent query field should remain.');
+    ops006Assert(strpos($actual, '&after=kept') !== false, 'The query field after an encoded question mark should remain.');
 });
 
 ops006Test('one megabyte adversarial variable-name text stays near linear baseline', function () {
