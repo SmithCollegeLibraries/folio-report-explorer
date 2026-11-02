@@ -417,6 +417,22 @@ describe('Visualizations new behavior (tests round: expected to fail until imple
     await waitFor(() => expect(api.fetchVisualizations).toHaveBeenCalledTimes(3));
   });
 
+  it('does not show prior material-year amounts after the selected year request fails', async () => {
+    api.fetchVisualizations.mockResolvedValueOnce(figures)
+      .mockRejectedValueOnce(new Error('Synthetic material-year failure'));
+    const user = userEvent.setup();
+    renderPage();
+    const picker = await screen.findByLabelText('Material fiscal year');
+    expect(picker).toHaveValue('2027');
+    await user.selectOptions(picker, '2026');
+    await screen.findByRole('alert');
+    expect(screen.getByLabelText('Material fiscal year')).toHaveValue('2026');
+    const table = await showData('How the library purchases by material');
+    expect(table).not.toHaveTextContent('500.00');
+    expect(table).not.toHaveTextContent('1,400.00');
+    expect(within(table).getAllByRole('row')).toHaveLength(1);
+  });
+
   it('keeps fiscal year and kind fixed when editing a stored history row', async () => {
     auth.isAdmin = true;
     const user = userEvent.setup();

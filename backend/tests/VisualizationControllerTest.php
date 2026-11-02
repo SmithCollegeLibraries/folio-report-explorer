@@ -119,12 +119,20 @@ visualizationCase('options API exposes trimmed acquisitions-unit codes and the f
     visualizationAssert(isset($units['s']['name']) && !isset($units['deleted']), 'Units include a display name and exclude deleted options.');
 });
 
-visualizationCase('API rejects unknown units and invalid range/material years with 400', function () {
-    foreach ([['acqUnitId' => 'unknown'], ['years' => 6], ['years' => '5junk'], ['materialFiscalYearEnd' => 'invalid'], ['materialFiscalYearEnd' => 1900]] as $invalid) {
+visualizationCase('API reports unknown UUID units and specific invalid range/material-year errors', function () {
+    $unitId = '123e4567-e89b-12d3-a456-426614174000';
+    foreach ([
+        [['acqUnitId' => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'], 'Unknown acquisitions unit.'],
+        [['years' => 6], 'Choose 5, 10, 15 or 20 years.'],
+        [['years' => '5junk'], 'Choose 5, 10, 15 or 20 years.'],
+        [['materialFiscalYearEnd' => 'invalid'], 'Choose a valid material fiscal year.'],
+        [['materialFiscalYearEnd' => 1900], 'Choose a fiscal year with FOLIO purchase data or all years.'],
+    ] as $case) {
         list($f, $controller) = visualizationControllerFixture();
-        Yii::$app->request->setQueryParams(array_merge(['acqUnitId' => 's', 'years' => '5'], $invalid));
-        list($status) = visualizationInvoke($controller, 'Index', [], true);
+        Yii::$app->request->setQueryParams(array_merge(['acqUnitId' => $unitId, 'years' => '5'], $case[0]));
+        list($status, $body) = visualizationInvoke($controller, 'Index', [], true);
         visualizationSame(400, $status, 'Reject invalid query parameters instead of silently coercing them.');
+        visualizationSame($case[1], $body['error'], 'Return the rejection for the specific invalid field or unit.');
     }
 });
 
@@ -132,8 +140,9 @@ visualizationCase('API rejects malformed unit UUIDs before executing a FOLIO que
     foreach (['not-a-uuid', ['123e4567-e89b-12d3-a456-426614174000']] as $invalidUnitId) {
         list($f, $controller) = visualizationControllerFixture();
         Yii::$app->request->setQueryParams(['acqUnitId' => $invalidUnitId, 'years' => '5']);
-        list($status) = visualizationInvoke($controller, 'Index', [], true);
+        list($status, $body) = visualizationInvoke($controller, 'Index', [], true);
         visualizationSame(400, $status, 'A unit id must be a UUID string.');
+        visualizationSame('Choose a valid acquisitions unit id.', $body['error'], 'Malformed IDs receive the UUID validation error.');
         visualizationSame([], $f->folio->queries, 'Malformed ids must be rejected before PostgreSQL sees them.');
     }
 });
