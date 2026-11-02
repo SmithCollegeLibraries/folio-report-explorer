@@ -48,6 +48,6 @@ acquisitionsMigrationAssert(
 
 $files = app\services\MigrationService::discoverMigrationFiles();
 $last = end($files);
-acquisitionsMigrationAssert($last['filename'] === '062_budget_year_fund_report_encumbrance_status.sql', 'Migration 062 is the newest migration.');
+acquisitionsMigrationAssert($last['filename'] === '063_query_job_history_group.sql', 'Migration 063 is the newest migration.');
 
 echo "Acquisitions open-orders migration recognition checks passed\n";
