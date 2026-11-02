@@ -195,6 +195,8 @@ $config = [
 
                 // Query history
                 'GET query/history' => 'folio-query/query-history',
+                'GET query/history/<id:[\\w-]+>/group' => 'folio-query/query-history-group',
+                'GET query/history/<id:[\\w-]+>' => 'folio-query/query-history-item',
                 'POST query/index-recommendations' => 'folio-query/query-index-recommendations',
                 'POST query/history/<id:[\w-]+>/suggestions' => 'folio-query/query-history-suggestions',
                 'PATCH query/history/<id:[\w-]+>' => 'folio-query/rename-history-job',

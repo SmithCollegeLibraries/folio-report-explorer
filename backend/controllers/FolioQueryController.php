@@ -4882,6 +4882,14 @@ class FolioQueryController extends Controller
         if ($job->hasAttribute('output_mode')) {
             $job->output_mode = $outputMode;
         }
+        if ($job->hasAttribute('history_group_key')) {
+            $job->history_group_key = \app\services\HistoryGroupKeyService::build(
+                (int) $report->id,
+                $jobParams,
+                $exportKind,
+                $outputMode
+            );
+        }
         if ($outputMode === 'file') {
             $job->status = 'pending_export';
             $job->progress_message = 'Queued for CSV export';
@@ -5571,109 +5579,64 @@ class FolioQueryController extends Controller
     {
         $userId = $this->getCurrentUserId();
         $identity = $this->getAppIdentity();
-        $isAdmin = $identity && $identity->isAdmin();
-        $limit        = (int) (Yii::$app->request->get('limit', 50));
-        $offset       = (int) (Yii::$app->request->get('offset', 0));
+        $limit = max(1, min(100, (int) Yii::$app->request->get('limit', 50)));
+        $offset = max(0, (int) Yii::$app->request->get('offset', 0));
         $statusFilter = Yii::$app->request->get('status', 'all');
-        $mineOnly     = filter_var(Yii::$app->request->get('mine', false), FILTER_VALIDATE_BOOLEAN);
-        $advisoryReviewSubquery = "(SELECT r2.id
-            FROM ai_report_generations linked_generation
-            INNER JOIN ai_report_reviews r2
-                ON r2.generation_id = linked_generation.id
-                OR r2.generation_id = linked_generation.parent_generation_id
-            WHERE linked_generation.query_job_id = qj.id
-              AND r2.advisory_state IN ('cautioned', 'superseded')
-            ORDER BY r2.updated_at DESC, r2.id DESC
-            LIMIT 1)";
-
-        $query = QueryJob::find()
-            ->select([
-                'qj.*',
-                'u.email AS runBy',
-                'r.advisory_state AS reviewAdvisoryState',
-                'r.superseded_by_job_id AS reviewSupersededByJobId',
-            ])
-            ->alias('qj')
-            ->leftJoin('users u', 'u.id = qj.user_id')
-            ->leftJoin('ai_report_reviews r', 'r.id = ' . $advisoryReviewSubquery)
-            ->orderBy(['qj.completed_at' => SORT_DESC, 'qj.created_at' => SORT_DESC])
-            ->limit(min($limit, 100))
-            ->offset($offset);
-
-        if ($statusFilter === 'active') {
-            $query->andWhere(['qj.status' => ['pending', 'pending_export', 'running', 'cancelling']]);
-        } elseif ($statusFilter === 'completed') {
-            $query->andWhere(['qj.status' => 'completed']);
-        } elseif ($statusFilter === 'failed') {
-            $query->andWhere(['qj.status' => 'failed']);
-        }
-        // 'all' — no status restriction
-
-        if ($mineOnly) {
-            if ($userId) {
-                $query->andWhere(['qj.user_id' => $userId]);
-            } else {
-                $query->andWhere('1=0');
-            }
-        }
-
-        // All authenticated users can see the full history.
-        // The 'Mine Only' toggle above lets users filter to their own jobs.
-        // Deletion is still restricted: canDelete checks ownership or admin role.
-
-        $total = (clone $query)->count();
-        $jobs  = $query->asArray()->all();
-
-        return [
-            'total'  => (int) $total,
+        $mineOnly = filter_var(Yii::$app->request->get('mine', false), FILTER_VALIDATE_BOOLEAN);
+        $result = (new \app\services\HistoryGroupingService(Yii::$app->db))->list([
+            'status' => $statusFilter,
+            'mineOnly' => $mineOnly,
+            'userId' => $userId,
+            'isAdmin' => $identity && $identity->isAdmin(),
+            'limit' => $limit,
             'offset' => $offset,
-            'limit'  => $limit,
-            'items'  => array_map(function ($job) use ($isAdmin, $userId) {
-                $authorized = $isAdmin
-                    || ($userId !== null && (int) $job['user_id'] === (int) $userId);
-                $terminal = in_array($job['status'], ['completed', 'failed', 'cancelled'], true);
-                $canDelete = $authorized && $terminal;
-                $item = [
-                    'jobId'           => $job['id'],
-                    'name'            => $job['name'] ?? null,
-                    'status'          => $job['status'],
-                    'sql'             => $job['sql_text'],
-                    'source'          => $job['source'],
-                    'dataSource'      => $job['data_source'] ?? 'folio',
-                    'progressMessage' => $job['progress_message'] ?? null,
-                    'rowCount'        => (int) ($job['row_count'] ?? 0),
-                    'executionTimeMs' => (int) ($job['execution_time_ms'] ?? 0),
-                    'errorMessage'    => $job['error_message'] ?? null,
-                    'createdAt'       => $job['created_at'],
-                    'startedAt'       => $job['started_at'] ?? null,
-                    'completedAt'     => $job['completed_at'],
-                    'runBy'           => $job['runBy'] ?? null,
-                    'canDelete'       => $canDelete,
-                ];
-
-                if (($job['reviewAdvisoryState'] ?? null) === 'cautioned') {
-                    $item['reviewAdvisory'] = [
-                        'state' => 'cautioned',
-                        'message' => 'A reporting specialist identified an important limitation in this result.',
-                    ];
-                } elseif (($job['reviewAdvisoryState'] ?? null) === 'superseded') {
-                    if (!empty($job['reviewSupersededByJobId'])) {
-                        $item['reviewAdvisory'] = [
-                            'state' => 'superseded',
-                            'message' => 'A corrected version of this report is available.',
-                            'supersededByJobId' => $job['reviewSupersededByJobId'],
-                        ];
-                    } else {
-                        $item['reviewAdvisory'] = [
-                            'state' => 'superseded',
-                            'message' => 'A corrected version of this report was created, but it is no longer available in your history.',
-                        ];
-                    }
-                }
-
-                return $item;
-            }, $jobs),
+        ]);
+        return [
+            'total' => $result['total'],
+            'offset' => $result['offset'],
+            'limit' => $result['limit'],
+            'items' => $result['items'],
         ];
+    }
+
+    /**
+     * GET /api/query/history/<id>/group — return the retained members for a history group.
+     */
+    public function actionQueryHistoryGroup($id)
+    {
+        $userId = $this->getCurrentUserId();
+        $identity = $this->getAppIdentity();
+        $page = (new \app\services\HistoryGroupingService(Yii::$app->db))->expand($id, [
+            'status' => Yii::$app->request->get('status', 'all'),
+            'limit' => Yii::$app->request->get('limit', 20),
+            'offset' => Yii::$app->request->get('offset', 0),
+            'userId' => $userId,
+            'isAdmin' => $identity && $identity->isAdmin(),
+        ]);
+        if (empty($page['found'])) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Job not found'];
+        }
+        unset($page['found']);
+        return $page;
+    }
+
+    /**
+     * GET /api/query/history/<id> — return one history item for a deep link.
+     */
+    public function actionQueryHistoryItem($id)
+    {
+        $userId = $this->getCurrentUserId();
+        $identity = $this->getAppIdentity();
+        $item = (new \app\services\HistoryGroupingService(Yii::$app->db))->item($id, [
+            'userId' => $userId,
+            'isAdmin' => $identity && $identity->isAdmin(),
+        ]);
+        if ($item === null) {
+            Yii::$app->response->statusCode = 404;
+            return ['error' => 'Job not found'];
+        }
+        return $item;
     }
 
     /**

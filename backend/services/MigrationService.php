@@ -342,7 +342,7 @@ class MigrationService
         return BudgetYearFundReportMigrationRecognitionService::budgetYearFundReportEncumbranceStatusAppearComplete($db)
             && self::marcMissingTagReportAppearsComplete($db)
             && self::catalogingMarcFieldFinderAppearsComplete($db)
-            && CatalogingReportMigrationRecognitionService::reportsAppearComplete($db);
+            && CatalogingReportMigrationRecognitionService::reportsAppearComplete($db) && QueryJobHistoryMigrationRecognitionService::historyGroupKeyAndIndexAppearComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool
@@ -421,7 +421,7 @@ class MigrationService
             case '035_budget_year_fund_report.sql': return BudgetYearFundReportMigrationRecognitionService::budgetYearFundReportAppearsComplete($db);
             case '036_budget_year_fund_report_fiscal_year_options.sql': return BudgetYearFundReportMigrationRecognitionService::budgetYearFundReportFiscalYearOptionsAppearComplete($db);
             case '037_budget_year_fund_report_payment_distributions.sql': return BudgetYearFundReportMigrationRecognitionService::budgetYearFundReportPaymentDistributionsAppearComplete($db);
-            case '062_budget_year_fund_report_encumbrance_status.sql': return BudgetYearFundReportMigrationRecognitionService::budgetYearFundReportEncumbranceStatusAppearComplete($db);
+            case '062_budget_year_fund_report_encumbrance_status.sql': return BudgetYearFundReportMigrationRecognitionService::budgetYearFundReportEncumbranceStatusAppearComplete($db); case '063_query_job_history_group.sql': return QueryJobHistoryMigrationRecognitionService::historyGroupKeyAndIndexAppearComplete($db);
             case '039_ask_ai_report_review.sql':
                 return self::hasTable($db, 'ai_report_generations') && self::hasTable($db, 'ai_report_reviews');
             case '040_cataloging_marc_missing_tag_report.sql':

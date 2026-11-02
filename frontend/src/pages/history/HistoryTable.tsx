@@ -8,26 +8,21 @@ import {
   type SortingState,
   type VisibilityState,
 } from '@tanstack/react-table';
-import {
-  Database, Loader2, ChevronDown, ChevronUp, AlertCircle, XCircle,
-  Code, Check, Copy, User, Pencil, Bookmark, LayoutDashboard, Eye,
-  Trash2, SlidersHorizontal,
-} from 'lucide-react';
+import { Database, Loader2, ChevronDown, ChevronUp, AlertCircle, XCircle, Code, Check, Copy, User, Pencil, Bookmark, LayoutDashboard, Eye, Trash2, SlidersHorizontal } from 'lucide-react';
 import StatusBadge from '../../components/StatusBadge';
 import SourceBadge from '../../components/SourceBadge';
 import { fmtDate, fmtTime } from '../../utils/format';
 import type { HistoryItem } from '../../types';
+import HistoryGroupRows from './HistoryGroupRows';
+import type { HistoryGroupListItem, HistoryGroupResponse } from '../../api/history';
 import { isDeletableHistoryItem } from './historyDeletionState';
-
 interface Props {
   items: HistoryItem[];
   filteredItems: HistoryItem[];
   loading: boolean;
-  // Selection header checkbox
   allSelectableChecked: boolean;
   hasSelectableItems: boolean;
   onToggleSelectAll: () => void;
-  // Per-row: item-keyed state
   renamingId: string | null;
   renameValue: string;
   onRenameValueChange: (v: string) => void;
@@ -39,7 +34,6 @@ interface Props {
   expandedSql: Set<string>;
   copiedSqlId: string | null;
   selectedIds: Set<string>;
-  // Per-row callbacks (item is provided by the table, jobId baked in by caller)
   onOpen: (item: HistoryItem) => void;
   onCancel: (jobId: string, e: React.MouseEvent) => void;
   onToggleError: (jobId: string, e: React.MouseEvent) => void;
@@ -53,20 +47,14 @@ interface Props {
   onDelete: (jobId: string) => void;
   onSave: (item: HistoryItem, pinned: boolean, e: React.MouseEvent) => void;
   onToggleSelect: (jobId: string) => void;
+  expandedGroupIds?: Set<string>;
+  membersByGroup?: Record<string, HistoryGroupResponse>;
+  loadingGroupIds?: Set<string>;
+  onToggleGroup?: (group: HistoryGroupListItem) => void;
+  onGroupPage?: (group: HistoryGroupListItem, offset: number) => void;
 }
-
-function SortIcon({ sorted }: { sorted: false | 'asc' | 'desc' }) {
-  if (!sorted) return <ChevronDown size={12} className="opacity-30" />;
-  return sorted === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
-}
-
-function queryPreview(name: string): string {
-  const lines = name.split(/\r?\n/);
-  const firstLine = lines[0]?.trim() || 'Original query';
-  if (lines.length <= 1) return firstLine;
-  return `${firstLine} (+${lines.length - 1} lines)`;
-}
-
+function SortIcon({ sorted }: { sorted: false | 'asc' | 'desc' }) { return !sorted ? <ChevronDown size={12} className="opacity-30" /> : sorted === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />; }
+function queryPreview(name: string): string { const lines = name.split(/\r?\n/); const firstLine = lines[0]?.trim() || 'Original query'; return lines.length <= 1 ? firstLine : `${firstLine} (+${lines.length - 1} lines)`; }
 export default function HistoryTable({
   items, filteredItems, loading,
   allSelectableChecked, hasSelectableItems, onToggleSelectAll,
@@ -75,8 +63,9 @@ export default function HistoryTable({
   onOpen, onCancel, onToggleError, onToggleSql, onCopySql,
   onStartRename, onCommitRename, onCancelRename,
   onConfirmDelete, onCancelDelete, onDelete, onSave, onToggleSelect,
+  expandedGroupIds = new Set(), membersByGroup = {}, loadingGroupIds = new Set(), onToggleGroup, onGroupPage,
 }: Props) {
-  const [sorting, setSorting] = useState<SortingState>([{ id: 'date', desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>([]);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
     if (typeof window === 'undefined') {
@@ -89,7 +78,6 @@ export default function HistoryTable({
       runBy: width >= 1280,
     };
   });
-
   const columns = useMemo<ColumnDef<HistoryItem>[]>(() => [
     {
       id: 'select',
@@ -297,7 +285,6 @@ export default function HistoryTable({
                 )}
               </>
             )}
-
             {isFailed && (
               <button
                 onClick={(e) => onToggleError(item.jobId, e)}
@@ -307,7 +294,6 @@ export default function HistoryTable({
                 <AlertCircle size={11} />
               </button>
             )}
-
             {isCompleted && (
               <div className="flex items-center gap-1">
                 <button
@@ -347,7 +333,6 @@ export default function HistoryTable({
                 </button>
               </div>
             )}
-
             {canDelete && (
               confirmingDelete ? (
                 <div className="flex items-center gap-1 ml-1">
@@ -413,7 +398,6 @@ export default function HistoryTable({
     onCancelDelete,
     onConfirmDelete,
   ]);
-
   const table = useReactTable({
     data: filteredItems,
     columns,
@@ -423,7 +407,6 @@ export default function HistoryTable({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
   });
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
@@ -432,7 +415,6 @@ export default function HistoryTable({
       </div>
     );
   }
-
   if (filteredItems.length === 0) {
     return (
       <div className="text-center py-16 text-gray-400">
@@ -451,7 +433,6 @@ export default function HistoryTable({
       </div>
     );
   }
-
   return (
     <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
       <div className="flex items-center justify-end px-3 py-2 border-b border-gray-200 bg-gray-50">
@@ -484,7 +465,6 @@ export default function HistoryTable({
           )}
         </div>
       </div>
-
       <div className="overflow-x-auto">
       <table className="w-full min-w-[760px] text-sm border-separate border-spacing-0">
         <thead>
@@ -516,7 +496,8 @@ export default function HistoryTable({
             const rowBg = i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40';
             const showExpandedError = item.status === 'failed' && expandedErrors.has(item.jobId);
             const showExpandedSql = expandedSql.has(item.jobId);
-
+            const grouped = !!item.groupId && (item.runCount ?? 1) > 1 && !!onToggleGroup;
+            const group = item as HistoryGroupListItem;
             return (
               <Fragment key={row.id}>
                 <tr
@@ -538,7 +519,6 @@ export default function HistoryTable({
                     </td>
                   ))}
                 </tr>
-
                 {showExpandedError && (
                   <tr className={rowBg} key={`${row.id}-error`}>
                     <td colSpan={row.getVisibleCells().length} className="px-4 pb-4 border-b border-gray-100">
@@ -573,7 +553,6 @@ export default function HistoryTable({
                     </td>
                   </tr>
                 )}
-
                 {showExpandedSql && (
                   <tr className={rowBg} key={`${row.id}-sql`}>
                     <td colSpan={row.getVisibleCells().length} className="px-4 pb-4 border-b border-gray-100">
@@ -596,6 +575,12 @@ export default function HistoryTable({
                     </td>
                   </tr>
                 )}
+                {grouped && <HistoryGroupRows group={group} members={membersByGroup[group.groupId!]?.items ?? []}
+                  expanded={expandedGroupIds.has(group.groupId!)} loading={loadingGroupIds.has(group.groupId!)} onToggle={onToggleGroup!}
+                  onOpen={onOpen} onDelete={onDelete} onConfirmDelete={onConfirmDelete} onCancelDelete={onCancelDelete} confirmDeleteId={confirmDeleteId} deletingId={deletingId}
+                  onCancel={(id) => onCancel(id, { stopPropagation() {} } as React.MouseEvent)} onRename={(member) => onStartRename(member, { stopPropagation() {} } as React.MouseEvent)}
+                  renamingId={renamingId} renameValue={renameValue} onRenameValueChange={onRenameValueChange} renameSaving={renameSaving} onCommitRename={onCommitRename} onCancelRename={onCancelRename}
+                  page={membersByGroup[group.groupId!]} onPageChange={(nextOffset) => onGroupPage?.(group, nextOffset)} columnCount={row.getVisibleCells().length} />}
               </Fragment>
             );
           })}

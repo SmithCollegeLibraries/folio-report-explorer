@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   History as HistoryIcon, ChevronLeft, ChevronRight, Activity,
@@ -12,17 +12,15 @@ import {
   fetchHistorySuggestions,
 } from '../api/client';
 import { useHistoryData } from '../hooks/useHistoryData';
-import type { HistoryViewParameters } from '../hooks/useHistoryData';
+import { useHistoryGroup } from '../hooks/useHistoryGroup';
+import type { HistoryGroupListItem } from '../api/history';
 import { useSelectionManager } from '../hooks/useSelectionManager';
 import { useInlineRename } from '../hooks/useInlineRename';
 import { useCopyToClipboard } from '../hooks/useCopyToClipboard';
 import HistoryToolbar from './history/HistoryToolbar';
 import HistoryTable from './history/HistoryTable';
 import HistoryResultsModal from './history/HistoryResultsModal';
-import {
-  deriveHistoryDeletionState,
-  isDeletableHistoryItem,
-} from './history/historyDeletionState';
+import { isDeletableHistoryItem } from './history/historyDeletionState';
 import SaveQueryDialog from '../components/SaveQueryDialog';
 import type {
   HistoryItem,
@@ -30,35 +28,29 @@ import type {
   IndexRecommendationResponse,
   HistorySuggestionsResponse,
 } from '../types';
-
 const STATUS_TABS: { value: string; label: string; icon: React.ElementType }[] = [
   { value: 'all',       label: 'All',       icon: HistoryIcon },
   { value: 'active',    label: 'Active',     icon: Activity },
   { value: 'completed', label: 'Completed',  icon: CheckCircle2 },
   { value: 'failed',    label: 'Failed',     icon: AlertCircle },
 ];
-
 export default function History() {
   const navigate = useNavigate();
   const { jobId: jobIdParam } = useParams<{ jobId: string }>();
-
-  // ── Server data, pagination, tab, auto-refresh ───────────────────
   const {
-    items, setItems, total, setTotal, offset, setOffset, loading, error, setError,
+    items, setItems, total, offset, setOffset, loading, error, setError,
     statusTab, handleTabChange, mineOnly, handleMineOnlyChange,
     hasActive, limit, totalPages, currentPage,
     expandedErrors, toggleExpandError, load, invalidateLoads, getLatestViewParameters,
-  } = useHistoryData();
-
+    deepLinkItem, deepLinkError, deepLinkPolled, deepLinkLoading, refreshSequence,
+  } = useHistoryData(jobIdParam);
+  const historyGroups = useHistoryGroup(items as HistoryGroupListItem[], statusTab, offset, refreshSequence);
   const [expandedSql, setExpandedSql] = useState<Set<string>>(new Set());
-
-  // ── Client-side filtering & sorting ─────────────────────────────
   const [search, setSearch] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
   const [indexRecLoading, setIndexRecLoading] = useState(false);
   const [indexRecError, setIndexRecError] = useState<string | null>(null);
   const [indexRecData, setIndexRecData] = useState<IndexRecommendationResponse | null>(null);
-
   const filteredItems = useMemo(() => {
     return items
       .filter((item) => {
@@ -72,8 +64,6 @@ export default function History() {
         return true;
       });
   }, [items, search, sourceFilter]);
-
-  // ── Selection ────────────────────────────────────────────────────
   const selectableIds = useMemo(
     () => filteredItems
       .filter(isDeletableHistoryItem)
@@ -81,36 +71,26 @@ export default function History() {
     [filteredItems],
   );
   const selection = useSelectionManager(selectableIds);
-
-  // ── Batch delete ─────────────────────────────────────────────────
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
-
   useEffect(() => {
     if (selection.selectedCount === 0) setConfirmBatchDelete(false);
   }, [selection.selectedCount]);
-
-  // ── Inline rename ────────────────────────────────────────────────
   const rename = useInlineRename({
     onCommit: (jobId, newName) => {
       setItems((prev) => prev.map((i) => i.jobId === jobId ? { ...i, name: newName || null } : i));
       setModalItem((m) => m?.jobId === jobId ? { ...m, name: newName || null } : m);
+      void historyGroups.refreshOpenGroups();
     },
     onError: (msg) => setError(msg),
   });
-
-  // ── Copy SQL ─────────────────────────────────────────────────────
   const { copiedId: copiedSqlId, copy: copySql } = useCopyToClipboard();
   const handleCopySql = (jobId: string, sql: string, e: React.MouseEvent) => {
     e.stopPropagation();
     copySql(jobId, sql);
   };
-
-  // ── Single row delete ────────────────────────────────────────────
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-
-  // ── Query-history index recommendations ─────────────────────────
   const handleGenerateIndexRecommendations = useCallback(async () => {
     setIndexRecLoading(true);
     setIndexRecError(null);
@@ -127,12 +107,9 @@ export default function History() {
       setIndexRecLoading(false);
     }
   }, []);
-
-  // ── Cancel active job ────────────────────────────────────────────
   const [cancellingId, setCancellingId] = useState<string | null>(null);
-
-  const handleCancel = async (jobId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleCancel = async (jobId: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
     setCancellingId(jobId);
     try {
       const updated = await cancelJob(jobId);
@@ -143,24 +120,24 @@ export default function History() {
         startedAt: updated.startedAt,
         completedAt: updated.completedAt,
       } : item));
+      await historyGroups.refreshOpenGroups();
     } catch (err: any) {
       setError(err.response?.data?.error || 'Cancel failed');
     } finally {
       setCancellingId(null);
     }
   };
-
-  // ── Results modal ────────────────────────────────────────────────
   const [modalItem, setModalItem] = useState<HistoryItem | null>(null);
+  const modalJobIdRef = useRef<string | null>(null);
   const [modalJob, setModalJob] = useState<JobStatusResponse | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [historySuggestions, setHistorySuggestions] = useState<HistorySuggestionsResponse | null>(null);
   const [historySuggestionsLoading, setHistorySuggestionsLoading] = useState(false);
   const [historySuggestionsError, setHistorySuggestionsError] = useState<string | null>(null);
-
   const openModal = useCallback(async (item: HistoryItem) => {
     if (item.status !== 'completed') return;
     navigate(`/history/${item.jobId}`, { replace: true });
+    modalJobIdRef.current = item.jobId;
     setModalItem(item);
     setModalJob(null);
     setModalLoading(true);
@@ -175,103 +152,50 @@ export default function History() {
       setModalLoading(false);
     }
   }, [navigate]);
-
-  // Open modal when navigating directly to /history/:jobId
   useEffect(() => {
-    if (jobIdParam && items.length > 0 && !modalItem) {
-      const target = items.find((i) => i.jobId === jobIdParam);
-      if (target) openModal(target);
-    }
+    const target = items.find((i) => i.jobId === jobIdParam) ?? deepLinkItem;
+    const completedByPolling = deepLinkItem?.jobId === jobIdParam && deepLinkPolled;
+    if (jobIdParam && target?.status === 'completed' && !completedByPolling && !modalItem) openModal(target);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobIdParam, items]);
-
+  }, [jobIdParam, items, deepLinkItem, deepLinkPolled]);
   const closeModal = useCallback(() => {
+    modalJobIdRef.current = null;
     setModalItem(null);
     setModalJob(null);
     setHistorySuggestions(null);
     setHistorySuggestionsError(null);
     navigate('/history', { replace: true });
   }, [navigate]);
-
-  // Preserve the latest committed or synchronously derived state across async deletions.
-  const deletionSnapshotRef = useRef({
-    items,
-    total,
-    offset,
-    limit,
-    modalJobId: modalItem?.jobId ?? null,
-  });
-
-  useLayoutEffect(() => {
-    deletionSnapshotRef.current = {
-      items,
-      total,
-      offset,
-      limit,
-      modalJobId: modalItem?.jobId ?? null,
-    };
-  }, [items, total, offset, limit, modalItem?.jobId]);
-
-  const applySuccessfulDeletions = useCallback(async (
-    deletedIds: string[],
-    deletionView: HistoryViewParameters,
-  ) => {
+  const applySuccessfulDeletions = useCallback(async (deletedIds: string[]) => {
     if (deletedIds.length === 0) return;
-
     invalidateLoads();
-    const latestView = getLatestViewParameters();
-    const sameView = deletionView.offset === latestView.offset
-      && deletionView.statusTab === latestView.statusTab
-      && deletionView.mineOnly === latestView.mineOnly;
-    const current = deletionSnapshotRef.current;
-
-    if (sameView) {
-      const next = deriveHistoryDeletionState(
-        current.items,
-        current.total,
-        current.offset,
-        current.limit,
-        deletedIds,
-        current.modalJobId,
-      );
-      deletionSnapshotRef.current = {
-        items: next.items,
-        total: next.total,
-        offset: next.offset,
-        limit: current.limit,
-        modalJobId: next.closeModal ? null : current.modalJobId,
-      };
-      setItems(next.items);
-      setTotal(next.total);
-      setOffset(next.offset);
-      if (next.closeModal) closeModal();
-    } else if (current.modalJobId !== null && deletedIds.includes(current.modalJobId)) {
-      closeModal();
-    }
-
     selection.removeIds(deletedIds);
-    await load();
+    if (modalJobIdRef.current && deletedIds.includes(modalJobIdRef.current)) closeModal();
+    let refreshedTotal: number | null = null;
+    await load(false, (loadedTotal) => { refreshedTotal = loadedTotal; });
+    if (refreshedTotal !== null) {
+      const currentOffset = getLatestViewParameters().offset;
+      const lastOffset = Math.max(0, Math.floor(Math.max(0, refreshedTotal - 1) / limit) * limit);
+      if (currentOffset > lastOffset) setOffset(lastOffset);
+    }
   }, [
     closeModal,
     getLatestViewParameters,
     invalidateLoads,
     load,
+    limit,
     selection.removeIds,
-    setItems,
     setOffset,
-    setTotal,
   ]);
-
   const handleDeleteSelected = async () => {
     const ids = selectableIds.filter((id) => selection.selectedIds.has(id));
     if (!ids.length) return;
-    const deletionView = getLatestViewParameters();
     setBatchDeleting(true);
     try {
       const results = await Promise.allSettled(ids.map((id) => deleteHistoryJob(id)));
       const deletedIds = ids.filter((_, idx) => results[idx].status === 'fulfilled');
       const failedCount = ids.length - deletedIds.length;
-      await applySuccessfulDeletions(deletedIds, deletionView);
+      await applySuccessfulDeletions(deletedIds);
       if (failedCount > 0) {
         setError(`Deleted ${deletedIds.length}, failed to delete ${failedCount}.`);
       }
@@ -280,24 +204,20 @@ export default function History() {
       setConfirmBatchDelete(false);
     }
   };
-
   const handleDelete = async (jobId: string) => {
-    const deletionView = getLatestViewParameters();
     setConfirmDeleteId(null);
     setDeletingId(jobId);
     try {
       await deleteHistoryJob(jobId);
-      await applySuccessfulDeletions([jobId], deletionView);
+      await applySuccessfulDeletions([jobId]);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Delete failed');
     } finally {
       setDeletingId(null);
     }
   };
-
   const handleGenerateHistorySuggestions = useCallback(async () => {
     if (!modalItem) return;
-
     setHistorySuggestionsLoading(true);
     setHistorySuggestionsError(null);
     try {
@@ -309,33 +229,26 @@ export default function History() {
       setHistorySuggestionsLoading(false);
     }
   }, [modalItem]);
-
   const handleRunHistorySuggestion = useCallback((suggestion: string) => {
     navigate(`/ask?q=${encodeURIComponent(suggestion)}`);
   }, [navigate]);
-
   const handleAskHistoryFollowUp = useCallback((jobId: string) => {
     navigate(`/ask?followUpJobId=${encodeURIComponent(jobId)}`);
   }, [navigate]);
-
   const handleModalRename = (newName: string) => {
     if (!modalItem) return;
     setItems((prev) => prev.map((i) => i.jobId === modalItem.jobId ? { ...i, name: newName || null } : i));
     setModalItem((m) => m ? { ...m, name: newName || null } : m);
+    void historyGroups.refreshOpenGroups();
   };
-
-  // ── Save / pin dialog ────────────────────────────────────────────
   const [savingItem, setSavingItem] = useState<HistoryItem | null>(null);
   const [saveInitialPin, setSaveInitialPin] = useState(false);
-
   const openSaveDialog = (item: HistoryItem, pinned: boolean, e?: React.MouseEvent) => {
     e?.stopPropagation();
     setSavingItem(item);
     setSaveInitialPin(pinned);
     closeModal();
   };
-
-  // ─────────────────────────────────────────────────────────────────
   return (
     <div className="max-w-screen-xl mx-auto p-6">
       {/* Page header */}
@@ -352,7 +265,6 @@ export default function History() {
             </span>
           )}
         </div>
-
         <button
           onClick={handleGenerateIndexRecommendations}
           disabled={indexRecLoading}
@@ -363,7 +275,6 @@ export default function History() {
           {indexRecLoading ? 'Analyzing History...' : 'Index Suggestions'}
         </button>
       </div>
-
       {/* Status tabs */}
       <div className="flex gap-1 mb-4 border-b border-gray-200">
         {STATUS_TABS.map(({ value, label, icon: Icon }) => (
@@ -381,20 +292,23 @@ export default function History() {
           </button>
         ))}
       </div>
-
       {/* Error banner */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">
           {error}
         </div>
       )}
-
+      {jobIdParam && !modalItem && deepLinkError && <div role="status" className="mb-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{deepLinkError}</div>}
+      {jobIdParam && deepLinkLoading && !deepLinkItem && <div role="status" className="mb-4 text-sm text-gray-500">Loading history entry…</div>}
+      {jobIdParam && !modalItem && deepLinkItem?.status === 'failed' && <div role="status" className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{deepLinkItem.errorMessage || 'This query failed.'}</div>}
+      {jobIdParam && !modalItem && deepLinkItem?.status === 'cancelled' && <div role="status" className="mb-4 rounded border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">This query was cancelled.</div>}
+      {jobIdParam && !modalItem && deepLinkItem && ['pending', 'pending_export', 'running', 'cancelling'].includes(deepLinkItem.status) && <div role="status" className="mb-4 rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">{deepLinkItem.progressMessage || `Query ${deepLinkItem.status.replace('_', ' ')}`}</div>}
+      {jobIdParam && !modalItem && deepLinkPolled && deepLinkItem?.status === 'completed' && <div role="status" className="mb-4 rounded border border-green-200 bg-green-50 p-3 text-sm text-green-800">{deepLinkItem.progressMessage || 'Query completed.'} <button onClick={() => { void openModal(deepLinkItem); }} className="ml-2 underline">Open results</button></div>}
       {indexRecError && (
         <div className="bg-red-50 border border-red-200 rounded p-3 mb-4 text-red-700 text-sm">
           {indexRecError}
         </div>
       )}
-
       {indexRecData && (
         <div className="bg-white border rounded-lg p-4 mb-4">
           <div className="flex items-start justify-between gap-3">
@@ -418,17 +332,14 @@ export default function History() {
               Dismiss
             </button>
           </div>
-
           {indexRecData.summary && (
             <p className="text-sm text-gray-700 mt-3">{indexRecData.summary}</p>
           )}
-
           {indexRecData.warnings && indexRecData.warnings.length > 0 && (
             <div className="mt-3 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
               {indexRecData.warnings.join(' | ')}
             </div>
           )}
-
           {indexRecData.recommendations.length === 0 ? (
             <div className="mt-3 text-sm text-gray-600">
               No index recommendations were produced for the selected history window.
@@ -463,7 +374,6 @@ export default function History() {
               ))}
             </div>
           )}
-
           {indexRecData.notes?.length > 0 && (
             <div className="mt-3 text-xs text-gray-500">
               Notes: {indexRecData.notes.join(' | ')}
@@ -471,7 +381,6 @@ export default function History() {
           )}
         </div>
       )}
-
       {/* Filters + batch actions */}
       <HistoryToolbar
         search={search}
@@ -488,7 +397,6 @@ export default function History() {
         onCancelBatchDelete={() => setConfirmBatchDelete(false)}
         onDeleteSelected={handleDeleteSelected}
       />
-
       {/* Table */}
       <HistoryTable
         items={items}
@@ -528,8 +436,12 @@ export default function History() {
         onDelete={handleDelete}
         onSave={(item, pinned, e) => openSaveDialog(item, pinned, e)}
         onToggleSelect={selection.toggleOne}
+        expandedGroupIds={historyGroups.expandedGroupIds}
+        membersByGroup={historyGroups.membersByGroup}
+        loadingGroupIds={historyGroups.loadingGroupIds}
+        onToggleGroup={historyGroups.toggleGroup}
+        onGroupPage={historyGroups.setGroupOffset}
       />
-
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-4">
@@ -552,7 +464,6 @@ export default function History() {
           </button>
         </div>
       )}
-
       {/* Results modal */}
       {modalItem && (
         <HistoryResultsModal
@@ -572,7 +483,6 @@ export default function History() {
           onAskFollowUp={handleAskHistoryFollowUp}
         />
       )}
-
       {/* Save-to-library / pin-to-dashboard dialog */}
       {savingItem && (
         <SaveQueryDialog
