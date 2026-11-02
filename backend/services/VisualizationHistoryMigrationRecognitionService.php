@@ -5,6 +5,23 @@ namespace app\services;
 /** Confirms the history schema, unique key, and complete seed before migration discovery skips 064. */
 final class VisualizationHistoryMigrationRecognitionService
 {
+    public static function visualizationHistoryVersionAppearsComplete($db): bool
+    {
+        try {
+            $table = $db->createCommand('SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table', [':table' => 'visualization_history_version'])->queryScalar();
+            if ((int)$table !== 1) return false;
+            $rows = $db->createCommand('SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table', [':table' => 'visualization_history_version'])->queryAll();
+            if (count($rows) !== 2) return false;
+            $columns = [];
+            foreach ($rows as $row) $columns[strtolower((string)$row['COLUMN_NAME'])] = [strtolower((string)$row['DATA_TYPE']), strtoupper((string)$row['IS_NULLABLE'])];
+            if (($columns['id'] ?? null) !== ['tinyint', 'NO'] || ($columns['version'] ?? null) !== ['bigint', 'NO']) return false;
+            $key = $db->createCommand('SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table AND INDEX_NAME = :index AND COLUMN_NAME = :column AND SEQ_IN_INDEX = 1 AND NON_UNIQUE = 0', [':table' => 'visualization_history_version', ':index' => 'PRIMARY', ':column' => 'id'])->queryScalar();
+            return (int)$key === 1 && (int)$db->createCommand('SELECT COUNT(*) FROM visualization_history_version WHERE id = 1')->queryScalar() === 1;
+        } catch (\Throwable $error) {
+            return false;
+        }
+    }
+
     public static function visualizationHistoryAppearsComplete($db): bool
     {
         try {

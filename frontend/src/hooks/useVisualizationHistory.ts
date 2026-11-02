@@ -67,8 +67,12 @@ export function useVisualizationHistory(acqUnitCode: string, currentYear: number
   const confirmDelete = (row: VisualizationHistoryRow) => {
     if (window.confirm(`Delete ${row.fiscalYearEnd} ${row.kind} historical figure for ${acqUnitCode}?`)) remove.mutate(row.id);
   };
+  const update = (field: keyof HistoryDraft, value: string) => setDraft((previous) => {
+    if (!previous || (editing && (field === 'fiscalYearEnd' || field === 'kind'))) return previous;
+    return { ...previous, [field]: value };
+  });
   return { history, draft, editing, open, submit, save, remove, confirmDelete,
     errors: fieldErrors(save.error), close: () => setDraft(null),
-    update: (field: keyof HistoryDraft, value: string) => setDraft((previous) => previous ? { ...previous, [field]: value } : null),
+    update,
   };
 }

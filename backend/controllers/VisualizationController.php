@@ -56,7 +56,11 @@ final class VisualizationController extends Controller
     public function actionIndex(): array
     {
         if (($denied = $this->requireApprovedUser()) !== null) return $denied;
-        $unitId = (string)Yii::$app->request->get('acqUnitId', '');
+        $rawUnitId = Yii::$app->request->get('acqUnitId', '');
+        if (!is_string($rawUnitId) || preg_match('/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i', $rawUnitId) !== 1) {
+            return $this->error(400, 'Choose a valid acquisitions unit id.');
+        }
+        $unitId = $rawUnitId;
         $rawYears = Yii::$app->request->get('years', 10);
         $materialYear = Yii::$app->request->get('materialFiscalYearEnd');
         if (!(is_int($rawYears) || (is_string($rawYears) && preg_match('/^\d+$/', $rawYears)))) {

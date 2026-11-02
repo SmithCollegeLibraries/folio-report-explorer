@@ -26,8 +26,8 @@ final class VisualizationDataService
     public function options(): array
     {
         $sql = 'SELECT id, TRIM(name) AS "code", TRIM(name) AS "name" FROM orders.acquisitions_unit__t'
-            . ' WHERE is_deleted = :deleted ORDER BY TRIM(name)';
-        $rows = $this->readFolioQueries([[$sql, [':deleted' => 0]]]);
+            . ' WHERE NOT is_deleted AND :activeOnly IS TRUE ORDER BY TRIM(name)';
+        $rows = $this->readFolioQueries([[$sql, [':activeOnly' => true]]]);
         $units = [];
         foreach ($rows[0] as $row) $units[] = ['id' => (string)$row['id'], 'code' => trim((string)$row['code']), 'name' => trim((string)$row['name'])];
         return ['units' => $units, 'years' => self::YEARS];
@@ -48,16 +48,16 @@ final class VisualizationDataService
         $cached = $this->cache->get($key);
         if (is_array($cached)) return $cached;
 
-        $raw = $this->readFolioQueries([[$this->contextSql(), [':unitId' => $acqUnitId, ':deleted' => 0]]]);
+        $raw = $this->readFolioQueries([[$this->contextSql(), [':unitId' => $acqUnitId]]]);
         if (empty($raw[0])) throw new \InvalidArgumentException('Unknown acquisitions unit.');
         $context = $this->contextFromRows($raw[0]);
         $lastYear = $context['currentFiscalYearEnd'];
         $firstYear = $lastYear - $years + 1;
         $baselineYear = $firstYear - 1;
         $queries = [
-            [$this->purchasesSql(), [':unitId' => $acqUnitId, ':deleted' => 0, ':firstYear' => $firstYear, ':lastYear' => $lastYear]],
-            [$this->materialsSql(), [':unitId' => $acqUnitId, ':deleted' => 0]],
-            [$this->budgetSql(), [':unitId' => $acqUnitId, ':deleted' => 0, ':firstYear' => $baselineYear, ':lastYear' => $lastYear]],
+            [$this->purchasesSql(), [':unitId' => $acqUnitId, ':firstYear' => $firstYear, ':lastYear' => $lastYear]],
+            [$this->materialsSql(), [':unitId' => $acqUnitId]],
+            [$this->budgetSql(), [':unitId' => $acqUnitId, ':firstYear' => $baselineYear, ':lastYear' => $lastYear]],
         ];
         $raw = array_merge($raw, $this->readFolioQueries($queries));
         $history = (new VisualizationHistoryService($this->historyDb, $this->cache, []))->list($context['code']);
@@ -65,7 +65,7 @@ final class VisualizationDataService
         $materialYears = [];
         foreach ($raw[2] as $row) {
             $year = (int)$row['fiscalYearEnd'];
-            $materialRows[] = ['fiscalYearEnd' => $year, 'materialType' => trim((string)$row['materialType']), 'amount' => round((float)$row['amount'], 2)];
+            $materialRows[] = ['fiscalYearEnd' => $year, 'materialType' => trim((string)$row['materialType']), 'amount' => (float)$row['amount']];
             $materialYears[$year] = $year;
         }
         $materialYears = array_values($materialYears);
@@ -125,17 +125,17 @@ SELECT au.id AS "id", TRIM(au.name) AS "code", TRIM(au.name) AS "name", fy.id AS
        fy.period_start::date AS "periodStart", fy.period_end::date AS "periodEnd", EXTRACT(YEAR FROM fy.period_end::date)::int AS "fiscalYearEnd"
 FROM orders.acquisitions_unit__t au LEFT JOIN finance.fiscal_year__t fy
   ON fy.series = TRIM(au.name) || 'FY' AND fy.period_end IS NOT NULL
-WHERE au.id = :unitId AND au.is_deleted = :deleted ORDER BY fy.period_end
+WHERE au.id = :unitId AND NOT au.is_deleted ORDER BY fy.period_end
 SQL;
     }
 
     private function paymentCtes(bool $withRange): string
     {
         $range = $withRange ? ' AND EXTRACT(YEAR FROM fy.period_end::date)::int BETWEEN :firstYear AND :lastYear' : '';
-        return "WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND is_deleted = :deleted),\n"
+        return "WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND NOT is_deleted),\n"
             . "selected_years AS (SELECT fy.id, EXTRACT(YEAR FROM fy.period_end::date)::int AS fiscal_year_end FROM finance.fiscal_year__t fy JOIN selected_unit au ON fy.series = au.unit_code || 'FY' WHERE fy.period_end IS NOT NULL{$range}),\n"
             . "unit_funds AS (SELECT DISTINCT fau.id AS fund_id FROM finance.fund__t__acq_unit_ids fau JOIN finance.fund__t f ON f.id = fau.id JOIN selected_unit au ON au.id = fau.acq_unit_ids),\n"
-            . "paid_lines AS (SELECT sy.fiscal_year_end, COALESCE(CASE WHEN LOWER(COALESCE(fd.fund_distributions__distribution_type, '')) = 'amount' THEN fd.fund_distributions__value ELSE COALESCE(fd.total, 0) * COALESCE(fd.fund_distributions__value, 0) / 100.0 END, 0) AS amount, COALESCE(ermt.name, pmt.name, 'Other') AS material_type\n"
+            . "paid_lines AS (SELECT sy.fiscal_year_end, COALESCE(CASE WHEN LOWER(COALESCE(fd.fund_distributions__distribution_type, '')) = 'amount' THEN fd.fund_distributions__value ELSE COALESCE(fd.total, 0) * COALESCE(fd.fund_distributions__value, 0) / 100.0 END, 0) AS amount, COALESCE(ermt.name, pmt.name, 'No material type') AS material_type\n"
             . "FROM invoice.invoice_lines__t__fund_distributions fd JOIN invoice.invoices__t inv ON inv.id = fd.invoice_id JOIN selected_years sy ON sy.id = inv.fiscal_year_id JOIN unit_funds uf ON uf.fund_id = fd.fund_distributions__fund_id\n"
             . "LEFT JOIN orders.po_line__t pol ON pol.id = fd.po_line_id LEFT JOIN inventory.material_type__t ermt ON ermt.id = pol.eresource__material_type LEFT JOIN inventory.material_type__t pmt ON pmt.id = pol.physical__material_type WHERE fd.invoice_line_status = 'Paid')\n";
     }
@@ -145,23 +145,23 @@ SQL;
         $electronic = "'" . implode("', '", array_map('strtolower', self::ELECTRONIC)) . "'";
         $physical = "'" . implode("', '", array_map('strtolower', self::PHYSICAL)) . "'";
         return $this->paymentCtes(true)
-            . "SELECT fiscal_year_end AS \"fiscalYearEnd\", ROUND(SUM(amount), 2) AS total,\n"
-            . "ROUND(SUM(CASE WHEN LOWER(material_type) IN ({$electronic}) THEN amount ELSE 0 END), 2) AS electronic,\n"
-            . "ROUND(SUM(CASE WHEN LOWER(material_type) IN ({$physical}) THEN amount ELSE 0 END), 2) AS physical,\n"
-            . "ROUND(SUM(CASE WHEN LOWER(material_type) NOT IN ({$electronic}, {$physical}) THEN amount ELSE 0 END), 2) AS other\n"
+            . "SELECT fiscal_year_end AS \"fiscalYearEnd\", SUM(amount) AS total,\n"
+            . "SUM(CASE WHEN LOWER(material_type) IN ({$electronic}) THEN amount ELSE 0 END) AS electronic,\n"
+            . "SUM(CASE WHEN LOWER(material_type) IN ({$physical}) THEN amount ELSE 0 END) AS physical,\n"
+            . "SUM(CASE WHEN LOWER(material_type) NOT IN ({$electronic}, {$physical}) THEN amount ELSE 0 END) AS other\n"
             . 'FROM paid_lines GROUP BY fiscal_year_end ORDER BY fiscal_year_end';
     }
 
     private function materialsSql(): string
     {
-        return $this->paymentCtes(false) . "SELECT fiscal_year_end AS \"fiscalYearEnd\", material_type AS \"materialType\", ROUND(SUM(amount), 2) AS amount\n"
+        return $this->paymentCtes(false) . "SELECT fiscal_year_end AS \"fiscalYearEnd\", material_type AS \"materialType\", SUM(amount) AS amount\n"
             . 'FROM paid_lines GROUP BY fiscal_year_end, material_type ORDER BY fiscal_year_end, amount DESC, material_type';
     }
 
     private function budgetSql(): string
     {
         return <<<'SQL'
-WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND is_deleted = :deleted),
+WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND NOT is_deleted),
 selected_years AS (SELECT fy.id, EXTRACT(YEAR FROM fy.period_end::date)::int AS fiscal_year_end FROM finance.fiscal_year__t fy
  JOIN selected_unit au ON fy.series = au.unit_code || 'FY' WHERE fy.period_end IS NOT NULL
  AND EXTRACT(YEAR FROM fy.period_end::date)::int BETWEEN :firstYear AND :lastYear),
@@ -221,12 +221,12 @@ SQL;
 
     private function selectedMaterialYear($selection, int $currentYear, array $materialYears)
     {
-        if ($selection !== null && $selection !== 'all' && !in_array((int)$selection, $materialYears, true)) {
+        if ($selection !== null && $selection !== 'all' && !in_array((int)$selection, $materialYears, true) && (int)$selection !== $currentYear) {
             throw new \InvalidArgumentException('Choose a fiscal year with FOLIO purchase data or all years.');
         }
-        if (empty($materialYears)) return null;
-        if ($selection === 'all') return 'all';
-        return $selection === null ? $currentYear : (int)$selection;
+        if ($selection === 'all') return empty($materialYears) ? null : 'all';
+        if ($selection !== null) return (int)$selection;
+        return empty($materialYears) ? null : $currentYear;
     }
 
     private function materialItems(array $rows, $year): array
@@ -235,7 +235,7 @@ SQL;
         $items = [];
         foreach ($rows as $row) {
             if ($year !== 'all' && $row['fiscalYearEnd'] !== $year) continue;
-            $type = $row['materialType'] === '' ? 'Other' : $row['materialType'];
+            $type = $row['materialType'] === '' ? 'No material type' : $row['materialType'];
             if (!isset($items[$type])) $items[$type] = 0;
             $items[$type] += $row['amount'];
         }
@@ -250,8 +250,9 @@ SQL;
         $points = [];
         foreach ($folioRows as $row) {
             $year = (int)$row['fiscalYearEnd'];
-            $points[$year] = ['fiscalYearEnd' => $year, 'electronic' => round((float)$row['electronic'], 2), 'physical' => round((float)$row['physical'], 2),
-                'other' => round((float)$row['other'], 2), 'total' => round((float)$row['total'], 2), 'source' => 'folio'];
+            $electronic = (float)$row['electronic']; $physical = (float)$row['physical']; $other = (float)$row['other'];
+            $points[$year] = ['fiscalYearEnd' => $year, 'electronic' => round($electronic, 2), 'physical' => round($physical, 2),
+                'other' => round($other, 2), 'total' => round((float)$row['total'], 2), 'source' => 'folio', '_shares' => [$electronic, $physical, $other]];
         }
         foreach ($history as $row) {
             $year = (int)$row['fiscalYearEnd'];
@@ -259,10 +260,11 @@ SQL;
             $e = round((float)$row['electronicAmount'], 2);
             $p = round((float)$row['physicalAmount'], 2);
             $total = round((float)$row['totalAmount'], 2);
-            $points[$year] = ['fiscalYearEnd' => $year, 'electronic' => $e, 'physical' => $p, 'other' => round($total - $e - $p, 2), 'total' => $total, 'source' => 'history'];
+            $other = $total - $e - $p;
+            $points[$year] = ['fiscalYearEnd' => $year, 'electronic' => $e, 'physical' => $p, 'other' => round($other, 2), 'total' => $total, 'source' => 'history', '_shares' => [$e, $p, $other]];
         }
         ksort($points, SORT_NUMERIC);
-        foreach ($points as &$point) $point = array_merge($point, self::categoryPercentages($point['electronic'], $point['physical'], $point['other']));
+        foreach ($points as &$point) { $point = array_merge($point, self::categoryPercentages($point['_shares'][0], $point['_shares'][1], $point['_shares'][2])); unset($point['_shares']); }
         unset($point);
         return array_values($points);
     }

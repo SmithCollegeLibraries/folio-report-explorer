@@ -29,7 +29,7 @@ export function HistoryPanel({ unitCode, currentYear }: { unitCode: string; curr
       <h3 className="font-semibold mb-3">{state.editing ? 'Edit historical figure' : 'New historical figure'}</h3>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div><label htmlFor={`${id}-kind`} className="block text-sm font-medium mb-1">Kind</label>
-          <select id={`${id}-kind`} className="border rounded px-3 py-2 w-full" value={draft.kind}
+          <select id={`${id}-kind`} className={`border rounded px-3 py-2 w-full ${state.editing ? 'bg-gray-100 cursor-not-allowed' : ''}`} value={draft.kind} aria-readonly={state.editing}
             onChange={(event) => state.update('kind', event.target.value)} aria-invalid={Boolean(state.errors.kind)}
             aria-describedby={state.errors.kind ? `${id}-kind-error` : undefined}>
             <option value="purchases">purchases</option><option value="budget">budget</option>
@@ -40,7 +40,9 @@ export function HistoryPanel({ unitCode, currentYear }: { unitCode: string; curr
           return <div key={field.key}><label htmlFor={fieldId} className="block text-sm font-medium mb-1">{field.label}</label>
             <input id={fieldId} type={field.type} value={draft[field.key]}
               {...(field.type === 'number' ? { min: field.min, max: field.max, step: field.step, required: true } : { maxLength: 255 })}
-              onChange={(event) => state.update(field.key, event.target.value)} className="border rounded px-3 py-2 w-full"
+              onChange={(event) => state.update(field.key, event.target.value)}
+              aria-readonly={state.editing && field.key === 'fiscalYearEnd'}
+              className={`border rounded px-3 py-2 w-full ${state.editing && field.key === 'fiscalYearEnd' ? 'bg-gray-100 cursor-not-allowed' : ''}`}
               aria-invalid={Boolean(state.errors[field.key])} aria-describedby={state.errors[field.key] ? `${fieldId}-error` : undefined} />
             {state.errors[field.key] && <p id={`${fieldId}-error`} className="text-sm text-red-700">{state.errors[field.key]}</p>}
           </div>;

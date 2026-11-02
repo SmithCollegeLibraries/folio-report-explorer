@@ -28,9 +28,9 @@ export interface VisualizationData {
     physical: number;
     other: number;
     total: number;
-    electronicPct: number;
-    physicalPct: number;
-    otherPct: number;
+    electronicPct: number | null;
+    physicalPct: number | null;
+    otherPct: number | null;
     source: 'history' | 'folio';
   }[];
   purchasesByMaterial: {

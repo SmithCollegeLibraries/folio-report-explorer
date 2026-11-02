@@ -5,15 +5,12 @@ namespace app\services;
 /** Validates and persists editable historical visualization values. */
 final class VisualizationHistoryService
 {
-    private const VERSION_CACHE_KEY = 'visualization_history_version_v1';
     private $db;
-    private $cache;
     private $existingUnitCodes;
 
     public function __construct($db, $cache, array $existingUnitCodes)
     {
         $this->db = $db;
-        $this->cache = $cache;
         $this->existingUnitCodes = [];
         foreach ($existingUnitCodes as $code) {
             if (is_string($code) && trim($code) !== '') $this->existingUnitCodes[] = trim($code);
@@ -73,13 +70,12 @@ final class VisualizationHistoryService
 
     public function version(): int
     {
-        $version = $this->cache->get(self::VERSION_CACHE_KEY);
-        return is_numeric($version) ? (int)$version : 0;
+        return (int)$this->db->createCommand('SELECT version FROM visualization_history_version WHERE id = 1')->queryScalar();
     }
 
     private function bumpVersion(): void
     {
-        $this->cache->set(self::VERSION_CACHE_KEY, $this->version() + 1);
+        $this->db->createCommand('UPDATE visualization_history_version SET version = version + 1 WHERE id = 1')->execute();
     }
 
     private function validatedValues(array $input): array

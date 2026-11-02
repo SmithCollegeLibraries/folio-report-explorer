@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchVisualizationOptions, fetchVisualizations } from '../api/visualizations';
+import { fetchVisualizationOptions, fetchVisualizations, type VisualizationData } from '../api/visualizations';
 
 export function useVisualizations() {
   const [selectedUnit, setSelectedUnit] = useState<string>();
@@ -17,14 +17,17 @@ export function useVisualizations() {
     }),
     enabled: Boolean(unitId),
   });
+  const [lastData, setLastData] = useState<VisualizationData>();
+  useEffect(() => { if (figures.data) setLastData(figures.data); }, [figures.data]);
   const changeUnit = (id: string) => {
     setSelectedUnit(id);
     setMaterialYear(undefined);
   };
   const resolvedMaterialYear: number | 'all' | '' = materialYear ?? figures.data?.purchasesByMaterial.fiscalYearEnd
     ?? figures.data?.currentFiscalYearEnd ?? '';
+  const data = figures.data ?? (lastData?.unit.id === unitId ? lastData : undefined);
   return {
-    options, figures, unitId, years, setYears, changeUnit, setMaterialYear,
+    options, figures, data, unitId, years, setYears, changeUnit, setMaterialYear,
     materialYear: resolvedMaterialYear,
     retry: () => options.isError ? options.refetch() : figures.refetch(),
   };

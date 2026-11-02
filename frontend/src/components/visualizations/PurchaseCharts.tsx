@@ -3,6 +3,8 @@ import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveCo
 import type { VisualizationData } from '../../api/visualizations';
 import { amount, ChartCard } from './ChartCard';
 
+const share = (value: number | null) => value === null ? 'n/a' : `${value.toFixed(1)}%`;
+
 const groups = [
   { key: 'electronic', name: 'Electronic', color: '#2563a0' },
   { key: 'physical', name: 'Physical', color: '#287e78' },
@@ -15,7 +17,9 @@ export function PurchaseCharts({ data, materialYear, onMaterialYear }: {
 }) {
   const pickerId = useId();
   const purchases = data.purchasesByCategory.filter((row) => row.total > 0);
-  const materials = [...data.purchasesByMaterial.items].sort((a, b) => b.amount - a.amount);
+  const materials = data.purchasesByMaterial.items.map((row) => ({
+    ...row, materialType: row.materialType || 'No material type',
+  })).sort((a, b) => b.amount - a.amount);
   const disabled = data.materialFiscalYearEnds.length === 0;
   const title = 'How the library purchases';
   const materialTitle = 'How the library purchases by material';
@@ -26,7 +30,7 @@ export function PurchaseCharts({ data, materialYear, onMaterialYear }: {
         <th scope="col">Total</th><th scope="col">Source</th>
       </tr></thead><tbody>{data.purchasesByCategory.map((row) => <tr key={row.fiscalYearEnd}>
         <th scope="row">{row.fiscalYearEnd}</th>{groups.map((group) => <td key={group.key}>
-          {amount(row[group.key])} / {row.total > 0 ? `${row[`${group.key}Pct`].toFixed(1)}%` : 'no spending'}
+          {amount(row[group.key])} / {row.total > 0 ? share(row[`${group.key}Pct`]) : 'no spending'}
         </td>)}<td>{amount(row.total)}</td><td>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</td>
       </tr>)}</tbody></table>}>
       <div className="h-80" aria-label="Purchases as percentages by fiscal year">
@@ -37,7 +41,7 @@ export function PurchaseCharts({ data, materialYear, onMaterialYear }: {
             if (!active || !payload?.length) return null;
             const row = payload[0].payload as VisualizationData['purchasesByCategory'][number];
             return <div className="bg-white border rounded p-3 shadow text-sm"><strong>FY {label}</strong>
-              {groups.map((group) => <p key={group.key}>{group.name}: {amount(row[group.key])} ({row[`${group.key}Pct`].toFixed(1)}%)</p>)}
+              {groups.map((group) => <p key={group.key}>{group.name}: {amount(row[group.key])} ({share(row[`${group.key}Pct`])})</p>)}
               <p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p></div>;
           }} />
           <Legend />

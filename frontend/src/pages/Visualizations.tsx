@@ -8,7 +8,7 @@ import { HistoryPanel } from '../components/visualizations/HistoryPanel';
 export default function Visualizations() {
   const state = useVisualizations();
   const { isAdmin } = useAuth();
-  const data = state.figures.data;
+  const data = state.data;
   const error = state.options.error ?? state.figures.error;
   const loading = state.options.isPending || (Boolean(state.unitId) && state.figures.isPending);
   const empty = data && data.purchasesByCategory.length === 0 && data.budget.length === 0;
