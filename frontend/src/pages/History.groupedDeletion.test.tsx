@@ -149,4 +149,42 @@ describe('History grouped deletion', () => {
     expect(screen.getByRole('button', { name: /run 2 times/i })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Late page older member')).toBeInTheDocument();
   });
+
+  it('reloads at the clamped offset after deleting the only row on the last page', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => (
+      historyItem(`page-one-${index}`, `Page one query ${index}`)
+    ));
+    const lastPageItem = historyItem('last-page-job', 'Only last-page query');
+    let deleted = false;
+    vi.mocked(fetchQueryHistory).mockImplementation(async (limit = 50, requestedOffset = 0) => ({
+      items: requestedOffset === 50
+        ? (deleted ? [] : [lastPageItem])
+        : firstPage,
+      total: deleted ? 50 : 51,
+      offset: requestedOffset,
+      limit,
+    }));
+    vi.mocked(deleteHistoryJob).mockImplementation(async () => { deleted = true; });
+
+    render(
+      <MemoryRouter initialEntries={['/history']}>
+        <Routes>
+          <Route path="/history/:jobId?" element={<History />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /next/i }));
+    const row = (await screen.findByText('Only last-page query')).closest('tr');
+    expect(row).not.toBeNull();
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+    await user.click(within(row!).getByTitle('Delete from history'));
+    await user.click(within(row!).getByRole('button', { name: 'Yes' }));
+
+    await waitFor(() => expect(fetchQueryHistory).toHaveBeenLastCalledWith(50, 0, 'all', false));
+    expect(fetchQueryHistory).toHaveBeenCalledWith(50, 50, 'all', false);
+    expect(await screen.findByText('Page one query 0')).toBeInTheDocument();
+  });
 });

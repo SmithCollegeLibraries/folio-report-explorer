@@ -122,6 +122,43 @@ describe('useHistoryGroup expansion state', () => {
     expect(result.current.membersByGroup['stable-group-id'].items[0].jobId).toBe('next-runs-page');
   });
 
+  it('refreshes the requested next-runs page while navigation is still pending', async () => {
+    const nextPage = deferred<HistoryGroupResponse>();
+    vi.mocked(fetchHistoryGroup)
+      .mockResolvedValueOnce(groupResponse([{
+        ...group(), jobId: 'first-runs-page', name: 'First runs page',
+      }], 0, 45))
+      .mockReturnValueOnce(nextPage.promise)
+      .mockImplementationOnce(async (_jobId, parameters) => groupResponse([{
+        ...group(),
+        jobId: parameters.offset === 20 ? 'refreshed-next-page' : 'refreshed-first-page',
+        name: parameters.offset === 20 ? 'Refreshed next runs page' : 'Refreshed first runs page',
+      }], parameters.offset ?? 0, 45));
+    const { result } = renderHook(() => useHistoryGroup([group()], 'all', 0));
+
+    await act(async () => result.current.toggleGroup(group()));
+    let navigation!: Promise<void>;
+    act(() => { navigation = result.current.setGroupOffset(group(), 20); });
+    expect(fetchHistoryGroup).toHaveBeenLastCalledWith('representative', {
+      status: 'all', limit: 20, offset: 20,
+    });
+
+    await act(async () => result.current.refreshOpenGroups());
+    expect(fetchHistoryGroup).toHaveBeenLastCalledWith('representative', {
+      status: 'all', limit: 20, offset: 20,
+    });
+
+    await act(async () => {
+      nextPage.resolve(groupResponse([{
+        ...group(), jobId: 'delayed-next-page', name: 'Delayed next runs page',
+      }], 20, 45));
+      await navigation;
+    });
+
+    expect(result.current.membersByGroup['stable-group-id'].offset).toBe(20);
+    expect(result.current.membersByGroup['stable-group-id'].items[0].jobId).toBe('refreshed-next-page');
+  });
+
   it('drops an old filter response after the group is reopened in the new filter', async () => {
     const oldFilter = deferred<HistoryGroupResponse>();
     const newFilter = deferred<HistoryGroupResponse>();

@@ -171,6 +171,60 @@ describe('History deletion concurrency', () => {
     expect(screen.getByText('0 queries')).toBeInTheDocument();
   });
 
+  it('closes the deleted row modal and clears its selection before reconciliation resolves', async () => {
+    const deletion = deferred();
+    const reconciliation = deferredValue<{
+      items: HistoryItem[];
+      total: number;
+      offset: number;
+      limit: number;
+    }>();
+    vi.mocked(fetchQueryHistory)
+      .mockResolvedValueOnce({
+        items: [historyItem('selected-job', 'Selected query')],
+        total: 1,
+        offset: 0,
+        limit: 50,
+      })
+      .mockReturnValueOnce(reconciliation.promise);
+    vi.mocked(deleteHistoryJob).mockReturnValue(deletion.promise);
+    vi.mocked(checkJobStatus).mockResolvedValue({
+      jobId: 'selected-job',
+      status: 'completed',
+      sql: 'SELECT 1;',
+      progressMessage: 'Completed',
+      createdAt: '2026-07-19T12:00:00Z',
+      startedAt: '2026-07-19T12:00:01Z',
+      completedAt: '2026-07-19T12:00:02Z',
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/history']}>
+        <Routes>
+          <Route path="/history/*" element={<History />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const user = userEvent.setup();
+    const row = (await screen.findByText('Selected query')).closest('tr');
+    expect(row).not.toBeNull();
+    await user.click(within(row!).getByTitle('Select for batch delete'));
+    await user.click(screen.getByRole('button', { name: 'Delete selected (1)' }));
+    await user.click(screen.getByRole('button', { name: 'Yes' }));
+    await user.click(screen.getByText('Selected query'));
+    expect(await screen.findByTitle('Close (Esc)')).toBeInTheDocument();
+
+    await act(async () => {
+      deletion.resolve();
+      await deletion.promise;
+    });
+    await waitFor(() => expect(fetchQueryHistory).toHaveBeenCalledTimes(2));
+
+    expect(screen.queryByTitle('Close (Esc)')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete selected (1)' })).not.toBeInTheDocument();
+  });
+
   it('reloads the latest My Queries cohort when deletion finishes during the transition', async () => {
     const deletion = deferred();
     const transitioningLoad = deferredValue<{
