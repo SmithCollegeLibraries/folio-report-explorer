@@ -11,6 +11,7 @@ import Builder from './pages/Builder';
 import Ask from './pages/Ask';
 import SavedQueries from './pages/SavedQueries';
 import Reports from './pages/Reports';
+import Visualizations from './pages/Visualizations';
 import ReportDetail from './pages/ReportDetail';
 import SettingsPage from './pages/Settings';
 import Training from './pages/Training';
@@ -235,6 +236,9 @@ export default function App() {
 
             <NavDropdown label="Query" icon={MessageSquare} items={queryItems} />
             <NavDropdown label="Library" icon={BookOpen} items={libraryItems} />
+            <NavLink to="/visualizations" className={({ isActive }) => `flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${isActive ? 'bg-folio-600 text-white' : 'text-folio-200 hover:bg-folio-700 hover:text-white'}`}>
+              <FileBarChart size={15} /> Visualizations
+            </NavLink>
             {authEnabled && !isAdmin && canEditAllocationsFor() && (
               <NavLink
                 to="/local-data"
@@ -300,6 +304,9 @@ export default function App() {
 
             <MobileNavGroup label="Query" icon={MessageSquare} items={queryItems} />
             <MobileNavGroup label="Library" icon={BookOpen} items={libraryItems} />
+            <NavLink to="/visualizations" className={({ isActive }) => `flex items-center gap-2 px-3 py-2.5 rounded-md text-sm font-medium ${isActive ? 'bg-folio-600 text-white' : 'text-folio-200 hover:bg-folio-700 hover:text-white'}`}>
+              <FileBarChart size={16} /> Visualizations
+            </NavLink>
             {authEnabled && !isAdmin && canEditAllocationsFor() && (
               <NavLink to="/local-data" className="flex items-center gap-2 px-3 py-2.5 rounded-md text-sm font-medium text-folio-200 hover:bg-folio-700 hover:text-white">
                 <Database size={16} /> Local Data
@@ -351,6 +358,7 @@ export default function App() {
           <Route path="/builder" element={<ProtectedRoute><Builder /></ProtectedRoute>} />
           <Route path="/ask" element={<ProtectedRoute><Ask /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+          <Route path="/visualizations" element={<ProtectedRoute><Visualizations /></ProtectedRoute>} />
           <Route path="/reports/:id" element={<ProtectedRoute><ReportDetail /></ProtectedRoute>} />
           <Route path="/saved" element={<ProtectedRoute><SavedQueries /></ProtectedRoute>} />
           <Route path="/history" element={<ProtectedRoute><History /></ProtectedRoute>} />

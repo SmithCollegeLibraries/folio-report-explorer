@@ -1,0 +1,51 @@
+-- Editable historical visualization values. INSERT IGNORE preserves edits and soft deletions on reruns.
+CREATE TABLE IF NOT EXISTS visualization_history (
+    id INT NOT NULL AUTO_INCREMENT,
+    acq_unit_code VARCHAR(50) NOT NULL,
+    kind ENUM('purchases', 'budget') NOT NULL,
+    fiscal_year_end SMALLINT NOT NULL,
+    total_amount DECIMAL(14,2) NOT NULL,
+    electronic_amount DECIMAL(14,2) NULL,
+    physical_amount DECIMAL(14,2) NULL,
+    note VARCHAR(255) NULL,
+    updated_by INT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    deleted_at DATETIME NULL,
+    deleted_by INT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_visualization_history (acq_unit_code, kind, fiscal_year_end)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+INSERT IGNORE INTO visualization_history
+    (acq_unit_code, kind, fiscal_year_end, total_amount, electronic_amount, physical_amount)
+VALUES
+    ('SC', 'purchases', 2007, 2567831.66, 1334266.38, 1143607.81),
+    ('SC', 'purchases', 2008, 3221855.63, 1717693.05, 1409036.79),
+    ('SC', 'purchases', 2009, 2937533.95, 1714244.55, 1148068.68),
+    ('SC', 'purchases', 2010, 3062216.28, 1852305.18, 1079989.89),
+    ('SC', 'purchases', 2011, 3181973.30, 1982264.28, 1102012.18),
+    ('SC', 'purchases', 2012, 3262968.20, 2089729.61, 1092427.68),
+    ('SC', 'purchases', 2013, 3503739.64, 2440624.37, 957096.48),
+    ('SC', 'purchases', 2014, 3610392.99, 2538100.99, 999902.13),
+    ('SC', 'purchases', 2015, 3687477.22, 2780674.71, 852249.83),
+    ('SC', 'purchases', 2016, 3852994.53, 2910170.09, 875494.54),
+    ('SC', 'purchases', 2017, 3868891.85, 3089314.70, 726037.79),
+    ('SC', 'purchases', 2018, 4103345.09, 3396215.40, 641009.49),
+    ('SC', 'purchases', 2019, 4226976.56, 3663794.81, 519482.28),
+    ('SC', 'purchases', 2020, 4208692.79, 3690107.02, 457227.37),
+    ('SC', 'purchases', 2021, 4364817.63, 3893346.36, 415789.69),
+    ('SC', 'purchases', 2022, 4358920.00, 3708858.00, 483355.00),
+    ('SC', 'budget', 2011, 3100043.00, NULL, NULL),
+    ('SC', 'budget', 2012, 3233265.00, NULL, NULL),
+    ('SC', 'budget', 2013, 3390968.00, NULL, NULL),
+    ('SC', 'budget', 2014, 3485500.00, NULL, NULL),
+    ('SC', 'budget', 2015, 3645079.00, NULL, NULL),
+    ('SC', 'budget', 2016, 3864112.00, NULL, NULL),
+    ('SC', 'budget', 2017, 4023465.00, NULL, NULL),
+    ('SC', 'budget', 2018, 4133400.00, NULL, NULL),
+    ('SC', 'budget', 2019, 4133400.00, NULL, NULL),
+    ('SC', 'budget', 2020, 4216068.00, NULL, NULL),
+    ('SC', 'budget', 2021, 4216068.00, NULL, NULL),
+    ('SC', 'budget', 2022, 4426871.00, NULL, NULL),
+    ('SC', 'budget', 2023, 4526871.00, NULL, NULL),
+    ('SC', 'budget', 2024, 4526871.00, NULL, NULL);

@@ -1,3 +1,5 @@
+import { api } from './client';
+
 export interface VisualizationUnit {
   id: string;
   code: string;
@@ -60,21 +62,25 @@ export interface VisualizationHistoryRow extends VisualizationHistoryInput {
 }
 
 export async function fetchVisualizationOptions(): Promise<VisualizationOptions> {
-  throw new Error('not implemented');
+  const { data } = await api.get('/visualizations/options');
+  return data;
 }
 
-export async function fetchVisualizations(_filters: VisualizationFilters): Promise<VisualizationData> {
-  throw new Error('not implemented');
+export async function fetchVisualizations(filters: VisualizationFilters): Promise<VisualizationData> {
+  const { data } = await api.get('/visualizations', { params: filters });
+  return data;
 }
 
-export async function fetchVisualizationHistory(_acqUnitCode: string): Promise<VisualizationHistoryRow[]> {
-  throw new Error('not implemented');
+export async function fetchVisualizationHistory(acqUnitCode: string): Promise<VisualizationHistoryRow[]> {
+  const { data } = await api.get('/visualizations/history', { params: { acqUnitCode } });
+  return data;
 }
 
-export async function saveVisualizationHistory(_input: VisualizationHistoryInput): Promise<VisualizationHistoryRow> {
-  throw new Error('not implemented');
+export async function saveVisualizationHistory(input: VisualizationHistoryInput): Promise<VisualizationHistoryRow> {
+  const { data } = await api.put('/visualizations/history', input);
+  return data;
 }
 
-export async function deleteVisualizationHistory(_id: number): Promise<void> {
-  throw new Error('not implemented');
+export async function deleteVisualizationHistory(id: number): Promise<void> {
+  await api.delete(`/visualizations/history/${id}`);
 }

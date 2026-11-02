@@ -98,6 +98,13 @@ $config = [
                 'POST reports/convert' => 'folio-query/report-convert',
                 'GET budget-year-expense-class/options' => 'folio-query/budget-year-expense-class-options',
 
+                // Unit-scoped purchase, material and budget visualizations
+                'GET visualizations/options' => 'visualization/options',
+                'GET visualizations' => 'visualization/index',
+                'GET visualizations/history' => 'visualization/history',
+                'PUT visualizations/history' => 'visualization/history-upsert',
+                'DELETE visualizations/history/<id:\d+>' => 'visualization/history-delete',
+
                 // ACRL survey question catalogue and review (admin only)
                 'GET acrl/years' => 'acrl/years',
                 'POST acrl/worksheets' => 'acrl/upload',
