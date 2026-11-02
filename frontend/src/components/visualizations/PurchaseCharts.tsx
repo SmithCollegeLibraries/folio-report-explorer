@@ -11,8 +11,9 @@ const groups = [
   { key: 'other', name: 'Other', color: '#b17b22' },
 ] as const;
 
-export function PurchaseCharts({ data, materialYear, onMaterialYear }: {
+export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, onMaterialYear }: {
   data: VisualizationData; materialYear: number | 'all' | '';
+  materialFiscalYearEnds: number[];
   onMaterialYear: (year: number | 'all') => void;
 }) {
   const pickerId = useId();
@@ -20,7 +21,7 @@ export function PurchaseCharts({ data, materialYear, onMaterialYear }: {
   const materials = data.purchasesByMaterial.items.map((row) => ({
     ...row, materialType: row.materialType || 'No material type',
   })).sort((a, b) => b.amount - a.amount);
-  const disabled = data.materialFiscalYearEnds.length === 0;
+  const disabled = materialFiscalYearEnds.length === 0;
   const title = 'How the library purchases';
   const materialTitle = 'How the library purchases by material';
   return <>
@@ -59,7 +60,7 @@ export function PurchaseCharts({ data, materialYear, onMaterialYear }: {
           onChange={(event) => onMaterialYear(event.target.value === 'all' ? 'all' : Number(event.target.value))}
           className="border rounded px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-500">
           {disabled ? <option value="">No FOLIO years</option> : <>
-            {Array.from(new Set([...(data.currentFiscalYearEnd === null ? [] : [data.currentFiscalYearEnd]), ...data.materialFiscalYearEnds]))
+            {Array.from(new Set([...(data.currentFiscalYearEnd === null ? [] : [data.currentFiscalYearEnd]), ...materialFiscalYearEnds]))
               .sort((a, b) => b - a).map((year) => <option key={year} value={year}>{year}</option>)}
             <option value="all">All FOLIO years</option>
           </>}

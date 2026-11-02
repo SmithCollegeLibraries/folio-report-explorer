@@ -2,6 +2,24 @@ import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchVisualizationOptions, fetchVisualizations, type VisualizationData } from '../api/visualizations';
 
+interface SuccessfulSelection {
+  unitId: string;
+  years: number;
+  materialYear: number | 'all' | undefined;
+  data: VisualizationData;
+}
+
+function emptySelection(data: VisualizationData, years: number, materialYear: number | 'all' | undefined): VisualizationData {
+  const lastYear = data.fiscalYearEnds[data.fiscalYearEnds.length - 1] ?? data.currentFiscalYearEnd;
+  return {
+    ...data,
+    fiscalYearEnds: lastYear === null ? [] : Array.from({ length: years }, (_, index) => lastYear - years + index + 1),
+    purchasesByCategory: [],
+    purchasesByMaterial: { fiscalYearEnd: materialYear ?? data.currentFiscalYearEnd, items: [] },
+    budget: [],
+  };
+}
+
 export function useVisualizations() {
   const [selectedUnit, setSelectedUnit] = useState<string>();
   const [years, setYears] = useState(10);
@@ -17,17 +35,26 @@ export function useVisualizations() {
     }),
     enabled: Boolean(unitId),
   });
-  const [lastData, setLastData] = useState<VisualizationData>();
-  useEffect(() => { if (figures.data) setLastData(figures.data); }, [figures.data]);
+  const [lastSuccess, setLastSuccess] = useState<SuccessfulSelection>();
+  useEffect(() => {
+    if (figures.data && unitId) setLastSuccess({ unitId, years, materialYear, data: figures.data });
+  }, [figures.data, unitId, years, materialYear]);
   const changeUnit = (id: string) => {
     setSelectedUnit(id);
     setMaterialYear(undefined);
   };
+  const previous = lastSuccess?.unitId === unitId ? lastSuccess : undefined;
+  const materialFiscalYearEnds = figures.data?.materialFiscalYearEnds ?? previous?.data.materialFiscalYearEnds ?? [];
+  let fallback = previous?.data;
+  if (previous && fallback && previous.years !== years) fallback = emptySelection(fallback, years, materialYear);
+  else if (previous && fallback && previous.materialYear !== materialYear) {
+    fallback = { ...fallback, purchasesByMaterial: { fiscalYearEnd: materialYear ?? fallback.currentFiscalYearEnd, items: [] } };
+  }
+  const data = figures.data ?? fallback;
   const resolvedMaterialYear: number | 'all' | '' = materialYear ?? figures.data?.purchasesByMaterial.fiscalYearEnd
-    ?? figures.data?.currentFiscalYearEnd ?? '';
-  const data = figures.data ?? (lastData?.unit.id === unitId ? lastData : undefined);
+    ?? data?.currentFiscalYearEnd ?? '';
   return {
-    options, figures, data, unitId, years, setYears, changeUnit, setMaterialYear,
+    options, figures, data, materialFiscalYearEnds, unitId, years, setYears, changeUnit, setMaterialYear,
     materialYear: resolvedMaterialYear,
     retry: () => options.isError ? options.refetch() : figures.refetch(),
   };

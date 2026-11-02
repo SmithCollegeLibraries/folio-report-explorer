@@ -11,7 +11,8 @@ export default function Visualizations() {
   const data = state.data;
   const error = state.options.error ?? state.figures.error;
   const loading = state.options.isPending || (Boolean(state.unitId) && state.figures.isPending);
-  const empty = data && data.purchasesByCategory.length === 0 && data.budget.length === 0;
+  const empty = !error && !state.figures.isFetching && data
+    && data.purchasesByCategory.length === 0 && data.budget.length === 0;
 
   return <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
     <header className="mb-6 border-b border-gray-200 pb-6">
@@ -41,7 +42,8 @@ export default function Visualizations() {
     {empty && <p className="p-4 mb-6 bg-gray-50 border rounded-md">No purchase or budget data for this unit in the selected years</p>}
     {data && <>
       <div className="grid lg:grid-cols-2 gap-6">
-        <PurchaseCharts data={data} materialYear={state.materialYear} onMaterialYear={state.setMaterialYear} />
+        <PurchaseCharts data={data} materialYear={state.materialYear}
+          materialFiscalYearEnds={state.materialFiscalYearEnds} onMaterialYear={state.setMaterialYear} />
         <BudgetCharts data={data} />
       </div>
       {isAdmin && <HistoryPanel key={data.unit.code} unitCode={data.unit.code} currentYear={data.currentFiscalYearEnd} />}
