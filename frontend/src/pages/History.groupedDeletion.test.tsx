@@ -43,10 +43,10 @@ function historyItem(jobId: string, name: string): HistoryItem {
   };
 }
 
-function groupedItem(jobId: string, name: string, runCount: number): HistoryGroupListItem {
+function groupedItem(jobId: string, name: string, runCount: number, groupId = 'stable-group-id'): HistoryGroupListItem {
   return {
     ...historyItem(jobId, name),
-    groupId: 'stable-group-id',
+    groupId,
     runCount,
     activeRunCount: 0,
   };
@@ -93,5 +93,60 @@ describe('History grouped deletion', () => {
     expect(await screen.findByText('Next newest synthetic run')).toBeInTheDocument();
     await waitFor(() => expect(fetchQueryHistory).toHaveBeenCalledTimes(2));
     expect(screen.queryByText('Newest synthetic run')).not.toBeInTheDocument();
+  });
+
+  it('keeps a late-page expansion open on the next representative after deletion', async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) => (
+      groupedItem(`page-one-${index}`, `Page one group ${index}`, 1, `page-one-group-${index}`)
+    ));
+    const oldRepresentative = groupedItem('late-representative', 'Late page representative', 3, 'late-page-group');
+    const nextRepresentative = groupedItem('late-next', 'Late page next newest', 2, 'late-page-group');
+    const olderMember = historyItem('late-older', 'Late page older member');
+    let representativeDeleted = false;
+
+    vi.mocked(fetchQueryHistory).mockImplementation(async (limit = 50, requestedOffset = 0) => ({
+      items: requestedOffset === 50
+        ? [representativeDeleted ? nextRepresentative : oldRepresentative]
+        : firstPage,
+      total: 51,
+      offset: requestedOffset,
+      limit,
+    }));
+    vi.mocked(fetchHistoryGroup).mockImplementation(async (_jobId, parameters) => ({
+      items: representativeDeleted
+        ? [historyItem('late-next', 'Late page next newest'), olderMember]
+        : [historyItem('late-representative', 'Late page representative'), historyItem('late-next', 'Late page next newest'), olderMember],
+      total: representativeDeleted ? 2 : 3,
+      offset: parameters.offset ?? 0,
+      limit: parameters.limit ?? 20,
+    }));
+    vi.mocked(deleteHistoryJob).mockImplementation(async () => {
+      representativeDeleted = true;
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/history']}>
+        <Routes>
+          <Route path="/history/:jobId?" element={<History />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: /next/i }));
+    const representativeRow = (await screen.findByText('Late page representative')).closest('tr');
+    expect(representativeRow).not.toBeNull();
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /run 3 times/i }));
+    expect(await screen.findByText('Late page next newest')).toBeInTheDocument();
+    await user.click(within(representativeRow!).getByTitle('Delete from history'));
+    await user.click(within(representativeRow!).getByRole('button', { name: 'Yes' }));
+
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
+    const nextRow = await screen.findByText('Late page next newest');
+    await waitFor(() => expect(within(nextRow.closest('tr')!).getByTitle('Delete from history')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /run 2 times/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Late page older member')).toBeInTheDocument();
   });
 });

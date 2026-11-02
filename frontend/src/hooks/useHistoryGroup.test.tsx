@@ -30,8 +30,14 @@ function group(overrides: Partial<HistoryGroupListItem> = {}): HistoryGroupListI
   return { ...base, groupId: 'stable-group-id', runCount: 2, activeRunCount: 1, ...overrides };
 }
 
-function groupResponse(items: HistoryItem[] = []): HistoryGroupResponse {
-  return { items, total: items.length, limit: 20, offset: 0 };
+function groupResponse(items: HistoryItem[] = [], offset = 0, total = items.length): HistoryGroupResponse {
+  return { items, total, limit: 20, offset };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }
 
 describe('useHistoryGroup expansion state', () => {
@@ -86,5 +92,66 @@ describe('useHistoryGroup expansion state', () => {
     await act(async () => result.current.toggleGroup(group()));
     rerender({ status: 'completed', offset: 50 });
     expect(result.current.expandedGroupIds.size).toBe(0);
+  });
+
+  it('drops a delayed first-page poll after a newer next-runs request', async () => {
+    const firstPage = deferred<HistoryGroupResponse>();
+    const nextPage = deferred<HistoryGroupResponse>();
+    vi.mocked(fetchHistoryGroup).mockReturnValueOnce(firstPage.promise).mockReturnValueOnce(nextPage.promise);
+    const { result } = renderHook(() => useHistoryGroup([group()], 'all', 0));
+    let firstRequest!: Promise<void>;
+    let nextRequest!: Promise<void>;
+
+    act(() => { firstRequest = result.current.toggleGroup(group()); });
+    act(() => { nextRequest = result.current.setGroupOffset(group(), 20); });
+
+    await act(async () => {
+      nextPage.resolve(groupResponse([{
+        ...group(), jobId: 'next-runs-page', name: 'Later run page',
+      }], 20, 45));
+      await nextRequest;
+    });
+    await act(async () => {
+      firstPage.resolve(groupResponse([{
+        ...group(), jobId: 'first-runs-page', name: 'Stale first run page',
+      }], 0, 45));
+      await firstRequest;
+    });
+
+    expect(result.current.membersByGroup['stable-group-id'].offset).toBe(20);
+    expect(result.current.membersByGroup['stable-group-id'].items[0].jobId).toBe('next-runs-page');
+  });
+
+  it('drops an old filter response after the group is reopened in the new filter', async () => {
+    const oldFilter = deferred<HistoryGroupResponse>();
+    const newFilter = deferred<HistoryGroupResponse>();
+    vi.mocked(fetchHistoryGroup).mockReturnValueOnce(oldFilter.promise).mockReturnValueOnce(newFilter.promise);
+    const { result, rerender } = renderHook(
+      ({ status }) => useHistoryGroup([group()], status, 0),
+      { initialProps: { status: 'all' } },
+    );
+    let oldRequest!: Promise<void>;
+    let newRequest!: Promise<void>;
+
+    act(() => { oldRequest = result.current.toggleGroup(group()); });
+    rerender({ status: 'failed' });
+    expect(result.current.expandedGroupIds.size).toBe(0);
+    act(() => { newRequest = result.current.toggleGroup(group()); });
+
+    await act(async () => {
+      newFilter.resolve(groupResponse([{
+        ...group(), jobId: 'failed-member', status: 'failed', name: 'Failed-filter run',
+      }]));
+      await newRequest;
+    });
+    await act(async () => {
+      oldFilter.resolve(groupResponse([{
+        ...group(), jobId: 'all-member', name: 'Stale all-filter run',
+      }]));
+      await oldRequest;
+    });
+
+    expect(result.current.membersByGroup['stable-group-id'].items[0].jobId).toBe('failed-member');
+    expect(result.current.expandedGroupIds.has('stable-group-id')).toBe(true);
   });
 });

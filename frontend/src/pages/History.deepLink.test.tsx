@@ -143,6 +143,55 @@ describe('History deep links', () => {
     expect(screen.getByText(/completed synthetic report/i)).toBeInTheDocument();
   });
 
+  it('shows the error returned when an off-page active deep link fails', async () => {
+    vi.mocked(fetchQueryHistory).mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
+    vi.mocked(fetchHistoryItem).mockResolvedValue(item('failed-off-page-job', 'running'));
+    vi.mocked(checkJobStatus).mockResolvedValue({
+      ...completedStatus,
+      jobId: 'failed-off-page-job',
+      status: 'failed',
+      progressMessage: 'Report failed',
+      error: 'Synthetic status failure detail',
+    });
+
+    renderHistory('/history/failed-off-page-job');
+
+    expect(await screen.findByText('Synthetic status failure detail')).toBeInTheDocument();
+  });
+
+  it('retries a rejected active status poll and shows the recovered result', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchQueryHistory).mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
+    vi.mocked(fetchHistoryItem).mockResolvedValue(item('retry-status-job', 'running'));
+    vi.mocked(checkJobStatus)
+      .mockRejectedValueOnce({ response: { status: 503 } })
+      .mockResolvedValueOnce({
+        ...completedStatus,
+        jobId: 'retry-status-job',
+        status: 'completed',
+        progressMessage: 'Recovered synthetic report',
+      });
+
+    renderHistory('/history/retry-status-job');
+    await act(async () => { await Promise.resolve(); });
+    expect(checkJobStatus).toHaveBeenCalledTimes(1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+
+    expect(checkJobStatus).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Recovered synthetic report')).toBeInTheDocument();
+  });
+
+  it('shows the removed-entry message when status polling returns 404', async () => {
+    vi.mocked(fetchQueryHistory).mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
+    vi.mocked(fetchHistoryItem).mockResolvedValue(item('removed-during-poll', 'running'));
+    vi.mocked(checkJobStatus).mockRejectedValue({ response: { status: 404 } });
+
+    renderHistory('/history/removed-during-poll');
+
+    expect(await screen.findByText(/this history entry no longer exists/i)).toBeInTheDocument();
+  });
+
   it('shows the removed-entry message when a direct link returns 404', async () => {
     vi.mocked(fetchQueryHistory).mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
     vi.mocked(fetchHistoryItem).mockRejectedValue({ response: { status: 404 } });
