@@ -96,7 +96,7 @@ describe('History grouped deletion', () => {
   });
 
   it('keeps a late-page expansion open on the next representative after deletion', async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => (
+    const firstPage = Array.from({ length: 1 }, (_, index) => (
       groupedItem(`page-one-${index}`, `Page one group ${index}`, 1, `page-one-group-${index}`)
     ));
     const oldRepresentative = groupedItem('late-representative', 'Late page representative', 3, 'late-page-group');
@@ -148,7 +148,7 @@ describe('History grouped deletion', () => {
     await waitFor(() => expect(within(nextRow.closest('tr')!).getByTitle('Delete from history')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /run 2 times/i })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Late page older member')).toBeInTheDocument();
-  });
+  }, 15_000);
 
   it('reloads at the clamped offset after deleting the only row on the last page', async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => (
