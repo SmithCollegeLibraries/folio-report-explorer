@@ -27,7 +27,7 @@ export interface UseHistoryDataReturn {
   mineOnly: boolean;
   handleMineOnlyChange: (mineOnly: boolean) => void;
   hasActive: boolean;
-  load: (silent?: boolean) => Promise<void>;
+  load: (silent?: boolean, onLoaded?: (total: number) => void) => Promise<void>;
   invalidateLoads: () => void;
   getLatestViewParameters: () => HistoryViewParameters;
   limit: number;
@@ -93,7 +93,7 @@ export function useHistoryData(jobId?: string): UseHistoryDataReturn {
     setLoading(false);
   }, []);
 
-  const load = useCallback(async (silent = false) => {
+  const load = useCallback(async (silent = false, onLoaded?: (total: number) => void) => {
     const generation = ++loadGenerationRef.current;
     const view = latestViewParametersRef.current;
     if (!silent) setLoading(true);
@@ -109,6 +109,7 @@ export function useHistoryData(jobId?: string): UseHistoryDataReturn {
       setTotal(data.total);
       setRefreshSequence((sequence) => sequence + 1);
       setError(null);
+      onLoaded?.(data.total);
     } catch (e: any) {
       if (generation !== loadGenerationRef.current) return;
       setError(e.response?.data?.error || 'Failed to load history');
@@ -181,6 +182,7 @@ export function useHistoryData(jobId?: string): UseHistoryDataReturn {
             ...item,
             status: status.status,
             progressMessage: status.progressMessage,
+            errorMessage: status.error ?? item.errorMessage,
             rowCount: status.rowCount ?? item.rowCount,
             executionTimeMs: status.executionTimeMs ?? item.executionTimeMs,
             startedAt: status.startedAt ?? item.startedAt,
@@ -188,7 +190,15 @@ export function useHistoryData(jobId?: string): UseHistoryDataReturn {
           } : item);
           if (ACTIVE_STATUSES.includes(status.status)) timer = setTimeout(() => { void poll(); }, 2000);
         }
-      } catch (_) { /* The next poll may recover from a transient status error. */ }
+      } catch (e: any) {
+        if (!active) return;
+        if (e.response?.status === 404) {
+          setDeepLinkItem(null);
+          setDeepLinkError('This history entry no longer exists');
+        } else {
+          timer = setTimeout(() => { void poll(); }, 2000);
+        }
+      }
     };
     void poll();
     return () => { active = false; if (timer) clearTimeout(timer); };

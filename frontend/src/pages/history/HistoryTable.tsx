@@ -65,7 +65,7 @@ export default function HistoryTable({
   onConfirmDelete, onCancelDelete, onDelete, onSave, onToggleSelect,
   expandedGroupIds = new Set(), membersByGroup = {}, loadingGroupIds = new Set(), onToggleGroup, onGroupPage,
 }: Props) {
-  const [sorting, setSorting] = useState<SortingState>([{ id: 'date', desc: true }]);
+  const [sorting, setSorting] = useState<SortingState>([]);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
     if (typeof window === 'undefined') {
@@ -580,7 +580,7 @@ export default function HistoryTable({
                   onOpen={onOpen} onDelete={onDelete} onConfirmDelete={onConfirmDelete} onCancelDelete={onCancelDelete} confirmDeleteId={confirmDeleteId} deletingId={deletingId}
                   onCancel={(id) => onCancel(id, { stopPropagation() {} } as React.MouseEvent)} onRename={(member) => onStartRename(member, { stopPropagation() {} } as React.MouseEvent)}
                   renamingId={renamingId} renameValue={renameValue} onRenameValueChange={onRenameValueChange} renameSaving={renameSaving} onCommitRename={onCommitRename} onCancelRename={onCancelRename}
-                  page={membersByGroup[group.groupId!]} onPageChange={(nextOffset) => onGroupPage?.(group, nextOffset)} />}
+                  page={membersByGroup[group.groupId!]} onPageChange={(nextOffset) => onGroupPage?.(group, nextOffset)} columnCount={row.getVisibleCells().length} />}
               </Fragment>
             );
           })}

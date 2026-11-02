@@ -26,7 +26,12 @@ export function useHistoryGroup(
   const expandedRef = useRef(expandedGroupIds);
   const membersRef = useRef(membersByGroup);
   const itemsRef = useRef(items);
-  const viewRef = useRef({ status, offset });
+  const viewRef = useRef({ status, offset, generation: 0 });
+  if (viewRef.current.status !== status || viewRef.current.offset !== offset) {
+    viewRef.current = { status, offset, generation: viewRef.current.generation + 1 };
+  }
+  const previousViewRef = useRef({ status, offset });
+  const requestGenerationsRef = useRef(new Map<string, number>());
   const previousItemsRef = useRef(items);
   const signatureRef = useRef(itemSignature(items));
   const refreshSequenceRef = useRef(refreshSequence);
@@ -38,6 +43,13 @@ export function useHistoryGroup(
   const fetchMembers = useCallback(async (group: HistoryGroupListItem, requestedOffset: number) => {
     if (!group.groupId) return;
     const groupId = group.groupId;
+    const viewGeneration = viewRef.current.generation;
+    const requestKey = `${groupId}:${viewGeneration}`;
+    const requestGeneration = (requestGenerationsRef.current.get(requestKey) ?? 0) + 1;
+    requestGenerationsRef.current.set(requestKey, requestGeneration);
+    const isLatestRequest = () => requestGenerationsRef.current.get(requestKey) === requestGeneration
+      && viewRef.current.generation === viewGeneration;
+    const canApplyResponse = () => isLatestRequest() && expandedRef.current.has(groupId);
     setLoadingGroupIds((previous) => new Set(previous).add(groupId));
     try {
       let response = await fetchHistoryGroup(group.jobId, {
@@ -45,6 +57,7 @@ export function useHistoryGroup(
         limit: MEMBER_PAGE_SIZE,
         offset: requestedOffset,
       });
+      if (!canApplyResponse()) return;
       const lastOffset = Math.max(0, Math.floor(Math.max(0, response.total - 1) / MEMBER_PAGE_SIZE) * MEMBER_PAGE_SIZE);
       if (requestedOffset > lastOffset) {
         response = await fetchHistoryGroup(group.jobId, {
@@ -52,10 +65,11 @@ export function useHistoryGroup(
           limit: MEMBER_PAGE_SIZE,
           offset: lastOffset,
         });
+        if (!canApplyResponse()) return;
       }
       setMembersByGroup((previous) => ({ ...previous, [groupId]: response }));
     } finally {
-      setLoadingGroupIds((previous) => {
+      if (isLatestRequest()) setLoadingGroupIds((previous) => {
         const next = new Set(previous);
         next.delete(groupId);
         return next;
@@ -67,19 +81,25 @@ export function useHistoryGroup(
     if (!group.groupId) return;
     const groupId = group.groupId;
     if (expandedRef.current.has(groupId)) {
-      setExpandedGroupIds((previous) => {
-        const next = new Set(previous);
-        next.delete(groupId);
-        return next;
-      });
+      const nextExpanded = new Set(expandedRef.current);
+      nextExpanded.delete(groupId);
+      expandedRef.current = nextExpanded;
+      setExpandedGroupIds(nextExpanded);
       setMembersByGroup((previous) => {
         const next = { ...previous };
         delete next[groupId];
         return next;
       });
+      setLoadingGroupIds((previous) => {
+        const next = new Set(previous);
+        next.delete(groupId);
+        return next;
+      });
       return;
     }
-    setExpandedGroupIds((previous) => new Set(previous).add(groupId));
+    const nextExpanded = new Set(expandedRef.current).add(groupId);
+    expandedRef.current = nextExpanded;
+    setExpandedGroupIds(nextExpanded);
     await fetchMembers(group, 0);
   }, [fetchMembers]);
 
@@ -97,9 +117,10 @@ export function useHistoryGroup(
   ), [fetchMembers]);
 
   useEffect(() => {
-    const previousView = viewRef.current;
-    viewRef.current = { status, offset };
+    const previousView = previousViewRef.current;
     if (previousView.status !== status || previousView.offset !== offset) {
+      previousViewRef.current = { status, offset };
+      requestGenerationsRef.current.clear();
       setExpandedGroupIds(new Set());
       setMembersByGroup({});
       setLoadingGroupIds(new Set());

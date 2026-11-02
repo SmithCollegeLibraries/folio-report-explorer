@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   History as HistoryIcon, ChevronLeft, ChevronRight, Activity,
@@ -14,17 +14,13 @@ import {
 import { useHistoryData } from '../hooks/useHistoryData';
 import { useHistoryGroup } from '../hooks/useHistoryGroup';
 import type { HistoryGroupListItem } from '../api/history';
-import type { HistoryViewParameters } from '../hooks/useHistoryData';
 import { useSelectionManager } from '../hooks/useSelectionManager';
 import { useInlineRename } from '../hooks/useInlineRename';
 import { useCopyToClipboard } from '../hooks/useCopyToClipboard';
 import HistoryToolbar from './history/HistoryToolbar';
 import HistoryTable from './history/HistoryTable';
 import HistoryResultsModal from './history/HistoryResultsModal';
-import {
-  deriveHistoryDeletionState,
-  isDeletableHistoryItem,
-} from './history/historyDeletionState';
+import { isDeletableHistoryItem } from './history/historyDeletionState';
 import SaveQueryDialog from '../components/SaveQueryDialog';
 import type {
   HistoryItem,
@@ -42,7 +38,7 @@ export default function History() {
   const navigate = useNavigate();
   const { jobId: jobIdParam } = useParams<{ jobId: string }>();
   const {
-    items, setItems, total, setTotal, offset, setOffset, loading, error, setError,
+    items, setItems, total, offset, setOffset, loading, error, setError,
     statusTab, handleTabChange, mineOnly, handleMineOnlyChange,
     hasActive, limit, totalPages, currentPage,
     expandedErrors, toggleExpandError, load, invalidateLoads, getLatestViewParameters,
@@ -132,6 +128,7 @@ export default function History() {
     }
   };
   const [modalItem, setModalItem] = useState<HistoryItem | null>(null);
+  const modalJobIdRef = useRef<string | null>(null);
   const [modalJob, setModalJob] = useState<JobStatusResponse | null>(null);
   const [modalLoading, setModalLoading] = useState(false);
   const [historySuggestions, setHistorySuggestions] = useState<HistorySuggestionsResponse | null>(null);
@@ -140,6 +137,7 @@ export default function History() {
   const openModal = useCallback(async (item: HistoryItem) => {
     if (item.status !== 'completed') return;
     navigate(`/history/${item.jobId}`, { replace: true });
+    modalJobIdRef.current = item.jobId;
     setModalItem(item);
     setModalJob(null);
     setModalLoading(true);
@@ -161,86 +159,43 @@ export default function History() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobIdParam, items, deepLinkItem, deepLinkPolled]);
   const closeModal = useCallback(() => {
+    modalJobIdRef.current = null;
     setModalItem(null);
     setModalJob(null);
     setHistorySuggestions(null);
     setHistorySuggestionsError(null);
     navigate('/history', { replace: true });
   }, [navigate]);
-  const deletionSnapshotRef = useRef({
-    items,
-    total,
-    offset,
-    limit,
-    modalJobId: modalItem?.jobId ?? null,
-  });
-  useLayoutEffect(() => {
-    deletionSnapshotRef.current = {
-      items,
-      total,
-      offset,
-      limit,
-      modalJobId: modalItem?.jobId ?? null,
-    };
-  }, [items, total, offset, limit, modalItem?.jobId]);
-  const applySuccessfulDeletions = useCallback(async (
-    deletedIds: string[],
-    deletionView: HistoryViewParameters,
-  ) => {
+  const applySuccessfulDeletions = useCallback(async (deletedIds: string[]) => {
     if (deletedIds.length === 0) return;
     invalidateLoads();
-    const latestView = getLatestViewParameters();
-    const sameView = deletionView.offset === latestView.offset
-      && deletionView.statusTab === latestView.statusTab
-      && deletionView.mineOnly === latestView.mineOnly;
-    const current = deletionSnapshotRef.current;
-    if (sameView) {
-      const next = deriveHistoryDeletionState(
-        current.items,
-        current.total,
-        current.offset,
-        current.limit,
-        deletedIds,
-        current.modalJobId,
-      );
-      deletionSnapshotRef.current = {
-        items: next.items,
-        total: next.total,
-        offset: next.offset,
-        limit: current.limit,
-        modalJobId: next.closeModal ? null : current.modalJobId,
-      };
-      setItems(next.items);
-      setTotal(next.total);
-      setOffset(next.offset);
-      if (next.closeModal) closeModal();
-    } else if (current.modalJobId !== null && deletedIds.includes(current.modalJobId)) {
-      closeModal();
+    let refreshedTotal: number | null = null;
+    await load(false, (loadedTotal) => { refreshedTotal = loadedTotal; });
+    if (refreshedTotal !== null) {
+      const currentOffset = getLatestViewParameters().offset;
+      const lastOffset = Math.max(0, Math.floor(Math.max(0, refreshedTotal - 1) / limit) * limit);
+      if (currentOffset > lastOffset) setOffset(lastOffset);
     }
     selection.removeIds(deletedIds);
-    await load();
-    await historyGroups.refreshOpenGroups();
+    if (modalJobIdRef.current && deletedIds.includes(modalJobIdRef.current)) closeModal();
   }, [
     closeModal,
     getLatestViewParameters,
     invalidateLoads,
     load,
+    limit,
     selection.removeIds,
-    setItems,
     setOffset,
-    setTotal,
-    historyGroups.refreshOpenGroups,
   ]);
   const handleDeleteSelected = async () => {
     const ids = selectableIds.filter((id) => selection.selectedIds.has(id));
     if (!ids.length) return;
-    const deletionView = getLatestViewParameters();
     setBatchDeleting(true);
     try {
       const results = await Promise.allSettled(ids.map((id) => deleteHistoryJob(id)));
       const deletedIds = ids.filter((_, idx) => results[idx].status === 'fulfilled');
       const failedCount = ids.length - deletedIds.length;
-      await applySuccessfulDeletions(deletedIds, deletionView);
+      await applySuccessfulDeletions(deletedIds);
       if (failedCount > 0) {
         setError(`Deleted ${deletedIds.length}, failed to delete ${failedCount}.`);
       }
@@ -250,12 +205,11 @@ export default function History() {
     }
   };
   const handleDelete = async (jobId: string) => {
-    const deletionView = getLatestViewParameters();
     setConfirmDeleteId(null);
     setDeletingId(jobId);
     try {
       await deleteHistoryJob(jobId);
-      await applySuccessfulDeletions([jobId], deletionView);
+      await applySuccessfulDeletions([jobId]);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Delete failed');
     } finally {
