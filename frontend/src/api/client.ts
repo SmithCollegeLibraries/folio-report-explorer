@@ -28,8 +28,6 @@ import type {
   CorrectionInput,
   CorrectionResponse,
   AuthUser,
-  HistoryResponse,
-  HistorySuggestionsResponse,
   QueryReuseCandidateRequest,
   QueryReuseCandidateResponse,
   QueryFeedbackResponse,
@@ -528,39 +526,13 @@ export async function toggleUserNotifications(
 }
 
 // ─── Query History ────────────────────────────────────────────────
-
-export async function fetchQueryHistory(
-  limit = 50,
-  offset = 0,
-  status?: string,
-  mine = false,
-): Promise<HistoryResponse> {
-  const params: Record<string, string | number> = { limit, offset };
-  if (status && status !== 'all') params.status = status;
-  if (mine) params.mine = 1;
-  const { data } = await api.get('/query/history', { params });
-  return data;
-}
-
-export async function fetchHistorySuggestions(jobId: string): Promise<HistorySuggestionsResponse> {
-  const { data } = await api.post(`/query/history/${jobId}/suggestions`);
-  return data;
-}
+export { deleteHistoryJob, fetchHistorySuggestions, fetchQueryHistory, renameHistoryJob } from './history';
 
 export async function fetchQueryReuseCandidate(
   payload: QueryReuseCandidateRequest,
 ): Promise<QueryReuseCandidateResponse> {
   const { data } = await api.post('/query/reuse-candidate', payload);
   return data;
-}
-
-export async function renameHistoryJob(jobId: string, name: string): Promise<{ jobId: string; name: string | null }> {
-  const { data } = await api.patch(`/query/history/${jobId}`, { name });
-  return data;
-}
-
-export async function deleteHistoryJob(jobId: string): Promise<void> {
-  await api.delete(`/query/history/${jobId}`);
 }
 
 export async function fetchIndexRecommendations(payload: {

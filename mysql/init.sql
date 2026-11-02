@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS query_log (
     source ENUM('builder', 'nl', 'manual', 'report') DEFAULT 'builder',
     data_source ENUM('folio', 'local') DEFAULT 'folio',
     user_id INT NULL,
+    history_group_key CHAR(40) NULL,
     row_count INT,
     execution_time_ms INT,
     error_message TEXT,
@@ -94,6 +95,7 @@ CREATE TABLE IF NOT EXISTS query_jobs (
     INDEX idx_status (status),
     INDEX idx_created (created_at),
     INDEX idx_user_id (user_id),
+    INDEX idx_query_jobs_history_group (user_id, history_group_key, created_at),
     INDEX idx_sql_hash (sql_hash),
     CONSTRAINT fk_query_jobs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

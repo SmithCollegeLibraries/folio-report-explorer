@@ -2,16 +2,28 @@
 
 namespace app\services;
 
-/** Test-round stub; the build round replaces these methods with the key contract. */
 final class HistoryGroupKeyService
 {
     public static function build($reportTemplateId, array $boundParams, $exportKind, $outputMode): string
     {
-        throw new \RuntimeException('not implemented');
+        ksort($boundParams, SORT_STRING);
+        $encoded = json_encode([
+            'reportTemplateId' => $reportTemplateId,
+            'boundParams' => $boundParams,
+            'exportKind' => $exportKind,
+            'outputMode' => $outputMode,
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        if ($encoded === false) {
+            throw new \InvalidArgumentException('Report parameters could not be encoded for history grouping.');
+        }
+        return sha1($encoded);
     }
 
     public static function groupId($ownerId, $historyGroupKey): ?string
     {
-        throw new \RuntimeException('not implemented');
+        if ($ownerId === null || $historyGroupKey === null) {
+            return null;
+        }
+        return sha1((string) $ownerId . ':' . (string) $historyGroupKey);
     }
 }

@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchQueryHistory } from '../api/client';
+import { checkJobStatus, fetchQueryHistory } from '../api/client';
+import { fetchHistoryItem } from '../api/history';
 import type { HistoryItem } from '../types';
 
 const PAGE_LIMIT = 50;
+const ACTIVE_STATUSES = ['pending', 'pending_export', 'running', 'cancelling'];
 
 export interface HistoryViewParameters {
   offset: number;
@@ -25,7 +27,7 @@ export interface UseHistoryDataReturn {
   mineOnly: boolean;
   handleMineOnlyChange: (mineOnly: boolean) => void;
   hasActive: boolean;
-  load: () => Promise<void>;
+  load: (silent?: boolean) => Promise<void>;
   invalidateLoads: () => void;
   getLatestViewParameters: () => HistoryViewParameters;
   limit: number;
@@ -33,13 +35,18 @@ export interface UseHistoryDataReturn {
   currentPage: number;
   expandedErrors: Set<string>;
   toggleExpandError: (jobId: string) => void;
+  deepLinkItem: HistoryItem | null;
+  deepLinkError: string | null;
+  deepLinkPolled: boolean;
+  deepLinkLoading: boolean;
+  refreshSequence: number;
 }
 
 /**
  * Manages history data fetching, pagination, tab state, and auto-refresh.
  * Auto-refreshes every 5 s whenever the current page has pending/running jobs.
  */
-export function useHistoryData(): UseHistoryDataReturn {
+export function useHistoryData(jobId?: string): UseHistoryDataReturn {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffsetState] = useState(0);
@@ -48,7 +55,14 @@ export function useHistoryData(): UseHistoryDataReturn {
   const [statusTab, setStatusTab] = useState<string>('all');
   const [mineOnly, setMineOnly] = useState(false);
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  const [deepLinkItem, setDeepLinkItem] = useState<HistoryItem | null>(null);
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
+  const [deepLinkLoading, setDeepLinkLoading] = useState(false);
+  const [deepLinkPolled, setDeepLinkPolled] = useState(false);
+  const [refreshSequence, setRefreshSequence] = useState(0);
   const loadGenerationRef = useRef(0);
+  const deepLinkJobRef = useRef<string | undefined>(jobId);
+  const deepLinkFetchedRef = useRef<string | null>(null);
   const latestViewParametersRef = useRef<HistoryViewParameters>({
     offset,
     statusTab,
@@ -79,10 +93,10 @@ export function useHistoryData(): UseHistoryDataReturn {
     setLoading(false);
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (silent = false) => {
     const generation = ++loadGenerationRef.current;
     const view = latestViewParametersRef.current;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       const data = await fetchQueryHistory(
         PAGE_LIMIT,
@@ -93,6 +107,7 @@ export function useHistoryData(): UseHistoryDataReturn {
       if (generation !== loadGenerationRef.current) return;
       setItems(data.items);
       setTotal(data.total);
+      setRefreshSequence((sequence) => sequence + 1);
       setError(null);
     } catch (e: any) {
       if (generation !== loadGenerationRef.current) return;
@@ -109,14 +124,75 @@ export function useHistoryData(): UseHistoryDataReturn {
     || i.status === 'pending_export'
     || i.status === 'running'
     || i.status === 'cancelling'
-  ));
+  )) || items.some((item) => (item.activeRunCount ?? 0) > 0);
 
   // Auto-refresh while there are active jobs on this page
   useEffect(() => {
     if (!hasActive) return;
-    const timer = setInterval(() => { load(); }, 5000);
+    const timer = setInterval(() => { load(true); }, 5000);
     return () => clearInterval(timer);
   }, [hasActive, load]);
+
+  useEffect(() => {
+    if (deepLinkJobRef.current !== jobId) {
+      deepLinkJobRef.current = jobId;
+      deepLinkFetchedRef.current = null;
+      setDeepLinkItem(null);
+      setDeepLinkError(null);
+      setDeepLinkPolled(false);
+    }
+    if (!jobId) return;
+    const visibleItem = items.find((item) => item.jobId === jobId);
+    if (visibleItem) {
+      setDeepLinkItem(visibleItem);
+      setDeepLinkError(null);
+      deepLinkFetchedRef.current = jobId;
+      return;
+    }
+    if (loading || deepLinkFetchedRef.current === jobId) return;
+    deepLinkFetchedRef.current = jobId;
+    setDeepLinkLoading(true);
+    fetchHistoryItem(jobId).then((item) => {
+      if (deepLinkJobRef.current === jobId) {
+        setDeepLinkItem(item);
+        setDeepLinkError(null);
+      }
+    }).catch((e: any) => {
+      if (deepLinkJobRef.current === jobId) {
+        setDeepLinkError(e.response?.status === 404
+          ? 'This history entry no longer exists'
+          : e.response?.data?.error || 'Failed to load history entry');
+      }
+    }).finally(() => {
+      if (deepLinkJobRef.current === jobId) setDeepLinkLoading(false);
+    });
+  }, [jobId, items, loading]);
+
+  useEffect(() => {
+    if (!deepLinkItem || !ACTIVE_STATUSES.includes(deepLinkItem.status)) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const status = await checkJobStatus(deepLinkItem.jobId);
+        if (active) {
+          setDeepLinkPolled(true);
+          setDeepLinkItem((item) => item ? {
+            ...item,
+            status: status.status,
+            progressMessage: status.progressMessage,
+            rowCount: status.rowCount ?? item.rowCount,
+            executionTimeMs: status.executionTimeMs ?? item.executionTimeMs,
+            startedAt: status.startedAt ?? item.startedAt,
+            completedAt: status.completedAt ?? item.completedAt,
+          } : item);
+          if (ACTIVE_STATUSES.includes(status.status)) timer = setTimeout(() => { void poll(); }, 2000);
+        }
+      } catch (_) { /* The next poll may recover from a transient status error. */ }
+    };
+    void poll();
+    return () => { active = false; if (timer) clearTimeout(timer); };
+  }, [deepLinkItem?.jobId]);
 
   const handleTabChange = useCallback((tab: string) => {
     latestViewParametersRef.current = {
@@ -171,5 +247,6 @@ export function useHistoryData(): UseHistoryDataReturn {
     totalPages,
     currentPage,
     expandedErrors, toggleExpandError,
+    deepLinkItem, deepLinkError, deepLinkPolled, deepLinkLoading, refreshSequence,
   };
 }

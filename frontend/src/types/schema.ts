@@ -826,6 +826,9 @@ export interface HistoryItem {
   completedAt: string | null;
   runBy: string | null;
   canDelete: boolean;
+  groupId?: string | null;
+  runCount?: number;
+  activeRunCount?: number;
   reviewAdvisory?: {
     state: 'cautioned' | 'superseded';
     message: string;
