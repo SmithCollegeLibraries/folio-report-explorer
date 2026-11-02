@@ -43,7 +43,9 @@ export default function Visualizations() {
     {data && <>
       <div className="grid lg:grid-cols-2 gap-6">
         <PurchaseCharts data={data} materialYear={state.materialYear}
-          materialFiscalYearEnds={state.materialFiscalYearEnds} onMaterialYear={state.setMaterialYear} />
+          materialFiscalYearEnds={state.materialFiscalYearEnds} materialLoading={state.materialLoading}
+          materialError={state.materialError} materialAvailable={state.materialAvailable}
+          onMaterialYear={state.setMaterialYear} />
         <BudgetCharts data={data} />
       </div>
       {isAdmin && <HistoryPanel key={data.unit.code} unitCode={data.unit.code} currentYear={data.currentFiscalYearEnd} />}

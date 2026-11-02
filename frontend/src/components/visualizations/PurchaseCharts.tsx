@@ -1,6 +1,7 @@
 import { useId } from 'react';
 import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import type { VisualizationData } from '../../api/visualizations';
+import { errorMessage } from '../../utils/errorMessage';
 import { amount, ChartCard } from './ChartCard';
 
 const share = (value: number | null) => value === null ? 'n/a' : `${value.toFixed(1)}%`;
@@ -11,9 +12,10 @@ const groups = [
   { key: 'other', name: 'Other', color: '#b17b22' },
 ] as const;
 
-export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, onMaterialYear }: {
+export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, materialLoading, materialError, materialAvailable, onMaterialYear }: {
   data: VisualizationData; materialYear: number | 'all' | '';
   materialFiscalYearEnds: number[];
+  materialLoading: boolean; materialError?: Error; materialAvailable: boolean;
   onMaterialYear: (year: number | 'all') => void;
 }) {
   const pickerId = useId();
@@ -67,7 +69,12 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, onM
         </select></div>}
       table={<table><caption>{materialTitle}</caption><thead><tr><th scope="col">Material type</th><th scope="col">Amount</th></tr></thead>
         <tbody>{materials.map((row) => <tr key={row.materialType}><th scope="row">{row.materialType}</th><td>{amount(row.amount)}</td></tr>)}</tbody></table>}>
-      {disabled ? <p className="py-16 text-center text-gray-600">No FOLIO purchase data for this unit</p>
+      {materialLoading ? <p role="status" className="py-16 text-center text-gray-600">Loading material purchases…</p>
+        : materialError ? <p role="status" className="py-16 text-center text-red-800">
+          {errorMessage(materialError)} Use Retry above to try again.
+        </p>
+          : !materialAvailable ? <p role="status" className="py-16 text-center text-gray-600">Material purchase data is unavailable</p>
+            : disabled ? <p className="py-16 text-center text-gray-600">No FOLIO purchase data for this unit</p>
         : materials.length === 0 ? <p className="py-16 text-center text-gray-600">No FOLIO purchases for this fiscal year</p>
           : <div style={{ height: Math.max(320, materials.length * 36) }}>
             <ResponsiveContainer width="100%" height="100%"><BarChart data={materials} layout="vertical" margin={{ right: 24 }}>

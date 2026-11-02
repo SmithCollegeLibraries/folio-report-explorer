@@ -54,7 +54,11 @@ export function useVisualizations() {
   const resolvedMaterialYear: number | 'all' | '' = materialYear ?? figures.data?.purchasesByMaterial.fiscalYearEnd
     ?? data?.currentFiscalYearEnd ?? '';
   return {
-    options, figures, data, materialFiscalYearEnds, unitId, years, setYears, changeUnit, setMaterialYear,
+    options, figures, data, materialFiscalYearEnds,
+    materialLoading: figures.isFetching && !figures.error,
+    materialError: figures.error ? figures.error : undefined,
+    materialAvailable: figures.data !== undefined,
+    unitId, years, setYears, changeUnit, setMaterialYear,
     materialYear: resolvedMaterialYear,
     retry: () => options.isError ? options.refetch() : figures.refetch(),
   };
