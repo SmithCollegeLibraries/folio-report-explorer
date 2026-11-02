@@ -84,6 +84,34 @@ async function showData(title: string) {
   return within(region).findByRole('table');
 }
 
+function pendingFigures() {
+  let resolve!: (data: VisualizationData) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<VisualizationData>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function beginSelectionChange(selection: 'material year' | 'range') {
+  const request = pendingFigures();
+  const selectedFilters = selection === 'material year'
+    ? { acqUnitId: 'unit-sc', years: 10, materialFiscalYearEnd: 2026 }
+    : { acqUnitId: 'unit-sc', years: 5 };
+  api.fetchVisualizations.mockImplementation((filters) =>
+    JSON.stringify(filters) === JSON.stringify(selectedFilters) ? request.promise : Promise.resolve(figures));
+  renderPage();
+  const region = await chart(chartTitles[1]);
+  if (selection === 'material year') {
+    await userEvent.selectOptions(screen.getByLabelText('Material fiscal year'), '2026');
+  } else {
+    await userEvent.selectOptions(screen.getByLabelText('Years'), '5');
+  }
+  await waitFor(() => expect(api.fetchVisualizations).toHaveBeenLastCalledWith(selectedFilters));
+  return { request, region };
+}
+
 function suppressStubError(event: ErrorEvent) {
   if (event.error instanceof Error && event.error.message === 'not implemented') event.preventDefault();
 }
@@ -277,6 +305,35 @@ describe('Visualizations new behavior (tests round: expected to fail until imple
       expect(screen.getByLabelText('Acquisitions unit')).toHaveValue('unit-sc');
     }
   });
+
+  it.each(['material year', 'range'] as const)(
+    'shows material loading instead of a confirmed empty result after changing the %s', async (selection) => {
+      const { region } = await beginSelectionChange(selection);
+      expect(within(region).getByRole('status')).toHaveTextContent('Loading material purchases…');
+      expect(within(region).queryByText('No FOLIO purchases for this fiscal year')).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(['material year', 'range'] as const)(
+    'shows the material request error and page retry instead of an empty result after changing the %s', async (selection) => {
+      const { request, region } = await beginSelectionChange(selection);
+      request.reject(new Error('Synthetic material request failure'));
+      expect(await within(region).findByText(/Synthetic material request failure/)).toBeInTheDocument();
+      expect(within(region).queryByText('No FOLIO purchases for this fiscal year')).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(/Synthetic material request failure/);
+      expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    },
+  );
+
+  it.each(['material year', 'range'] as const)(
+    'shows the empty material result only after a successful empty response for the %s change', async (selection) => {
+      const { request, region } = await beginSelectionChange(selection);
+      request.resolve({ ...figures, purchasesByMaterial: {
+        fiscalYearEnd: selection === 'material year' ? 2026 : 2027, items: [],
+      } });
+      expect(await within(region).findByText('No FOLIO purchases for this fiscal year')).toBeInTheDocument();
+    },
+  );
 
   it('supports admin history add, edit, delete and field errors while omitting the panel for non-admins', async () => {
     {
