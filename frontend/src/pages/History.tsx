@@ -169,6 +169,8 @@ export default function History() {
   const applySuccessfulDeletions = useCallback(async (deletedIds: string[]) => {
     if (deletedIds.length === 0) return;
     invalidateLoads();
+    selection.removeIds(deletedIds);
+    if (modalJobIdRef.current && deletedIds.includes(modalJobIdRef.current)) closeModal();
     let refreshedTotal: number | null = null;
     await load(false, (loadedTotal) => { refreshedTotal = loadedTotal; });
     if (refreshedTotal !== null) {
@@ -176,8 +178,6 @@ export default function History() {
       const lastOffset = Math.max(0, Math.floor(Math.max(0, refreshedTotal - 1) / limit) * limit);
       if (currentOffset > lastOffset) setOffset(lastOffset);
     }
-    selection.removeIds(deletedIds);
-    if (modalJobIdRef.current && deletedIds.includes(modalJobIdRef.current)) closeModal();
   }, [
     closeModal,
     getLatestViewParameters,

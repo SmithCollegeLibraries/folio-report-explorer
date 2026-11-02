@@ -32,6 +32,7 @@ export function useHistoryGroup(
   }
   const previousViewRef = useRef({ status, offset });
   const requestGenerationsRef = useRef(new Map<string, number>());
+  const requestedOffsetsRef = useRef(new Map<string, number>());
   const previousItemsRef = useRef(items);
   const signatureRef = useRef(itemSignature(items));
   const refreshSequenceRef = useRef(refreshSequence);
@@ -43,6 +44,7 @@ export function useHistoryGroup(
   const fetchMembers = useCallback(async (group: HistoryGroupListItem, requestedOffset: number) => {
     if (!group.groupId) return;
     const groupId = group.groupId;
+    requestedOffsetsRef.current.set(groupId, requestedOffset);
     const viewGeneration = viewRef.current.generation;
     const requestKey = `${groupId}:${viewGeneration}`;
     const requestGeneration = (requestGenerationsRef.current.get(requestKey) ?? 0) + 1;
@@ -60,6 +62,7 @@ export function useHistoryGroup(
       if (!canApplyResponse()) return;
       const lastOffset = Math.max(0, Math.floor(Math.max(0, response.total - 1) / MEMBER_PAGE_SIZE) * MEMBER_PAGE_SIZE);
       if (requestedOffset > lastOffset) {
+        requestedOffsetsRef.current.set(groupId, lastOffset);
         response = await fetchHistoryGroup(group.jobId, {
           status: viewRef.current.status,
           limit: MEMBER_PAGE_SIZE,
@@ -67,6 +70,7 @@ export function useHistoryGroup(
         });
         if (!canApplyResponse()) return;
       }
+      requestedOffsetsRef.current.set(groupId, response.offset);
       setMembersByGroup((previous) => ({ ...previous, [groupId]: response }));
     } finally {
       if (isLatestRequest()) setLoadingGroupIds((previous) => {
@@ -84,6 +88,7 @@ export function useHistoryGroup(
       const nextExpanded = new Set(expandedRef.current);
       nextExpanded.delete(groupId);
       expandedRef.current = nextExpanded;
+      requestedOffsetsRef.current.delete(groupId);
       setExpandedGroupIds(nextExpanded);
       setMembersByGroup((previous) => {
         const next = { ...previous };
@@ -108,19 +113,22 @@ export function useHistoryGroup(
     await Promise.all(open.map((groupId) => {
       const group = itemsRef.current.find((item) => item.groupId === groupId);
       if (!group) return Promise.resolve();
-      return fetchMembers(group, membersRef.current[groupId]?.offset ?? 0);
+      return fetchMembers(group, requestedOffsetsRef.current.get(groupId) ?? membersRef.current[groupId]?.offset ?? 0);
     }));
   }, [fetchMembers]);
 
-  const setGroupOffset = useCallback((group: HistoryGroupListItem, nextOffset: number) => (
-    fetchMembers(group, Math.max(0, Math.floor(nextOffset / MEMBER_PAGE_SIZE) * MEMBER_PAGE_SIZE))
-  ), [fetchMembers]);
+  const setGroupOffset = useCallback((group: HistoryGroupListItem, nextOffset: number) => {
+    const requestedOffset = Math.max(0, Math.floor(nextOffset / MEMBER_PAGE_SIZE) * MEMBER_PAGE_SIZE);
+    if (group.groupId) requestedOffsetsRef.current.set(group.groupId, requestedOffset);
+    return fetchMembers(group, requestedOffset);
+  }, [fetchMembers]);
 
   useEffect(() => {
     const previousView = previousViewRef.current;
     if (previousView.status !== status || previousView.offset !== offset) {
       previousViewRef.current = { status, offset };
       requestGenerationsRef.current.clear();
+      requestedOffsetsRef.current.clear();
       setExpandedGroupIds(new Set());
       setMembersByGroup({});
       setLoadingGroupIds(new Set());
@@ -137,6 +145,9 @@ export function useHistoryGroup(
       const retained = new Set(Array.from(expandedRef.current).filter((id) => available.has(id)));
       if (retained.size !== expandedRef.current.size) {
         expandedRef.current = retained;
+        Array.from(requestedOffsetsRef.current.keys()).forEach((id) => {
+          if (!retained.has(id)) requestedOffsetsRef.current.delete(id);
+        });
         setExpandedGroupIds(retained);
         setMembersByGroup((previous) => Object.fromEntries(
           Object.entries(previous).filter(([id]) => retained.has(id)),
@@ -146,7 +157,8 @@ export function useHistoryGroup(
     }
     if (changed) {
       items.filter((item) => item.groupId && expandedRef.current.has(item.groupId)).forEach((group) => {
-        void fetchMembers(group, membersRef.current[group.groupId!]?.offset ?? 0);
+        const groupId = group.groupId!;
+        void fetchMembers(group, requestedOffsetsRef.current.get(groupId) ?? membersRef.current[groupId]?.offset ?? 0);
       });
       signatureRef.current = signature;
       refreshSequenceRef.current = refreshSequence;
