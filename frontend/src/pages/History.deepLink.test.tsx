@@ -140,7 +140,7 @@ describe('History deep links', () => {
     });
 
     expect(checkJobStatus).toHaveBeenCalledTimes(2);
-    expect(await screen.findByText(/completed synthetic report/i)).toBeInTheDocument();
+    expect(screen.getByText(/completed synthetic report/i)).toBeInTheDocument();
   });
 
   it('shows the removed-entry message when a direct link returns 404', async () => {
