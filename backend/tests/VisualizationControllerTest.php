@@ -10,6 +10,9 @@ function visualizationControllerFixture($role = 'admin', $approved = 1)
 {
     $f = new VisualizationFixture();
     $f->payment(30);
+    $unitId = '123e4567-e89b-12d3-a456-426614174000';
+    $f->insert('orders.acquisitions_unit__t', ['id' => $unitId, 'name' => ' SC ']);
+    $f->insert('finance.fund__t__acq_unit_ids', ['id' => 'fund-s', 'acq_unit_ids' => $unitId]);
     $f->insert('users', ['id' => 7, 'role' => $role, 'is_approved' => $approved, 'username' => 'synthetic-user', 'smith_id' => 'synthetic-7']);
     new Application([
         'id' => 'visualization-controller-test', 'basePath' => dirname(__DIR__),
@@ -25,7 +28,7 @@ function visualizationControllerFixture($role = 'admin', $approved = 1)
     putenv('JWT_SECRET=synthetic-visualization-test-key');
     $token = \Firebase\JWT\JWT::encode(['sub' => 7, 'exp' => time() + 3600], 'synthetic-visualization-test-key', 'HS256');
     Yii::$app->request->headers->set('Authorization', 'Bearer ' . $token);
-    Yii::$app->request->setQueryParams(['acqUnitId' => 's', 'years' => '5', 'acqUnitCode' => 'SC']);
+    Yii::$app->request->setQueryParams(['acqUnitId' => $unitId, 'years' => '5', 'acqUnitCode' => 'SC']);
     return [$f, new VisualizationController('visualization', Yii::$app)];
 }
 
@@ -122,6 +125,16 @@ visualizationCase('API rejects unknown units and invalid range/material years wi
         Yii::$app->request->setQueryParams(array_merge(['acqUnitId' => 's', 'years' => '5'], $invalid));
         list($status) = visualizationInvoke($controller, 'Index', [], true);
         visualizationSame(400, $status, 'Reject invalid query parameters instead of silently coercing them.');
+    }
+});
+
+visualizationCase('API rejects malformed unit UUIDs before executing a FOLIO query', function () {
+    foreach (['not-a-uuid', ['123e4567-e89b-12d3-a456-426614174000']] as $invalidUnitId) {
+        list($f, $controller) = visualizationControllerFixture();
+        Yii::$app->request->setQueryParams(['acqUnitId' => $invalidUnitId, 'years' => '5']);
+        list($status) = visualizationInvoke($controller, 'Index', [], true);
+        visualizationSame(400, $status, 'A unit id must be a UUID string.');
+        visualizationSame([], $f->folio->queries, 'Malformed ids must be rejected before PostgreSQL sees them.');
     }
 });
 

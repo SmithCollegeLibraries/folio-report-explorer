@@ -157,6 +157,26 @@ final class VisualizationRecordingCache extends \yii\caching\ArrayCache
     }
 }
 
+final class VisualizationStaleVersionCache extends \yii\caching\ArrayCache
+{
+    public $staleValue;
+    public $staleReads = 0;
+    public $writes = [];
+    public function set($key, $value, $duration = 0, $dependency = null)
+    {
+        $this->writes[] = ['key' => $key, 'duration' => $duration];
+        return parent::set($key, $value, $duration, $dependency);
+    }
+    public function get($key)
+    {
+        if ($key === 'visualization_history_version_v1' && $this->staleReads > 0) {
+            $this->staleReads--;
+            return $this->staleValue;
+        }
+        return parent::get($key);
+    }
+}
+
 final class VisualizationFixture
 {
     public $db;
@@ -183,8 +203,10 @@ final class VisualizationFixture
             'invoice.invoice_lines__t__fund_distributions (id TEXT, invoice_id TEXT, po_line_id TEXT, invoice_line_status TEXT, fund_distributions__fund_id TEXT, fund_distributions__distribution_type TEXT, fund_distributions__value NUMERIC, total NUMERIC)',
             'inventory.material_type__t (id TEXT PRIMARY KEY, name TEXT)',
             'visualization_history (id INTEGER PRIMARY KEY AUTOINCREMENT, acq_unit_code VARCHAR(50), kind TEXT, fiscal_year_end SMALLINT, total_amount DECIMAL(14,2), electronic_amount DECIMAL(14,2), physical_amount DECIMAL(14,2), note VARCHAR(255), updated_by INT, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, deleted_at DATETIME, deleted_by INT, UNIQUE(acq_unit_code, kind, fiscal_year_end))',
+            'visualization_history_version (id INTEGER PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0)',
             'users (id INTEGER PRIMARY KEY, role TEXT, is_approved INTEGER, username TEXT, smith_id TEXT)',
         ] as $table) $this->db->createCommand('CREATE TABLE ' . $table)->execute();
+        $this->insert('visualization_history_version', ['id' => 1, 'version' => 0]);
         foreach (['s' => ' SC ', 'a' => 'AC', 'h' => 'HX', 'n' => 'NF', 'e' => 'EP'] as $id => $name) {
             $this->insert('orders.acquisitions_unit__t', ['id' => $id, 'name' => $name]);
         }

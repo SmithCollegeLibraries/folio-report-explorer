@@ -402,4 +402,61 @@ describe('Visualizations new behavior (tests round: expected to fail until imple
     }
   });
 
+  it('keeps the material picker available after a material-year request fails', async () => {
+    api.fetchVisualizations.mockResolvedValueOnce(figures)
+      .mockRejectedValueOnce(new Error('Synthetic material request failure'))
+      .mockResolvedValue(figures);
+    const user = userEvent.setup();
+    renderPage();
+    const picker = await screen.findByLabelText('Material fiscal year');
+    await user.selectOptions(picker, '2026');
+    await screen.findByRole('alert');
+    const pickerAfterError = screen.getByLabelText('Material fiscal year');
+    expect(pickerAfterError).toBeEnabled();
+    await user.selectOptions(pickerAfterError, '2027');
+    await waitFor(() => expect(api.fetchVisualizations).toHaveBeenCalledTimes(3));
+  });
+
+  it('keeps fiscal year and kind fixed when editing a stored history row', async () => {
+    auth.isAdmin = true;
+    const user = userEvent.setup();
+    renderPage();
+    const panel = await screen.findByRole('region', { name: 'Historical figures' });
+    const row = await within(panel).findByRole('row', { name: /2026.*purchases/i });
+    await user.click(within(row).getByRole('button', { name: /edit/i }));
+    expect(within(panel).getByLabelText('Fiscal year')).toHaveAttribute('aria-readonly', 'true');
+    expect(within(panel).getByLabelText('Kind')).toHaveAttribute('aria-readonly', 'true');
+    await user.clear(within(panel).getByLabelText('Fiscal year'));
+    await user.type(within(panel).getByLabelText('Fiscal year'), '2011');
+    await user.selectOptions(within(panel).getByLabelText('Kind'), 'budget');
+    await user.click(within(panel).getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(api.saveVisualizationHistory).toHaveBeenCalledWith(expect.objectContaining({
+      fiscalYearEnd: 2026, kind: 'purchases',
+    })));
+  });
+
+  it('renders null purchase percentages safely for a positive total', async () => {
+    const nullableShares = {
+      ...figures,
+      purchasesByCategory: figures.purchasesByCategory.map((row) => row.fiscalYearEnd === 2027 ? {
+        ...row, electronic: 0, physical: 0, other: 0, total: 0.01,
+        electronicPct: null, physicalPct: null, otherPct: null,
+      } : row),
+    };
+    api.fetchVisualizations.mockResolvedValue(nullableShares);
+    renderPage();
+    const table = await showData('How the library purchases');
+    expect(within(table).getByRole('row', { name: /2027/ })).toHaveTextContent('n/a');
+  });
+
+  it('labels a missing material type explicitly in the material data table', async () => {
+    api.fetchVisualizations.mockResolvedValue({
+      ...figures,
+      purchasesByMaterial: { fiscalYearEnd: 2027, items: [{ materialType: '', amount: 100 }] },
+    });
+    renderPage();
+    const table = await showData('How the library purchases by material');
+    expect(within(table).getByRole('row', { name: /No material type/ })).toBeInTheDocument();
+  });
+
 });

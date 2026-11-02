@@ -200,4 +200,54 @@ visualizationCase('material picker offers current and All FOLIO years, sorts pai
     }
 });
 
+visualizationCase('current fiscal year stays selectable when it has no payments but earlier years do', function () {
+    $f = new VisualizationFixture();
+    $f->payment(12, 'amount', 100, 'Book', 'fund-s', 2026);
+    $service = $f->service();
+    visualizationSame(2026, $service->get('s', 5, 2026)['purchasesByMaterial']['fiscalYearEnd'], 'An earlier paid year remains selectable.');
+    visualizationSame(['fiscalYearEnd' => 2027, 'items' => []], $service->get('s', 5, 2027)['purchasesByMaterial'], 'The current year is valid with an empty material result.');
+});
+
+visualizationCase('All FOLIO years rounds only after combining full-precision material totals', function () {
+    $f = new VisualizationFixture();
+    $f->payment(0.004, 'amount', 100, 'Book', 'fund-s', 2026);
+    $f->payment(0.004, 'amount', 100, 'Book', 'fund-s', 2027);
+    $all = $f->service()->get('s', 5, 'all')['purchasesByMaterial'];
+    visualizationSame([['materialType' => 'Book', 'amount' => 0.01]], $all['items'], 'Two sub-cent years sum before rounding to cents.');
+});
+
+visualizationCase('purchase shares use raw category aggregates when displayed subtotals round to zero', function () {
+    $f = new VisualizationFixture();
+    $f->payment(0.004, 'amount', 100, 'E-Book');
+    $f->payment(0.004, 'amount', 100, 'Book');
+    $f->payment(0.004, 'amount', 100, null);
+    $point = visualizationByYear($f->service()->get('s', 5)['purchasesByCategory'], 2027);
+    visualizationSame(0.01, $point['total'], 'The positive total remains visible at cent precision.');
+    visualizationSame([0.0, 0.0, 0.0], [$point['electronic'], $point['physical'], $point['other']], 'Each displayed subtotal rounds independently to zero.');
+    visualizationAssert($point['electronicPct'] !== null && $point['physicalPct'] !== null && $point['otherPct'] !== null, 'Shares use the positive raw aggregate.');
+    visualizationNear(100, $point['electronicPct'] + $point['physicalPct'] + $point['otherPct'], 'Raw-aggregate shares still total 100.0%.');
+});
+
+visualizationCase('paid lines without a material type are labelled separately but remain Other purchases', function () {
+    $f = new VisualizationFixture();
+    $f->payment(12, 'amount', 100, null, 'fund-s', 2027, 'Paid', true, null);
+    $data = $f->service()->get('s', 5);
+    $point = visualizationByYear($data['purchasesByCategory'], 2027);
+    visualizationNear(12, $point['other'], 'No-material purchases remain in the Other category share.');
+    visualizationSame([['materialType' => 'No material type', 'amount' => 12.0]], $data['purchasesByMaterial']['items'], 'Material detail names the missing value explicitly.');
+});
+
+visualizationCase('active acquisitions-unit filters use PostgreSQL boolean syntax without an integer deleted parameter', function () {
+    $f = new VisualizationFixture();
+    $f->payment(5);
+    $service = $f->service();
+    $service->options();
+    $service->get('s', 5);
+    foreach ($f->folio->queries as $query) {
+        visualizationAssert(strpos($query['sql'], 'is_deleted = :deleted') === false, 'Do not compare PostgreSQL booleans with integer parameters.');
+        if (stripos($query['sql'], 'is_deleted') !== false) visualizationAssert(preg_match('/NOT\s+(?:[a-z_]+\.)?is_deleted/i', $query['sql']) === 1, 'Use NOT for the FOLIO boolean column.');
+        visualizationAssert(!array_key_exists(':deleted', $query['params']), 'No integer deleted flag is bound.');
+    }
+});
+
 visualizationFinish();

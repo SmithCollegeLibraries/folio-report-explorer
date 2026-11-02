@@ -109,4 +109,16 @@ visualizationCase('history validation, unique upsert/undelete, soft delete, serv
     foreach ($visualizationHistoryChecks as $check) $check();
 });
 
+visualizationCase('concurrent history writes advance the shared version atomically without losing an increment', function () {
+    $f = new VisualizationFixture();
+    $cache = new VisualizationStaleVersionCache();
+    $service = new \app\services\VisualizationHistoryService($f->db, $cache, ['SC']);
+    $before = $service->version();
+    $cache->staleValue = $before;
+    $cache->staleReads = 2;
+    $service->upsert(visualizationHistoryInput(['fiscalYearEnd' => 2025]), 7);
+    $service->upsert(visualizationHistoryInput(['fiscalYearEnd' => 2026]), 7);
+    visualizationSame($before + 2, $service->version(), 'Two writes based on a stale concurrent read must both increment the version.');
+});
+
 visualizationFinish();
