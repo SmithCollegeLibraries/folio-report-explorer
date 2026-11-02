@@ -148,7 +148,7 @@ describe('History grouped deletion', () => {
     await waitFor(() => expect(within(nextRow.closest('tr')!).getByTitle('Delete from history')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /run 2 times/i })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Late page older member')).toBeInTheDocument();
-  }, 15_000);
+  });
 
   it('reloads at the clamped offset after deleting the only row on the last page', async () => {
     const firstPage = Array.from({ length: 50 }, (_, index) => (
