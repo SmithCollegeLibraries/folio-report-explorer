@@ -7,6 +7,8 @@ final class HistoryGroupingService
     private const ACTIVE_STATUSES = ['pending', 'pending_export', 'running', 'cancelling'];
 
     private $db;
+    private $historyGroupKeyColumnResolved = false;
+    private $historyGroupKeyColumn = 'NULL';
 
     public function __construct($db)
     {
@@ -15,26 +17,34 @@ final class HistoryGroupingService
 
     public function list(array $options): array
     {
-        list($where, $params) = $this->filteredJobsWhere($options);
-        $cte = $this->groupingCte($where);
-        $total = (int) $this->db->createCommand(
-            $cte . ' SELECT COUNT(*) FROM ranked_jobs WHERE representative_rank = 1',
-            $params
-        )->queryScalar();
+        $historyGroupKey = $this->historyGroupKeyColumn();
+        list($singleWhere, $singleParams) = $this->filteredJobsWhere($options, 'qj', ':singletonUserId');
+        $params = $singleParams;
+        if ($historyGroupKey !== 'NULL') {
+            list($keyedWhere, $keyedParams) = $this->filteredJobsWhere($options, 'qj', ':keyedUserId');
+            list($candidateWhere, $candidateParams) = $this->filteredJobsWhere($options, 'candidate', ':candidateUserId');
+            $params = array_merge($keyedParams, $candidateParams, $singleParams);
+            $cte = $this->groupedListCte($keyedWhere, $candidateWhere, $singleWhere);
+        } else {
+            $cte = $this->singletonListCte($singleWhere);
+        }
         $limit = max(1, min(100, (int) ($options['limit'] ?? 50)));
         $offset = max(0, (int) ($options['offset'] ?? 0));
-        $order = $this->historyGroupKeyColumn() === 'NULL'
+        $order = $historyGroupKey === 'NULL'
             ? 'COALESCE(completed_at, created_at) DESC, id DESC'
             : 'CASE WHEN active_run_count > 0 THEN 0 ELSE 1 END ASC, COALESCE(completed_at, created_at) DESC, id DESC';
         $command = $this->db->createCommand(
-            $cte . ' SELECT id, user_id, history_group_key, run_count, active_run_count '
-            . 'FROM ranked_jobs WHERE representative_rank = 1 '
+            $cte . ' SELECT id, user_id, history_group_key, run_count, active_run_count, COUNT(*) OVER() AS total '
+            . 'FROM visible_jobs '
             . 'ORDER BY ' . $order . ' LIMIT :limit OFFSET :offset',
             $params
         );
         $command->bindValue(':limit', $limit, \PDO::PARAM_INT);
         $command->bindValue(':offset', $offset, \PDO::PARAM_INT);
         $representatives = $command->queryAll();
+        $total = empty($representatives)
+            ? (int) $this->db->createCommand($cte . ' SELECT COUNT(*) FROM visible_jobs', $params)->queryScalar()
+            : (int) $representatives[0]['total'];
         $jobs = $this->loadItemsByIds(array_column($representatives, 'id'), $options);
         $byId = [];
         foreach ($jobs as $job) {
@@ -123,58 +133,79 @@ final class HistoryGroupingService
         return $items[0] ?? null;
     }
 
-    private function filteredJobsWhere(array $options): array
+    private function filteredJobsWhere(array $options, string $alias = 'qj', string $userIdParameter = ':userId'): array
     {
         $where = ['1 = 1'];
         $params = [];
-        $this->appendStatusFilter($where, $params, $options['status'] ?? 'all');
+        $this->appendStatusFilter($where, $params, $options['status'] ?? 'all', $alias);
         if (!empty($options['mineOnly'])) {
             if (($options['userId'] ?? null) === null) {
                 $where[] = '1 = 0';
             } else {
-                $where[] = 'qj.user_id = :userId';
-                $params[':userId'] = $options['userId'];
+                $where[] = $alias . '.user_id = ' . $userIdParameter;
+                $params[$userIdParameter] = $options['userId'];
             }
         }
         return [implode(' AND ', $where), $params];
     }
 
-    private function appendStatusFilter(array &$where, array &$params, $status): void
+    private function appendStatusFilter(array &$where, array &$params, $status, string $alias = ''): void
     {
+        $statusColumn = $alias === '' ? 'status' : $alias . '.status';
         if ($status === 'active') {
-            $where[] = "status IN ('pending', 'pending_export', 'running', 'cancelling')";
+            $where[] = $statusColumn . " IN ('pending', 'pending_export', 'running', 'cancelling')";
         } elseif ($status === 'completed') {
-            $where[] = "status = 'completed'";
+            $where[] = $statusColumn . " = 'completed'";
         } elseif ($status === 'failed') {
-            $where[] = "status = 'failed'";
+            $where[] = $statusColumn . " = 'failed'";
         }
     }
 
-    private function groupingCte(string $where): string
+    private function groupedListCte(string $keyedWhere, string $candidateWhere, string $singleWhere): string
+    {
+        return 'WITH keyed_groups AS ('
+            . ' SELECT qj.user_id, qj.history_group_key, COUNT(*) AS run_count,'
+            . " SUM(CASE WHEN qj.status IN ('pending', 'pending_export', 'running', 'cancelling') THEN 1 ELSE 0 END) AS active_run_count"
+            . ' FROM query_jobs qj WHERE ' . $keyedWhere
+            . ' AND qj.user_id IS NOT NULL AND qj.history_group_key IS NOT NULL'
+            . ' GROUP BY qj.user_id, qj.history_group_key'
+            . '), keyed_representatives AS ('
+            . ' SELECT qj.id, qj.user_id, qj.history_group_key, group_counts.run_count, group_counts.active_run_count, qj.completed_at, qj.created_at'
+            . ' FROM keyed_groups group_counts JOIN query_jobs qj ON qj.id = ('
+            . ' SELECT candidate.id FROM query_jobs candidate'
+            . ' WHERE candidate.user_id = group_counts.user_id AND candidate.history_group_key = group_counts.history_group_key'
+            . ' AND ' . $candidateWhere
+            . ' ORDER BY candidate.created_at DESC, candidate.id DESC LIMIT 1)'
+            . '), singleton_jobs AS (' . $this->singletonJobsSelect($singleWhere, true) . '), visible_jobs AS ('
+            . ' SELECT * FROM keyed_representatives UNION ALL SELECT * FROM singleton_jobs)';
+    }
+
+    private function singletonListCte(string $where): string
+    {
+        return 'WITH visible_jobs AS (' . $this->singletonJobsSelect($where, false) . ')';
+    }
+
+    private function singletonJobsSelect(string $where, bool $onlyUngrouped): string
     {
         $historyGroupKey = $this->historyGroupKeyColumn();
-        return 'WITH filtered_jobs AS ('
-            . ' SELECT qj.id, qj.user_id, ' . $historyGroupKey . ' AS history_group_key, qj.status, qj.created_at, qj.completed_at,'
-            . ' CASE WHEN qj.user_id IS NOT NULL AND ' . $historyGroupKey . ' IS NOT NULL THEN qj.user_id ELSE NULL END AS group_owner,'
-            . ' CASE WHEN qj.user_id IS NOT NULL AND ' . $historyGroupKey . ' IS NOT NULL THEN ' . $historyGroupKey . ' ELSE NULL END AS group_key,'
-            . ' CASE WHEN qj.user_id IS NULL OR ' . $historyGroupKey . ' IS NULL THEN qj.id ELSE NULL END AS singleton_id'
-            . ' FROM query_jobs qj WHERE ' . $where
-            . '), ranked_jobs AS ('
-            . ' SELECT filtered_jobs.*,'
-            . ' COUNT(*) OVER (PARTITION BY group_owner, group_key, singleton_id) AS run_count,'
-            . " SUM(CASE WHEN status IN ('pending', 'pending_export', 'running', 'cancelling') THEN 1 ELSE 0 END)"
-            . ' OVER (PARTITION BY group_owner, group_key, singleton_id) AS active_run_count,'
-            . ' ROW_NUMBER() OVER (PARTITION BY group_owner, group_key, singleton_id'
-            . ' ORDER BY created_at DESC, id DESC) AS representative_rank'
-            . ' FROM filtered_jobs)';
+        $ungroupedFilter = $onlyUngrouped
+            ? ' AND (qj.user_id IS NULL OR qj.history_group_key IS NULL)'
+            : '';
+        return 'SELECT qj.id, qj.user_id, ' . $historyGroupKey . ' AS history_group_key, 1 AS run_count,'
+            . " CASE WHEN qj.status IN ('pending', 'pending_export', 'running', 'cancelling') THEN 1 ELSE 0 END AS active_run_count,"
+            . ' qj.completed_at, qj.created_at FROM query_jobs qj WHERE ' . $where . $ungroupedFilter;
     }
 
     private function historyGroupKeyColumn(): string
     {
-        $table = $this->db->schema->getTableSchema('query_jobs', true);
-        return $table && $table->getColumn('history_group_key') !== null
-            ? 'qj.history_group_key'
-            : 'NULL';
+        if (!$this->historyGroupKeyColumnResolved) {
+            $table = $this->db->schema->getTableSchema('query_jobs');
+            $this->historyGroupKeyColumn = $table && $table->getColumn('history_group_key') !== null
+                ? 'qj.history_group_key'
+                : 'NULL';
+            $this->historyGroupKeyColumnResolved = true;
+        }
+        return $this->historyGroupKeyColumn;
     }
 
     private function loadItemsByIds(array $ids, array $options): array
