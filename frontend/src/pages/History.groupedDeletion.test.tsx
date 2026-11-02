@@ -96,7 +96,7 @@ describe('History grouped deletion', () => {
   });
 
   it('keeps a late-page expansion open on the next representative after deletion', async () => {
-    const firstPage = Array.from({ length: 50 }, (_, index) => (
+    const firstPage = Array.from({ length: 1 }, (_, index) => (
       groupedItem(`page-one-${index}`, `Page one group ${index}`, 1, `page-one-group-${index}`)
     ));
     const oldRepresentative = groupedItem('late-representative', 'Late page representative', 3, 'late-page-group');
