@@ -28,7 +28,7 @@ visualizationCase('dev mode allows every visualization route without a bearer to
     $row = $f->db->createCommand('SELECT * FROM visualization_history')->queryOne();
     visualizationSame(1, (int)$row['updated_by'], 'updated_by comes from the dev identity.');
 
-    list($status, $deleted) = visualizationInvoke($controller, 'history-delete', [$row['id']]);
+    list($status, $deleted) = visualizationInvoke($controller, 'history-delete', ['id' => $row['id']]);
     visualizationSame(200, $status, 'DELETE visualizations/history/<id> succeeds without a token in dev.');
     visualizationSame(true, $deleted['deleted'], 'Delete reports that the row was soft deleted.');
     $row = $f->db->createCommand('SELECT * FROM visualization_history')->queryOne();
