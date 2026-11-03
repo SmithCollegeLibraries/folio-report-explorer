@@ -7,6 +7,13 @@ export default {
   theme: {
     extend: {
       colors: {
+        background: 'var(--background)',
+        foreground: 'var(--foreground)',
+        border: 'rgb(var(--border-rgb) / <alpha-value>)',
+        muted: {
+          DEFAULT: '#f3f4f6',
+          foreground: 'var(--muted)',
+        },
         folio: {
           50: '#eff6ff',
           100: '#dbeafe',
