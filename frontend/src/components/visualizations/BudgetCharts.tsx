@@ -1,8 +1,7 @@
 import { useId } from 'react';
-import { Bar, BarChart, CartesianGrid, Cell, Legend, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, XAxis, YAxis } from 'recharts';
 import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
-import { ChartLegendContent } from '../ui/chart-legend';
 import { ChartTooltip, ChartTooltipContent } from '../ui/chart-tooltip';
 import { ChartCard, HistoryPattern, amount, percent } from './ChartCard';
 import { useNarrowViewport } from './useNarrowViewport';
@@ -36,13 +35,14 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
       <th scope="row">{row.fiscalYearEnd}</th><td>{amount(row.allocated)}</td><td>{percent(row.changePct)}</td>
       <td>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</td>
     </tr>)}</tbody></table>}>
-    <div className="relative h-80" aria-label="Allocated budget by fiscal year">
-      <ChartContainer config={config} className="h-full">
-        <BarChart data={data.budget} margin={{ top: 42, right: 12, bottom: 12, left: 72 }} barCategoryGap={2}>
+    <div className="relative h-80 min-w-0 w-full" aria-label="Allocated budget by fiscal year">
+      <ChartContainer config={config} className="h-full min-w-0 w-full">
+        <BarChart data={data.budget} margin={{ top: 42, right: 12, bottom: 12, left: 8 }} barCategoryGap={2}>
         <HistoryPattern id={patternId} />
         <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
-        <XAxis dataKey="fiscalYearEnd" hide />
-        <YAxis hide />
+        <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
+        <YAxis width={72} domain={[0, 'auto']} tickFormatter={compactAmount}
+          tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
         <ChartTooltip content={<ChartTooltipContent hideLabel indicator="line" formatter={(_value, _name, item) => {
           const row = item.payload as BudgetRow;
           return <div className="grid gap-1.5 text-sm">
@@ -50,37 +50,22 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
             <p>Change: {changeLabel(row.changePct)}</p><p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p>
           </div>;
         }} />} />
-        <Legend content={<ChartLegendContent />} />
         <Bar dataKey="allocated" name="Allocated" fill="var(--chart-1)" radius={[4, 4, 0, 0]} isAnimationActive={false}>
           {data.budget.map((row) => <Cell key={row.fiscalYearEnd}
             fill={row.source === 'history' ? `url(#${patternId})` : 'var(--chart-1)'} />)}
+          <LabelList dataKey="allocated" position="top" content={({ x, y, index }) => {
+            const row = data.budget[Number(index)];
+            if (!row) return null;
+            const labelX = Number(x ?? 0);
+            const labelY = Number(y ?? 0);
+            return <text x={labelX} y={labelY} textAnchor="middle" fill="#374151" fontSize={12}>
+              <tspan x={labelX} dy={crowded ? 0 : -6}>{compactAmount(row.allocated)}</tspan>
+              {!crowded && <tspan x={labelX} dy="14">{changeLabel(row.changePct)}</tspan>}
+            </text>;
+          }} />
         </Bar>
         </BarChart>
       </ChartContainer>
-      <svg className="recharts-surface pointer-events-none absolute inset-0 z-10 h-full w-full" viewBox="0 0 800 320" preserveAspectRatio="none" aria-hidden="true">
-        <g className="recharts-yAxis" textAnchor="end" fill="#6b7280" fontSize="11">
-          {[0, 1, 2, 3, 4].map((step) => {
-            const max = Math.max(...data.budget.map((row) => row.allocated), 1);
-            const value = max * step / 4;
-            return <text key={step} className="recharts-cartesian-axis-tick-value" x="74" y={274 - step * 54}>{compactAmount(value)}</text>;
-          })}
-        </g>
-        <g className="recharts-xAxis" textAnchor="middle" fill="#6b7280" fontSize="11">
-          {data.budget.map((row, index) => {
-            const x = 88 + (index + 0.5) * (696 / Math.max(data.budget.length, 1));
-            return <text key={row.fiscalYearEnd} className="recharts-cartesian-axis-tick-value" x={x} y="306">{row.fiscalYearEnd}</text>;
-          })}
-        </g>
-        <g className="recharts-label-list" textAnchor="middle" fill="#374151" fontSize="11">
-          {data.budget.map((row, index) => {
-            const x = 88 + (index + 0.5) * (696 / Math.max(data.budget.length, 1));
-            return <text key={row.fiscalYearEnd} x={x} y="24" fontSize={crowded ? 9 : 11}>
-              <tspan x={x}>{compactAmount(row.allocated)}</tspan>
-              {!crowded && <tspan x={x} dy="13">{changeLabel(row.changePct)}</tspan>}
-            </text>;
-          })}
-        </g>
-      </svg>
     </div>
   </ChartCard>;
 }

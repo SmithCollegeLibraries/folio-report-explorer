@@ -1,5 +1,5 @@
-import { useId } from 'react';
-import { Bar, BarChart, CartesianGrid, Cell, Legend, XAxis, YAxis } from 'recharts';
+import { useId, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, Cell, LabelList, Legend, XAxis, YAxis } from 'recharts';
 import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartLegendContent } from '../ui/chart-legend';
@@ -19,7 +19,7 @@ const groups = [
   { key: 'physical', name: 'Physical', color: 'var(--chart-2)' },
   { key: 'other', name: 'Other', color: 'var(--chart-3)' },
 ] as const;
-const groupConfig: ChartConfig = Object.fromEntries(groups.map((group) => [group.key, {
+const groupConfig: ChartConfig = Object.fromEntries(groups.map((group) => [`${group.key}Pct`, {
   label: group.name, color: group.color,
 }]));
 
@@ -31,6 +31,7 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
 }) {
   const pickerId = useId();
   const patternId = useId().replace(/:/g, '');
+  const [legendPortal, setLegendPortal] = useState<HTMLDivElement | null>(null);
   const purchases = data.purchasesByCategory.filter((row) => row.total > 0);
   const materialItems = data.purchasesByMaterial.items;
   const materials = materialRows(materialItems);
@@ -48,13 +49,14 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
           {amount(row[group.key])} / {row.total > 0 ? share(row[`${group.key}Pct`]) : 'no spending'}
         </td>)}<td>{amount(row.total)}</td><td>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</td>
       </tr>)}</tbody></table>}>
-      <div className="h-80" aria-label="Purchases as percentages by fiscal year">
-        <ChartContainer config={groupConfig} className="h-full">
+      <div className="min-w-0 w-full" aria-label="Purchases as percentages by fiscal year">
+        <ChartContainer config={groupConfig} className="h-72 min-w-0 w-full">
           <BarChart data={purchases} barCategoryGap={2} barGap={2}>
           <HistoryPattern id={patternId} />
           <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} />
-          <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} width={48} tickLine={false} axisLine={false} />
+          <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} allowDataOverflow
+            tickFormatter={(value) => `${value}%`} width={56} tickLine={false} axisLine={false} />
           <ChartTooltip content={({ active, payload, label }) => {
             if (!active || !payload?.length) return null;
             const row = payload[0].payload as VisualizationData['purchasesByCategory'][number];
@@ -62,31 +64,23 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
               {groups.map((group) => <p key={group.key}>{group.name}: {amount(row[group.key])} ({share(row[`${group.key}Pct`])})</p>)}
               <p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p></div>;
           }} />
-          <Legend content={<ChartLegendContent />} />
+          <Legend content={<ChartLegendContent />} portal={legendPortal} />
           {groups.map((group) => <Bar key={group.key} dataKey={`${group.key}Pct`} name={group.name}
             stackId="purchases" fill={group.color} radius={[4, 4, 0, 0]} isAnimationActive={false}>
             {purchases.map((row) => <Cell key={row.fiscalYearEnd}
               fill={row.source === 'history' ? `url(#${patternId})` : group.color} />)}
+            <LabelList dataKey={`${group.key}Pct`} position="inside" content={({ value, x, y, width, height }) => {
+              const percentage = Number(value ?? 0);
+              if (!Number.isFinite(percentage) || percentage < 8) return null;
+              const labelX = Number(x ?? 0) + Number(width ?? 0) / 2;
+              const labelY = Number(y ?? 0) + Number(height ?? 0) / 2;
+              return <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central"
+                fill={group.key === 'electronic' ? '#ffffff' : '#111827'}>{Math.round(percentage)}%</text>;
+            }} />
           </Bar>)}
           </BarChart>
         </ChartContainer>
-        <svg className="recharts-surface pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 800 320" preserveAspectRatio="none" aria-hidden="true">
-          <g className="recharts-label-list">
-            {purchases.flatMap((row, index) => {
-              const x = 64 + (index + 0.5) * (720 / Math.max(purchases.length, 1));
-              let cumulative = 0;
-              return groups.map((group) => {
-                const value = row[`${group.key}Pct`] ?? 0;
-                const y = 272 - (cumulative + value / 2) * 2.6;
-                cumulative += value;
-                return value >= 8 ? <text key={`${row.fiscalYearEnd}-${group.key}`} x={x} y={y + 4}
-                  textAnchor="middle" fill={group.key === 'electronic' ? '#ffffff' : '#111827'} fontSize="11" fontWeight="600">
-                  {Math.round(value)}%
-                </text> : null;
-              });
-            })}
-          </g>
-        </svg>
+        <div ref={setLegendPortal} className="min-w-0" aria-label="Purchase chart legend" />
       </div>
       <aside className="mt-3 rounded-md bg-gray-50 p-3 text-sm text-gray-700">
         <h3 className="font-semibold text-gray-900">What's in each group</h3>

@@ -41,7 +41,7 @@ export default function Visualizations() {
     {state.options.data?.units.length === 0 && <p>No acquisitions units available.</p>}
     {empty && <p className="p-4 mb-6 bg-gray-50 border rounded-md">No purchase or budget data for this unit in the selected years</p>}
     {data && <>
-      <div className="grid lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 min-w-0">
         <PurchaseCharts data={data} materialYear={state.materialYear}
           materialFiscalYearEnds={state.materialFiscalYearEnds} materialLoading={state.materialLoading}
           materialError={state.materialError} materialAvailable={state.materialAvailable}
