@@ -7,10 +7,23 @@ export const percent = (value: number | null) => value === null ? 'n/a'
   : `${value > 0 ? '+' : ''}${value.toFixed(1)}%`;
 
 export function HistoryLegend() {
+  const patternId = useId().replace(/:/g, '');
   return <div className="flex flex-wrap gap-5 text-xs text-gray-600 mb-4">
-    <span className="flex items-center gap-2"><svg aria-hidden="true" width="26" height="14"><rect x="1" y="1" width="24" height="12" fill="none" stroke="#172f44" strokeWidth="2" strokeDasharray="4 3" /></svg>Stored history</span>
+    <span className="flex items-center gap-2"><svg aria-hidden="true" width="26" height="14">
+      <defs><pattern id={patternId} width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+        <rect width="6" height="6" fill="#f8fafc" /><path d="M 0 0 V 6" stroke="#334155" strokeWidth="2" />
+      </pattern></defs>
+      <rect x="1" y="1" width="24" height="12" fill={`url(#${patternId})`} stroke="#334155" strokeWidth="1" />
+    </svg>Stored history</span>
     <span className="flex items-center gap-2"><span aria-hidden="true" className="inline-block w-6 h-3 bg-folio-600" />FOLIO</span>
   </div>;
+}
+
+export function HistoryPattern({ id }: { id: string }) {
+  return <defs><pattern id={id} width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+    <rect width="6" height="6" fill="#f8fafc" />
+    <path d="M 0 0 V 6" stroke="#334155" strokeWidth="2" />
+  </pattern></defs>;
 }
 
 export function ChartCard({ title, explanation, children, table, controls, history = false }: {
