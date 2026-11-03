@@ -1,10 +1,13 @@
 import { Component, type ReactNode } from 'react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VisualizationData, VisualizationHistoryRow, VisualizationOptions } from '../api/visualizations';
+import { PurchaseCharts } from '../components/visualizations/PurchaseCharts';
 import Visualizations from './Visualizations';
 
 const api = vi.hoisted(() => ({
@@ -51,7 +54,7 @@ const historyRow: VisualizationHistoryRow = {
 };
 const chartTitles = [
   'How the library purchases', 'How the library purchases by material',
-  'Library budget', 'Library budget change',
+  'Library budget',
 ];
 
 // Only the authorized throw-only stub is converted to an empty render. Other
@@ -112,6 +115,35 @@ async function beginSelectionChange(selection: 'material year' | 'range') {
   return { request, region };
 }
 
+async function renderWithData(data: Partial<VisualizationData>) {
+  let resolveFigures!: () => void;
+  const figuresLoaded = new Promise<void>((resolve) => { resolveFigures = resolve; });
+  api.fetchVisualizations.mockImplementation(async () => {
+    resolveFigures();
+    return { ...figures, ...data };
+  });
+  renderPage();
+  await waitFor(() => expect(api.fetchVisualizations).toHaveBeenCalled());
+  await act(async () => { await figuresLoaded; });
+}
+
+function pieLabels(region: HTMLElement | null) {
+  return Array.from(region?.querySelectorAll('svg .recharts-pie-labels text') ?? [])
+    .map((label) => label.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+}
+
+async function openTableWithoutAssumingItExists(region: HTMLElement | null) {
+  const button = region?.querySelector('button[aria-controls]') as HTMLButtonElement | null;
+  if (button) await userEvent.click(button);
+  return region?.querySelector('table') ?? null;
+}
+
+function materialLegendColor(region: ParentNode | null, materialType: string) {
+  const item = Array.from(region?.querySelectorAll('.recharts-legend-item') ?? [])
+    .find((candidate) => candidate.querySelector('.recharts-legend-item-text')?.textContent?.trim() === materialType);
+  return item?.querySelector('svg [fill]')?.getAttribute('fill') ?? null;
+}
+
 function suppressStubError(event: ErrorEvent) {
   if (event.error instanceof Error && event.error.message === 'not implemented') event.preventDefault();
 }
@@ -160,6 +192,228 @@ beforeEach(() => {
   });
 });
 
+describe('Visualizations RPT-022 new behavior', () => {
+  const chartTitlesForRestyle = {
+    purchases: 'How the library purchases',
+    material: 'How the library purchases by material',
+    budget: 'Library budget',
+  };
+  const pieFixture = [
+    { materialType: 'Hotel', amount: 40 },
+    { materialType: 'Bravo', amount: 600 },
+    { materialType: 'Zero', amount: 0 },
+    { materialType: 'Alpha', amount: 700 },
+    { materialType: 'Golf', amount: 60 },
+    { materialType: 'Charlie', amount: 500 },
+    { materialType: 'Foxtrot', amount: 200 },
+    { materialType: 'Echo', amount: 300 },
+    { materialType: 'Delta', amount: 400 },
+    { materialType: 'Negative', amount: -14 },
+  ];
+
+  it('plots the six largest material types and their aggregated remainder with the right shares', async () => {
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items: pieFixture } });
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const labels = pieLabels(region).join(' | ');
+    const sectors = region?.querySelectorAll('svg .recharts-pie-sector').length ?? 0;
+
+    expect.soft(sectors).toBe(7);
+    expect.soft(labels).toContain('Alpha');
+    expect.soft(labels).toContain('25.0%');
+    expect.soft(labels).toContain('Bravo');
+    expect.soft(labels).toContain('21.4%');
+    expect.soft(labels).toContain('All other types');
+    expect.soft(labels).toContain('3.6%');
+    const expectedShares = ['25.0%', '21.4%', '17.9%', '14.3%', '10.7%', '7.1%', '3.6%'];
+    for (const share of expectedShares) expect.soft(labels).toContain(share);
+    const renderedShares = pieLabels(region).flatMap((label) =>
+      Array.from(label.matchAll(/(\d+\.\d)%/g), (match) => Number(match[1])));
+    expect.soft(renderedShares).toHaveLength(7);
+    expect.soft(renderedShares.reduce((total, share) => total + share, 0)).toBeCloseTo(100, 8);
+  });
+
+  it('orders pie slices by descending amount', async () => {
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items: pieFixture } });
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const renderedLabels = pieLabels(region);
+    const order = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'All other types'];
+    const observedOrder = renderedLabels.map((label) => order.find((name) => label.includes(name)))
+      .filter((name): name is string => Boolean(name));
+
+    expect.soft(observedOrder).toEqual(order);
+  });
+
+  it('uses material name to order equal-sized pie slices', async () => {
+    const tiedItems = ['Zulu', 'Delta', 'Alpha', 'Mike', 'Beta', 'Gamma', 'Echo']
+      .map((materialType) => ({ materialType, amount: 100 }));
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items: tiedItems } });
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const renderedLabels = pieLabels(region);
+    const order = ['Alpha', 'Beta', 'Delta', 'Echo', 'Gamma', 'Mike', 'All other types'];
+    const observedOrder = renderedLabels.map((label) => order.find((name) => label.includes(name)))
+      .filter((name): name is string => Boolean(name));
+
+    expect.soft(observedOrder).toEqual(order);
+  });
+
+  it('omits the aggregated remainder when there are six or fewer material types', async () => {
+    const sixItems = pieFixture.filter((item) => item.amount > 0).slice(0, 6);
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items: sixItems } });
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const sectors = region?.querySelectorAll('svg .recharts-pie-sector').length ?? 0;
+
+    expect.soft(sectors).toBe(6);
+    expect.soft(region?.textContent ?? '').not.toContain('All other types');
+  });
+
+  it('keeps every material and its amount and percentage in the data table', async () => {
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items: pieFixture } });
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const table = await openTableWithoutAssumingItExists(region);
+    const tableText = table?.textContent ?? '';
+    const rows = Array.from(table?.querySelectorAll('tbody tr') ?? []);
+    const rowText = (name: string) => rows.find((row) => row.textContent?.includes(name))?.textContent ?? '';
+
+    expect.soft(table).not.toBeNull();
+    expect.soft(rows).toHaveLength(pieFixture.length);
+    for (const item of pieFixture) {
+      expect.soft(tableText).toContain(item.materialType);
+      expect.soft(rowText(item.materialType)).toContain(item.amount.toLocaleString('en-US', {
+        minimumFractionDigits: 2, maximumFractionDigits: 2,
+      }));
+      expect.soft(rowText(item.materialType)).toMatch(/-?\d+\.\d%/);
+    }
+    expect.soft(rowText('Alpha')).toContain('700.00');
+    expect.soft(rowText('Alpha')).toContain('25.0%');
+    expect.soft(rowText('Negative')).toContain('-14.00');
+    expect.soft(rowText('Negative')).toContain('-0.5%');
+  });
+
+  it('does not draw zero or negative materials but keeps them in the data table', async () => {
+    const items = [
+      { materialType: 'Book', amount: 200 },
+      { materialType: 'Database', amount: 100 },
+      { materialType: 'No spend', amount: 0 },
+      { materialType: 'Credit', amount: -14 },
+    ];
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items } });
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const sectors = region?.querySelectorAll('svg .recharts-pie-sector').length ?? 0;
+    const table = await openTableWithoutAssumingItExists(region);
+    const tableText = table?.textContent ?? '';
+
+    expect.soft(sectors).toBe(2);
+    expect.soft(tableText).toContain('No spend');
+    expect.soft(tableText).toContain('0.00');
+    expect.soft(tableText).toContain('Credit');
+    expect.soft(tableText).toContain('-14.00');
+    expect.soft(tableText).toContain('-4.7%');
+  });
+
+  it('keeps a material type color stable when the selected fiscal year changes', async () => {
+    const props = {
+      materialYear: 2027 as number | 'all' | '', materialFiscalYearEnds: [2026, 2027],
+      materialLoading: false, materialAvailable: true, onMaterialYear: vi.fn(),
+    };
+    const { container, rerender } = render(<PurchaseCharts data={{ ...figures,
+      purchasesByMaterial: { fiscalYearEnd: 2027, items: [
+        { materialType: 'Database', amount: 500 }, { materialType: 'Book', amount: 100 },
+      ] },
+    }} {...props} />);
+    const regionFor2027 = Array.from(container.querySelectorAll('section[aria-labelledby]'))
+      .find((section) => section.querySelector('h2')?.textContent === chartTitlesForRestyle.material) ?? null;
+    const colorFor2027 = materialLegendColor(regionFor2027, 'Database');
+
+    rerender(<PurchaseCharts data={{ ...figures,
+      purchasesByMaterial: { fiscalYearEnd: 2026, items: [
+        { materialType: 'Book', amount: 300 }, { materialType: 'Database', amount: 100 },
+      ] },
+    }} {...props} materialYear={2026} />);
+    const regionFor2026 = Array.from(container.querySelectorAll('section[aria-labelledby]'))
+      .find((section) => section.querySelector('h2')?.textContent === chartTitlesForRestyle.material) ?? null;
+    const colorFor2026 = materialLegendColor(regionFor2026, 'Database');
+
+    expect.soft(colorFor2027).not.toBeNull();
+    expect.soft(colorFor2026).not.toBeNull();
+    expect.soft(colorFor2026).toBe(colorFor2027);
+  });
+
+  it('shows one dollar-axis budget chart with the API change label on each bar', async () => {
+    const budget = [
+      { fiscalYearEnd: 2023, allocated: 4_080_000, changePct: 14.6, source: 'history' as const },
+      { fiscalYearEnd: 2024, allocated: 4_000_000, changePct: null, source: 'folio' as const },
+      { fiscalYearEnd: 2025, allocated: 3_000_000, changePct: 0, source: 'folio' as const },
+      { fiscalYearEnd: 2026, allocated: 2_500_000, changePct: -12.7, source: 'folio' as const },
+    ];
+    await renderWithData({ budget });
+    const budgetRegions = screen.queryAllByRole('region').filter((region) =>
+      /^Library budget/.test(region.querySelector('h2')?.textContent ?? ''));
+    const budgetRegion = screen.queryByRole('region', { name: chartTitlesForRestyle.budget });
+    const labels = Array.from(budgetRegion?.querySelectorAll('svg text') ?? [])
+      .map((label) => label.textContent?.replace(/\s+/g, ' ').trim() ?? '').join(' | ');
+    const yAxes = budgetRegion?.querySelectorAll('svg .recharts-yAxis').length ?? 0;
+    const yAxisLabels = Array.from(budgetRegion?.querySelectorAll('svg .recharts-yAxis .recharts-cartesian-axis-tick-value') ?? [])
+      .map((label) => label.textContent ?? '');
+
+    expect.soft(budgetRegions).toHaveLength(1);
+    expect.soft(yAxes).toBe(1);
+    expect.soft(yAxisLabels.some((label) => label.includes('%'))).toBe(false);
+    expect.soft(labels).toContain('$4.08M');
+    expect.soft(labels).toContain('▲ 14.6%');
+    expect.soft(labels).toContain('n/a');
+    expect.soft(labels).toMatch(/–\s*0\.0%/);
+    expect.soft(labels).toContain('▼ 12.7%');
+  });
+
+  it('renders the category share inside each purchase bar segment where it fits', async () => {
+    await renderWithData({});
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.purchases });
+    const labels = Array.from(region?.querySelectorAll('svg .recharts-label-list text') ?? [])
+      .map((label) => label.textContent?.trim() ?? '');
+
+    expect.soft(labels).toEqual(expect.arrayContaining(['60%', '30%', '70%', '25%']));
+  });
+
+  it('renders the group note with every material mapping from the backend', async () => {
+    await renderWithData({});
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.purchases });
+    const note = region?.textContent ?? '';
+
+    expect.soft(note).toContain("What's in each group");
+    for (const material of [
+      'Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package', 'E-Newspaper', 'Streaming Video',
+      'Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial',
+    ]) expect.soft(note).toContain(material);
+    expect.soft(note).toMatch(/Other.*every other material type.*purchases without one/i);
+  });
+
+  it('keeps the rendered group note mapping in parity with both backend category lists', () => {
+    const frontendSource = readFileSync(resolve(process.cwd(), 'src/components/visualizations/PurchaseCharts.tsx'), 'utf8');
+    const backendSource = readFileSync(resolve(process.cwd(), '../backend/services/VisualizationDataService.php'), 'utf8');
+    const declaration = frontendSource.match(/export const PURCHASE_MATERIAL_GROUPS\s*=\s*\{([\s\S]*?)\}\s*(?:as const)?;/);
+    const parseFrontendGroup = (group: string) => {
+      const match = declaration?.[1].match(new RegExp(`${group}\\s*:\\s*\\[([^\\]]*)\\]`));
+      return match ? Array.from(match[1].matchAll(/(['"])(.*?)\1/g), (item) => item[2]) : null;
+    };
+    const parseBackendGroup = (group: string) => {
+      const match = backendSource.match(new RegExp(`private const ${group} = \\[([^\\]]*)\\];`));
+      return match ? Array.from(match[1].matchAll(/'([^']*)'/g), (item) => item[1]) : null;
+    };
+    const frontendGroups = {
+      electronic: parseFrontendGroup('electronic'),
+      physical: parseFrontendGroup('physical'),
+    };
+    const backendGroups = {
+      electronic: parseBackendGroup('ELECTRONIC'),
+      physical: parseBackendGroup('PHYSICAL'),
+    };
+
+    expect.soft(frontendGroups).toEqual(backendGroups);
+    expect.soft((frontendSource.match(/PURCHASE_MATERIAL_GROUPS/g) ?? []).length).toBeGreaterThan(1);
+  });
+
+});
+
 afterEach(() => {
   cleanup();
   window.removeEventListener('error', suppressStubError);
@@ -167,8 +421,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('Visualizations new behavior (tests round: expected to fail until implemented)', () => {
-  it('renders all four Recharts charts from synthetic purchase and budget fixtures', async () => {
+describe('Visualizations RPT-018 behavior', () => {
+  it('renders the three charts from synthetic purchase and budget fixtures', async () => {
     {
       renderPage();
       for (const title of chartTitles) {
@@ -187,7 +441,7 @@ describe('Visualizations new behavior (tests round: expected to fail until imple
   it('marks stored history in the legend and chart with a pattern or dashed outline', async () => {
     {
       renderPage();
-      for (const title of [chartTitles[0], chartTitles[2], chartTitles[3]]) {
+      for (const title of [chartTitles[0], chartTitles[2]]) {
         const region = await chart(title);
         expect(within(region).getByText(/stored history/i)).toBeInTheDocument();
         expect(region.querySelector('svg [fill^="url("], svg [stroke-dasharray]')).toBeInTheDocument();
@@ -213,10 +467,9 @@ describe('Visualizations new behavior (tests round: expected to fail until imple
       expect(within(categories).getByRole('row', { name: /2025/ })).toHaveTextContent(/no spending/i);
       const budget = within(await chart(chartTitles[2])).getByRole('table');
       expect(within(budget).getByRole('row', { name: /2027/ })).toHaveTextContent('11,000.00');
-      const change = within(await chart(chartTitles[3])).getByRole('table');
-      expect(within(change).getByRole('row', { name: /2025/ })).toHaveTextContent('n/a');
-      expect(within(change).getByRole('row', { name: /2026/ })).toHaveTextContent(/[-−]20\.0%/);
-      expect(within(change).getByRole('row', { name: /2027/ })).toHaveTextContent('+10.0%');
+      expect(within(budget).getByRole('row', { name: /2025/ })).toHaveTextContent('n/a');
+      expect(within(budget).getByRole('row', { name: /2026/ })).toHaveTextContent(/[-−]20\.0%/);
+      expect(within(budget).getByRole('row', { name: /2027/ })).toHaveTextContent('+10.0%');
     }
   });
 
