@@ -115,7 +115,7 @@ async function beginSelectionChange(selection: 'material year' | 'range') {
   return { request, region };
 }
 
-async function renderWithData(data: Partial<VisualizationData>) {
+async function renderWithData(data: Partial<VisualizationData>, waitForMaterialPie = true) {
   let resolveFigures!: () => void;
   const figuresLoaded = new Promise<void>((resolve) => { resolveFigures = resolve; });
   api.fetchVisualizations.mockImplementation(async () => {
@@ -130,7 +130,7 @@ async function renderWithData(data: Partial<VisualizationData>) {
   const budgetRegion = await chart(chartTitles[2]);
   await waitFor(() => {
     expect(purchaseRegion.querySelectorAll('svg .recharts-label-list text').length).toBeGreaterThan(0);
-    expect(materialRegion.querySelectorAll('svg .recharts-pie-sector').length).toBeGreaterThan(0);
+    if (waitForMaterialPie) expect(materialRegion.querySelectorAll('svg .recharts-pie-sector').length).toBeGreaterThan(0);
     expect(budgetRegion.querySelectorAll('svg .recharts-label-list text').length).toBeGreaterThan(0);
   });
 }
@@ -251,6 +251,18 @@ describe('Visualizations RPT-022 new behavior', () => {
     expect.soft(observedOrder).toEqual(order);
   });
 
+  it('draws a non-degenerate full circle for a fiscal year with one positive material', async () => {
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items: [{ materialType: 'Book', amount: 500 }] } });
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const sectors = Array.from(region?.querySelectorAll('svg .recharts-pie-sector') ?? []);
+    const path = sectors[0];
+    const arcCommands = (path?.getAttribute('d')?.match(/[Aa]/g) ?? []).length;
+
+    expect.soft(sectors).toHaveLength(1);
+    expect.soft(path?.tagName.toLowerCase()).toBe('path');
+    expect.soft(arcCommands).toBeGreaterThanOrEqual(2);
+  });
+
   it('uses material name to order equal-sized pie slices', async () => {
     const tiedItems = ['Zulu', 'Delta', 'Alpha', 'Mike', 'Beta', 'Gamma', 'Echo']
       .map((materialType) => ({ materialType, amount: 100 }));
@@ -318,6 +330,30 @@ describe('Visualizations RPT-022 new behavior', () => {
     expect.soft(tableText).toContain('-4.7%');
   });
 
+  it('shows the empty-material status without a pie or legend and keeps every row in the table', async () => {
+    const items = [
+      { materialType: 'No spend', amount: 0 },
+      { materialType: 'Credit', amount: -14 },
+    ];
+    await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items } }, false);
+    const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
+    const status = region?.querySelector('[role="status"]')?.textContent ?? '';
+    const sectors = region?.querySelectorAll('svg .recharts-pie-sector') ?? [];
+    const legend = region?.querySelectorAll('.recharts-legend-item') ?? [];
+    const table = await openTableWithoutAssumingItExists(region);
+    const rows = Array.from(table?.querySelectorAll('tbody tr') ?? []);
+    const tableText = table?.textContent ?? '';
+
+    expect.soft(status).toContain('No positive purchases for this fiscal year');
+    expect.soft(sectors).toHaveLength(0);
+    expect.soft(legend).toHaveLength(0);
+    expect.soft(rows).toHaveLength(items.length);
+    for (const item of items) {
+      expect.soft(tableText).toContain(item.materialType);
+      expect.soft(tableText).toContain(item.amount.toFixed(2));
+    }
+  });
+
   it('keeps a material type color stable when the selected fiscal year changes', async () => {
     const props = {
       materialYear: 2027 as number | 'all' | '', materialFiscalYearEnds: [2026, 2027],
@@ -354,11 +390,15 @@ describe('Visualizations RPT-022 new behavior', () => {
       { fiscalYearEnd: 2024, allocated: 4_000_000, changePct: null, source: 'folio' as const },
       { fiscalYearEnd: 2025, allocated: 3_000_000, changePct: 0, source: 'folio' as const },
       { fiscalYearEnd: 2026, allocated: 2_500_000, changePct: -12.7, source: 'folio' as const },
+      { fiscalYearEnd: 2027, allocated: 2_250_000, changePct: 7.5, source: 'folio' as const },
     ];
     await renderWithData({ budget });
     const budgetRegions = screen.queryAllByRole('region').filter((region) =>
       /^Library budget/.test(region.querySelector('h2')?.textContent ?? ''));
     const budgetRegion = screen.queryByRole('region', { name: chartTitlesForRestyle.budget });
+    const budgetLabels = Array.from(budgetRegion?.querySelectorAll('svg .recharts-label-list text') ?? []);
+    const labelTexts = budgetLabels.map((label) => label.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+    const bars = Array.from(budgetRegion?.querySelectorAll('.recharts-bar-rectangle .recharts-rectangle') ?? []);
     const labels = Array.from(budgetRegion?.querySelectorAll('svg text') ?? [])
       .map((label) => label.textContent?.replace(/\s+/g, ' ').trim() ?? '').join(' | ');
     const yAxes = budgetRegion?.querySelectorAll('svg .recharts-yAxis').length ?? 0;
@@ -373,6 +413,43 @@ describe('Visualizations RPT-022 new behavior', () => {
     expect.soft(labels).toContain('n/a');
     expect.soft(labels).toMatch(/–\s*0\.0%/);
     expect.soft(labels).toContain('▼ 12.7%');
+    expect.soft(budgetLabels).toHaveLength(budget.length);
+    expect.soft(bars).toHaveLength(budget.length);
+    const expectedLabelParts = [
+      ['$4.08M', '▲ 14.6%'], ['$4.00M', 'n/a'], ['$3.00M', '– 0.0%'],
+      ['$2.50M', '▼ 12.7%'], ['$2.25M', '▲ 7.5%'],
+    ];
+    labelTexts.forEach((label, index) => {
+      for (const expected of expectedLabelParts[index] ?? []) expect.soft(label).toContain(expected);
+    });
+    bars.forEach((bar, index) => {
+      const center = Number(bar.getAttribute('x')) + Number(bar.getAttribute('width')) / 2;
+      const labelX = Number(budgetLabels[index]?.getAttribute('x'));
+      expect.soft(Math.abs(labelX - center)).toBeLessThanOrEqual(1);
+    });
+  });
+
+  it('keeps an amount label on every bar and omits change labels when twenty budget years are crowded', async () => {
+    const budget = Array.from({ length: 20 }, (_, index) => ({
+      fiscalYearEnd: 2008 + index,
+      allocated: 4_080_000 - index * 11_000,
+      changePct: index === 0 ? null : index % 2 === 0 ? 2.4 : -1.5,
+      source: index % 5 === 0 ? 'history' as const : 'folio' as const,
+    }));
+    await renderWithData({ budget });
+    const budgetRegion = screen.queryByRole('region', { name: chartTitlesForRestyle.budget });
+    const bars = Array.from(budgetRegion?.querySelectorAll('.recharts-bar-rectangle .recharts-rectangle') ?? []);
+    const labels = Array.from(budgetRegion?.querySelectorAll('.recharts-label-list text') ?? []);
+    const labelTexts = labels.map((label) => label.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+    const table = await openTableWithoutAssumingItExists(budgetRegion);
+    const tableText = table?.textContent ?? '';
+
+    expect.soft(bars).toHaveLength(budget.length);
+    expect.soft(labels).toHaveLength(budget.length);
+    expect.soft(labelTexts.every((label) => label.startsWith('$'))).toBe(true);
+    expect.soft(labelTexts.some((label) => /[▲▼]|%/.test(label))).toBe(false);
+    expect.soft(tableText).toContain('+2.4%');
+    expect.soft(tableText).toContain('-1.5%');
   });
 
   it('renders the category share inside each purchase bar segment where it fits', async () => {
@@ -388,6 +465,16 @@ describe('Visualizations RPT-022 new behavior', () => {
     await renderWithData({});
     const region = screen.queryByRole('region', { name: chartTitlesForRestyle.purchases });
     const note = region?.textContent ?? '';
+    const backendSource = readFileSync(resolve(process.cwd(), '../backend/services/VisualizationDataService.php'), 'utf8');
+    const parseBackendGroup = (group: string) => {
+      const match = backendSource.match(new RegExp(`private const ${group} = \\[([^\\]]*)\\];`));
+      return match ? Array.from(match[1].matchAll(/'([^']*)'/g), (item) => item[1]) : null;
+    };
+    const noteLines = Array.from(region?.querySelectorAll('aside p') ?? []);
+    const readRenderedGroup = (group: string) => {
+      const line = noteLines.find((paragraph) => paragraph.querySelector('strong')?.textContent?.replace(':', '').trim() === group);
+      return line?.textContent?.replace(new RegExp(`^${group}:\\s*`), '').split(', ').map((item) => item.trim()) ?? null;
+    };
 
     expect.soft(note).toContain("What's in each group");
     for (const material of [
@@ -395,6 +482,14 @@ describe('Visualizations RPT-022 new behavior', () => {
       'Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial',
     ]) expect.soft(note).toContain(material);
     expect.soft(note).toMatch(/Other.*every other material type.*purchases without one/i);
+    const electronic = readRenderedGroup('Electronic');
+    const physical = readRenderedGroup('Physical');
+    const backendElectronic = parseBackendGroup('ELECTRONIC');
+    const backendPhysical = parseBackendGroup('PHYSICAL');
+    expect.soft(backendElectronic).not.toBeNull();
+    expect.soft(backendPhysical).not.toBeNull();
+    expect.soft(electronic).toEqual(backendElectronic);
+    expect.soft(physical).toEqual(backendPhysical);
   });
 
   it('keeps the rendered group note mapping in parity with both backend category lists', () => {
