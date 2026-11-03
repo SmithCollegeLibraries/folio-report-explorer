@@ -100,8 +100,8 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
     color: slice.key === OTHER_KEY ? NEUTRAL : colors.get(slice.name) ?? COLORS[index % COLORS.length],
   }));
   const total = slices.reduce((sum, slice) => sum + slice.amount, 0);
-  const center = { x: 180, y: 142 };
-  const radius = 88;
+  const center = narrow ? { x: 160, y: 160 } : { x: 180, y: 142 };
+  const radius = narrow ? 144 : 88;
   const labels = slices.map((slice, index) => {
     const prior = slices.slice(0, index).reduce((sum, item) => sum + item.amount, 0);
     const angle = (prior + slice.amount / 2) / total * Math.PI * 2 - Math.PI / 2;
@@ -119,9 +119,11 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   }
 
   return <div className="space-y-2">
-    <ChartContainer config={config} className="h-80" aria-label="Paid purchases by material type">
+    <ChartContainer config={config} className="h-80 min-w-0 w-full" aria-label="Paid purchases by material type">
       <div className="flex h-full w-full flex-col">
-      <svg className="recharts-surface min-h-0 w-full flex-1" viewBox="0 0 360 320" role="img" aria-label="Paid purchases by material type">
+      <svg className="recharts-surface min-h-0 min-w-0 w-full flex-1"
+        viewBox={narrow ? '0 0 320 320' : '0 0 360 320'} preserveAspectRatio="xMidYMid meet"
+        role="img" aria-label="Paid purchases by material type">
         <g className="recharts-pie-sectors">
           {slices.map((slice, index) => {
             const start = (slices.slice(0, index).reduce((sum, item) => sum + item.amount, 0) / total) * Math.PI * 2 - Math.PI / 2;

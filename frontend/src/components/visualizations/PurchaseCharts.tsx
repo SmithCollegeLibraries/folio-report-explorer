@@ -69,13 +69,22 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
             stackId="purchases" fill={group.color} radius={[4, 4, 0, 0]} isAnimationActive={false}>
             {purchases.map((row) => <Cell key={row.fiscalYearEnd}
               fill={row.source === 'history' ? `url(#${patternId})` : group.color} />)}
-            <LabelList dataKey={`${group.key}Pct`} position="inside" content={({ value, x, y, width, height }) => {
+            <LabelList dataKey={`${group.key}Pct`} position="inside" content={({ value, x, y, width, height, index }) => {
               const percentage = Number(value ?? 0);
               if (!Number.isFinite(percentage) || percentage < 8) return null;
+              const row = purchases[Number(index)];
+              const label = `${Math.round(percentage)}%`;
+              const textWidth = label.length * 7;
+              if (!row || Number(width ?? 0) < textWidth + 4) return null;
               const labelX = Number(x ?? 0) + Number(width ?? 0) / 2;
               const labelY = Number(y ?? 0) + Number(height ?? 0) / 2;
-              return <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central"
-                fill={group.key === 'electronic' ? '#ffffff' : '#111827'}>{Math.round(percentage)}%</text>;
+              const history = row.source === 'history';
+              return <g>
+                {history && <rect x={labelX - textWidth / 2 - 2} y={labelY - 8} width={textWidth + 4} height={16}
+                  rx={3} fill="#ffffff" fillOpacity={0.85} />}
+                <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central" fontSize={11}
+                  fill={history || group.key !== 'electronic' ? '#111827' : '#ffffff'}>{label}</text>
+              </g>;
             }} />
           </Bar>)}
           </BarChart>
