@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { LegendPayload } from 'recharts';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartLegendContent } from '../ui/chart-legend';
@@ -77,8 +77,24 @@ function materialTableRows(items: MaterialItem[]) {
 }
 
 export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
-  const narrow = useNarrowViewport();
+  const viewportNarrow = useNarrowViewport();
+  const [chartElement, setChartElement] = useState<HTMLDivElement | null>(null);
+  const [chartWidth, setChartWidth] = useState(0);
   const [active, setActive] = useState<PieSlice | null>(null);
+
+  useEffect(() => {
+    if (!chartElement) return;
+    const measure = (width: number) => {
+      if (width > 0) setChartWidth(width);
+    };
+    measure(chartElement.getBoundingClientRect().width);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => measure(entry.contentRect.width));
+    observer.observe(chartElement);
+    return () => observer.disconnect();
+  }, [chartElement]);
+
+  const narrow = viewportNarrow || chartWidth < 480;
 
   const slices = useMemo(() => buildSlices(items), [items]);
   const colors = useMemo(() => materialColors(slices
@@ -100,8 +116,11 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
     color: slice.key === OTHER_KEY ? NEUTRAL : colors.get(slice.name) ?? COLORS[index % COLORS.length],
   }));
   const total = slices.reduce((sum, slice) => sum + slice.amount, 0);
+  if (slices.length === 0) {
+    return <p role="status" className="py-16 text-center text-gray-600">No positive purchases for this fiscal year</p>;
+  }
   const center = narrow ? { x: 160, y: 160 } : { x: 180, y: 142 };
-  const radius = narrow ? 144 : 88;
+  const radius = narrow ? 144 : 60;
   const labels = slices.map((slice, index) => {
     const prior = slices.slice(0, index).reduce((sum, item) => sum + item.amount, 0);
     const angle = (prior + slice.amount / 2) / total * Math.PI * 2 - Math.PI / 2;
@@ -119,7 +138,7 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   }
 
   return <div className="space-y-2">
-    <ChartContainer config={config} className="h-80 min-w-0 w-full" aria-label="Paid purchases by material type">
+    <ChartContainer ref={setChartElement} config={config} className="h-80 min-w-0 w-full" aria-label="Paid purchases by material type">
       <div className="flex h-full w-full flex-col">
       <svg className="recharts-surface min-h-0 min-w-0 w-full flex-1"
         viewBox={narrow ? '0 0 320 320' : '0 0 360 320'} preserveAspectRatio="xMidYMid meet"
@@ -132,7 +151,10 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
             const [x1, y1] = point(start); const [x2, y2] = point(end);
             const large = end - start > Math.PI ? 1 : 0;
             const fill = slice.key === OTHER_KEY ? NEUTRAL : colors.get(slice.name) ?? COLORS[index % COLORS.length];
-            return <path key={`${slice.key}-${index}`} className="recharts-pie-sector" d={`M ${center.x} ${center.y} L ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2} Z`}
+            const d = slices.length === 1
+              ? `M ${center.x} ${center.y} L ${center.x} ${center.y - radius} A ${radius} ${radius} 0 1 1 ${center.x} ${center.y + radius} A ${radius} ${radius} 0 1 1 ${center.x} ${center.y - radius} Z`
+              : `M ${center.x} ${center.y} L ${x1} ${y1} A ${radius} ${radius} 0 ${large} 1 ${x2} ${y2} Z`;
+            return <path key={`${slice.key}-${index}`} className="recharts-pie-sector" d={d}
               fill={fill} stroke="white" strokeWidth="2" tabIndex={0} role="img"
               aria-label={`${slice.name}, ${amount(slice.amount)}, ${slice.percentage.toFixed(1)}%`}
               onMouseEnter={() => setActive(slice)} onFocus={() => setActive(slice)} onMouseLeave={() => setActive(null)} />;
@@ -141,12 +163,17 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
         {!narrow && <g className="recharts-pie-labels">
           {labels.filter((label) => label.slice.percentage >= 3).map(({ slice, angle, side, y }) => {
             const [x1, y1] = [center.x + Math.cos(angle) * radius, center.y + Math.sin(angle) * radius];
-            const x2 = side === 'right' ? 326 : 34;
-            const x3 = side === 'right' ? 332 : 28;
+            const x2 = side === 'right' ? 242 : 118;
+            const x3 = side === 'right' ? 244 : 116;
+            const shareText = `${slice.percentage.toFixed(1)}%`;
+            const availableWidth = side === 'right' ? 360 - x3 : x3;
+            const nameLimit = Math.floor(availableWidth / 5.2) - shareText.length - 1;
+            const labelName = slice.name.length > nameLimit
+              ? `${slice.name.slice(0, Math.max(1, nameLimit - 1))}…` : slice.name;
             return <g key={slice.key}>
               <path d={`M ${x1} ${y1} L ${x2} ${y} L ${x3} ${y}`} fill="none" stroke="#6b7280" strokeWidth="1" />
               <text x={x3} y={y + 4} textAnchor={side === 'right' ? 'start' : 'end'} fill="#374151" fontSize="10">
-                {slice.name} {slice.percentage.toFixed(1)}%
+                {labelName} {shareText}
               </text>
             </g>;
           })}

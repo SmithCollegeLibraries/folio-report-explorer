@@ -4,6 +4,7 @@ import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartTooltip, ChartTooltipContent } from '../ui/chart-tooltip';
 import { ChartCard, HistoryPattern, amount, percent } from './ChartCard';
+import { useNarrowViewport } from './useNarrowViewport';
 
 type BudgetRow = VisualizationData['budget'][number];
 const config: ChartConfig = { allocated: { label: 'Allocated', color: 'var(--chart-1)' } };
@@ -33,9 +34,9 @@ function estimatedLabelWidth(value: string) {
 
 export function BudgetCharts({ data }: { data: VisualizationData }) {
   const patternId = useId().replace(/:/g, '');
-  const newestYear = Math.max(...data.budget.map((row) => row.fiscalYearEnd), Number.NEGATIVE_INFINITY);
-  const newestIndex = data.budget.findIndex((row) => row.fiscalYearEnd === newestYear);
-  const tallestAllocated = Math.max(...data.budget.map((row) => row.allocated), 0);
+  const narrow = useNarrowViewport();
+  const showChangeLabels = !narrow && data.budget.length < 15;
+  const topMargin = showChangeLabels && data.budget.length >= 10 ? 112 : 42;
   const title = 'Library budget';
   return <ChartCard title={title} history explanation="Total budget allocated to the acquisitions unit, with the API-reported year-over-year change."
     table={<table><caption>{title}</caption><thead><tr><th scope="col">Fiscal year</th>
@@ -46,7 +47,7 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
     </tr>)}</tbody></table>}>
     <div className="relative h-80 min-w-0 w-full" aria-label="Allocated budget by fiscal year">
       <ChartContainer config={config} className="h-full min-w-0 w-full">
-        <BarChart data={data.budget} margin={{ top: 42, right: 12, bottom: 12, left: 8 }} barCategoryGap={2}>
+        <BarChart data={data.budget} margin={{ top: topMargin, right: 12, bottom: 12, left: 8 }} barCategoryGap={2}>
         <HistoryPattern id={patternId} />
         <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
@@ -62,34 +63,33 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
         <Bar dataKey="allocated" name="Allocated" fill="var(--chart-1)" radius={[4, 4, 0, 0]} isAnimationActive={false}>
           {data.budget.map((row) => <Cell key={row.fiscalYearEnd}
             fill={row.source === 'history' ? `url(#${patternId})` : 'var(--chart-1)'} />)}
-          <LabelList dataKey="allocated" position="top" content={({ x, y, width, height, index }) => {
+          <LabelList dataKey="allocated" position="top" content={({ x, y, width, index }) => {
             const barIndex = Number(index);
             const row = data.budget[barIndex];
             if (!row) return null;
-            const labelX = Number(x ?? 0);
+            const labelX = Number(x ?? 0) + Number(width ?? 0) / 2;
             const labelY = Number(y ?? 0);
             const barWidth = Number(width ?? 0);
             const amountText = compactAmount(row.allocated);
             const changeText = changeLabel(row.changePct);
             const amountWidth = estimatedLabelWidth(amountText);
             const changeWidth = estimatedLabelWidth(changeText);
-            const labelGap = 4;
-            const showChange = Math.max(amountWidth, changeWidth) + labelGap <= barWidth;
-            const showAmount = amountWidth + labelGap <= barWidth;
-            const showSparseAmount = amountWidth + labelGap <= barWidth * 2
-              && Math.abs(barIndex - newestIndex) % 2 === 0;
-            if (!showChange && !showAmount && !showSparseAmount) return null;
+            const horizontal = amountWidth + 8 <= barWidth
+              && (!showChangeLabels || changeWidth + 8 <= barWidth);
+            const labelYAboveBar = labelY - 6;
 
-            const sparse = !showChange && !showAmount;
-            const barHeight = Number(height ?? 0);
-            const plotBottom = labelY + barHeight;
-            const tallestBarY = row.allocated > 0 && barHeight > 0
-              ? plotBottom - tallestAllocated * (barHeight / row.allocated)
-              : labelY;
-            const textY = Math.min(labelY, sparse ? tallestBarY : labelY) - (showChange ? 20 : 7);
-            return <text x={labelX} y={textY} textAnchor="middle" fill="#374151" fontSize={11}>
+            if (!horizontal) {
+              return <text x={labelX} y={labelYAboveBar}
+                transform={`rotate(-90 ${labelX} ${labelYAboveBar})`}
+                textAnchor="start" fill="#374151" fontSize={9}>
+                <tspan x={labelX}>{amountText}</tspan>
+                {showChangeLabels && <tspan x={labelX} dy="10">{changeText}</tspan>}
+              </text>;
+            }
+
+            return <text x={labelX} y={labelY - (showChangeLabels ? 20 : 7)} textAnchor="middle" fill="#374151" fontSize={11}>
               <tspan x={labelX}>{amountText}</tspan>
-              {showChange && <tspan x={labelX} dy="13">{changeText}</tspan>}
+              {showChangeLabels && <tspan x={labelX} dy="13">{changeText}</tspan>}
             </text>;
           }} />
         </Bar>

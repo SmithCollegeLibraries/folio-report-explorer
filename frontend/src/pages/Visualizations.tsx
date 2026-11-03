@@ -46,7 +46,7 @@ export default function Visualizations() {
           materialFiscalYearEnds={state.materialFiscalYearEnds} materialLoading={state.materialLoading}
           materialError={state.materialError} materialAvailable={state.materialAvailable}
           onMaterialYear={state.setMaterialYear} />
-        <BudgetCharts data={data} />
+        <div className="min-w-0 lg:col-span-2"><BudgetCharts data={data} /></div>
       </div>
       {isAdmin && <HistoryPanel key={data.unit.code} unitCode={data.unit.code} currentYear={data.currentFiscalYearEnd} />}
     </>}

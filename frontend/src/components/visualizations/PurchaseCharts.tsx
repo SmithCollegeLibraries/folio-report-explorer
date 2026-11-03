@@ -4,7 +4,7 @@ import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartLegendContent } from '../ui/chart-legend';
 import { ChartTooltip } from '../ui/chart-tooltip';
-import { ChartCard, HistoryPattern, amount } from './ChartCard';
+import { ChartCard, amount } from './ChartCard';
 import { MaterialPieChart, materialRows } from './MaterialPieChart';
 import { errorMessage } from '../../utils/errorMessage';
 
@@ -52,7 +52,11 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
       <div className="min-w-0 w-full" aria-label="Purchases as percentages by fiscal year">
         <ChartContainer config={groupConfig} className="h-72 min-w-0 w-full">
           <BarChart data={purchases} barCategoryGap={2} barGap={2}>
-          <HistoryPattern id={patternId} />
+          <defs>{groups.map((group) => <pattern key={group.key} id={`${patternId}-${group.key}`}
+            width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+            <rect width="6" height="6" fill="#f8fafc" />
+            <path d="M 0 0 V 6" stroke={group.color} strokeWidth="2" />
+          </pattern>)}</defs>
           <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} />
           <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} allowDataOverflow
@@ -68,7 +72,7 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
           {groups.map((group) => <Bar key={group.key} dataKey={`${group.key}Pct`} name={group.name}
             stackId="purchases" fill={group.color} radius={[4, 4, 0, 0]} isAnimationActive={false}>
             {purchases.map((row) => <Cell key={row.fiscalYearEnd}
-              fill={row.source === 'history' ? `url(#${patternId})` : group.color} />)}
+              fill={row.source === 'history' ? `url(#${patternId}-${group.key})` : group.color} />)}
             <LabelList dataKey={`${group.key}Pct`} position="inside" content={({ value, x, y, width, height, index }) => {
               const percentage = Number(value ?? 0);
               if (!Number.isFinite(percentage) || percentage < 8) return null;
