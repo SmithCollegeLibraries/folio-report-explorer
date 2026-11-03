@@ -197,7 +197,7 @@ class FolioQueryController extends Controller
         }
 
         if (YII_ENV === 'dev') {
-            return new DummyIdentity();
+            return \app\services\DevIdentityProvider::identity();
         }
 
         return null;
@@ -217,7 +217,7 @@ class FolioQueryController extends Controller
         }
 
         if (YII_ENV === 'dev') {
-            return (int) (new DummyIdentity())->getId();
+            return \app\services\DevIdentityProvider::id();
         }
 
         return null;

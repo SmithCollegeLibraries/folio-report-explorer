@@ -9,6 +9,7 @@ use yii\web\Controller;
 use yii\web\Response;
 use app\controllers\traits\PersistedAdminAccessTrait;
 use app\models\User;
+use app\services\DevIdentityProvider;
 use app\services\VisualizationDataService;
 use app\services\VisualizationHistoryService;
 
@@ -24,20 +25,22 @@ final class VisualizationController extends Controller
     public function behaviors()
     {
         $behaviors = parent::behaviors();
-        $behaviors['authenticator'] = ['class' => HttpBearerAuth::class];
-        $behaviors['access'] = [
-            'class' => AccessControl::class,
-            'rules' => [[
-                'allow' => true,
-                'roles' => ['@'],
-                'matchCallback' => function () { return $this->isPersistedApprovedUser(); },
-            ], [
-                'allow' => false,
-                'denyCallback' => function () {
-                    Yii::$app->response->statusCode = Yii::$app->user->isGuest ? 401 : 403;
-                },
-            ]],
-        ];
+        if (YII_ENV !== 'dev') {
+            $behaviors['authenticator'] = ['class' => HttpBearerAuth::class];
+            $behaviors['access'] = [
+                'class' => AccessControl::class,
+                'rules' => [[
+                    'allow' => true,
+                    'roles' => ['@'],
+                    'matchCallback' => function () { return $this->isPersistedApprovedUser(); },
+                ], [
+                    'allow' => false,
+                    'denyCallback' => function () {
+                        Yii::$app->response->statusCode = Yii::$app->user->isGuest ? 401 : 403;
+                    },
+                ]],
+            ];
+        }
         return $behaviors;
     }
 
@@ -75,7 +78,7 @@ final class VisualizationController extends Controller
 
     public function actionHistory(): array
     {
-        if (($denied = $this->requireAdministrator()) !== null) return $denied;
+        if (($denied = $this->requireVisualizationAdministrator()) !== null) return $denied;
         $code = trim((string)Yii::$app->request->get('acqUnitCode', ''));
         foreach ($this->dataService()->options()['units'] as $unit) {
             if ($unit['code'] === $code) return $this->historyService([$code])->list($code);
@@ -85,10 +88,10 @@ final class VisualizationController extends Controller
 
     public function actionHistoryUpsert(): array
     {
-        if (($denied = $this->requireAdministrator()) !== null) return $denied;
+        if (($denied = $this->requireVisualizationAdministrator()) !== null) return $denied;
         $options = $this->dataService()->options();
         $codes = array_column($options['units'], 'code');
-        $result = $this->historyService($codes)->upsert(Yii::$app->request->bodyParams, (int)Yii::$app->user->id);
+        $result = $this->historyService($codes)->upsert(Yii::$app->request->bodyParams, $this->currentActorId());
         if (isset($result['errors'])) return $this->error(422, $result);
         Yii::$app->response->statusCode = 200;
         return $result;
@@ -96,8 +99,8 @@ final class VisualizationController extends Controller
 
     public function actionHistoryDelete($id): array
     {
-        if (($denied = $this->requireAdministrator()) !== null) return $denied;
-        $result = $this->historyService([])->delete((int)$id, (int)Yii::$app->user->id);
+        if (($denied = $this->requireVisualizationAdministrator()) !== null) return $denied;
+        $result = $this->historyService([])->delete((int)$id, $this->currentActorId());
         if (isset($result['errors'])) return $this->error(422, $result);
         return $result;
     }
@@ -122,9 +125,22 @@ final class VisualizationController extends Controller
 
     private function requireApprovedUser(): ?array
     {
+        if (YII_ENV === 'dev') return null;
         if ($this->isPersistedApprovedUser()) return null;
         Yii::$app->response->statusCode = Yii::$app->user->isGuest ? 401 : 403;
         return ['error' => Yii::$app->user->isGuest ? 'Unauthorized' : 'Forbidden'];
+    }
+
+    private function requireVisualizationAdministrator(): ?array
+    {
+        if (YII_ENV === 'dev') return null;
+        return $this->requireAdministrator();
+    }
+
+    private function currentActorId(): int
+    {
+        if (YII_ENV === 'dev') return DevIdentityProvider::id();
+        return (int)Yii::$app->user->id;
     }
 
     private function error(int $status, $body): array
