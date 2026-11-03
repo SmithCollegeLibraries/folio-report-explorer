@@ -219,7 +219,6 @@ export default function ChartPanel({ data, chartType: externalChartType, initial
                   dataKey={y}
                   fill={COLORS[i % COLORS.length]}
                   radius={[4, 4, 0, 0]}
-                  isAnimationActive={false}
                 />
               ))}
             </BarChart>
@@ -289,7 +288,6 @@ export default function ChartPanel({ data, chartType: externalChartType, initial
                   `${name}: ${((percent ?? 0) * 100).toFixed(0)}%`
                 }
                 labelLine
-                isAnimationActive={false}
               >
                 {chartData.map((_, i) => (
                   <Cell key={i} fill={COLORS[i % COLORS.length]} />

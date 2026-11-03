@@ -125,6 +125,14 @@ async function renderWithData(data: Partial<VisualizationData>) {
   renderPage();
   await waitFor(() => expect(api.fetchVisualizations).toHaveBeenCalled());
   await act(async () => { await figuresLoaded; });
+  const purchaseRegion = await chart(chartTitles[0]);
+  const materialRegion = await chart(chartTitles[1]);
+  const budgetRegion = await chart(chartTitles[2]);
+  await waitFor(() => {
+    expect(purchaseRegion.querySelectorAll('svg .recharts-label-list text').length).toBeGreaterThan(0);
+    expect(materialRegion.querySelectorAll('svg .recharts-pie-sector').length).toBeGreaterThan(0);
+    expect(budgetRegion.querySelectorAll('svg .recharts-label-list text').length).toBeGreaterThan(0);
+  });
 }
 
 function pieLabels(region: HTMLElement | null) {
@@ -322,6 +330,7 @@ describe('Visualizations RPT-022 new behavior', () => {
     }} {...props} />);
     const regionFor2027 = Array.from(container.querySelectorAll('section[aria-labelledby]'))
       .find((section) => section.querySelector('h2')?.textContent === chartTitlesForRestyle.material) ?? null;
+    await waitFor(() => expect(regionFor2027?.querySelectorAll('svg .recharts-pie-sector').length ?? 0).toBeGreaterThan(0));
     const colorFor2027 = materialLegendColor(regionFor2027, 'Database');
 
     rerender(<PurchaseCharts data={{ ...figures,
@@ -331,6 +340,7 @@ describe('Visualizations RPT-022 new behavior', () => {
     }} {...props} materialYear={2026} />);
     const regionFor2026 = Array.from(container.querySelectorAll('section[aria-labelledby]'))
       .find((section) => section.querySelector('h2')?.textContent === chartTitlesForRestyle.material) ?? null;
+    await waitFor(() => expect(regionFor2026?.querySelectorAll('svg .recharts-pie-sector').length ?? 0).toBeGreaterThan(0));
     const colorFor2026 = materialLegendColor(regionFor2026, 'Database');
 
     expect.soft(colorFor2027).not.toBeNull();
