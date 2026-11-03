@@ -1,7 +1,8 @@
 /*
- * Folio chart primitives adapted to shadcn/ui's New York, Tailwind CSS v3 chart conventions.
- * Source candidate: https://raw.githubusercontent.com/shadcn-ui/ui/v3.3.0/apps/www/registry/new-york/ui/chart.tsx
- * The source candidate returned HTTP 404. No upstream source file was copied; exact commit SHA is unresolved.
+ * Source: https://github.com/shadcn-ui/ui/blob/7869defd429cd8451407c8925e2dd0b55242d569/apps/www/registry/new-york/ui/chart.tsx
+ * Commit: 7869defd429cd8451407c8925e2dd0b55242d569
+ *
+ * MIT License
  * Copyright (c) 2023 shadcn
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -23,46 +24,175 @@
  * SOFTWARE.
  */
 
-import { createContext, useContext, type ComponentType, type CSSProperties, type ReactNode } from 'react';
-import { cn } from '../../lib/utils';
+"use client"
 
-export type ChartConfig = Record<string, {
-  label?: ReactNode;
-  color?: string;
-  icon?: ComponentType;
-}>;
+import * as React from "react"
+import * as RechartsPrimitive from "recharts"
 
-type ChartContextValue = { config: ChartConfig };
-const ChartContext = createContext<ChartContextValue | null>(null);
+import { cn } from "../../lib/utils"
 
-export function useChart() {
-  const context = useContext(ChartContext);
-  if (!context) throw new Error('useChart must be used within a ChartContainer');
-  return context;
+// Format: { THEME_NAME: CSS_SELECTOR }
+const THEMES = { light: "", dark: ".dark" } as const
+
+export type ChartConfig = {
+  [k in string]: {
+    label?: React.ReactNode
+    icon?: React.ComponentType
+  } & (
+    | { color?: string; theme?: never }
+    | { color?: never; theme: Record<keyof typeof THEMES, string> }
+  )
 }
 
-export function ChartContainer({
-  config, className, children, id, style, ...props
-}: {
-  config: ChartConfig;
-  className?: string;
-  children: ReactNode;
-  id?: string;
-  style?: CSSProperties;
-  'aria-label'?: string;
-}) {
-  const variables = Object.fromEntries(Object.entries(config).flatMap(([key, value]) =>
-    value.color ? [[`--color-${key}`, value.color]] : [])) as CSSProperties;
-  return <ChartContext.Provider value={{ config }}>
-    <div {...props} id={id} style={{ ...variables, ...style }}
-      className={cn('relative w-full text-xs [&_.recharts-cartesian-axis-tick_text]:fill-gray-500 [&_.recharts-cartesian-grid_line]:stroke-gray-200 [&_.recharts-tooltip-cursor]:fill-gray-100 [&_.recharts-dot]:stroke-transparent [&_.recharts-layer]:outline-none [&_.recharts-polar-grid_[stroke]]:stroke-gray-200', className)}>
-      {children}
-    </div>
-  </ChartContext.Provider>;
+type ChartContextProps = {
+  config: ChartConfig
 }
 
-export function ChartStyle({ config }: { config: ChartConfig }) {
-  const rules = Object.entries(config).filter(([, item]) => item.color)
-    .map(([key, item]) => `[data-chart] { --color-${key}: ${item.color}; }`).join('\n');
-  return <style>{rules}</style>;
+const ChartContext = React.createContext<ChartContextProps | null>(null)
+
+function useChart() {
+  const context = React.useContext(ChartContext)
+
+  if (!context) {
+    throw new Error("useChart must be used within a <ChartContainer />")
+  }
+
+  return context
+}
+
+const ChartContainer = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentProps<"div"> & {
+    config: ChartConfig
+    children: React.ComponentProps<
+      typeof RechartsPrimitive.ResponsiveContainer
+    >["children"]
+  }
+>(({ id, className, children, config, ...props }, ref) => {
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [dimensions, setDimensions] = React.useState({ width: 640, height: 320 })
+  React.useImperativeHandle(ref, () => containerRef.current as HTMLDivElement)
+  const uniqueId = React.useId()
+  const chartId = `chart-${id || uniqueId.replace(/:/g, "")}`
+
+  React.useEffect(() => {
+    if (!containerRef.current || typeof ResizeObserver === "undefined") {
+      return
+    }
+
+    const observer = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width)
+      const height = Math.round(entry.contentRect.height)
+      if (width > 0 && height > 0) {
+        setDimensions((current) =>
+          current.width === width && current.height === height
+            ? current
+            : { width, height }
+        )
+      }
+    })
+    observer.observe(containerRef.current)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <ChartContext.Provider value={{ config }}>
+      <div
+        data-chart={chartId}
+        ref={containerRef}
+        className={cn(
+          "relative flex aspect-video justify-center text-xs [&_.recharts-cartesian-axis-tick_text]:fill-muted-foreground [&_.recharts-cartesian-grid_line[stroke='#ccc']]:stroke-border/50 [&_.recharts-curve.recharts-tooltip-cursor]:stroke-border [&_.recharts-dot[stroke='#fff']]:stroke-transparent [&_.recharts-layer]:outline-none [&_.recharts-polar-grid_[stroke='#ccc']]:stroke-border [&_.recharts-radial-bar-background-sector]:fill-muted [&_.recharts-rectangle.recharts-tooltip-cursor]:fill-muted [&_.recharts-reference-line_[stroke='#ccc']]:stroke-border [&_.recharts-sector[stroke='#fff']]:stroke-transparent [&_.recharts-sector]:outline-none [&_.recharts-surface]:outline-none",
+          className
+        )}
+        {...props}
+      >
+        <ChartStyle id={chartId} config={config} />
+        <div className="absolute inset-0">
+          <RechartsPrimitive.ResponsiveContainer width={dimensions.width} height={dimensions.height}>
+            {children}
+          </RechartsPrimitive.ResponsiveContainer>
+        </div>
+      </div>
+    </ChartContext.Provider>
+  )
+})
+ChartContainer.displayName = "Chart"
+
+const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
+  const colorConfig = Object.entries(config).filter(
+    ([, config]) => config.theme || config.color
+  )
+
+  if (!colorConfig.length) {
+    return null
+  }
+
+  return (
+    <style
+      dangerouslySetInnerHTML={{
+        __html: Object.entries(THEMES)
+          .map(
+            ([theme, prefix]) => `
+${prefix} [data-chart=${id}] {
+${colorConfig
+  .map(([key, itemConfig]) => {
+    const color =
+      itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
+      itemConfig.color
+    return color ? `  --color-${key}: ${color};` : null
+  })
+  .join("\n")}
+}
+`
+          )
+          .join("\n"),
+      }}
+    />
+  )
+}
+
+// Helper to extract item config from a payload.
+function getPayloadConfigFromPayload(
+  config: ChartConfig,
+  payload: unknown,
+  key: string
+) {
+  if (typeof payload !== "object" || payload === null) {
+    return undefined
+  }
+
+  const payloadPayload =
+    "payload" in payload &&
+    typeof payload.payload === "object" &&
+    payload.payload !== null
+      ? payload.payload
+      : undefined
+
+  let configLabelKey: string = key
+
+  if (
+    key in payload &&
+    typeof payload[key as keyof typeof payload] === "string"
+  ) {
+    configLabelKey = payload[key as keyof typeof payload] as string
+  } else if (
+    payloadPayload &&
+    key in payloadPayload &&
+    typeof payloadPayload[key as keyof typeof payloadPayload] === "string"
+  ) {
+    configLabelKey = payloadPayload[
+      key as keyof typeof payloadPayload
+    ] as string
+  }
+
+  return configLabelKey in config
+    ? config[configLabelKey]
+    : config[key as keyof typeof config]
+}
+
+export {
+  ChartContainer,
+  ChartStyle,
+  useChart,
+  getPayloadConfigFromPayload,
 }

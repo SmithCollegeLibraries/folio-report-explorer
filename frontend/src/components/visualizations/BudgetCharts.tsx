@@ -1,8 +1,9 @@
 import { useId } from 'react';
-import { Bar, BarChart, CartesianGrid, Cell, Legend, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, Legend, XAxis, YAxis } from 'recharts';
 import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartLegendContent } from '../ui/chart-legend';
+import { ChartTooltip, ChartTooltipContent } from '../ui/chart-tooltip';
 import { ChartCard, HistoryPattern, amount, percent } from './ChartCard';
 import { useNarrowViewport } from './useNarrowViewport';
 
@@ -37,20 +38,18 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
     </tr>)}</tbody></table>}>
     <div className="relative h-80" aria-label="Allocated budget by fiscal year">
       <ChartContainer config={config} className="h-full">
-        <BarChart width={640} height={320} responsive style={{ width: '100%', height: '100%' }}
-          data={data.budget} margin={{ top: 42, right: 12, bottom: 12, left: 72 }} barCategoryGap={2}>
+        <BarChart data={data.budget} margin={{ top: 42, right: 12, bottom: 12, left: 72 }} barCategoryGap={2}>
         <HistoryPattern id={patternId} />
         <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="fiscalYearEnd" hide />
         <YAxis hide />
-        <Tooltip content={({ active, payload, label }) => {
-          if (!active || !payload?.length) return null;
-          const row = payload[0].payload as BudgetRow;
-          return <div className="rounded-md border border-gray-200 bg-white p-3 text-sm shadow-md">
-            <strong>FY {label}</strong><p>Allocated: {amount(row.allocated)}</p>
+        <ChartTooltip content={<ChartTooltipContent hideLabel indicator="line" formatter={(_value, _name, item) => {
+          const row = item.payload as BudgetRow;
+          return <div className="grid gap-1.5 text-sm">
+            <strong>FY {row.fiscalYearEnd}</strong><p>Allocated: {amount(row.allocated)}</p>
             <p>Change: {changeLabel(row.changePct)}</p><p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p>
           </div>;
-        }} />
+        }} />} />
         <Legend content={<ChartLegendContent />} />
         <Bar dataKey="allocated" name="Allocated" fill="var(--chart-1)" radius={[4, 4, 0, 0]} isAnimationActive={false}>
           {data.budget.map((row) => <Cell key={row.fiscalYearEnd}

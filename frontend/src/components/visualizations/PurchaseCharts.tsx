@@ -1,8 +1,9 @@
 import { useId } from 'react';
-import { Bar, BarChart, CartesianGrid, Cell, Legend, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, CartesianGrid, Cell, Legend, XAxis, YAxis } from 'recharts';
 import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartLegendContent } from '../ui/chart-legend';
+import { ChartTooltip } from '../ui/chart-tooltip';
 import { ChartCard, HistoryPattern, amount } from './ChartCard';
 import { MaterialPieChart, materialRows } from './MaterialPieChart';
 import { errorMessage } from '../../utils/errorMessage';
@@ -49,13 +50,12 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
       </tr>)}</tbody></table>}>
       <div className="h-80" aria-label="Purchases as percentages by fiscal year">
         <ChartContainer config={groupConfig} className="h-full">
-          <BarChart width={640} height={320} responsive style={{ width: '100%', height: '100%' }}
-            data={purchases} barCategoryGap={2} barGap={2}>
+          <BarChart data={purchases} barCategoryGap={2} barGap={2}>
           <HistoryPattern id={patternId} />
           <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
           <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} />
           <YAxis domain={[0, 100]} tickFormatter={(value) => `${value}%`} width={48} tickLine={false} axisLine={false} />
-          <Tooltip content={({ active, payload, label }) => {
+          <ChartTooltip content={({ active, payload, label }) => {
             if (!active || !payload?.length) return null;
             const row = payload[0].payload as VisualizationData['purchasesByCategory'][number];
             return <div className="rounded-md border border-gray-200 bg-white p-3 text-sm shadow-md"><strong>FY {label}</strong>

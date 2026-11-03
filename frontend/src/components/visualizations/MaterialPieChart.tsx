@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
+import type { LegendPayload } from 'recharts';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
-import { ChartLegendContent, type ChartLegendEntry } from '../ui/chart-legend';
+import { ChartLegendContent } from '../ui/chart-legend';
 import { amount } from './ChartCard';
 import { useNarrowViewport } from './useNarrowViewport';
 
@@ -10,6 +11,14 @@ const OTHER_KEY = '__rpt022_all_other_materials__';
 const COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)', 'var(--chart-6)'];
 const NEUTRAL = 'var(--chart-neutral)';
 const PREFERRED = ['E-Journal Package', 'Database', 'E-Book', 'E-Journal', 'Book', 'E-Book Package'];
+
+function materialLegendIcon(color: string) {
+  return function MaterialLegendIcon() {
+    return <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12">
+      <rect width="12" height="12" rx="2" fill={color} />
+    </svg>;
+  };
+}
 
 function roundShares(values: number[]) {
   if (!values.length) return [];
@@ -76,10 +85,19 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
     .filter((slice) => slice.key !== OTHER_KEY)
     .map((slice) => ({ materialType: slice.name, amount: slice.amount }))), [slices]);
   const config: ChartConfig = Object.fromEntries(slices.map((slice, index) => [
-    slice.key, { label: slice.name, color: slice.key === OTHER_KEY ? NEUTRAL : colors.get(slice.name) ?? COLORS[index % COLORS.length] },
+    `slice-${index}`, (() => {
+      const color = slice.key === OTHER_KEY ? NEUTRAL : colors.get(slice.name) ?? COLORS[index % COLORS.length];
+      return {
+        label: narrow ? `${slice.name} ${slice.percentage.toFixed(1)}%` : slice.name,
+        color,
+        icon: materialLegendIcon(color),
+      };
+    })(),
   ]));
-  const legendPayload: ChartLegendEntry[] = slices.map((slice) => ({
-    value: slice.name, dataKey: slice.key, color: slice.key === OTHER_KEY ? NEUTRAL : colors.get(slice.name),
+  const legendPayload: LegendPayload[] = slices.map((slice, index) => ({
+    value: slice.name,
+    dataKey: `slice-${index}`,
+    color: slice.key === OTHER_KEY ? NEUTRAL : colors.get(slice.name) ?? COLORS[index % COLORS.length],
   }));
   const total = slices.reduce((sum, slice) => sum + slice.amount, 0);
   const center = { x: 180, y: 142 };
@@ -102,7 +120,8 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
 
   return <div className="space-y-2">
     <ChartContainer config={config} className="h-80" aria-label="Paid purchases by material type">
-      <svg className="recharts-surface h-full w-full" viewBox="0 0 360 320" role="img" aria-label="Paid purchases by material type">
+      <div className="flex h-full w-full flex-col">
+      <svg className="recharts-surface min-h-0 w-full flex-1" viewBox="0 0 360 320" role="img" aria-label="Paid purchases by material type">
         <g className="recharts-pie-sectors">
           {slices.map((slice, index) => {
             const start = (slices.slice(0, index).reduce((sum, item) => sum + item.amount, 0) / total) * Math.PI * 2 - Math.PI / 2;
@@ -131,12 +150,11 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
           })}
         </g>}
       </svg>
+      <ChartLegendContent payload={legendPayload} verticalAlign="bottom"
+        className={narrow ? 'flex-col items-start gap-2 pt-1' : 'flex-wrap gap-4 pt-1'} />
+      </div>
     </ChartContainer>
     {active && <p role="status" className="text-center text-sm text-gray-700">{active.name}: {amount(active.amount)} ({active.percentage.toFixed(1)}%)</p>}
-    <ChartLegendContent payload={legendPayload} value={narrow ? (entry) => {
-      const slice = slices.find((item) => item.name === entry.value);
-      return slice ? `${slice.percentage.toFixed(1)}%` : undefined;
-    } : undefined} className="pt-1" />
   </div>;
 }
 
