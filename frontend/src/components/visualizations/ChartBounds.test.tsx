@@ -56,7 +56,37 @@ function circleGeometry(path: SVGPathElement) {
   return { centerX: Number(center[1]), centerY: Number(center[2]), radiusX: Number(arc[1]), radiusY: Number(arc[2]) };
 }
 
+function expectSideLabelsInsideSvg(svg: SVGSVGElement) {
+  const bounds = viewBox(svg);
+  const labels = Array.from(svg.querySelectorAll('.recharts-pie-labels text'));
+  expect(labels.length).toBeGreaterThan(0);
+
+  for (const label of labels) {
+    const x = Number(label.getAttribute('x'));
+    const y = Number(label.getAttribute('y'));
+    const width = (label as SVGTextElement).getComputedTextLength();
+    const height = Number(label.getAttribute('font-size') ?? 10);
+    const left = label.getAttribute('text-anchor') === 'end' ? x - width : x;
+    const right = label.getAttribute('text-anchor') === 'end' ? x : x + width;
+    expect.soft(left).toBeGreaterThanOrEqual(bounds.x);
+    expect.soft(right).toBeLessThanOrEqual(bounds.x + bounds.width);
+    expect.soft(y - height).toBeGreaterThanOrEqual(bounds.y);
+    expect.soft(y + 2).toBeLessThanOrEqual(bounds.y + bounds.height);
+  }
+
+  return labels;
+}
+
 const singleMaterial = [{ materialType: 'Book', amount: 1000 }];
+const labelledMaterials = [
+  { materialType: 'Database', amount: 553 },
+  { materialType: 'Admin', amount: 201 },
+  { materialType: 'Book', amount: 80 },
+  { materialType: 'E-Journal', amount: 56 },
+  { materialType: 'E-Book', amount: 52 },
+  { materialType: 'Journal', amount: 16 },
+  { materialType: 'Score', amount: 42 },
+];
 
 describe('RPT-024 visualization bounds', () => {
   it('sizes the material pie responsively inside its SVG', async () => {
@@ -91,6 +121,29 @@ describe('RPT-024 visualization bounds', () => {
     expect.soft(radii[1]).toBeGreaterThanOrEqual(110);
   });
 
+  it('keeps a large pie with labels on both sides at the measured 640px and 800px widths', async () => {
+    for (const width of [640, 800]) {
+      setChartSize(width);
+      const { container, unmount } = render(<MaterialPieChart items={labelledMaterials} />);
+      const svg = container.querySelector('svg');
+      expect(svg).not.toBeNull();
+      if (!svg) { unmount(); continue; }
+
+      await waitFor(() => expect(svg.querySelectorAll('.recharts-pie-labels text').length).toBeGreaterThan(0));
+      const path = svg.querySelector('.recharts-pie-sector');
+      expect(path).not.toBeNull();
+      if (!path) { unmount(); continue; }
+      const { radiusX } = circleGeometry(path as SVGPathElement);
+      const labels = expectSideLabelsInsideSvg(svg);
+
+      expect.soft(viewBox(svg).width).toBe(width);
+      expect.soft(radiusX).toBeGreaterThanOrEqual(110);
+      expect.soft(labels.some((label) => label.getAttribute('text-anchor') === 'start')).toBe(true);
+      expect.soft(labels.some((label) => label.getAttribute('text-anchor') === 'end')).toBe(true);
+      unmount();
+    }
+  });
+
   it('fits long material side-label text within the SVG using deterministic text widths', async () => {
     setChartSize(640);
     const items = [
@@ -105,22 +158,8 @@ describe('RPT-024 visualization bounds', () => {
     if (!svg) return;
 
     await waitFor(() => expect(svg.querySelectorAll('.recharts-pie-labels text').length).toBeGreaterThan(0));
-    const bounds = viewBox(svg);
-    const labels = Array.from(svg.querySelectorAll('.recharts-pie-labels text'));
+    const labels = expectSideLabelsInsideSvg(svg);
     expect(labels.some((label) => label.textContent?.includes('Electronic'))).toBe(true);
-
-    for (const label of labels) {
-      const x = Number(label.getAttribute('x'));
-      const y = Number(label.getAttribute('y'));
-      const width = (label as SVGTextElement).getComputedTextLength();
-      const height = Number(label.getAttribute('font-size') ?? 10);
-      const left = label.getAttribute('text-anchor') === 'end' ? x - width : x;
-      const right = label.getAttribute('text-anchor') === 'end' ? x : x + width;
-      expect.soft(left).toBeGreaterThanOrEqual(bounds.x);
-      expect.soft(right).toBeLessThanOrEqual(bounds.x + bounds.width);
-      expect.soft(y - height).toBeGreaterThanOrEqual(bounds.y);
-      expect.soft(y + 2).toBeLessThanOrEqual(bounds.y + bounds.height);
-    }
   });
 
   it('keeps rotated budget amount labels below the top SVG edge on narrow bars', async () => {
