@@ -5,10 +5,21 @@ import { BudgetCharts } from './BudgetCharts';
 import { MaterialPieChart } from './MaterialPieChart';
 
 let chartSize = { width: 800, height: 320 };
+let pieSvgSize: { width: number; height: number } | null = null;
 const originalTextLength = Object.getOwnPropertyDescriptor(SVGElement.prototype, 'getComputedTextLength');
+const originalPieSvgBounds = Object.getOwnPropertyDescriptor(SVGSVGElement.prototype, 'getBoundingClientRect');
+const elementGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 
 function setChartSize(width: number) {
   chartSize = { width, height: 320 };
+}
+
+function setPieSvgSize(width: number, height: number) {
+  pieSvgSize = { width, height };
+}
+
+function measuredRect(width: number, height: number) {
+  return { x: 0, y: 0, top: 0, left: 0, right: width, bottom: height, width, height, toJSON: () => ({}) } as DOMRect;
 }
 
 function mockSvgTextMeasurement() {
@@ -20,10 +31,21 @@ function mockSvgTextMeasurement() {
 
 beforeEach(() => {
   setChartSize(800);
+  pieSvgSize = null;
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({
     x: 0, y: 0, top: 0, left: 0, right: chartSize.width, bottom: chartSize.height,
     width: chartSize.width, height: chartSize.height, toJSON: () => ({}),
   }));
+  Object.defineProperty(SVGSVGElement.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value(this: SVGSVGElement) {
+      if (this.getAttribute('aria-label') === 'Paid purchases by material type') {
+        const size = pieSvgSize ?? chartSize;
+        return measuredRect(size.width, size.height);
+      }
+      return elementGetBoundingClientRect.call(this);
+    },
+  });
   vi.stubGlobal('ResizeObserver', class {
     constructor(private callback: ResizeObserverCallback) {}
     observe(target: Element) {
@@ -39,8 +61,11 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  if (originalPieSvgBounds) Object.defineProperty(SVGSVGElement.prototype, 'getBoundingClientRect', originalPieSvgBounds);
+  else Reflect.deleteProperty(SVGSVGElement.prototype, 'getBoundingClientRect');
   if (originalTextLength) Object.defineProperty(SVGElement.prototype, 'getComputedTextLength', originalTextLength);
   else Reflect.deleteProperty(SVGElement.prototype, 'getComputedTextLength');
+  pieSvgSize = null;
 });
 
 function viewBox(svg: SVGSVGElement) {
@@ -54,6 +79,40 @@ function circleGeometry(path: SVGPathElement) {
   const arc = d.match(/\bA\s+([\d.]+)\s+([\d.]+)/);
   if (!center || !arc) throw new Error(`Expected a pie sector path with an arc: ${d}`);
   return { centerX: Number(center[1]), centerY: Number(center[2]), radiusX: Number(arc[1]), radiusY: Number(arc[2]) };
+}
+
+function budgetDataForAmounts(amounts: number[]): VisualizationData {
+  const fiscalYearEnds = amounts.map((_, index) => 2023 + index);
+  const currentFiscalYearEnd = fiscalYearEnds[fiscalYearEnds.length - 1] ?? 2024;
+  return {
+    unit: { id: 'unit-sc', code: 'SC', name: 'SC' },
+    currentFiscalYearEnd,
+    fiscalYearEnds,
+    materialFiscalYearEnds: [],
+    purchasesByCategory: [],
+    purchasesByMaterial: { fiscalYearEnd: currentFiscalYearEnd, items: [] },
+    budget: amounts.map((allocated, index) => ({
+      fiscalYearEnd: 2023 + index, allocated, changePct: null, source: 'folio' as const,
+    })),
+  };
+}
+
+async function firstBudgetBarTop(amounts: number[]) {
+  const data = budgetDataForAmounts(amounts);
+  const { container, unmount } = render(<BudgetCharts data={data} />);
+  const svg = Array.from(container.querySelectorAll('svg'))
+    .find((candidate) => candidate.querySelector('.recharts-bar-rectangles'));
+  expect(svg).toBeDefined();
+  if (!svg) { unmount(); return Number.NaN; }
+
+  await waitFor(() => expect(svg.querySelectorAll('.recharts-label-list text').length).toBe(amounts.length));
+  const labels = Array.from(svg.querySelectorAll('.recharts-label-list text'));
+  expect(labels.every((label) => !label.getAttribute('transform')?.includes('rotate(-90'))).toBe(true);
+  const firstBar = svg.querySelector('.recharts-bar-rectangle .recharts-rectangle');
+  expect(firstBar).not.toBeNull();
+  const top = Number(firstBar?.getAttribute('y'));
+  unmount();
+  return top;
 }
 
 function expectSideLabelsInsideSvg(svg: SVGSVGElement) {
@@ -160,6 +219,66 @@ describe('RPT-024 visualization bounds', () => {
     await waitFor(() => expect(svg.querySelectorAll('.recharts-pie-labels text').length).toBeGreaterThan(0));
     const labels = expectSideLabelsInsideSvg(svg);
     expect(labels.some((label) => label.textContent?.includes('Electronic'))).toBe(true);
+  });
+
+  it('keeps the previous plot top when wide bars fit long horizontal amount labels', async () => {
+    setChartSize(800);
+    const shortAmountBarTop = await firstBudgetBarTop([12_000, 8_000]);
+    const longAmountBarTop = await firstBudgetBarTop([12_000_000_000, 8_000_000_000]);
+
+    expect(longAmountBarTop).toBeCloseTo(shortAmountBarTop, 5);
+  });
+
+  it('sizes the pie from the measured SVG box above the legend', async () => {
+    setChartSize(640);
+    setPieSvgSize(640, 240);
+    const { container } = render(<MaterialPieChart items={singleMaterial} />);
+    const svg = container.querySelector('svg');
+    expect(svg).not.toBeNull();
+    if (!svg) return;
+
+    await waitFor(() => expect(svg.querySelector('.recharts-pie-sector')).not.toBeNull());
+    const path = svg.querySelector('.recharts-pie-sector');
+    expect(path).not.toBeNull();
+    if (!path) return;
+    const { centerX, centerY, radiusX } = circleGeometry(path as SVGPathElement);
+    const bounds = viewBox(svg);
+
+    expect.soft(bounds).toEqual({ x: 0, y: 0, width: 640, height: 240 });
+    expect.soft(radiusX).toBeLessThanOrEqual(240 / 2 - 16);
+    expect.soft(centerX - radiusX).toBeGreaterThanOrEqual(0);
+    expect.soft(centerX + radiusX).toBeLessThanOrEqual(640);
+    expect.soft(centerY - radiusX).toBeGreaterThanOrEqual(0);
+    expect.soft(centerY + radiusX).toBeLessThanOrEqual(240);
+  });
+
+  it('grows the narrow pie with SVG width up to the SVG height limit', async () => {
+    const radii: number[] = [];
+    setChartSize(420);
+
+    for (const width of [240, 340]) {
+      setPieSvgSize(width, 320);
+      const { container, unmount } = render(<MaterialPieChart items={singleMaterial} />);
+      const svg = container.querySelector('svg');
+      expect(svg).not.toBeNull();
+      if (!svg) { unmount(); continue; }
+
+      await waitFor(() => expect(svg.querySelector('.recharts-pie-sector')).not.toBeNull());
+      const path = svg.querySelector('.recharts-pie-sector');
+      expect(path).not.toBeNull();
+      if (!path) { unmount(); continue; }
+      const { centerX, radiusX } = circleGeometry(path as SVGPathElement);
+      const bounds = viewBox(svg);
+      radii.push(radiusX);
+
+      expect.soft(bounds).toEqual({ x: 0, y: 0, width, height: 320 });
+      expect.soft(centerX - radiusX).toBeGreaterThanOrEqual(0);
+      expect.soft(centerX + radiusX).toBeLessThanOrEqual(width);
+      expect.soft(radiusX).toBeLessThanOrEqual(320 / 2 - 16);
+      unmount();
+    }
+
+    expect.soft(radii[1]).toBeGreaterThan(radii[0]);
   });
 
   it('keeps rotated budget amount labels below the top SVG edge on narrow bars', async () => {
