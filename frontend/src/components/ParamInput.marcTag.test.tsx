@@ -115,9 +115,12 @@ describe('ParamInput', () => {
     expect(screen.queryByRole('checkbox', { name: /neilson dvd/i })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('checkbox', { name: /sc internet/i }));
-    await user.click(screen.getByRole('button', { name: '1 location selected' }));
-    const reopenedSearch = screen.getByRole('searchbox', { name: /search locations/i });
-    await user.clear(reopenedSearch);
+    expect(screen.getByRole('button', { name: '1 location selected' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    const searchAgain = screen.getByRole('searchbox', { name: /search locations/i });
+    await user.clear(searchAgain);
     await user.click(screen.getByRole('checkbox', { name: /neilson dvd/i }));
 
     const selectedControl = screen.getByRole('button', { name: '2 locations selected' });
@@ -129,13 +132,12 @@ describe('ParamInput', () => {
     expect(screen.getByRole('button', { name: '1 location selected' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /remove .*sc internet/i })).not.toBeInTheDocument();
 
-    await user.click(selectedControl);
     await user.click(screen.getByRole('button', { name: 'Clear all locations' }));
     expect(screen.getByRole('button', { name: /select locations/i })).toBeInTheDocument();
     expect(screen.queryByText('No locations selected')).not.toBeInTheDocument();
   });
 
-  it('closes the location list after a location is selected', async () => {
+  it('keeps the location list open after selection and closes on outside click', async () => {
     const user = userEvent.setup();
 
     function Harness() {
@@ -165,6 +167,15 @@ describe('ParamInput', () => {
     render(<Harness />);
     await user.click(screen.getByRole('button', { name: /select locations/i }));
     await user.click(screen.getByRole('checkbox', { name: /sc internet/i }));
+
+    expect(screen.getByRole('checkbox', { name: /sc internet/i })).toBeChecked();
+    expect(screen.getByRole('listbox', { name: /location options/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1 location selected' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+
+    await user.click(document.body);
 
     expect(screen.queryByRole('listbox', { name: /location options/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '1 location selected' })).toHaveAttribute(
@@ -205,9 +216,12 @@ describe('ParamInput', () => {
     const listbox = screen.getByRole('listbox', { name: /location options/i });
     await user.click(within(listbox).getByRole('checkbox', { name: /main library/i }));
 
-    await user.click(screen.getByRole('button', { name: '1 location selected' }));
-    const reopenedListbox = screen.getByRole('listbox', { name: /location options/i });
-    expect(within(reopenedListbox).getByRole('checkbox', { name: /science library/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '1 location selected' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    const currentListbox = screen.getByRole('listbox', { name: /location options/i });
+    expect(within(currentListbox).getByRole('checkbox', { name: /science library/i })).toBeDisabled();
     expect(screen.getByText('Maximum of 1 location selected.')).toBeInTheDocument();
 
     const search = screen.getByRole('searchbox', { name: /search locations/i });
