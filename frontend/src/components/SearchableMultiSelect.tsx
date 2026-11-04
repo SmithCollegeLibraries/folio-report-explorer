@@ -1,6 +1,7 @@
 import { ChevronDown, Search, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { selectionCountLabel, selectionLabels } from '../utils/multiSelectLabels';
+import { useDismiss } from '../hooks/useDismiss';
 
 interface SelectOption {
   value: string;
@@ -45,6 +46,9 @@ export default function SearchableMultiSelect({
 }: SearchableMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  useDismiss([triggerRef, containerRef], isOpen, () => setIsOpen(false));
   const [groupSelectionMessage, setGroupSelectionMessage] = useState('');
   useEffect(() => {
     if (disabled) setIsOpen(false);
@@ -103,7 +107,6 @@ export default function SearchableMultiSelect({
     }
     if (!atLimit) {
       emit([...selectedValues, optionValue]);
-      setIsOpen(false);
     }
   };
 
@@ -130,10 +133,9 @@ export default function SearchableMultiSelect({
   const hiddenSelectionCount = selectedValues.length - visibleSelectedValues.length;
 
   return (
-    <div className="relative" onKeyDown={(event) => {
-      if (event.key === 'Escape') setIsOpen(false);
-    }}>
+    <div className="relative" ref={containerRef}>
       <button
+        ref={triggerRef}
         id={id}
         type="button"
         aria-label={accessibleButtonLabel}
