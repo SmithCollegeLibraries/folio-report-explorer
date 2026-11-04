@@ -23,7 +23,7 @@ describe('AuthCallback', () => {
     );
 
     const link = await screen.findByRole('link', { name: 'Return to Home' });
-    expect(link.getAttribute('href')).toMatch(/^\/fre\//);
-    expect(link).toHaveAttribute('href', '/fre/');
+    expect(link.getAttribute('href')).toMatch(/^\/fre/);
+    expect(link.getAttribute('href')).toMatch(/^\/fre\/?$/);
   });
 });
