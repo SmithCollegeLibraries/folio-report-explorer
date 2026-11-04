@@ -43,6 +43,7 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
         public $links = [];
         public $sectionRows = [];
         public $writes = [];
+        public $changeBeforeReplace = null;
 
         public function isPublishedYear(int $year): bool
         {
@@ -91,8 +92,20 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             return $links;
         }
 
-        public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy): void
+        public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy, ?callable $validateBeforeReplace = null): void
         {
+            if ($this->changeBeforeReplace === 'unpublish') {
+                unset($this->publishedYears[$year]);
+            } elseif ($this->changeBeforeReplace === 'remove-question') {
+                $this->catalogue = array_values(array_filter($this->catalogue, function ($question) use ($year, $sheet, $questionId, $part) {
+                    return !((int)$question['survey_year'] === $year && $question['sheet'] === $sheet
+                        && $question['question_id'] === $questionId && $question['part'] === $part);
+                }));
+            }
+            $this->changeBeforeReplace = null;
+            if ($validateBeforeReplace !== null) {
+                $validateBeforeReplace();
+            }
             $this->writes[] = [$year, $sheet, $questionId, $part, $userIds, $assignedBy];
             $this->rows = array_values(array_filter($this->rows, function ($row) use ($year, $sheet, $questionId, $part) {
                 return !((int)$row['survey_year'] === $year && $row['sheet'] === $sheet
@@ -211,6 +224,36 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             }
             acrlQuestionAssignmentCheck($caught !== null && $caught->getMessage() === $case[5], 'saveQuestion must reject ' . $case[2] . ':' . $case[3] . ' with the established ACRL error.');
         }
+    });
+
+    acrlQuestionAssignmentScenario('save rechecks publication inside the replacement lock', function () {
+        $repository = new AcrlQuestionAssignmentTestRepository();
+        $repository->catalogue = [acrlQuestionAssignmentQuestion(2026, 'survey', '60', 'A', 'Circulation', 1)];
+        $repository->changeBeforeReplace = 'unpublish';
+        $error = null;
+        try {
+            acrlQuestionAssignmentService($repository)->saveQuestion(2026, 'survey', '60', 'A', [1], '9');
+        } catch (Throwable $caught) {
+            $error = $caught;
+        }
+        acrlQuestionAssignmentSame('The selected ACRL year is not published.', $error ? $error->getMessage() : null, 'A year unpublished before the replacement lock returns the established 404 message.');
+        acrlQuestionAssignmentSame([], $repository->assignments(2026), 'A question assignment is not written after the year becomes unpublished.');
+        acrlQuestionAssignmentSame([], $repository->writes, 'The repository replacement does not run after the publication recheck fails.');
+    });
+
+    acrlQuestionAssignmentScenario('save rechecks the question tuple inside the replacement lock', function () {
+        $repository = new AcrlQuestionAssignmentTestRepository();
+        $repository->catalogue = [acrlQuestionAssignmentQuestion(2026, 'survey', '60', 'A', 'Circulation', 1)];
+        $repository->changeBeforeReplace = 'remove-question';
+        $error = null;
+        try {
+            acrlQuestionAssignmentService($repository)->saveQuestion(2026, 'survey', '60', 'A', [1], '9');
+        } catch (Throwable $caught) {
+            $error = $caught;
+        }
+        acrlQuestionAssignmentSame('The selected ACRL question is not available.', $error ? $error->getMessage() : null, 'A question removed before the replacement lock returns the established 404 message.');
+        acrlQuestionAssignmentSame([], $repository->assignments(2026), 'A question assignment is not written after the catalogue tuple disappears.');
+        acrlQuestionAssignmentSame([], $repository->writes, 'The repository replacement does not run after the tuple recheck fails.');
     });
 
     acrlQuestionAssignmentScenario('list ignores stale tuples and revoked users, then applies a re-added tuple', function () {

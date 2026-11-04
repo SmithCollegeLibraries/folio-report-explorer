@@ -647,6 +647,7 @@ describe('ACRL catalogue page', () => {
     if (!text.includes('FY 2026 already had section assignments, so sections were not copied.')) failures.push('alreadyAssigned uses the section-specific publish message');
     if (!text.includes('Q60 · A')) failures.push('copied question labels remain visible beside the section guard');
     if (text.includes('FY 2026 already had assignments, so no copy was made.')) failures.push('the old generic alreadyAssigned message is absent');
+    if (text.includes('Assignments copied from FY 2025 for: none')) failures.push('an already-assigned section guard does not say that no assignments were copied beside copied questions');
     if (failures.length) throw new Error(failures.join('; '));
   });
 

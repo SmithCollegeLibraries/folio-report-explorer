@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -280,6 +280,55 @@ describe('ACRL entry page', () => {
     expect(screen.getAllByRole('button', { name: 'Fill from FOLIO' })).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Use this value' })).not.toBeInTheDocument();
     expect(saveAnswer).not.toHaveBeenCalled();
+  });
+
+  it('keeps Survey and Trends drafts separate for the same section question tuple', async () => {
+    const response = entry();
+    const surveyQuestion = makeQuestion({
+      sheet: 'survey', questionId: '60', part: 'A', prompt: 'Survey shared tuple',
+      answer: { value_text: '10', value_number: '10', note: null, source: null, source_label: null, updated_by: null, updated_at: null },
+    });
+    const trendsQuestion = makeQuestion({
+      sheet: 'trends', questionId: '60', part: 'A', prompt: 'Trends shared tuple',
+      answer: { value_text: '20', value_number: '20', note: null, source: null, source_label: null, updated_by: null, updated_at: null },
+    });
+    response.sections[0].questions = [surveyQuestion, trendsQuestion];
+    getEntry.mockResolvedValue(response);
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/acrl/entry/2026']} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <Routes><Route path="/acrl/entry/:year" element={<AcrlEntryPage />} /></Routes>
+    </MemoryRouter></QueryClientProvider>);
+
+    await screen.findByRole('heading', { name: 'Survey shared tuple' });
+    const user = userEvent.setup();
+    const surveyRow = screen.getByRole('heading', { name: 'Survey shared tuple' }).closest('article') as HTMLElement;
+    const trendsRow = screen.getByRole('heading', { name: 'Trends shared tuple' }).closest('article') as HTMLElement;
+    const surveyInput = within(surveyRow).getByRole('spinbutton');
+    const trendsInput = within(trendsRow).getByRole('spinbutton');
+    await user.clear(surveyInput);
+    await user.type(surveyInput, '111');
+    await user.clear(trendsInput);
+    await user.type(trendsInput, '222');
+
+    const reorderedResponse = {
+      ...response,
+      sections: response.sections.map((section, index) => index === 0
+        ? { ...section, questions: [trendsQuestion, surveyQuestion] }
+        : section),
+    };
+    getEntry.mockResolvedValueOnce(reorderedResponse);
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['acrl-entry', '2026'] });
+    });
+    await waitFor(() => expect([...document.querySelectorAll('article h3')].slice(0, 2).map((heading) => heading.textContent)).toEqual(['Trends shared tuple', 'Survey shared tuple']));
+
+    const surveyInputAfterReorder = within(screen.getByRole('heading', { name: 'Survey shared tuple' }).closest('article') as HTMLElement).getByRole('spinbutton');
+    const trendsInputAfterReorder = within(screen.getByRole('heading', { name: 'Trends shared tuple' }).closest('article') as HTMLElement).getByRole('spinbutton');
+    const failures: string[] = [];
+    if ((surveyInputAfterReorder as HTMLInputElement).value !== '111') failures.push('the Survey draft remains with its full question tuple after reorder');
+    if ((trendsInputAfterReorder as HTMLInputElement).value !== '222') failures.push('the Trends draft remains with its full question tuple after reorder');
+    if (failures.length) throw new Error(failures.join('; '));
   });
 
   it('refetches the displayed survey year before exporting the refreshed answers', async () => {

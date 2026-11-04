@@ -78,6 +78,33 @@ function acrlMigrationEngineRaw($db, string $sql): void
     $db->createCommand()->setRawSql($sql)->execute();
 }
 
+function acrlMigrationEngineCreateMalformedAssignmentTable($db): void
+{
+    $db->createCommand("CREATE TABLE acrl_question_assignments (\n"
+        . "    survey_year SMALLINT NOT NULL,\n"
+        . "    sheet VARCHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n"
+        . "    question_id VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n"
+        . "    part VARCHAR(1) CHARACTER SET ascii COLLATE ascii_bin NOT NULL DEFAULT '',\n"
+        . "    user_id INT NOT NULL,\n"
+        . "    assigned_by INT NULL,\n"
+        . "    assigned_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)\n"
+        . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
+}
+
+function acrlMigrationEngineMalformedMigrationError($db, string $path): void
+{
+    $error = null;
+    try {
+        MigrationService::run($db, $path, false);
+    } catch (Throwable $caught) {
+        $error = $caught;
+    }
+    acrlMigrationEngineCheck($error !== null && strpos($error->getMessage(), 'acrl_question_assignments') !== false,
+        'Executing 066 against a malformed existing table must throw an error naming acrl_question_assignments.');
+    $recorded = (int)$db->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '066_acrl_question_assignments.sql'")->queryScalar();
+    acrlMigrationEngineSame(0, $recorded, 'A malformed acrl_question_assignments table must not record migration 066.');
+}
+
 function acrlMigrationEnginePrepareCurrentSchema(PDO $admin, string $adminDsn, string $adminUser, string $adminPassword, string $databaseName, string $migrationDir, string $temporaryMigrationDir, array &$createdDatabases, string $runtimeUser, string $runtimePassword): array
 {
     $admin->exec('CREATE DATABASE `' . $databaseName . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
@@ -196,6 +223,14 @@ try {
     acrlMigrationEngineSame([], $resultB['applied'], 'Scenario (b) must execute no migration when 066 is already complete.');
     $questionCountB = (int)$appDbB->createCommand("SELECT COUNT(*) FROM acrl_questions WHERE survey_year = 2025 AND sheet = 'survey' AND question_id = '60' AND part = 'A'")->queryScalar();
     acrlMigrationEngineSame(0, $questionCountB, 'Scenario (b) must keep the deleted seed question deleted.');
+
+    $adminDbB->createCommand('DROP TABLE acrl_question_assignments')->execute();
+    acrlMigrationEngineCreateMalformedAssignmentTable($adminDbB);
+    $adminDbB->createCommand("DELETE FROM schema_migrations WHERE filename = '066_acrl_question_assignments.sql'")->execute();
+    acrlMigrationEngineMalformedMigrationError($appDbB, $migrationDir);
+    $adminDbB->createCommand('DELETE FROM schema_migrations')->execute();
+    acrlMigrationEngineCheck(acrlMigrationEngineDatabaseAppearsCurrent($appDbB), 'Malformed-table baseline setup must still satisfy the legacy current-schema check.');
+    acrlMigrationEngineMalformedMigrationError($appDbB, $migrationDir);
 
     $scenarioC = $prefix . '_c';
     list($adminDbC, $dsnC) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioC, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
