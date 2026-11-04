@@ -6,6 +6,7 @@ import { askNl, submitQuery, saveQuery, submitCorrection, saveCampusPreference, 
 import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { useSavedQueryPromotion } from '../hooks/useSavedQueryPromotion';
+import { useDismiss } from '../hooks/useDismiss';
 import SqlPreview from '../components/SqlPreview';
 import ResultsTable from '../components/ResultsTable';
 import ResultsModal from '../components/ResultsModal';
@@ -775,20 +776,15 @@ export default function Ask() {
 
   // History popover state
   const [historyOpen, setHistoryOpen] = useState(false);
-  const historyRef = useRef<HTMLDivElement>(null);
+  const historyTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const historyPopoverFirstRef = useRef<HTMLDivElement>(null);
+  const historyPopoverSecondRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
-
-  // Close history popover on outside click
-  useEffect(() => {
-    if (!historyOpen) return;
-    const handleClick = (e: MouseEvent) => {
-      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
-        setHistoryOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [historyOpen]);
+  useDismiss(
+    [historyTriggerRef, historyPopoverFirstRef, historyPopoverSecondRef],
+    historyOpen,
+    () => setHistoryOpen(false),
+  );
 
   useEffect(() => {
     localStorage.setItem(ASK_WORKSPACE_SPLIT_STORAGE_KEY, String(workspaceSplit));
@@ -1499,9 +1495,12 @@ export default function Ask() {
                     )}
                   </button>
                   {history.length > 0 && (
-                    <div className="relative" ref={historyRef}>
+                    <div className="relative" ref={historyPopoverFirstRef}>
                       <button
-                        onClick={() => setHistoryOpen((o) => !o)}
+                        onClick={(event) => {
+                          historyTriggerRef.current = event.currentTarget;
+                          setHistoryOpen((o) => !o);
+                        }}
                         className={`w-full flex items-center justify-center px-4 py-2 rounded-lg border transition-colors ${
                           historyOpen
                             ? 'bg-folio-50 text-folio-700 border-folio-300'
@@ -1912,9 +1911,12 @@ export default function Ask() {
                     )}
                   </button>
                   {history.length > 0 && (
-                    <div className="relative" ref={historyRef}>
+                    <div className="relative" ref={historyPopoverSecondRef}>
                       <button
-                        onClick={() => setHistoryOpen((o) => !o)}
+                        onClick={(event) => {
+                          historyTriggerRef.current = event.currentTarget;
+                          setHistoryOpen((o) => !o);
+                        }}
                         className={`w-full flex items-center justify-center px-4 py-2 rounded-lg border transition-colors ${
                           historyOpen
                             ? 'bg-folio-50 text-folio-700 border-folio-300'

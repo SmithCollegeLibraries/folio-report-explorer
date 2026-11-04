@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 
 const { auth } = vi.hoisted(() => ({ auth: { current: null as any } }));
@@ -89,5 +89,39 @@ describe('ACRL administration navigation', () => {
 
     expect(screen.queryByRole('button', { name: 'Admin' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /ACRL/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('navigation menu dismissal', () => {
+  beforeEach(() => {
+    auth.current = {
+      user: { role: 'admin', displayName: 'Admin' },
+      isAdmin: true,
+      authEnabled: true,
+      canEditAllocationsFor: () => true,
+      logout: vi.fn(),
+    };
+  });
+
+  it('closes a desktop navigation dropdown after an outside click', async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Query' }));
+    expect(screen.getByRole('link', { name: /Query Builder/ })).toBeInTheDocument();
+    await user.click(document.body);
+
+    expect(screen.queryByRole('link', { name: /Query Builder/ })).not.toBeInTheDocument();
+  });
+
+  it('closes the mobile navigation menu after an outside click', async () => {
+    const user = userEvent.setup();
+    renderApp();
+
+    await user.click(screen.getByRole('button', { name: 'Open menu' }));
+    expect(screen.getByRole('button', { name: 'Close menu' })).toBeInTheDocument();
+    await user.click(document.body);
+
+    expect(screen.getByRole('button', { name: 'Open menu' })).toBeInTheDocument();
   });
 });

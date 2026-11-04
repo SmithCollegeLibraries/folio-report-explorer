@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
@@ -16,6 +16,7 @@ import type { HistoryItem } from '../../types';
 import HistoryGroupRows from './HistoryGroupRows';
 import type { HistoryGroupListItem, HistoryGroupResponse } from '../../api/history';
 import { isDeletableHistoryItem } from './historyDeletionState';
+import { useDismiss } from '../../hooks/useDismiss';
 interface Props {
   items: HistoryItem[];
   filteredItems: HistoryItem[];
@@ -67,6 +68,9 @@ export default function HistoryTable({
 }: Props) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [showColumnMenu, setShowColumnMenu] = useState(false);
+  const columnMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const columnMenuRef = useRef<HTMLDivElement>(null);
+  useDismiss([columnMenuTriggerRef, columnMenuRef], showColumnMenu, () => setShowColumnMenu(false));
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(() => {
     if (typeof window === 'undefined') {
       return { source: true, results: true, runBy: true };
@@ -438,6 +442,7 @@ export default function HistoryTable({
       <div className="flex items-center justify-end px-3 py-2 border-b border-gray-200 bg-gray-50">
         <div className="relative">
           <button
+            ref={columnMenuTriggerRef}
             onClick={() => setShowColumnMenu((v) => !v)}
             className="inline-flex items-center gap-1 text-xs text-gray-600 border border-gray-300 rounded px-2 py-1 hover:bg-white transition-colors"
             title="Choose visible columns"
@@ -445,7 +450,7 @@ export default function HistoryTable({
             <SlidersHorizontal size={12} /> Columns
           </button>
           {showColumnMenu && (
-            <div className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-10">
+            <div ref={columnMenuRef} className="absolute right-0 mt-1 w-40 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-10">
               {['source', 'results', 'runBy'].map((columnId) => {
                 const column = table.getColumn(columnId);
                 if (!column) return null;

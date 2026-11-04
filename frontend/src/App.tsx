@@ -27,6 +27,7 @@ import AuthPending from './pages/AuthPending';
 import ProtectedRoute from './components/ProtectedRoute';
 import { ToastProvider } from './components/ToastProvider';
 import { useAuth, getShibbolethLoginUrl } from './hooks/useAuth';
+import { useDismiss } from './hooks/useDismiss';
 
 // ─── Nav groups ────────────────────────────────────────────────────────────────
 
@@ -67,17 +68,10 @@ function NavDropdown({
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const location = useLocation();
   const isAnyActive = items.some((item) => location.pathname === item.to || location.pathname.startsWith(`${item.to}/`));
-
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
+  useDismiss([triggerRef, ref], open, () => setOpen(false));
 
   const activeCls = color === 'amber'
     ? 'bg-amber-600 text-white'
@@ -94,6 +88,7 @@ function NavDropdown({
   return (
     <div className="relative" ref={ref}>
       <button
+        ref={triggerRef}
         onClick={() => setOpen((o) => !o)}
         className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
           isAnyActive ? activeCls : hoverCls
@@ -188,7 +183,10 @@ function MobileNavGroup({
 export default function App() {
   const { user, isAdmin, authEnabled, logout, canEditAllocationsFor } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
+  useDismiss([mobileMenuTriggerRef, mobileMenuRef], mobileOpen, () => setMobileOpen(false));
 
   // Close mobile menu on navigation
   useEffect(() => {
@@ -278,6 +276,7 @@ export default function App() {
 
           {/* Hamburger button — mobile only */}
           <button
+            ref={mobileMenuTriggerRef}
             onClick={() => setMobileOpen((o) => !o)}
             className="md:hidden p-2 rounded text-folio-200 hover:text-white hover:bg-folio-700 ml-2"
             aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
@@ -288,7 +287,7 @@ export default function App() {
 
         {/* Mobile nav drawer */}
         {mobileOpen && (
-          <div className="md:hidden border-t border-folio-700 bg-folio-800 px-4 py-3 space-y-1">
+          <div ref={mobileMenuRef} className="md:hidden border-t border-folio-700 bg-folio-800 px-4 py-3 space-y-1">
             <NavLink
               to="/"
               end

@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Ask from './Ask';
@@ -116,6 +117,25 @@ afterEach(() => {
 });
 
 describe('Ask request lifecycle', () => {
+  it('closes the Recent Questions popover after an outside click', async () => {
+    const user = userEvent.setup();
+    apiMocks.askNl.mockResolvedValue({
+      sql: 'SELECT title FROM inventory.instance__t',
+      generationProvenance: 'ai_built',
+      provenanceLabel: 'AI-built',
+    });
+
+    renderAsk();
+    submitQuestion('Show titles');
+    const historyTriggers = await screen.findAllByTitle('Recent questions');
+    await user.click(historyTriggers[0]);
+    expect(screen.getAllByText('Recent Questions').length).toBeGreaterThan(0);
+
+    await user.click(document.body);
+
+    expect(screen.queryByText('Recent Questions')).not.toBeInTheDocument();
+  });
+
   it.each([
     [
       403,
