@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
 /**
@@ -38,12 +38,12 @@ export default function AuthCallback() {
         <div className="bg-red-50 border border-red-200 rounded-lg p-6 max-w-md">
           <h2 className="text-lg font-semibold text-red-800 mb-2">Authentication Error</h2>
           <p className="text-red-700">{error}</p>
-          <a
-            href="/"
+          <Link
+            to="/"
             className="inline-block mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
           >
             Return to Home
-          </a>
+          </Link>
         </div>
       </div>
     );

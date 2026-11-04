@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import AcrlPage from './Acrl';
 import AcrlReviewPanel from '../components/AcrlReviewPanel';
 import type { AcrlQuestionPart, AcrlReviewResponse, AcrlSurveyYear } from '../types/acrl';
@@ -36,7 +37,7 @@ afterEach(() => {
 
 function renderAcrl() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={queryClient}><AcrlPage /></QueryClientProvider>);
+  return render(<QueryClientProvider client={queryClient}><MemoryRouter basename="/fre" initialEntries={["/fre/acrl"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><AcrlPage /></MemoryRouter></QueryClientProvider>);
 }
 
 function makeQuestion(sheet: 'survey' | 'trends', questionId: string): AcrlQuestionPart {
@@ -172,6 +173,7 @@ describe('ACRL review panel bulk decisions', () => {
 describe('ACRL catalogue page', () => {
   it('offers only published years and links to the selected section assignments with a count', async () => {
     listYears.mockResolvedValue([makeYear(2026), makeYear(2025, 'published'), makeYear(2024, 'published')]);
+    getReview.mockResolvedValue(makeReview());
     getAssignments.mockResolvedValue({
       surveyYear: 2025,
       sections: [
@@ -188,13 +190,15 @@ describe('ACRL catalogue page', () => {
     await user.selectOptions(yearSelect, '2025');
 
     const assignmentLink = await screen.findByRole('link', { name: 'Assign sections for FY 2025' });
-    expect(assignmentLink).toHaveAttribute('href', '/acrl/entry/2025#section-assignments');
+    expect(assignmentLink.getAttribute('href')).toMatch(/^\/fre\//);
+    expect(assignmentLink).toHaveAttribute('href', '/fre/acrl/entry/2025#section-assignments');
     expect(await screen.findByText('1 of 2 sections have someone assigned')).toBeInTheDocument();
     expect(getAssignments).toHaveBeenCalledWith(2025);
   });
 
   it('shows a zero assignment count', async () => {
     listYears.mockResolvedValue([makeYear(2025, 'published')]);
+    getReview.mockResolvedValue(makeReview());
     getAssignments.mockResolvedValue({
       surveyYear: 2025,
       sections: [{ section: 'Circulation', assignees: [] }, { section: 'Services', assignees: [] }],
@@ -220,7 +224,9 @@ describe('ACRL catalogue page', () => {
     await user.selectOptions(yearSelect, '2025');
 
     expect(await screen.findByText('Could not load section assignments.')).toHaveAttribute('role', 'alert');
-    expect(screen.getByRole('link', { name: 'Assign sections for FY 2025' })).toHaveAttribute('href', '/acrl/entry/2025#section-assignments');
+    const assignmentLink = screen.getByRole('link', { name: 'Assign sections for FY 2025' });
+    expect(assignmentLink.getAttribute('href')).toMatch(/^\/fre\//);
+    expect(assignmentLink).toHaveAttribute('href', '/fre/acrl/entry/2025#section-assignments');
   });
 
   it('shows grouped annual changes and approves unchanged matches in bulk', async () => {
