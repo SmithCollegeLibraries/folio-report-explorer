@@ -108,11 +108,12 @@ class AcrlPublishAssignmentCopyTestAssigner
     }
 }
 
+ $acrlPublishAssignmentCopyFailures = [];
 function acrlPublishAssignmentCopyAssert($condition, string $message): void
 {
     if (!$condition) {
-        fwrite(STDERR, "FAIL: {$message}\n");
-        exit(1);
+        global $acrlPublishAssignmentCopyFailures;
+        $acrlPublishAssignmentCopyFailures[] = $message;
     }
 }
 
@@ -133,6 +134,10 @@ $emptyTargetCopy = [
     'skippedSections' => [],
     'unmatchedSections' => ['Old services'],
     'alreadyAssigned' => false,
+    'copiedQuestions' => [],
+    'skippedQuestions' => [],
+    'unmatchedQuestions' => [],
+    'questionsAlreadyAssigned' => false,
     'failed' => false,
 ];
 $emptyTargetAssigner = new AcrlPublishAssignmentCopyTestAssigner();
@@ -151,6 +156,10 @@ $existingTargetAssigner->result = [
     'skippedSections' => ['Circulation'],
     'unmatchedSections' => [],
     'alreadyAssigned' => true,
+    'copiedQuestions' => [],
+    'skippedQuestions' => [],
+    'unmatchedQuestions' => [],
+    'questionsAlreadyAssigned' => true,
     'failed' => false,
 ];
 $existingTargetReview = acrlPublishAssignmentCopyService($existingTargetAssigner)->publishYear(2026, '9');
@@ -163,6 +172,16 @@ $failureDb = new AcrlPublishAssignmentCopyTestDb();
 $failureReview = acrlPublishAssignmentCopyService($failureAssigner, $failureDb)->publishYear(2026, '9');
 acrlPublishAssignmentCopyAssert($failureDb->years[2026]['status'] === 'published', 'An assignment-copy exception must not roll back publication.');
 acrlPublishAssignmentCopyAssert($failureReview['assignmentCopy']['failed'] === true, 'A nonfatal copy failure is included in the publish response.');
+acrlPublishAssignmentCopyAssert(($failureReview['assignmentCopy']['copiedQuestions'] ?? null) === [], 'A publish copy failure includes an empty copiedQuestions list.');
+acrlPublishAssignmentCopyAssert(($failureReview['assignmentCopy']['skippedQuestions'] ?? null) === [], 'A publish copy failure includes an empty skippedQuestions list.');
+acrlPublishAssignmentCopyAssert(($failureReview['assignmentCopy']['unmatchedQuestions'] ?? null) === [], 'A publish copy failure includes an empty unmatchedQuestions list.');
+acrlPublishAssignmentCopyAssert(($failureReview['assignmentCopy']['questionsAlreadyAssigned'] ?? null) === false, 'A publish copy failure includes questionsAlreadyAssigned=false.');
 acrlPublishAssignmentCopyAssert(count(Yii::$errors) === 1, 'A copy failure is written to the application log.');
+
+if ($acrlPublishAssignmentCopyFailures) {
+    fwrite(STDERR, 'FAIL: ' . count($acrlPublishAssignmentCopyFailures) . " ACRL publish assignment-copy checks failed:\n");
+    foreach ($acrlPublishAssignmentCopyFailures as $failure) fwrite(STDERR, " - {$failure}\n");
+    exit(1);
+}
 
 echo "PASS: ACRL publication copies assignments, preserves existing assignments, and logs copy failures\n";

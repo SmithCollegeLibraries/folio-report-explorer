@@ -28,6 +28,26 @@ class AcrlEntryTestAssignments
     }
 }
 
+class AcrlEntryTestQuestionAssignments
+{
+    public $assignments = [];
+
+    public function forEntry(int $year, ?string $userId): array
+    {
+        return $this->assignments;
+    }
+}
+
+class AcrlEntryTestSectionAssignments
+{
+    public $assignments = [];
+
+    public function forEntry(int $year, ?string $userId): array
+    {
+        return $this->assignments;
+    }
+}
+
 class AcrlEntryTestRepository
 {
     public $status = ['section' => 'Circulation', 'status' => 'ready'];
@@ -215,5 +235,79 @@ try {
 }
 $service->setSectionStatus(2026, 'Circulation', 'open', 'admin-1', true);
 acrlEntryServiceAssert(count($repository->statusWrites) === 2, 'Any signed-in editor can set ready and administrators can reopen.');
+
+$questionAssignmentFailures = [];
+function acrlEntryQuestionAssignmentCheck($condition, string $message): void
+{
+    global $questionAssignmentFailures;
+    if (!$condition) $questionAssignmentFailures[] = $message;
+}
+
+function acrlEntryQuestionAssignmentEntry(array $sectionRows, array $questionRows): array
+{
+    $sectionAssignments = new AcrlEntryTestSectionAssignments();
+    $sectionAssignments->assignments = ['Circulation' => $sectionRows];
+    $questionAssignments = new AcrlEntryTestQuestionAssignments();
+    $questionAssignments->assignments = $questionRows;
+    $service = new AcrlEntryService(
+        new AcrlEntryTestRepository(),
+        null,
+        null,
+        new AcrlEntryTestThreshold(),
+        null,
+        null,
+        $sectionAssignments,
+        null,
+        null,
+        $questionAssignments
+    );
+    return $service->entry(2026, '7');
+}
+
+$sectionOnly = acrlEntryQuestionAssignmentEntry(
+    ['assignees' => [['id' => 7, 'displayName' => 'Signed-in Editor']], 'assignedToCurrentUser' => true],
+    []
+);
+$sectionOnlySection = $sectionOnly['sections'][0];
+$sectionOnlyQuestion = $sectionOnlySection['questions'][0];
+acrlEntryQuestionAssignmentCheck(($sectionOnlyQuestion['questionAssignees'] ?? null) === [], 'Section-only question rows expose an empty questionAssignees list.');
+acrlEntryQuestionAssignmentCheck(($sectionOnlyQuestion['assignees'] ?? null) === [['id' => 7, 'displayName' => 'Signed-in Editor']], 'Section-only question rows inherit the section assignee in the union.');
+acrlEntryQuestionAssignmentCheck(($sectionOnlyQuestion['assignedToCurrentUser'] ?? null) === true && ($sectionOnlyQuestion['questionAssignedToCurrentUser'] ?? null) === false, 'Section-only ownership sets the union flag but not the direct question flag.');
+acrlEntryQuestionAssignmentCheck(($sectionOnlySection['questionsAssignedToCurrentUser'] ?? null) === 0, 'A section already assigned to the current user has zero question-only count.');
+
+$questionOnly = acrlEntryQuestionAssignmentEntry(
+    ['assignees' => [], 'assignedToCurrentUser' => false],
+    ['survey:60:A' => ['assignees' => [['id' => 7, 'displayName' => 'Signed-in Editor']], 'assignedToCurrentUser' => true]]
+);
+$questionOnlySection = $questionOnly['sections'][0];
+$questionOnlyRow = $questionOnlySection['questions'][0];
+acrlEntryQuestionAssignmentCheck(($questionOnlyRow['questionAssignees'] ?? null) === [['id' => 7, 'displayName' => 'Signed-in Editor']], 'Question-only assignment appears in questionAssignees.');
+acrlEntryQuestionAssignmentCheck(($questionOnlyRow['assignees'] ?? null) === [['id' => 7, 'displayName' => 'Signed-in Editor']], 'Question-only assignment appears in the union assignees.');
+acrlEntryQuestionAssignmentCheck(($questionOnlyRow['assignedToCurrentUser'] ?? null) === true && ($questionOnlyRow['questionAssignedToCurrentUser'] ?? null) === true, 'Question-only ownership sets both the union and direct question flags.');
+acrlEntryQuestionAssignmentCheck(($questionOnlySection['questionsAssignedToCurrentUser'] ?? null) === 1, 'Section counts question assignments owned by the current user.');
+
+$overlap = acrlEntryQuestionAssignmentEntry(
+    ['assignees' => [['id' => 1, 'displayName' => 'Section Editor'], ['id' => 7, 'displayName' => 'Signed-in Editor']], 'assignedToCurrentUser' => true],
+    ['survey:60:A' => ['assignees' => [['id' => 7, 'displayName' => 'Signed-in Editor'], ['id' => 2, 'displayName' => 'Question Editor']], 'assignedToCurrentUser' => true]]
+);
+$overlapSection = $overlap['sections'][0];
+$overlapRow = $overlapSection['questions'][0];
+acrlEntryQuestionAssignmentCheck(($overlapRow['assignees'] ?? null) === [
+    ['id' => 1, 'displayName' => 'Section Editor'],
+    ['id' => 7, 'displayName' => 'Signed-in Editor'],
+    ['id' => 2, 'displayName' => 'Question Editor'],
+], 'Section then question assignees form a stable union with duplicate IDs removed.');
+acrlEntryQuestionAssignmentCheck(($overlapRow['questionAssignees'] ?? null) === [
+    ['id' => 7, 'displayName' => 'Signed-in Editor'],
+    ['id' => 2, 'displayName' => 'Question Editor'],
+], 'Overlap does not remove direct question-level assignees.');
+acrlEntryQuestionAssignmentCheck(($overlapRow['assignedToCurrentUser'] ?? null) === true && ($overlapRow['questionAssignedToCurrentUser'] ?? null) === true, 'Overlap keeps both direct and union ownership flags true.');
+acrlEntryQuestionAssignmentCheck(($overlapSection['questionsAssignedToCurrentUser'] ?? null) === 0, 'A question assigned to someone who already owns the section is not counted as an individual question assignment.');
+
+if ($questionAssignmentFailures) {
+    fwrite(STDERR, 'FAIL: ' . count($questionAssignmentFailures) . " ACRL entry question-assignment checks failed:\n");
+    foreach ($questionAssignmentFailures as $failure) fwrite(STDERR, " - {$failure}\n");
+    exit(1);
+}
 
 echo "PASS: ACRL entry assembly, merged prior values, ready lock, and optimistic conflicts\n";

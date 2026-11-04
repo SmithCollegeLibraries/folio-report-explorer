@@ -7,16 +7,17 @@ import AcrlEntryPage from './AcrlEntryPage';
 import AcrlSectionAssignmentsCard from '../components/AcrlSectionAssignmentsCard';
 import type { AcrlEntryQuestion, AcrlEntryResponse } from '../types/acrl';
 
-const { getEntry, saveAnswer, runAutofill, getAutofillMethods, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
+const { getEntry, saveAnswer, runAutofill, getAutofillMethods, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, saveQuestionAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   saveAnswer: vi.fn(),
   runAutofill: vi.fn(),
   getAutofillMethods: vi.fn().mockResolvedValue({ methods: [] }),
   setStatus: vi.fn(),
   acceptSuggestions: vi.fn(),
-  getAssignments: vi.fn().mockResolvedValue({ surveyYear: 2026, sections: [] }),
+  getAssignments: vi.fn().mockResolvedValue({ surveyYear: 2026, sections: [], questions: [] }),
   searchUsers: vi.fn().mockResolvedValue({ users: [] }),
   saveAssignments: vi.fn(),
+  saveQuestionAssignments: vi.fn(),
   copyAssignments: vi.fn(),
   getQuestionDetails: vi.fn(),
   addQuestionNote: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock('../api/acrl', () => ({
   getAcrlSectionAssignments: getAssignments,
   searchAcrlApprovedUsers: searchUsers,
   saveAcrlSectionAssignments: saveAssignments,
+  saveAcrlQuestionAssignments: saveQuestionAssignments,
   copyAcrlAssignmentsFromPrevious: copyAssignments,
   getAcrlQuestionDetails: getQuestionDetails,
   addAcrlQuestionNote: addQuestionNote,
@@ -56,10 +58,11 @@ afterEach(() => {
 });
 
 function makeQuestion(overrides: Partial<AcrlEntryQuestion> = {}): AcrlEntryQuestion {
-  return {
+  const fixture = {
     sheet: 'survey', questionId: '60', part: 'A', section: 'Circulation', prompt: 'Physical circulation', answerType: 'number', required: 'yes',
     calculatedFrom: null, surveyOrder: 1,
     hasDetailsNotes: false,
+    questionAssignees: [], assignees: [], assignedToCurrentUser: false, questionAssignedToCurrentUser: false,
     answer: { value_text: '20', value_number: '20', note: '', source: 'manual', source_label: null, updated_by: 'editor', updated_at: '2026-01-01 00:00:00.000001' },
     previous: { value: 10, label: '10', isSum: false, linkedValues: [{ questionId: '59', part: '', value: 10 }] },
     history: [],
@@ -68,12 +71,13 @@ function makeQuestion(overrides: Partial<AcrlEntryQuestion> = {}): AcrlEntryQues
     calculated: null,
     ...overrides,
   };
+  return fixture as AcrlEntryQuestion;
 }
 
 function entry(status: 'open' | 'ready' = 'open'): AcrlEntryResponse {
-  return {
+  const fixture = {
     selectedYear: 2026, previousYear: 2025, years: [2026, 2025, 2024, 2023], thresholdPercent: 10,
-    sections: [{ name: 'Circulation', status, setAt: null, reopenedAt: null, filled: 3, total: 8, assignees: [], assignedToCurrentUser: false, questions: [
+    sections: [{ name: 'Circulation', status, setAt: null, reopenedAt: null, filled: 3, total: 8, assignees: [], assignedToCurrentUser: false, questionsAssignedToCurrentUser: 0, questions: [
       makeQuestion({
         previous: { value: 10, label: 'Sum of linked values: 10', isSum: true, linkedValues: [{ questionId: '59', part: '', value: 10 }] },
         history: [
@@ -97,10 +101,11 @@ function entry(status: 'open' | 'ready' = 'open'): AcrlEntryResponse {
       ], suggestion: { value: 'Option A', label: 'Option A', year: 2025 }, comparison: { previousValue: 'Option A', previousLabel: 'Option A', changePercent: null, highlighted: false, addNote: false } }),
       makeQuestion({ questionId: '64', part: '', prompt: 'Answered yes/no', answerType: 'yes/no', answer: { value_text: 'yes', value_number: null, note: null, source: 'manual', source_label: null, updated_by: null, updated_at: '2026-01-02' }, suggestion: null, comparison: { previousValue: null, previousLabel: 'No previous value', changePercent: null, highlighted: false, addNote: false } }),
       makeQuestion({ questionId: '65', part: '', prompt: 'Numeric suggestion excluded', answerType: 'number', answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null }, suggestion: null, comparison: { previousValue: null, previousLabel: 'No previous value', changePercent: null, highlighted: false, addNote: false } }),
-    ] }, { name: 'Services', status: 'ready', setAt: null, reopenedAt: null, filled: 1, total: 2, assignees: [], assignedToCurrentUser: false, questions: [
+    ] }, { name: 'Services', status: 'ready', setAt: null, reopenedAt: null, filled: 1, total: 2, assignees: [], assignedToCurrentUser: false, questionsAssignedToCurrentUser: 0, questions: [
       makeQuestion({ questionId: '70', part: '', section: 'Services', prompt: 'Second section item', comparison: { previousValue: null, previousLabel: 'No previous value', changePercent: null, highlighted: false, addNote: false } }),
     ] }],
   };
+  return fixture as AcrlEntryResponse;
 }
 
 function renderPage(options: { staleTime?: number; initialEntry?: string; basename?: string; assignmentHashLink?: boolean } = {}) {
@@ -147,9 +152,12 @@ describe('ACRL entry page', () => {
     getEntry.mockResolvedValue(entry());
     renderPage({ initialEntry: '/acrl/entry/2026#section-assignments' });
 
-    const panel = await screen.findByRole('region', { name: 'Section assignments' });
-    expect(panel).toHaveAttribute('id', 'section-assignments');
-    await waitFor(() => expect(scrolledElements).toContain(panel));
+    await screen.findByText('3 of 8 parts filled');
+    const panel = screen.queryByRole('region', { name: 'Assignments' });
+    const failures: string[] = [];
+    if (panel?.getAttribute('id') !== 'section-assignments') failures.push('the renamed Assignments region keeps the section-assignments id');
+    if (!panel || !scrolledElements.includes(panel)) failures.push('the assignment hash scrolls to the renamed Assignments region');
+    if (failures.length) throw new Error(failures.join('; '));
   });
 
   it('scrolls to section assignments after navigating from the ACRL page', async () => {
@@ -166,16 +174,17 @@ describe('ACRL entry page', () => {
 
     const yearSelect = await screen.findByLabelText('Published year for section assignments');
     await user.selectOptions(yearSelect, '2026');
-    const assignmentLink = await screen.findByRole('link', { name: 'Assign sections for FY 2026' });
-    expect(assignmentLink.getAttribute('href')).toMatch(/^\/fre\//);
-    expect(assignmentLink).toHaveAttribute('href', '/fre/acrl/entry/2026#section-assignments');
-    await user.click(assignmentLink);
+    const failures: string[] = [];
+    const check = (condition: boolean, message: string) => { if (!condition) failures.push(message); };
+    const assignmentLink = screen.queryByRole('link', { name: 'Assign sections and questions for FY 2026' });
+    check(assignmentLink?.getAttribute('href') === '/fre/acrl/entry/2026#section-assignments', 'the assignment link keeps the section panel anchor');
+    check(assignmentLink?.getAttribute('href')?.startsWith('/fre/') === true, 'the assignment link includes the configured basename');
+    if (assignmentLink) await user.click(assignmentLink);
 
-    await waitFor(() => {
-      const panel = document.getElementById('section-assignments');
-      expect(panel).toBeInTheDocument();
-      expect(scrolledElements).toContain(panel);
-    });
+    const panel = document.getElementById('section-assignments');
+    check(panel !== null, 'the section assignment panel keeps its stable id');
+    check(panel !== null && scrolledElements.includes(panel), 'navigation scrolls to the assignment panel');
+    if (failures.length) throw new Error(failures.join('; '));
   });
 
   it('scrolls to section assignments when the hash is navigated to from the entry page itself', async () => {
@@ -190,10 +199,15 @@ describe('ACRL entry page', () => {
     getEntry.mockResolvedValue(entry());
     renderPage({ basename: '/fre', initialEntry: '/fre/acrl/entry/2026', assignmentHashLink: true });
 
-    const panel = await screen.findByRole('region', { name: 'Section assignments' });
-    await user.click(screen.getByRole('link', { name: 'Go to section assignments' }));
-
-    await waitFor(() => expect(scrolledElements).toContain(panel));
+    await screen.findByText('3 of 8 parts filled');
+    const panel = screen.queryByRole('region', { name: 'Assignments' });
+    const link = screen.queryByRole('link', { name: 'Go to section assignments' });
+    if (link) await user.click(link);
+    const failures: string[] = [];
+    if (!panel) failures.push('the renamed Assignments region is present for administrators');
+    if (panel && !scrolledElements.includes(panel)) failures.push('the section assignment hash link scrolls to the renamed region');
+    if (!link) failures.push('the existing Go to section assignments link remains available');
+    if (failures.length) throw new Error(failures.join('; '));
   });
 
   it('does not try to scroll to an assignment panel for non-admins', async () => {
@@ -206,10 +220,10 @@ describe('ACRL entry page', () => {
     getEntry.mockResolvedValue(entry());
     renderPage({ initialEntry: '/acrl/entry/2026#section-assignments' });
 
-    await screen.findByRole('region', { name: 'Your sections' });
-
-    expect(screen.queryByRole('region', { name: 'Section assignments' })).not.toBeInTheDocument();
+    await screen.findByText('No sections assigned to you.');
+    expect(screen.queryByRole('region', { name: 'Assignments' })).not.toBeInTheDocument();
     expect(scrolledElements).toHaveLength(0);
+    expect(screen.queryByRole('region', { name: 'Your assignments' })).toBeInTheDocument();
   });
 
   it('saves an accepted FOLIO suggestion through the normal answer API with query provenance', async () => {
@@ -326,18 +340,55 @@ describe('ACRL entry page', () => {
     getEntry.mockResolvedValue(response);
     renderPage();
 
-    const yourSections = await screen.findByRole('region', { name: 'Your sections' });
-    expect(screen.queryByRole('heading', { name: 'Section assignments' })).not.toBeInTheDocument();
-    expect(within(yourSections).getByRole('link', { name: /Circulation.*3\/8.*Open/ })).toBeInTheDocument();
-    expect(within(yourSections).queryByRole('link', { name: /Services/ })).not.toBeInTheDocument();
-    expect(screen.getByText('Assigned to: Alex Editor')).toBeInTheDocument();
-    expect(within(screen.getByRole('navigation', { name: 'Survey sections' })).getByRole('link', { name: /Circulation.*Your section/ })).toBeInTheDocument();
+    await screen.findByText('Assigned to: Alex Editor');
+    const yourSections = screen.queryByRole('region', { name: 'Your assignments' });
+    const failures: string[] = [];
+    if (screen.queryByRole('heading', { name: 'Assignments' }) !== null) failures.push('the administrator Assignments panel stays hidden from editors');
+    if (yourSections) {
+      if (within(yourSections).queryByRole('link', { name: /Circulation.*3\/8.*Open/ }) === null) failures.push('the section link remains in Your assignments');
+      if (within(yourSections).queryByRole('link', { name: /Services/ }) !== null) failures.push('unassigned sections stay out of Your assignments');
+    } else failures.push('the navigation region is named Your assignments');
+    if (screen.queryByText('Assigned to: Alex Editor') === null) failures.push('the existing section assignee card remains visible');
+    const navigation = screen.queryByRole('navigation', { name: 'Survey sections' });
+    if (!navigation || within(navigation).queryByRole('link', { name: /Circulation.*Your section/ }) === null) failures.push('the section tab keeps its Your section ownership marker');
+    if (screen.queryByRole('region', { name: 'Your assignments' }) === null) failures.push('the navigation region is named Your assignments');
+    if (failures.length) throw new Error(failures.join('; '));
   });
 
   it('shows an empty state when the signed-in user has no assigned sections', async () => {
     getEntry.mockResolvedValue(entry());
     renderPage();
     expect(await screen.findByText('No sections assigned to you.')).toBeInTheDocument();
+  });
+
+  it('links to individually assigned question cards and shows direct question ownership', async () => {
+    const response = entry();
+    const section = response.sections[0] as typeof response.sections[number] & { questionsAssignedToCurrentUser: number };
+    const assignedQuestion = section.questions[0] as typeof section.questions[number] & {
+      questionAssignees: Array<{ id: number; displayName: string }>;
+      assignees: Array<{ id: number; displayName: string }>;
+      assignedToCurrentUser: boolean;
+      questionAssignedToCurrentUser: boolean;
+    };
+    section.questionsAssignedToCurrentUser = 1;
+    assignedQuestion.questionAssignees = [{ id: 7, displayName: 'Alex Editor' }];
+    assignedQuestion.assignees = [{ id: 7, displayName: 'Alex Editor' }];
+    assignedQuestion.assignedToCurrentUser = true;
+    assignedQuestion.questionAssignedToCurrentUser = true;
+    getEntry.mockResolvedValue(response);
+    renderPage();
+
+    await screen.findByText('Physical circulation');
+    const failures: string[] = [];
+    const check = (condition: boolean, message: string) => { if (!condition) failures.push(message); };
+    const questionLink = screen.queryByRole('link', { name: /Q60 · A/ });
+    check(questionLink?.getAttribute('href') === '#acrl-q-survey-60-A', 'question navigation uses the stable full-tuple anchor');
+    check(document.getElementById('acrl-q-survey-60-A') !== null, 'the question card exposes the stable full-tuple anchor');
+    check(screen.queryByText('Assigned: Alex Editor') !== null, 'question card shows its direct assignee names');
+    check(screen.queryByText('Yours') !== null, 'question card shows the direct ownership badge');
+    check(screen.queryByRole('link', { name: /Your questions \(1\)/ }) !== null, 'section navigation shows the question ownership count');
+    check(screen.queryByRole('region', { name: 'Your assignments' }) !== null, 'the navigation region is named Your assignments');
+    if (failures.length) throw new Error(failures.join('; '));
   });
 
   it('shows progress, approved prior values, advisory change, labels, and calculated mismatch', async () => {
@@ -394,9 +445,9 @@ describe('ACRL entry page', () => {
     getEntry.mockResolvedValue(entry('ready'));
     renderPage();
     expect(await screen.findAllByRole('button', { name: 'Reopen section' })).toHaveLength(2);
-    expect(screen.getByRole('heading', { name: 'Section assignments' })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Reopen section' })[0]).toBeEnabled();
     expect(screen.getAllByRole('spinbutton')[0]).toBeEnabled();
+    expect(screen.queryByRole('heading', { name: 'Assignments' })).toBeInTheDocument();
   });
 
   it('shows three prior years and expands historical notes', async () => {

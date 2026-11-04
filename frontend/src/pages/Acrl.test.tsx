@@ -180,6 +180,10 @@ describe('ACRL catalogue page', () => {
         { section: 'Circulation', assignees: [{ id: 1, displayName: 'Editor' }] },
         { section: 'Services', assignees: [] },
       ],
+      questions: [
+        { sheet: 'survey', questionId: '60', part: 'A', section: 'Services', assignees: [{ id: 2, displayName: 'Editor' }] },
+        { sheet: 'trends', questionId: 'T1', part: '', section: 'Services', assignees: [{ id: 3, displayName: 'Editor' }] },
+      ],
     });
     const user = userEvent.setup();
     renderAcrl();
@@ -189,10 +193,18 @@ describe('ACRL catalogue page', () => {
     expect(within(yearSelect).getAllByRole('option').map((option) => option.textContent)).toEqual(['Choose a year…', '2025', '2024']);
     await user.selectOptions(yearSelect, '2025');
 
-    const assignmentLink = await screen.findByRole('link', { name: 'Assign sections for FY 2025' });
-    expect(assignmentLink.getAttribute('href')).toMatch(/^\/fre\//);
-    expect(assignmentLink).toHaveAttribute('href', '/fre/acrl/entry/2025#section-assignments');
-    expect(await screen.findByText('1 of 2 sections have someone assigned')).toBeInTheDocument();
+    await waitFor(() => {
+      const status = screen.queryByRole('status');
+      if (!status || status.textContent?.startsWith('Loading')) throw new Error('assignment count has not loaded');
+    });
+    const failures: string[] = [];
+    const check = (condition: boolean, message: string) => { if (!condition) failures.push(message); };
+    const assignmentLink = screen.queryByRole('link', { name: 'Assign sections and questions for FY 2025' });
+    check(assignmentLink?.getAttribute('href') === '/fre/acrl/entry/2025#section-assignments', 'the assignment link keeps the panel anchor');
+    check(assignmentLink?.textContent === 'Assign sections and questions for FY 2025', 'the assignment link names sections and questions');
+    check(screen.queryByText('1 of 2 sections have someone assigned · 2 questions assigned individually') !== null, 'the card counts question assignments individually');
+    check(screen.queryByRole('heading', { name: 'Assignments' }) !== null, 'the card heading is Assignments');
+    if (failures.length) throw new Error(failures.join('; '));
     expect(getAssignments).toHaveBeenCalledWith(2025);
   });
 
@@ -202,6 +214,7 @@ describe('ACRL catalogue page', () => {
     getAssignments.mockResolvedValue({
       surveyYear: 2025,
       sections: [{ section: 'Circulation', assignees: [] }, { section: 'Services', assignees: [] }],
+      questions: [],
     });
     const user = userEvent.setup();
     renderAcrl();
@@ -210,7 +223,11 @@ describe('ACRL catalogue page', () => {
     await within(yearSelect).findByRole('option', { name: '2025' });
     await user.selectOptions(yearSelect, '2025');
 
-    expect(await screen.findByText('0 of 2 sections have someone assigned')).toBeInTheDocument();
+    await waitFor(() => {
+      const status = screen.queryByRole('status');
+      if (!status || status.textContent?.startsWith('Loading')) throw new Error('assignment count has not loaded');
+    });
+    expect(screen.queryByText('0 of 2 sections have someone assigned · 0 questions assigned individually')).toBeInTheDocument();
   });
 
   it('keeps the assignment link available when the count request fails', async () => {
@@ -224,9 +241,11 @@ describe('ACRL catalogue page', () => {
     await user.selectOptions(yearSelect, '2025');
 
     expect(await screen.findByText('Could not load section assignments.')).toHaveAttribute('role', 'alert');
-    const assignmentLink = screen.getByRole('link', { name: 'Assign sections for FY 2025' });
-    expect(assignmentLink.getAttribute('href')).toMatch(/^\/fre\//);
-    expect(assignmentLink).toHaveAttribute('href', '/fre/acrl/entry/2025#section-assignments');
+    const assignmentLink = screen.queryByRole('link', { name: 'Assign sections and questions for FY 2025' });
+    const failures: string[] = [];
+    if (assignmentLink?.getAttribute('href') !== '/fre/acrl/entry/2025#section-assignments') failures.push('the link keeps the existing section assignment anchor after a count error');
+    if (assignmentLink?.textContent !== 'Assign sections and questions for FY 2025') failures.push('the link label names sections and questions after a count error');
+    if (failures.length) throw new Error(failures.join('; '));
   });
 
   it('shows grouped annual changes and approves unchanged matches in bulk', async () => {
@@ -515,6 +534,10 @@ describe('ACRL catalogue page', () => {
         skippedSections: [],
         unmatchedSections: ['Old services'],
         alreadyAssigned: false,
+        copiedQuestions: [],
+        skippedQuestions: [],
+        unmatchedQuestions: [],
+        questionsAlreadyAssigned: false,
         failed: false,
       },
     });
@@ -541,6 +564,10 @@ describe('ACRL catalogue page', () => {
         skippedSections: [],
         unmatchedSections: [],
         alreadyAssigned: false,
+        copiedQuestions: [],
+        skippedQuestions: [],
+        unmatchedQuestions: [],
+        questionsAlreadyAssigned: false,
         failed: true,
       },
     });
@@ -552,5 +579,106 @@ describe('ACRL catalogue page', () => {
 
     expect(await screen.findByText('FY 2026 was published, but assignments could not be copied from FY 2025.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Published' })).toBeDisabled();
+  });
+
+  it('shows question-only copy results without saying that no assignments were copied', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    publishYear.mockResolvedValue({
+      ...makeReview(),
+      status: 'published',
+      assignmentCopy: {
+        surveyYear: 2026,
+        sourceYear: 2025,
+        copiedSections: [],
+        skippedSections: [],
+        unmatchedSections: [],
+        alreadyAssigned: false,
+        copiedQuestions: [{ sheet: 'survey', questionId: '60', part: 'A', label: 'Q60 · A' }],
+        skippedQuestions: [],
+        unmatchedQuestions: [],
+        questionsAlreadyAssigned: false,
+        failed: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish year' }));
+    await screen.findByRole('button', { name: 'Published' });
+
+    const result = screen.getAllByRole('status').find((item) => item.textContent?.includes('FY 2026'));
+    const text = result?.textContent ?? '';
+    const failures: string[] = [];
+    if (!text.includes('Q60 · A')) failures.push('publish banner includes the copied question label');
+    if (text.includes('Assignments copied from FY 2025 for: none')) failures.push('question-only copy does not claim that no assignments were copied');
+    if (failures.length) throw new Error(failures.join('; '));
+  });
+
+  it('keeps the section alreadyAssigned message accurate beside copied questions', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    publishYear.mockResolvedValue({
+      ...makeReview(),
+      status: 'published',
+      assignmentCopy: {
+        surveyYear: 2026,
+        sourceYear: 2025,
+        copiedSections: [],
+        skippedSections: ['Circulation'],
+        unmatchedSections: [],
+        alreadyAssigned: true,
+        copiedQuestions: [{ sheet: 'survey', questionId: '60', part: 'A', label: 'Q60 · A' }],
+        skippedQuestions: [],
+        unmatchedQuestions: [],
+        questionsAlreadyAssigned: false,
+        failed: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish year' }));
+    await screen.findByRole('button', { name: 'Published' });
+
+    const result = screen.getAllByRole('status').find((item) => item.textContent?.includes('FY 2026'));
+    const text = result?.textContent ?? '';
+    const failures: string[] = [];
+    if (!text.includes('FY 2026 already had section assignments, so sections were not copied.')) failures.push('alreadyAssigned uses the section-specific publish message');
+    if (!text.includes('Q60 · A')) failures.push('copied question labels remain visible beside the section guard');
+    if (text.includes('FY 2026 already had assignments, so no copy was made.')) failures.push('the old generic alreadyAssigned message is absent');
+    if (failures.length) throw new Error(failures.join('; '));
+  });
+
+  it('announces when question assignments already exist on the published year', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    publishYear.mockResolvedValue({
+      ...makeReview(),
+      status: 'published',
+      assignmentCopy: {
+        surveyYear: 2026,
+        sourceYear: 2025,
+        copiedSections: [],
+        skippedSections: [],
+        unmatchedSections: [],
+        alreadyAssigned: false,
+        copiedQuestions: [],
+        skippedQuestions: [],
+        unmatchedQuestions: [],
+        questionsAlreadyAssigned: true,
+        failed: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish year' }));
+    await screen.findByRole('button', { name: 'Published' });
+
+    const result = screen.getAllByRole('status').find((item) => item.textContent?.includes('FY 2026'));
+    if (!result?.textContent?.includes('FY 2026 already had question assignments, so none were copied.')) {
+      throw new Error('the publish banner announces when question assignments already exist');
+    }
   });
 });
