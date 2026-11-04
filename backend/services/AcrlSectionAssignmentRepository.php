@@ -40,9 +40,7 @@ class AcrlSectionAssignmentRepository
 
     public function replaceSections(int $year, array $assignmentsBySection, int $assignedBy): void
     {
-        $transaction = $this->db->beginTransaction();
-        try {
-            $this->lockYear($year);
+        $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy) {
             foreach ($assignmentsBySection as $section => $userIds) {
                 $this->db->createCommand()->delete('acrl_section_assignments', [
                     'survey_year' => $year,
@@ -57,7 +55,17 @@ class AcrlSectionAssignmentRepository
                     ])->execute();
                 }
             }
+        });
+    }
+
+    public function withLockedYear(int $year, callable $callback)
+    {
+        $transaction = $this->db->beginTransaction();
+        try {
+            $this->lockYear($year);
+            $result = $callback();
             $transaction->commit();
+            return $result;
         } catch (\Throwable $exception) {
             if ($transaction->isActive) {
                 $transaction->rollBack();
@@ -66,11 +74,9 @@ class AcrlSectionAssignmentRepository
         }
     }
 
-    public function fillUnassignedSections(int $year, array $assignmentsBySection, int $assignedBy): array
+    public function fillUnassignedSections(int $year, array $assignmentsBySection, int $assignedBy, ?callable $afterCopy = null): array
     {
-        $transaction = $this->db->beginTransaction();
-        try {
-            $this->lockYear($year);
+        return $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $afterCopy) {
             $assignedSections = $this->assignedSections($year);
             $copiedSections = [];
             $skippedSections = [];
@@ -82,28 +88,25 @@ class AcrlSectionAssignmentRepository
                 $this->insertAssignments($year, $section, $userIds, $assignedBy);
                 $copiedSections[] = $section;
             }
-            $transaction->commit();
+            if ($afterCopy !== null) {
+                $afterCopy();
+            }
             return [
                 'copiedSections' => $copiedSections,
                 'skippedSections' => $skippedSections,
                 'alreadyAssigned' => false,
             ];
-        } catch (\Throwable $exception) {
-            if ($transaction->isActive) {
-                $transaction->rollBack();
-            }
-            throw $exception;
-        }
+        });
     }
 
-    public function copySectionsIfYearEmpty(int $year, array $assignmentsBySection, int $assignedBy): array
+    public function copySectionsIfYearEmpty(int $year, array $assignmentsBySection, int $assignedBy, ?callable $afterCopy = null): array
     {
-        $transaction = $this->db->beginTransaction();
-        try {
-            $this->lockYear($year);
+        return $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $afterCopy) {
             $assignedSections = $this->assignedSections($year);
             if (!empty($assignedSections)) {
-                $transaction->commit();
+                if ($afterCopy !== null) {
+                    $afterCopy();
+                }
                 return [
                     'copiedSections' => [],
                     'skippedSections' => array_keys($assignedSections),
@@ -118,18 +121,15 @@ class AcrlSectionAssignmentRepository
                 $this->insertAssignments($year, $section, $userIds, $assignedBy);
                 $copiedSections[] = $section;
             }
-            $transaction->commit();
+            if ($afterCopy !== null) {
+                $afterCopy();
+            }
             return [
                 'copiedSections' => $copiedSections,
                 'skippedSections' => [],
                 'alreadyAssigned' => false,
             ];
-        } catch (\Throwable $exception) {
-            if ($transaction->isActive) {
-                $transaction->rollBack();
-            }
-            throw $exception;
-        }
+        });
     }
 
     private function lockYear(int $year): void

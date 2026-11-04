@@ -7,6 +7,7 @@ use app\services\AcrlSectionAssignmentService;
 class AcrlSectionAssignmentTestRepository
 {
     public $replacements = [];
+    public $removeTargetGuardBetweenReadAndLock = false;
     private $sections = [
         2026 => ['Circulation', 'Library services'],
         2025 => ['Circulation', 'Old holdings'],
@@ -32,7 +33,21 @@ class AcrlSectionAssignmentTestRepository
 
     public function assignments(int $year): array
     {
-        return $this->assignments[$year] ?? [];
+        $rows = $this->assignments[$year] ?? [];
+        if ($year === 2026 && $this->removeTargetGuardBetweenReadAndLock) {
+            $this->assignments[$year] = [];
+            $this->removeTargetGuardBetweenReadAndLock = false;
+        }
+        return $rows;
+    }
+
+    public function withLockedYear(int $year, callable $callback)
+    {
+        if ($year === 2026 && $this->removeTargetGuardBetweenReadAndLock) {
+            $this->assignments[$year] = [];
+            $this->removeTargetGuardBetweenReadAndLock = false;
+        }
+        return $callback();
     }
 
     public function setAssignments(int $year, array $rows): void
@@ -174,6 +189,16 @@ $emptyPublishCopy = $emptyPublishService->copyOnPublish(2026, '9');
 acrlAssignmentAssert($emptyPublishCopy['copiedSections'] === ['Circulation', 'Library services'], 'An empty year receives exact-name assignments from the previous year on publish.');
 acrlAssignmentAssert($emptyPublishCopy['unmatchedSections'] === ['Old holdings'], 'Publish copy-forward reports renamed source sections.');
 acrlAssignmentAssert(!$emptyPublishCopy['alreadyAssigned'], 'A newly copied year is reported as previously unassigned.');
+
+$racingPublishRepository = new AcrlSectionAssignmentTestRepository();
+$racingPublishRepository->removeTargetGuardBetweenReadAndLock = true;
+$racingPublishCopy = (new AcrlSectionAssignmentService($racingPublishRepository, $directory))
+    ->copyOnPublish(2026, '9');
+$racingFailures = [];
+if (($racingPublishCopy['copiedSections'] ?? null) !== ['Circulation', 'Library services']) $racingFailures[] = 'matched source sections were not copied';
+if (($racingPublishCopy['alreadyAssigned'] ?? null) !== false) $racingFailures[] = 'the removed target guard still reported alreadyAssigned';
+if (array_column($racingPublishRepository->assignments(2026), 'section') !== ['Circulation', 'Library services']) $racingFailures[] = 'matching target sections were not filled';
+acrlAssignmentAssert(empty($racingFailures), 'Publish copy evaluates its guard and source after locking: ' . implode('; ', $racingFailures));
 
 try {
     $service->listForYear(2030);

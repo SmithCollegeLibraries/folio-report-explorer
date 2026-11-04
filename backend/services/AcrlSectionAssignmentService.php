@@ -7,11 +7,15 @@ class AcrlSectionAssignmentService
 {
     private $repository;
     private $users;
+    private $questionAssignments;
 
-    public function __construct($repository = null, $users = null)
+    public function __construct($repository = null, $users = null, $questionAssignments = null)
     {
         $this->repository = $repository ?: new AcrlSectionAssignmentRepository();
         $this->users = $users ?: new AcrlApprovedUserDirectoryService();
+        $this->questionAssignments = $questionAssignments ?: ($repository === null
+            ? new AcrlQuestionAssignmentService(null, $this->users)
+            : null);
     }
 
     public function searchApprovedUsers(string $query): array
@@ -73,11 +77,9 @@ class AcrlSectionAssignmentService
         if ($section === '' || !in_array($section, $this->repository->sections($year), true)) {
             throw new \DomainException('The selected ACRL section is not available.');
         }
-        $userIds = $this->normalizeUserIds($userIds);
-        if (count($this->users->findByIds($userIds)) !== count($userIds)) {
-            throw new \InvalidArgumentException('Only approved users can be assigned.');
-        }
-        $actorId = $this->actorId($assignedBy);
+        $userIds = self::normalizeUserIds($userIds);
+        self::requireApprovedUsers($this->users, $userIds);
+        $actorId = self::actorId($assignedBy);
         $this->repository->replaceSections($year, [$section => $userIds], $actorId);
         foreach ($this->listForYear($year)['sections'] as $item) {
             if ($item['section'] === $section) {
@@ -100,28 +102,29 @@ class AcrlSectionAssignmentService
     private function copyMatchingSections(int $year, string $assignedBy, bool $onlyIfYearEmpty): array
     {
         $this->requirePublishedYear($year);
-        $previousYear = $year - 1;
-        if ($onlyIfYearEmpty) {
-            $existingRows = $this->repository->assignments($year);
-            if (!empty($existingRows)) {
-                $existingSections = [];
-                foreach ($existingRows as $row) {
-                    $existingSections[$row['section']] = true;
-                }
-                return [
-                    'surveyYear' => $year,
-                    'sourceYear' => $previousYear,
-                    'copiedSections' => [],
-                    'skippedSections' => array_keys($existingSections),
-                    'unmatchedSections' => [],
-                    'alreadyAssigned' => true,
-                    'failed' => false,
-                ];
-            }
+        $copy = function () use ($year, $assignedBy, $onlyIfYearEmpty) {
+            return $this->copyMatchingSectionsWhileLocked($year, $assignedBy, $onlyIfYearEmpty);
+        };
+        if (method_exists($this->repository, 'withLockedYear')) {
+            return $this->repository->withLockedYear($year, $copy);
         }
-        $this->requirePublishedYear($previousYear, 'The previous ACRL year is not published.');
-        $targetSections = array_fill_keys($this->repository->sections($year), true);
-        $sourceRows = $this->repository->assignments($previousYear);
+        return $copy();
+    }
+
+    private function copyMatchingSectionsWhileLocked(int $year, string $assignedBy, bool $onlyIfYearEmpty): array
+    {
+        $previousYear = $year - 1;
+        $targetAlreadyAssigned = $onlyIfYearEmpty && !empty($this->repository->assignments($year));
+        $toCopy = [];
+        $unmatchedSections = [];
+        if (!$targetAlreadyAssigned) {
+            $this->requirePublishedYear($previousYear, 'The previous ACRL year is not published.');
+            $targetSections = array_fill_keys($this->repository->sections($year), true);
+            $sourceRows = $this->repository->assignments($previousYear);
+        } else {
+            $targetSections = [];
+            $sourceRows = [];
+        }
         $sourceBySection = [];
         foreach ($sourceRows as $row) {
             $sourceBySection[$row['section']][] = (int)$row['user_id'];
@@ -131,8 +134,6 @@ class AcrlSectionAssignmentService
             $allUserIds = array_merge($allUserIds, $userIds);
         }
         $usersById = $this->usersById($allUserIds);
-        $toCopy = [];
-        $unmatchedSections = [];
         foreach ($sourceBySection as $section => $userIds) {
             if (!isset($targetSections[$section])) {
                 $unmatchedSections[] = $section;
@@ -150,13 +151,39 @@ class AcrlSectionAssignmentService
             'skippedSections' => [],
             'alreadyAssigned' => false,
         ];
-        if (!empty($toCopy)) {
-            $actorId = $this->actorId($assignedBy);
-            $writeResult = $onlyIfYearEmpty
-                ? $this->repository->copySectionsIfYearEmpty($year, $toCopy, $actorId)
-                : $this->repository->fillUnassignedSections($year, $toCopy, $actorId);
+        if ($onlyIfYearEmpty && $targetAlreadyAssigned) {
+            $existingSections = [];
+            foreach ($this->repository->assignments($year) as $row) {
+                $existingSections[$row['section']] = true;
+            }
+            $writeResult = [
+                'copiedSections' => [],
+                'skippedSections' => array_keys($existingSections),
+                'alreadyAssigned' => true,
+            ];
         }
-        return [
+        $questionCopy = [];
+        $afterSections = null;
+        if ($this->questionAssignments) {
+            $afterSections = function () use ($year, $assignedBy, $onlyIfYearEmpty, &$questionCopy) {
+                $questionCopy = $onlyIfYearEmpty
+                    ? $this->questionAssignments->copyOnPublish($year, $assignedBy)
+                    : $this->questionAssignments->copyFromPrevious($year, $assignedBy);
+            };
+        }
+        $actorId = empty($toCopy) ? 0 : self::actorId($assignedBy);
+        if ($onlyIfYearEmpty) {
+            if ($afterSections !== null) {
+                $writeResult = $this->repository->copySectionsIfYearEmpty($year, $toCopy, $actorId, $afterSections);
+            } elseif (!$targetAlreadyAssigned && !empty($toCopy)) {
+                $writeResult = $this->repository->copySectionsIfYearEmpty($year, $toCopy, $actorId);
+            }
+        } elseif ($afterSections !== null) {
+            $writeResult = $this->repository->fillUnassignedSections($year, $toCopy, $actorId, $afterSections);
+        } elseif (!empty($toCopy)) {
+            $writeResult = $this->repository->fillUnassignedSections($year, $toCopy, $actorId);
+        }
+        return array_merge([
             'surveyYear' => $year,
             'sourceYear' => $previousYear,
             'copiedSections' => $writeResult['copiedSections'],
@@ -164,7 +191,7 @@ class AcrlSectionAssignmentService
             'unmatchedSections' => $unmatchedSections,
             'alreadyAssigned' => $writeResult['alreadyAssigned'],
             'failed' => false,
-        ];
+        ], $questionCopy);
     }
 
     private function requirePublishedYear(int $year, string $message = 'The selected ACRL year is not published.'): void
@@ -174,7 +201,7 @@ class AcrlSectionAssignmentService
         }
     }
 
-    private function normalizeUserIds(array $userIds): array
+    public static function normalizeUserIds(array $userIds): array
     {
         $ids = [];
         foreach ($userIds as $userId) {
@@ -186,12 +213,19 @@ class AcrlSectionAssignmentService
         return array_values($ids);
     }
 
-    private function actorId(string $assignedBy): int
+    public static function actorId(string $assignedBy): int
     {
         if (!ctype_digit($assignedBy) || (int)$assignedBy < 1) {
             throw new \InvalidArgumentException('The administrator ID is invalid.');
         }
         return (int)$assignedBy;
+    }
+
+    public static function requireApprovedUsers($users, array $userIds): void
+    {
+        if (count($users->findByIds($userIds)) !== count($userIds)) {
+            throw new \InvalidArgumentException('Only approved users can be assigned.');
+        }
     }
 
     private function usersById(array $ids): array

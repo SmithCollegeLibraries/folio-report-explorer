@@ -6,6 +6,7 @@ require_once __DIR__ . '/CatalogingMarcMissingTagReportService.php';
 require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
 require_once __DIR__ . '/CatalogingReportMigrationRecognitionService.php';
 require_once __DIR__ . '/AcrlRetirementMigrationRecognitionService.php';
+require_once __DIR__ . '/AcrlQuestionAssignmentMigrationRecognitionService.php';
 require_once __DIR__ . '/BudgetYearFundReportMigrationRecognitionService.php'; require_once __DIR__ . '/VisualizationHistoryMigrationRecognitionService.php';
 
 class MigrationService
@@ -126,13 +127,7 @@ class MigrationService
 
         $files = $audit['files'];
         if (empty($appliedRows) && self::databaseAppearsCurrent($db)) {
-            if ($dryRun) {
-                return ['applied' => [], 'skipped' => [], 'baselined' => array_column($files, 'filename'), 'dryRun' => true];
-            }
-            foreach ($files as $file) {
-                self::recordApplied($db, $file, 0);
-            }
-            return ['applied' => [], 'skipped' => [], 'baselined' => array_column($files, 'filename'), 'dryRun' => false];
+            return AcrlQuestionAssignmentMigrationRecognitionService::baselineCurrentSchema($db, $files, $dryRun);
         }
 
         $appliedByFilename = [];
@@ -215,7 +210,7 @@ class MigrationService
         return $statements;
     }
 
-    private static function executeMigrationFile($db, array $file): void
+    public static function executeMigrationFile($db, array $file): void
     {
         if (($file['filename'] ?? '') === '044_query_feedback_reuse_trust.sql') {
             self::executeInformationSchemaGuardedAlters($db, (string)$file['path']);
@@ -223,6 +218,9 @@ class MigrationService
         }
 
         self::executeSqlFile($db, (string)$file['path']);
+        if (($file['filename'] ?? '') === '066_acrl_question_assignments.sql') {
+            AcrlQuestionAssignmentMigrationRecognitionService::assertAcrlQuestionAssignmentsAppearComplete($db);
+        }
     }
 
     /**
@@ -440,6 +438,7 @@ class MigrationService
             case '050_orders_missing_acquisitions_unit.sql': return CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);
             case '051_budget_year_expense_class_report.sql': case '053_acquisitions_feedback_report_filters.sql': case '056_open_order_report_expansion.sql': return CatalogingReportMigrationRecognitionService::migrationDefinitionAppearsComplete($db, $filename);
             case '061_retire_acrl_statistics.sql': return AcrlRetirementMigrationRecognitionService::retirementAppearsComplete($db); case '064_visualization_history.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryAppearsComplete($db); case '065_visualization_history_version.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryVersionAppearsComplete($db);
+            case '066_acrl_question_assignments.sql': return AcrlQuestionAssignmentMigrationRecognitionService::acrlQuestionAssignmentsAppearComplete($db);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [
                     'generation_id',

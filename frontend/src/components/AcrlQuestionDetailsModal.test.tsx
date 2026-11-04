@@ -62,14 +62,16 @@ select
 };
 
 function question(questionId = '40a'): AcrlEntryQuestion {
-  return {
+  const fixture = {
     sheet: 'survey', questionId, part: '', section: 'Collections', prompt: 'Physical volumes', answerType: 'number', required: 'yes',
     calculatedFrom: null, surveyOrder: 1, hasDetailsNotes: false,
+    questionAssignees: [], assignees: [], assignedToCurrentUser: false, questionAssignedToCurrentUser: false,
     answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
     previous: { value: null, label: 'No previous value', isSum: false, linkedValues: [] },
     history: [], suggestion: null, calculated: null,
     comparison: { previousValue: null, previousLabel: 'No previous value', changePercent: null, highlighted: false, addNote: false },
   };
+  return fixture as AcrlEntryQuestion;
 }
 
 function renderWithClient(node: ReactNode, client = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {

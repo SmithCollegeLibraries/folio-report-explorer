@@ -186,6 +186,10 @@ export interface AcrlEntryQuestion {
   calculatedFrom: string | null;
   surveyOrder: number;
   hasDetailsNotes: boolean;
+  questionAssignees: AcrlAssignmentUser[];
+  assignees: AcrlAssignmentUser[];
+  assignedToCurrentUser: boolean;
+  questionAssignedToCurrentUser: boolean;
   answer: AcrlAnswer;
   answerDisplay?: string | null;
   previous: {
@@ -222,6 +226,7 @@ export interface AcrlEntrySection {
   total: number;
   assignees: AcrlAssignmentUser[];
   assignedToCurrentUser: boolean;
+  questionsAssignedToCurrentUser: number;
   questions: AcrlEntryQuestion[];
 }
 
@@ -235,9 +240,25 @@ export interface AcrlSectionAssignment {
   assignees: AcrlAssignmentUser[];
 }
 
+export interface AcrlQuestionAssignment {
+  sheet: AcrlSheet;
+  questionId: string;
+  part: string;
+  section: string;
+  assignees: AcrlAssignmentUser[];
+}
+
+export interface AcrlQuestionAssignmentInput {
+  sheet: AcrlSheet;
+  questionId: string;
+  part: string;
+  userIds: number[];
+}
+
 export interface AcrlSectionAssignmentsResponse {
   surveyYear: number;
   sections: AcrlSectionAssignment[];
+  questions: AcrlQuestionAssignment[];
 }
 
 export interface AcrlAssignmentCopyResponse {
@@ -247,6 +268,10 @@ export interface AcrlAssignmentCopyResponse {
   skippedSections: string[];
   unmatchedSections: string[];
   alreadyAssigned: boolean;
+  copiedQuestions: Array<{ sheet: AcrlSheet; questionId: string; part: string; label: string }>;
+  skippedQuestions: Array<{ sheet: AcrlSheet; questionId: string; part: string; label: string }>;
+  unmatchedQuestions: Array<{ sheet: AcrlSheet; questionId: string; part: string; label: string }>;
+  questionsAlreadyAssigned: boolean;
   failed: boolean;
 }
 

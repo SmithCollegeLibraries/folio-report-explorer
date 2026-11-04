@@ -286,10 +286,14 @@ export default function AcrlPage() {
           {assignmentCopyResult && <div role="status" className={`rounded p-3 text-sm ${assignmentCopyResult.failed ? 'bg-amber-50 text-amber-950' : 'bg-emerald-50 text-emerald-900'}`}>
             {assignmentCopyResult.failed
               ? <p>FY {assignmentCopyResult.surveyYear} was published, but assignments could not be copied from FY {assignmentCopyResult.sourceYear}.</p>
-              : <p>Assignments copied from FY {assignmentCopyResult.sourceYear} for: {assignmentCopyResult.copiedSections.length ? assignmentCopyResult.copiedSections.join(', ') : 'none'}.</p>}
-            {assignmentCopyResult.alreadyAssigned && <p>FY {assignmentCopyResult.surveyYear} already had assignments, so no copy was made.</p>}
+              : assignmentCopyResult.copiedSections.length > 0 && <p>Section assignments copied from FY {assignmentCopyResult.sourceYear} for: {assignmentCopyResult.copiedSections.join(', ')}.</p>}
+            {assignmentCopyResult.alreadyAssigned && <p>FY {assignmentCopyResult.surveyYear} already had section assignments, so sections were not copied.</p>}
             {assignmentCopyResult.skippedSections.length > 0 && <p>Already assigned, skipped: {assignmentCopyResult.skippedSections.join(', ')}.</p>}
             {assignmentCopyResult.unmatchedSections.length > 0 && <p>No matching section: {assignmentCopyResult.unmatchedSections.join(', ')}.</p>}
+            {assignmentCopyResult.copiedQuestions.length > 0 && <p>Question assignments copied from FY {assignmentCopyResult.sourceYear} to FY {assignmentCopyResult.surveyYear} for: {assignmentCopyResult.copiedQuestions.map((item) => item.label).join(', ')}.</p>}
+            {assignmentCopyResult.skippedQuestions.length > 0 && <p>Question assignments skipped: {assignmentCopyResult.skippedQuestions.map((item) => item.label).join(', ')}.</p>}
+            {assignmentCopyResult.unmatchedQuestions.length > 0 && <p>No matching question: {assignmentCopyResult.unmatchedQuestions.map((item) => item.label).join(', ')}.</p>}
+            {assignmentCopyResult.questionsAlreadyAssigned && <p>FY {assignmentCopyResult.surveyYear} already had question assignments, so none were copied.</p>}
           </div>}
           {reviewQuery.data && <AcrlReviewPanel review={reviewQuery.data} reviewHeadingRef={reviewHeadingRef} saving={saveMutation.isPending} publishing={publishMutation.isPending} onSave={(links) => saveMutation.mutate(links)} onPublish={() => publishMutation.mutate()} />}
         </section>

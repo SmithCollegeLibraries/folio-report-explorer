@@ -10,6 +10,7 @@ import { useAuth } from '../hooks/useAuth';
 import { acrlBenchmarkColumns, buildAcrlBenchmarkRows } from '../services/acrlBenchmarkExport';
 import type { AcrlEntryQuestion, AcrlEntryResponse, AcrlEntrySection } from '../types/acrl';
 import { downloadCsv } from '../utils/csv';
+import { acrlQuestionAnchorId, acrlQuestionLabel } from '../utils/acrlAssignments';
 
 function errorText(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -55,13 +56,14 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
   const isCalculated = Boolean(question.calculatedFrom);
   const calculationLabel = question.calculatedFrom?.replace(/^sum of\s+/i, '').replace(/,\s*/g, ' + ');
   return (
-    <article className={`space-y-3 rounded-lg border p-4 ${question.comparison.highlighted ? 'border-amber-400 bg-amber-50' : 'border-gray-200 bg-white'}`}>
+    <article id={acrlQuestionAnchorId(question)} className={`scroll-mt-24 space-y-3 rounded-lg border p-4 ${question.comparison.highlighted ? 'border-amber-400 bg-amber-50' : 'border-gray-200 bg-white'}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Q{question.questionId}{question.part ? ` · ${question.part}` : ''}{question.required === 'yes' ? ' · Required' : ''}</p>
           <h3 className="mt-1 font-medium text-gray-900">{question.prompt}</h3>
         </div>
         <div className="flex items-center gap-2">
+          {question.questionAssignedToCurrentUser && <span className="rounded-full bg-folio-100 px-2 py-0.5 text-xs font-semibold text-folio-800">Yours</span>}
           {question.hasDetailsNotes && <span aria-label="Has collection notes" title="Has collection notes" className="h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-amber-100" />}
           <button type="button" className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50" onClick={(event) => onShowDetails(question, event.currentTarget)}>Details</button>
           {question.comparison.changePercent !== null && <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${question.comparison.highlighted ? 'bg-amber-200 text-amber-950' : 'bg-gray-100 text-gray-700'}`} aria-label={`Change ${question.comparison.changePercent}%`}>
@@ -69,6 +71,7 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
           </span>}
         </div>
       </div>
+      {question.questionAssignees.length > 0 && <p className="text-xs text-gray-600">Assigned: {question.questionAssignees.map((assignee) => assignee.displayName).join(', ')}</p>}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
         {question.sheet === 'survey' && <>
           <span>Previous value: {question.previous.label}</span>
@@ -178,7 +181,7 @@ function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
       {mutation.error && <p role="alert" className="text-sm text-rose-700">Could not update section status.</p>}
       {suggestionMutation.error && <p role="alert" className="text-sm text-rose-700">Could not accept the selected suggestions. Refresh the section and try again.</p>}
       <div className="space-y-3">
-        {section.questions.map((question) => <AcrlAnswerRow key={`${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onShowDetails={onShowDetails} onSaved={onChanged} />)}
+        {section.questions.map((question) => <AcrlAnswerRow key={`${question.sheet}-${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onShowDetails={onShowDetails} onSaved={onChanged} />)}
       </div>
     </section>
   );
@@ -274,17 +277,21 @@ export default function AcrlEntryPage() {
         </div>
         {exportError && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">Could not refresh the survey answers for export. Please try again.</p>}
         {isAdmin && <AcrlSectionAssignmentPanel key={entry.selectedYear} year={entry.selectedYear} sections={entry.sections} hasPreviousYear={entry.years.includes(entry.selectedYear - 1)} />}
-        <section aria-label="Your sections" className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/50 p-4">
+        <section aria-label="Your assignments" className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/50 p-4">
           <div>
-            <h2 className="font-semibold text-gray-900">Your sections</h2>
+            <h2 className="font-semibold text-gray-900">Your assignments</h2>
             <p className="text-sm text-gray-600">Assignments are a guide. You can edit any section.</p>
           </div>
-          {entry.sections.some((section) => section.assignedToCurrentUser) ? <div className="flex flex-wrap gap-2">
+          {entry.sections.some((section) => section.assignedToCurrentUser || section.questions.some((question) => question.questionAssignedToCurrentUser && !section.assignedToCurrentUser)) ? <div className="flex flex-wrap gap-2">
             {entry.sections.map((section, index) => section.assignedToCurrentUser && <a key={section.name} href={`#acrl-section-${index + 1}`} className="inline-flex items-center gap-2 rounded-lg border border-folio-300 bg-white px-3 py-2 text-sm text-folio-900 hover:bg-folio-50">
               <span className="font-medium">{section.name}</span>
               <span className="font-mono text-xs">{section.filled}/{section.total}</span>
               <span className="text-xs">{section.status === 'ready' ? 'Ready' : 'Open'}</span>
             </a>)}
+            {entry.sections.flatMap((section) => !section.assignedToCurrentUser ? section.questions.filter((question) => question.questionAssignedToCurrentUser).map((question) => <a key={acrlQuestionAnchorId(question)} href={`#${acrlQuestionAnchorId(question)}`} className="inline-flex items-center gap-2 rounded-lg border border-folio-300 bg-white px-3 py-2 text-sm text-folio-900 hover:bg-folio-50">
+              <span className="font-medium">{section.name}</span>
+              <span>{acrlQuestionLabel(question.questionId, question.part)}</span>
+            </a>) : [])}
           </div> : <p className="text-sm text-gray-600">No sections assigned to you.</p>}
         </section>
         {entry.sections.length > 0 && <nav aria-label="Survey sections" className="sticky top-0 z-20 -mx-4 overflow-x-auto border-y border-gray-200 bg-white/95 shadow-sm backdrop-blur sm:-mx-6">
@@ -302,6 +309,7 @@ export default function AcrlEntryPage() {
               }} className={`inline-flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm ${active ? 'border-folio-700 bg-folio-50 text-folio-900' : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'}`}>
                 <span className="font-medium">{section.name}</span>
                 {section.assignedToCurrentUser && <span className="rounded-full bg-folio-100 px-2 py-0.5 text-xs font-semibold text-folio-800">Your section</span>}
+                {section.questionsAssignedToCurrentUser > 0 && <span className="rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-800">Your questions ({section.questionsAssignedToCurrentUser})</span>}
                 <span className="font-mono text-xs">{section.filled}/{section.total}</span>
                 <span className={`rounded-full px-2 py-0.5 text-xs ${section.status === 'ready' ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-600'}`}>{section.status === 'ready' ? 'Ready' : 'Open'}</span>
               </a>;

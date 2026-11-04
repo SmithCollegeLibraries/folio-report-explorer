@@ -4,9 +4,10 @@ import { serializeCsv } from '../utils/csv';
 import { acrlBenchmarkColumns, buildAcrlBenchmarkRows } from './acrlBenchmarkExport';
 
 function question(overrides: Partial<AcrlEntryQuestion> = {}): AcrlEntryQuestion {
-  return {
+  const fixture = {
     sheet: 'survey', questionId: '1', part: '', section: 'Circulation', prompt: 'Survey question', answerType: 'text',
     required: 'no', calculatedFrom: null, surveyOrder: 1, hasDetailsNotes: false,
+    questionAssignees: [], assignees: [], assignedToCurrentUser: false, questionAssignedToCurrentUser: false,
     answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
     previous: { value: null, label: 'No previous value', isSum: false, linkedValues: [] },
     history: [], suggestion: null,
@@ -14,10 +15,11 @@ function question(overrides: Partial<AcrlEntryQuestion> = {}): AcrlEntryQuestion
     calculated: null,
     ...overrides,
   };
+  return fixture as AcrlEntryQuestion;
 }
 
 function section(name: string, questions: AcrlEntryQuestion[]): AcrlEntrySection {
-  return { name, status: 'open', setAt: null, reopenedAt: null, filled: 0, total: questions.length, assignees: [], assignedToCurrentUser: false, questions };
+  return { name, status: 'open', setAt: null, reopenedAt: null, filled: 0, total: questions.length, assignees: [], assignedToCurrentUser: false, questionsAssignedToCurrentUser: 0, questions } as AcrlEntrySection;
 }
 
 function entry(sections: AcrlEntrySection[], previousYear = 2025): AcrlEntryResponse {

@@ -121,6 +121,7 @@ $config = [
                 'GET acrl/approved-users' => 'acrl-assignment/search-users',
                 'GET acrl/years/<year:\\d+>/assignments' => 'acrl-assignment/list-assignments',
                 'POST acrl/years/<year:\\d+>/sections/<section:[^/]+>/assignments' => 'acrl-assignment/save-assignments',
+                'POST acrl/years/<year:\\d+>/question-assignments' => 'acrl-assignment/save-question-assignments',
                 'POST acrl/years/<year:\\d+>/assignments/copy-previous' => 'acrl-assignment/copy-from-previous',
                 'GET acrl/threshold' => 'acrl/threshold',
                 'POST acrl/threshold' => 'acrl/save-threshold',
