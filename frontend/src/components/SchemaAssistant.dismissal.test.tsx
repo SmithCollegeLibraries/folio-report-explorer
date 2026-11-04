@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe('SchemaAssistant dismissal', () => {
-  it('closes the floating assistant after an outside click', async () => {
+  it('keeps the persistent assistant open after an outside click', async () => {
     const user = userEvent.setup();
     render(
       <>
@@ -30,6 +30,6 @@ describe('SchemaAssistant dismissal', () => {
     expect(screen.getByText('Schema Assistant')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Outside action' }));
 
-    expect(screen.queryByText('Schema Assistant')).not.toBeInTheDocument();
+    expect(screen.getByText('Schema Assistant')).toBeInTheDocument();
   });
 });
