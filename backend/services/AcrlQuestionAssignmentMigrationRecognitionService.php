@@ -60,7 +60,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     return false;
                 }
             }
-            if ((string)$actual['part']['COLUMN_DEFAULT'] !== '') {
+            if (!in_array((string)$actual['part']['COLUMN_DEFAULT'], ['', "''"], true)) {
                 return false;
             }
             $rows = $db->createCommand(
@@ -94,7 +94,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                 && !self::acrlQuestionAssignmentsAppearComplete($db)) {
                 if (!$dryRun) {
                     $started = microtime(true);
-                    $db->createCommand((string)file_get_contents($file['path']))->execute();
+                    MigrationService::executeMigrationFile($db, $file);
                     $db->createCommand()->insert('schema_migrations', [
                         'filename' => $file['filename'],
                         'checksum' => $file['checksum'],

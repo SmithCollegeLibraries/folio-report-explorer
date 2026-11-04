@@ -124,8 +124,7 @@ class AcrlQuestionAssignmentService
         $sourceAssignees = $this->approvedUsersByQuestion($previousQuestions, $this->repository->assignments($previousYear));
         $targetsBySource = [];
         foreach ($this->repository->approvedLinks($previousYear, $year) as $link) {
-            if (($link['decision'] ?? null) !== 'approved'
-                || (int)$link['previous_year'] !== $previousYear
+            if ((int)$link['previous_year'] !== $previousYear
                 || (int)$link['current_year'] !== $year) {
                 continue;
             }

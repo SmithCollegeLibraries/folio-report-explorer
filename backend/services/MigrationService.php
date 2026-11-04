@@ -210,7 +210,7 @@ class MigrationService
         return $statements;
     }
 
-    private static function executeMigrationFile($db, array $file): void
+    public static function executeMigrationFile($db, array $file): void
     {
         if (($file['filename'] ?? '') === '044_query_feedback_reuse_trust.sql') {
             self::executeInformationSchemaGuardedAlters($db, (string)$file['path']);
