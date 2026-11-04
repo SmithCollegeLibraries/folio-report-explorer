@@ -114,6 +114,8 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   const viewportNarrow = useNarrowViewport();
   const [chartElement, setChartElement] = useState<HTMLDivElement | null>(null);
   const [chartSize, setChartSize] = useState({ width: 0, height: 320 });
+  const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
+  const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [active, setActive] = useState<PieSlice | null>(null);
 
   useEffect(() => {
@@ -131,6 +133,22 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
     observer.observe(chartElement);
     return () => observer.disconnect();
   }, [chartElement]);
+
+  useEffect(() => {
+    if (!svgElement) return;
+    const measure = (width: number, height: number) => {
+      if (width > 0 && height > 0) {
+        setSvgSize((current) => current.width === width && current.height === height
+          ? current : { width, height });
+      }
+    };
+    const bounds = svgElement.getBoundingClientRect();
+    measure(bounds.width, bounds.height);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => measure(entry.contentRect.width, entry.contentRect.height));
+    observer.observe(svgElement);
+    return () => observer.disconnect();
+  }, [svgElement]);
 
   const narrow = viewportNarrow || chartSize.width < 480;
 
@@ -157,8 +175,8 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   if (slices.length === 0) {
     return <p role="status" className="py-16 text-center text-gray-600">No positive purchases for this fiscal year</p>;
   }
-  const width = chartSize.width || 320;
-  const height = chartSize.height || 320;
+  const width = svgSize.width || chartSize.width || 320;
+  const height = svgSize.height || chartSize.height || 320;
   const center = { x: width / 2, y: height / 2 };
   const labelGap = 12;
   const labelPadding = 16;
@@ -202,7 +220,7 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   return <div className="space-y-2">
     <ChartContainer ref={setChartElement} config={config} className="h-80 min-w-0 w-full" aria-label="Paid purchases by material type">
       <div className="flex h-full w-full flex-col">
-      <svg className="recharts-surface min-h-0 min-w-0 w-full flex-1"
+      <svg ref={setSvgElement} className="recharts-surface min-h-0 min-w-0 w-full flex-1"
         viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet"
         role="img" aria-label="Paid purchases by material type">
         <g className="recharts-pie-sectors">
