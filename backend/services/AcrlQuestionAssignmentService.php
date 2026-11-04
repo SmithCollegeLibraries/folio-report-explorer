@@ -29,7 +29,14 @@ class AcrlQuestionAssignmentService
         $userIds = AcrlSectionAssignmentService::normalizeUserIds($userIds);
         AcrlSectionAssignmentService::requireApprovedUsers($this->users, $userIds);
         $actorId = AcrlSectionAssignmentService::actorId($assignedBy);
-        $this->repository->replaceQuestionAssignments($year, $sheet, $questionId, $part, $userIds, $actorId);
+        $this->repository->replaceQuestionAssignments($year, $sheet, $questionId, $part, $userIds, $actorId, function () use ($year, $sheet, $questionId, $part, &$question) {
+            $this->requirePublishedYear($year);
+            $lockedQuestion = $this->repository->question($year, $sheet, $questionId, $part);
+            if (!$lockedQuestion) {
+                throw new \DomainException('The selected ACRL question is not available.');
+            }
+            $question = $lockedQuestion;
+        });
         $assignees = $this->approvedAssigneesForQuestion($year, $sheet, $questionId, $part);
         return [
             'sheet' => $sheet,

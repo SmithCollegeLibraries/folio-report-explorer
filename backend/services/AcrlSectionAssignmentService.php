@@ -102,6 +102,17 @@ class AcrlSectionAssignmentService
     private function copyMatchingSections(int $year, string $assignedBy, bool $onlyIfYearEmpty): array
     {
         $this->requirePublishedYear($year);
+        $copy = function () use ($year, $assignedBy, $onlyIfYearEmpty) {
+            return $this->copyMatchingSectionsWhileLocked($year, $assignedBy, $onlyIfYearEmpty);
+        };
+        if (method_exists($this->repository, 'withLockedYear')) {
+            return $this->repository->withLockedYear($year, $copy);
+        }
+        return $copy();
+    }
+
+    private function copyMatchingSectionsWhileLocked(int $year, string $assignedBy, bool $onlyIfYearEmpty): array
+    {
         $previousYear = $year - 1;
         $targetAlreadyAssigned = $onlyIfYearEmpty && !empty($this->repository->assignments($year));
         $toCopy = [];

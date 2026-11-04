@@ -181,7 +181,7 @@ function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
       {mutation.error && <p role="alert" className="text-sm text-rose-700">Could not update section status.</p>}
       {suggestionMutation.error && <p role="alert" className="text-sm text-rose-700">Could not accept the selected suggestions. Refresh the section and try again.</p>}
       <div className="space-y-3">
-        {section.questions.map((question) => <AcrlAnswerRow key={`${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onShowDetails={onShowDetails} onSaved={onChanged} />)}
+        {section.questions.map((question) => <AcrlAnswerRow key={`${question.sheet}-${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onShowDetails={onShowDetails} onSaved={onChanged} />)}
       </div>
     </section>
   );

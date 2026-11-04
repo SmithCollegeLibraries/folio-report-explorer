@@ -218,6 +218,9 @@ class MigrationService
         }
 
         self::executeSqlFile($db, (string)$file['path']);
+        if (($file['filename'] ?? '') === '066_acrl_question_assignments.sql') {
+            AcrlQuestionAssignmentMigrationRecognitionService::assertAcrlQuestionAssignmentsAppearComplete($db);
+        }
     }
 
     /**

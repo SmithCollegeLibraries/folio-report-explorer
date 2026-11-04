@@ -63,9 +63,12 @@ class AcrlQuestionAssignmentRepository
         )->queryAll();
     }
 
-    public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy): void
+    public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy, ?callable $validateBeforeReplace = null): void
     {
-        $this->withLockedYear($year, function () use ($year, $sheet, $questionId, $part, $userIds, $assignedBy) {
+        $this->withLockedYear($year, function () use ($year, $sheet, $questionId, $part, $userIds, $assignedBy, $validateBeforeReplace) {
+            if ($validateBeforeReplace !== null) {
+                $validateBeforeReplace();
+            }
             $this->db->createCommand()->delete('acrl_question_assignments', [
                 'survey_year' => $year,
                 'sheet' => $sheet,

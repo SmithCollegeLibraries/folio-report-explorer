@@ -5,6 +5,13 @@ namespace app\services;
 /** Recognizes migration 066 without changing the legacy current-schema baseline. */
 class AcrlQuestionAssignmentMigrationRecognitionService
 {
+    public static function assertAcrlQuestionAssignmentsAppearComplete($db): void
+    {
+        if (!self::acrlQuestionAssignmentsAppearComplete($db)) {
+            throw new \RuntimeException('Migration 066 left acrl_question_assignments without its required schema.');
+        }
+    }
+
     public static function acrlQuestionAssignmentsAppearComplete($db): bool
     {
         try {
