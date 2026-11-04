@@ -8,6 +8,7 @@ export default function ParamInput({
   onChange,
   error,
   errorId,
+  groupSelect = false,
 }: {
   param: ReportParam;
   value: string;
@@ -15,6 +16,7 @@ export default function ParamInput({
   onChange: (value: string) => void;
   error?: string;
   errorId?: string;
+  groupSelect?: boolean;
 }) {
   const inputId = `report-param-${param.name}`;
 
@@ -33,6 +35,7 @@ export default function ParamInput({
           options={options}
           placeholder={param.placeholder}
           maxSelections={param.max_selections}
+          groupSelect={groupSelect}
           error={error}
           errorId={errorId}
           onChange={onChange}

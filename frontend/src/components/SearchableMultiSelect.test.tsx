@@ -1,17 +1,29 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { useState, type ComponentProps, type ComponentType } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import SearchableMultiSelect from './SearchableMultiSelect';
 import { selectionLabels } from '../utils/multiSelectLabels';
 
 afterEach(cleanup);
 
+type GroupSelectableProps = ComponentProps<typeof SearchableMultiSelect> & { groupSelect?: boolean };
+const GroupSelectableMultiSelect = SearchableMultiSelect as ComponentType<GroupSelectableProps>;
+
 const receiptOptions = [
   { value: 'pending', label: 'Pending' },
   { value: 'awaiting', label: 'Awaiting Receipt' },
   { value: 'partial', label: 'Partially Received' },
   { value: 'received', label: 'Fully Received' },
+];
+
+const campusLocationOptions = [
+  { value: 'smith-browse', label: 'Smith College — Neilson Library — Browsing [BROWSE]' },
+  { value: 'smith-stacks', label: 'Smith College — Young Science Library — Stacks [STACKS]' },
+  { value: 'amherst-circulation', label: 'Amherst College — Frost Library — Circulation [CIRC]' },
+  { value: 'amherst-reading-room', label: 'Amherst College — Archives & Special Collections — Reading Room [READ]' },
+  { value: 'umass-periodicals', label: 'University Of Massachusetts — Du Bois Library — Periodicals [PER]' },
+  { value: 'unassigned', label: 'Unassigned location [UNASSIGNED]' },
 ];
 
 function renderSelect({
@@ -172,5 +184,179 @@ describe('SearchableMultiSelect summary', () => {
 
     await user.keyboard('{Escape}');
     expect(control).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+describe('SearchableMultiSelect campus selection', () => {
+  it('shows a counted Select all and Clear control for each campus group', async () => {
+    const user = userEvent.setup();
+    render(
+      <GroupSelectableMultiSelect
+        id="locations"
+        label="Locations"
+        value=""
+        options={campusLocationOptions}
+        groupSelect
+        onChange={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select locations' }));
+
+    expect(screen.getByRole('button', { name: 'Select all Smith College (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear Smith College' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select all Amherst College (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear Amherst College' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select all University Of Massachusetts (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear University Of Massachusetts' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Unassigned location/ })).not.toBeInTheDocument();
+  });
+
+  it('adds only the campus locations not already selected', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <GroupSelectableMultiSelect
+        id="locations"
+        label="Locations"
+        value="amherst-circulation,smith-browse"
+        options={campusLocationOptions}
+        groupSelect
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '2 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Select all Smith College (2)' }));
+
+    expect(changes).toEqual(['amherst-circulation,smith-browse,smith-stacks']);
+  });
+
+  it('clears only the selected locations from the requested campus', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <GroupSelectableMultiSelect
+        id="locations"
+        label="Locations"
+        value="smith-browse,amherst-circulation,umass-periodicals,unassigned"
+        options={campusLocationOptions}
+        groupSelect
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '4 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Clear Smith College' }));
+
+    expect(changes).toEqual(['amherst-circulation,umass-periodicals,unassigned']);
+  });
+
+  it('leaves the selection unchanged and names the limit when a campus exceeds it', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <GroupSelectableMultiSelect
+        id="locations"
+        label="Locations"
+        value="smith-browse,smith-stacks"
+        options={campusLocationOptions}
+        maxSelections={3}
+        groupSelect
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '2 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Select all Amherst College (2)' }));
+
+    expect(changes).toEqual([]);
+    expect(screen.getByText('Selecting all Amherst College locations would exceed 3 locations')).toBeInTheDocument();
+  });
+
+  it('allows Select all when the resulting selection is exactly at the limit', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <GroupSelectableMultiSelect
+        id="locations"
+        label="Locations"
+        value="smith-browse,amherst-circulation"
+        options={campusLocationOptions}
+        maxSelections={3}
+        groupSelect
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '2 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Select all Amherst College (2)' }));
+
+    expect(changes).toEqual(['smith-browse,amherst-circulation,amherst-reading-room']);
+  });
+
+  it('clears an over-limit message after a successful campus clear', async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [value, setValue] = useState('smith-browse,smith-stacks');
+      return (
+        <GroupSelectableMultiSelect
+          id="locations"
+          label="Locations"
+          value={value}
+          options={campusLocationOptions}
+          maxSelections={3}
+          groupSelect
+          onChange={setValue}
+        />
+      );
+    }
+    render(<Harness />);
+
+    await user.click(screen.getByRole('button', { name: '2 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Select all Amherst College (2)' }));
+    expect(screen.getByText('Selecting all Amherst College locations would exceed 3 locations')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Clear Smith College' }));
+
+    expect(screen.queryByText('Selecting all Amherst College locations would exceed 3 locations')).not.toBeInTheDocument();
+  });
+
+  it('does not emit a change when Select all targets an already selected campus', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <GroupSelectableMultiSelect
+        id="locations"
+        label="Locations"
+        value="smith-browse,smith-stacks"
+        options={campusLocationOptions}
+        groupSelect
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '2 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Select all Smith College (2)' }));
+
+    expect(changes).toEqual([]);
+  });
+
+  it('does not show campus controls without the opt-in prop', async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchableMultiSelect
+        id="locations"
+        label="Locations"
+        value=""
+        options={campusLocationOptions}
+        onChange={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select locations' }));
+
+    expect(screen.queryByRole('button', { name: 'Select all Smith College (2)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear Smith College' })).not.toBeInTheDocument();
   });
 });

@@ -91,7 +91,7 @@ export default function MarcFieldFinderParameters({
   const fieldErrorText = (name: string): string | undefined => fieldErrors(name).join(' ') || undefined;
   const fieldErrorId = (name: string): string => `marc-finder-${name}-error`;
 
-  const renderParam = (name: string) => {
+  const renderParam = (name: string, groupSelect = false) => {
     const parameter = getParam(parameters, name);
     return (
       <div key={name}>
@@ -101,6 +101,7 @@ export default function MarcFieldFinderParameters({
           options={optionsFor(name)}
           error={fieldErrorText(name)}
           errorId={fieldErrorId(name)}
+          groupSelect={groupSelect}
           onChange={(value) => onChange(name, value)}
         />
         {fieldErrorText(name) && parameter.type !== 'multiselect' && (
@@ -125,7 +126,7 @@ export default function MarcFieldFinderParameters({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {renderParam('locationIds')}
+        {renderParam('locationIds', true)}
         {renderParam('locationBasis')}
         {renderParam('marcTag')}
         {renderParam('occurrenceCondition')}

@@ -21,6 +21,7 @@ interface SearchableMultiSelectProps {
   buttonPlaceholder?: string;
   selectedSummary?: string;
   disabled?: boolean;
+  groupSelect?: boolean;
 }
 
 const MAX_VISIBLE_CHIPS = 3;
@@ -40,9 +41,11 @@ export default function SearchableMultiSelect({
   buttonPlaceholder,
   selectedSummary,
   disabled = false,
+  groupSelect = false,
 }: SearchableMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [groupSelectionMessage, setGroupSelectionMessage] = useState('');
   useEffect(() => {
     if (disabled) setIsOpen(false);
   }, [disabled]);
@@ -60,6 +63,22 @@ export default function SearchableMultiSelect({
     if (!needle) return options;
     return options.filter((option) => option.label.toLocaleLowerCase().includes(needle));
   }, [options, search]);
+  const optionGroups = useMemo(() => {
+    if (!groupSelect) return [];
+
+    const groups = new Map<string, SelectOption[]>();
+    options.forEach((option) => {
+      const separatorIndex = option.label.indexOf(' — ');
+      if (separatorIndex < 1) return;
+
+      const groupName = option.label.slice(0, separatorIndex);
+      const groupOptions = groups.get(groupName) || [];
+      groupOptions.push(option);
+      groups.set(groupName, groupOptions);
+    });
+
+    return Array.from(groups, ([name, groupOptions]) => ({ name, options: groupOptions }));
+  }, [groupSelect, options]);
   const atLimit = selectedValues.length >= maxSelections;
   const listboxId = `${id}-options`;
   const selectionName = selectionLabels(label);
@@ -73,7 +92,10 @@ export default function SearchableMultiSelect({
     && selectedValues.length === options.length
     && options.every((option) => selectedSet.has(option.value));
 
-  const emit = (next: string[]) => onChange(next.join(','));
+  const emit = (next: string[]) => {
+    onChange(next.join(','));
+    setGroupSelectionMessage('');
+  };
   const toggleOption = (optionValue: string) => {
     if (selectedSet.has(optionValue)) {
       emit(selectedValues.filter((selectedValue) => selectedValue !== optionValue));
@@ -171,7 +193,7 @@ export default function SearchableMultiSelect({
       )}
 
       {isOpen && (
-        <div className="absolute z-30 mt-2 w-full min-w-[22rem] rounded-xl border border-stone-200 bg-white p-2 shadow-xl">
+        <div className="absolute z-30 mt-2 w-full min-w-0 rounded-xl border border-stone-200 bg-white p-2 shadow-xl sm:min-w-[22rem]">
           <div className="mb-2 flex items-center justify-end gap-2">
             <button
               type="button"
@@ -192,6 +214,61 @@ export default function SearchableMultiSelect({
               Clear all
             </button>
           </div>
+          {optionGroups.length > 0 && (
+            <div className="mb-2 flex max-w-full flex-wrap items-center justify-start gap-2">
+              {optionGroups.map((group) => {
+                const groupValues = group.options.map((option) => option.value);
+                const groupValueSet = new Set(groupValues);
+                const selectedGroupCount = selectedValues.filter((selectedValue) => groupValueSet.has(selectedValue)).length;
+                const allGroupValuesSelected = groupValues.every((groupValue) => selectedSet.has(groupValue));
+
+                return (
+                  <div key={group.name} className="flex max-w-full items-center gap-1 rounded-md bg-stone-50 px-1">
+                    <button
+                      type="button"
+                      aria-label={`Select all ${group.name} (${group.options.length})`}
+                      onClick={() => {
+                        const uniqueSelectedValues = Array.from(new Set(selectedValues));
+                        const uniqueSelectedSet = new Set(uniqueSelectedValues);
+                        const additions = group.options
+                          .map((option) => option.value)
+                          .filter((groupValue) => !uniqueSelectedSet.has(groupValue));
+                        if (additions.length === 0) return;
+
+                        const nextValues = [...uniqueSelectedValues, ...additions];
+                        if (nextValues.length > maxSelections) {
+                          setGroupSelectionMessage(
+                            `Selecting all ${group.name} ${pluralLabel.toLocaleLowerCase()} would exceed ${maxSelections} ${pluralLabel.toLocaleLowerCase()}`,
+                          );
+                          return;
+                        }
+
+                        emit(nextValues);
+                      }}
+                      disabled={allGroupValuesSelected}
+                      className="max-w-full whitespace-normal break-words rounded-md px-2 py-1 text-left text-xs font-medium text-folio-700 hover:bg-folio-100 disabled:cursor-not-allowed disabled:text-stone-400"
+                    >
+                      Select all {group.name} ({group.options.length})
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Clear ${group.name}`}
+                      onClick={() => emit(selectedValues.filter((selectedValue) => !groupValueSet.has(selectedValue)))}
+                      disabled={selectedGroupCount === 0}
+                      className="max-w-full whitespace-normal break-words rounded-md px-2 py-1 text-left text-xs font-medium text-folio-700 hover:bg-folio-100 disabled:cursor-not-allowed disabled:text-stone-400"
+                    >
+                      Clear {group.name}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {groupSelectionMessage && (
+            <p role="alert" className="mb-2 text-xs font-medium text-amber-700">
+              {groupSelectionMessage}
+            </p>
+          )}
           <div className="relative">
             <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-stone-400" />
             <input
