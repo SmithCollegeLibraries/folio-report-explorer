@@ -36,7 +36,10 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
   const patternId = useId().replace(/:/g, '');
   const narrow = useNarrowViewport();
   const showChangeLabels = !narrow && data.budget.length < 15;
-  const topMargin = showChangeLabels && data.budget.length >= 10 ? 112 : 42;
+  const defaultTopMargin = showChangeLabels && data.budget.length >= 10 ? 112 : 42;
+  const longestAmountLabel = data.budget.reduce((longest, row) =>
+    Math.max(longest, estimatedLabelWidth(compactAmount(row.allocated))), 0);
+  const topMargin = Math.max(defaultTopMargin, longestAmountLabel + 10);
   const title = 'Library budget';
   return <ChartCard title={title} history explanation="Total budget allocated to the acquisitions unit, with the API-reported year-over-year change."
     table={<table><caption>{title}</caption><thead><tr><th scope="col">Fiscal year</th>
