@@ -79,9 +79,16 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
 
         public function approvedLinks(int $previousYear, int $currentYear): array
         {
-            return array_values(array_filter($this->links, function ($link) use ($previousYear, $currentYear) {
-                return (int)$link['previous_year'] === $previousYear && (int)$link['current_year'] === $currentYear;
-            }));
+            $columns = ['previous_year', 'current_year', 'sheet', 'previous_question_id', 'previous_part', 'current_question_id', 'current_part'];
+            $links = [];
+            foreach ($this->links as $link) {
+                if ((int)$link['previous_year'] !== $previousYear || (int)$link['current_year'] !== $currentYear
+                    || ($link['decision'] ?? null) !== 'approved') {
+                    continue;
+                }
+                $links[] = array_intersect_key($link, array_flip($columns));
+            }
+            return $links;
         }
 
         public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy): void
@@ -156,7 +163,10 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
         $saved = $service->saveQuestion(2026, 'survey', '60', 'A', [2, '2'], '9');
         acrlQuestionAssignmentSame(['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'section' => 'Circulation', 'assignees' => [['id' => 2, 'displayName' => 'Casey Editor']]], $saved, 'Saving replaces one question tuple and returns question-level approved assignees.');
         acrlQuestionAssignmentSame([2026, 'survey', '60', 'A', [2], 9], $repository->writes[0] ?? null, 'Saving deduplicates IDs and writes the exact tuple and administrator ID.');
-        acrlQuestionAssignmentSame(1, count($repository->assignments(2026)), 'Saving one question leaves the adjacent part untouched.');
+        acrlQuestionAssignmentSame(2, count($repository->assignments(2026)), 'Saving one question adds its assignment without removing the adjacent part.');
+        acrlQuestionAssignmentCheck(in_array('B', array_column(array_values(array_filter($repository->assignments(2026), function ($row) {
+            return $row['question_id'] === '60';
+        })), 'part'), true), 'Saving 60/A preserves the existing 60/B assignment.');
 
         $cleared = $service->saveQuestion(2026, 'survey', '60', 'A', [], '9');
         acrlQuestionAssignmentSame([], $cleared['assignees'] ?? null, 'An empty user list clears question-level assignees.');
@@ -302,6 +312,11 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             ['survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 99],
         ];
         $repository->sectionRows = [['survey_year' => 2026, 'section' => 'Circulation', 'user_id' => 1]];
+        $repository->links = [[
+            'previous_year' => 2025, 'current_year' => 2026, 'sheet' => 'survey',
+            'previous_question_id' => '60', 'previous_part' => 'A', 'current_question_id' => '60', 'current_part' => 'A',
+            'decision' => 'approved',
+        ]];
         $result = acrlQuestionAssignmentService($repository)->copyOnPublish(2026, '9');
         acrlQuestionAssignmentSame(false, $result['questionsAlreadyAssigned'] ?? null, 'Existing section assignments and inactive question rows do not block question copy on publish.');
         acrlQuestionAssignmentSame([['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'label' => 'Q60 · A']], $result['copiedQuestions'] ?? null, 'Question copy remains independent from the section-copy guard.');
