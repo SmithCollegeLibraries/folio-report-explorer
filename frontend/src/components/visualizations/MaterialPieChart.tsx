@@ -151,6 +151,7 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   }, [svgElement]);
 
   const narrow = viewportNarrow || chartSize.width < 480;
+  const phoneLayout = viewportNarrow;
 
   const slices = useMemo(() => buildSlices(items), [items]);
   const colors = useMemo(() => materialColors(slices
@@ -176,7 +177,7 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
     return <p role="status" className="py-16 text-center text-gray-600">No positive purchases for this fiscal year</p>;
   }
   const width = svgSize.width || chartSize.width || 320;
-  const height = svgSize.height || chartSize.height || 320;
+  const height = phoneLayout ? width : svgSize.height || chartSize.height || 320;
   const center = { x: width / 2, y: height / 2 };
   const labelGap = 12;
   const labelPadding = 16;
@@ -217,10 +218,17 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
     }
   }
 
+  const legend = <ChartLegendContent payload={legendPayload} verticalAlign="bottom"
+    className={narrow ? 'flex-col items-start justify-start gap-2 pt-1' : 'flex-wrap gap-4 pt-1'} />;
+  const narrowLegendHeight = legendPayload.length * 24 + 4;
+
   return <div className="space-y-2">
-    <ChartContainer ref={setChartElement} config={config} className="h-80 min-w-0 w-full" aria-label="Paid purchases by material type">
+    <ChartContainer ref={setChartElement} config={config}
+      className={phoneLayout ? 'aspect-auto min-w-0 w-full' : 'h-80 min-w-0 w-full'}
+      style={phoneLayout ? { height: width } : undefined} aria-label="Paid purchases by material type">
       <div className="flex h-full w-full flex-col">
-      <svg ref={setSvgElement} className="recharts-surface min-h-0 min-w-0 w-full flex-1"
+      <svg ref={setSvgElement} className={`recharts-surface min-h-0 min-w-0 w-full ${phoneLayout ? 'flex-none' : 'flex-1'}`}
+        style={phoneLayout ? { height: width } : undefined}
         viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet"
         role="img" aria-label="Paid purchases by material type">
         <g className="recharts-pie-sectors">
@@ -255,10 +263,13 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
           })}
         </g>}
       </svg>
-      <ChartLegendContent payload={legendPayload} verticalAlign="bottom"
-        className={narrow ? 'flex-col items-start gap-2 pt-1' : 'flex-wrap gap-4 pt-1'} />
+      {!phoneLayout && legend}
       </div>
     </ChartContainer>
+    {phoneLayout && <ChartContainer config={config} className="aspect-auto min-w-0 w-full"
+      style={{ height: narrowLegendHeight }}>
+      <div className="flex h-full w-full items-start">{legend}</div>
+    </ChartContainer>}
     {active && <p role="status" className="text-center text-sm text-gray-700">{active.name}: {amount(active.amount)} ({active.percentage.toFixed(1)}%)</p>}
   </div>;
 }

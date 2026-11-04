@@ -55,15 +55,15 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
   }, [chartElement]);
 
   const showChangeLabels = !narrow && data.budget.length < 15;
-  const defaultTopMargin = showChangeLabels && data.budget.length >= 10 ? 112 : 42;
+  const defaultTopMargin = 42;
   const estimatedBarWidth = Math.max(0, (chartWidth - 92) / Math.max(1, data.budget.length) - 2);
-  const longestRotatedAmountLabel = data.budget.reduce((longest, row) => {
+  const longestRotatedLabel = data.budget.reduce((longest, row) => {
     const amountWidth = estimatedLabelWidth(compactAmount(row.allocated));
     const changeWidth = estimatedLabelWidth(changeLabel(row.changePct));
     return labelsFitHorizontally(amountWidth, changeWidth, estimatedBarWidth, showChangeLabels)
-      ? longest : Math.max(longest, amountWidth);
+      ? longest : Math.max(longest, amountWidth, showChangeLabels ? changeWidth : 0);
   }, 0);
-  const topMargin = Math.max(defaultTopMargin, longestRotatedAmountLabel + 10);
+  const topMargin = Math.max(defaultTopMargin, longestRotatedLabel + 10);
   const title = 'Library budget';
   return <ChartCard title={title} history explanation="Total budget allocated to the acquisitions unit, with the API-reported year-over-year change."
     table={<table><caption>{title}</caption><thead><tr><th scope="col">Fiscal year</th>
