@@ -11,6 +11,7 @@ import type {
   AcrlLinkDecisionInput,
   AcrlNotesImportPreview,
   AcrlQuestionDetails,
+  AcrlQuestionAssignmentInput,
   AcrlQuestionNote,
   AcrlQuestionPart,
   AcrlReviewResponse,
@@ -68,6 +69,11 @@ export async function searchAcrlApprovedUsers(query: string): Promise<{ users: A
 
 export async function saveAcrlSectionAssignments(year: number, section: string, userIds: number[]): Promise<AcrlSectionAssignmentsResponse['sections'][number]> {
   const { data } = await api.post(`/acrl/years/${year}/sections/${encodeURIComponent(section)}/assignments`, { userIds });
+  return data;
+}
+
+export async function saveAcrlQuestionAssignments(year: number, input: AcrlQuestionAssignmentInput): Promise<AcrlSectionAssignmentsResponse['questions'][number]> {
+  const { data } = await api.post(`/acrl/years/${year}/question-assignments`, input);
   return data;
 }
 

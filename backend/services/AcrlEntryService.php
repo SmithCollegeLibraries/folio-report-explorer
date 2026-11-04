@@ -12,10 +12,11 @@ class AcrlEntryService
     private $thresholds;
     private $history;
     private $assignments;
+    private $questionAssignments;
     private $questionNotes;
     private $structuredAnswers;
 
-    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null, $questionNotes = null, $structuredAnswers = null)
+    public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null, $questionNotes = null, $structuredAnswers = null, $questionAssignments = null)
     {
         $this->repository = $repository ?: new AcrlAnswerRepository();
         $this->rules = $rules ?: new AcrlEntryRulesService();
@@ -24,6 +25,7 @@ class AcrlEntryService
         $this->thresholds = $thresholds ?: new AcrlThresholdService();
         $this->history = $history ?: new AcrlHistoryService($this->repository, $this->rules);
         $this->assignments = $assignments ?: new AcrlSectionAssignmentService();
+        $this->questionAssignments = $questionAssignments ?: ($repository ? null : new AcrlQuestionAssignmentService());
         $this->questionNotes = $questionNotes ?: ($repository
             ? new AcrlQuestionNotesService($repository, $repository)
             : new AcrlQuestionNotesService());
@@ -64,6 +66,9 @@ class AcrlEntryService
             $statuses[$status['section']] = $status;
         }
         $sectionAssignments = $this->assignments->forEntry($year, $userId);
+        $questionAssignments = $this->questionAssignments
+            ? $this->questionAssignments->forEntry($year, $userId)
+            : [];
         $threshold = $this->thresholds->get();
         $sections = [];
 
@@ -94,6 +99,13 @@ class AcrlEntryService
                 'mismatch' => $this->rules->calculatedStatus($answer['value_number'] ?? null, $calculation['value'])['mismatch'],
                 'waitingFor' => $calculation['waitingFor'],
             ] : null;
+            $questionAssignment = $questionAssignments[$this->assignmentQuestionKey($question['sheet'], $question['question_id'], $question['part'])]
+                ?? $questionAssignments[$this->questionKey($question['sheet'], $question['question_id'], $question['part'])]
+                ?? [];
+            $questionAssignees = $questionAssignment['assignees'] ?? [];
+            $sectionAssignment = $sectionAssignments[$question['section']] ?? [];
+            $sectionAssignees = $sectionAssignment['assignees'] ?? [];
+            $questionAssignedToCurrentUser = !empty($questionAssignment['assignedToCurrentUser']);
             $row = [
                 'questionId' => $question['question_id'],
                 'sheet' => $question['sheet'],
@@ -113,6 +125,10 @@ class AcrlEntryService
                 'comparison' => $comparison,
                 'calculated' => $computed,
                 'hasDetailsNotes' => !empty($questionNoteKeys[$key]),
+                'questionAssignees' => $questionAssignees,
+                'assignees' => $this->assigneeUnion($sectionAssignees, $questionAssignees),
+                'assignedToCurrentUser' => !empty($sectionAssignment['assignedToCurrentUser']) || $questionAssignedToCurrentUser,
+                'questionAssignedToCurrentUser' => $questionAssignedToCurrentUser,
             ];
             if (!isset($sections[$question['section']])) {
                 $status = $statuses[$question['section']] ?? null;
@@ -126,6 +142,7 @@ class AcrlEntryService
                     'total' => 0,
                     'assignees' => $assignment['assignees'] ?? [],
                     'assignedToCurrentUser' => $assignment['assignedToCurrentUser'] ?? false,
+                    'questionsAssignedToCurrentUser' => 0,
                     'questions' => [],
                 ];
             }
@@ -134,6 +151,9 @@ class AcrlEntryService
                 $sections[$question['section']]['filled'] += 1;
             }
             $sections[$question['section']]['questions'][] = $row;
+            if ($questionAssignedToCurrentUser && empty($sectionAssignment['assignedToCurrentUser'])) {
+                $sections[$question['section']]['questionsAssignedToCurrentUser'] += 1;
+            }
         }
 
         return [
@@ -348,6 +368,20 @@ class AcrlEntryService
     private function calculationKey(string $sheet, string $questionId, string $part): string
     {
         return $sheet . '|' . $questionId . '|' . $part;
+    }
+
+    private function assignmentQuestionKey(string $sheet, string $questionId, string $part): string
+    {
+        return serialize([$sheet, $questionId, $part]);
+    }
+
+    private function assigneeUnion(array $sectionAssignees, array $questionAssignees): array
+    {
+        $result = [];
+        foreach (array_merge($sectionAssignees, $questionAssignees) as $assignee) {
+            $result[(int)$assignee['id']] = $assignee;
+        }
+        return array_values($result);
     }
 
     private function emptyAnswer(): array

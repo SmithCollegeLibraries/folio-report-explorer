@@ -66,7 +66,7 @@ class AcrlSectionAssignmentRepository
         }
     }
 
-    public function fillUnassignedSections(int $year, array $assignmentsBySection, int $assignedBy): array
+    public function fillUnassignedSections(int $year, array $assignmentsBySection, int $assignedBy, ?callable $afterCopy = null): array
     {
         $transaction = $this->db->beginTransaction();
         try {
@@ -82,6 +82,9 @@ class AcrlSectionAssignmentRepository
                 $this->insertAssignments($year, $section, $userIds, $assignedBy);
                 $copiedSections[] = $section;
             }
+            if ($afterCopy !== null) {
+                $afterCopy();
+            }
             $transaction->commit();
             return [
                 'copiedSections' => $copiedSections,
@@ -96,13 +99,16 @@ class AcrlSectionAssignmentRepository
         }
     }
 
-    public function copySectionsIfYearEmpty(int $year, array $assignmentsBySection, int $assignedBy): array
+    public function copySectionsIfYearEmpty(int $year, array $assignmentsBySection, int $assignedBy, ?callable $afterCopy = null): array
     {
         $transaction = $this->db->beginTransaction();
         try {
             $this->lockYear($year);
             $assignedSections = $this->assignedSections($year);
             if (!empty($assignedSections)) {
+                if ($afterCopy !== null) {
+                    $afterCopy();
+                }
                 $transaction->commit();
                 return [
                     'copiedSections' => [],
@@ -117,6 +123,9 @@ class AcrlSectionAssignmentRepository
                 }
                 $this->insertAssignments($year, $section, $userIds, $assignedBy);
                 $copiedSections[] = $section;
+            }
+            if ($afterCopy !== null) {
+                $afterCopy();
             }
             $transaction->commit();
             return [

@@ -9,6 +9,7 @@ use yii\filters\AccessControl;
 use app\controllers\traits\AcrlApiBehaviorTrait;
 use app\controllers\traits\PersistedAdminAccessTrait;
 use app\services\AcrlSectionAssignmentService;
+use app\services\AcrlQuestionAssignmentService;
 
 require_once __DIR__ . '/traits/AcrlApiBehaviorTrait.php';
 require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
@@ -61,7 +62,10 @@ class AcrlAssignmentController extends Controller
             return $forbidden;
         }
         try {
-            return (new AcrlSectionAssignmentService())->listForYear((int)$year);
+            $assignments = (new AcrlSectionAssignmentService())->listForYear((int)$year);
+            $questions = (new AcrlQuestionAssignmentService())->listForYear((int)$year);
+            $assignments['questions'] = $questions['questions'];
+            return $assignments;
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
         }
@@ -80,6 +84,42 @@ class AcrlAssignmentController extends Controller
             return (new AcrlSectionAssignmentService())->saveSection(
                 (int)$year,
                 rawurldecode((string)$section),
+                $body['userIds'],
+                (string)(Yii::$app->user->id ?? '')
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse(422, $exception->getMessage());
+        } catch (\DomainException $exception) {
+            return $this->errorResponse(404, $exception->getMessage());
+        }
+    }
+
+    public function actionSaveQuestionAssignments($year)
+    {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
+            return $forbidden;
+        }
+        $body = Yii::$app->request->bodyParams;
+        foreach (['sheet', 'questionId', 'part'] as $field) {
+            if (!array_key_exists($field, $body) || !is_string($body[$field])) {
+                return $this->errorResponse(422, 'Question sheet, question ID, and part must be strings.');
+            }
+        }
+        if ($body['sheet'] !== 'survey' && $body['sheet'] !== 'trends') {
+            return $this->errorResponse(422, 'Sheet must be survey or trends.');
+        }
+        if ($body['part'] === '_') {
+            return $this->errorResponse(422, 'Question part must be an empty string or a question part.');
+        }
+        if (!array_key_exists('userIds', $body) || !is_array($body['userIds'])) {
+            return $this->errorResponse(422, 'Select zero or more approved users.');
+        }
+        try {
+            return (new AcrlQuestionAssignmentService())->saveQuestion(
+                (int)$year,
+                $body['sheet'],
+                $body['questionId'],
+                $body['part'],
                 $body['userIds'],
                 (string)(Yii::$app->user->id ?? '')
             );

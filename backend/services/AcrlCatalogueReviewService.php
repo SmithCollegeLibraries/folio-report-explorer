@@ -140,6 +140,10 @@ class AcrlCatalogueReviewService
                 'skippedSections' => [],
                 'unmatchedSections' => [],
                 'alreadyAssigned' => false,
+                'copiedQuestions' => [],
+                'skippedQuestions' => [],
+                'unmatchedQuestions' => [],
+                'questionsAlreadyAssigned' => false,
                 'failed' => true,
             ];
         }

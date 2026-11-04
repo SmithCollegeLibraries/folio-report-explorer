@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { copyAcrlAssignmentsFromPrevious, getAcrlSectionAssignments, saveAcrlSectionAssignments, searchAcrlApprovedUsers } from '../api/acrl';
-import type { AcrlAssignmentCopyResponse, AcrlEntrySection } from '../types/acrl';
+import { copyAcrlAssignmentsFromPrevious, getAcrlSectionAssignments, saveAcrlQuestionAssignments, saveAcrlSectionAssignments, searchAcrlApprovedUsers } from '../api/acrl';
+import type { AcrlAssignmentCopyResponse, AcrlEntrySection, AcrlQuestionAssignment } from '../types/acrl';
+import { acrlQuestionAssignmentKey } from '../utils/acrlAssignments';
+import AcrlQuestionAssignmentPicker from './AcrlQuestionAssignmentPicker';
 
 type AcrlSectionAssignmentPanelProps = {
   year: number;
@@ -12,53 +14,52 @@ type AcrlSectionAssignmentPanelProps = {
 export default function AcrlSectionAssignmentPanel({ year, sections, hasPreviousYear = true }: AcrlSectionAssignmentPanelProps) {
   const queryClient = useQueryClient();
   const [section, setSection] = useState(sections[0]?.name || '');
+  const [questionKey, setQuestionKey] = useState('');
   const [search, setSearch] = useState('');
   const [drafts, setDrafts] = useState<Record<string, number[]>>({});
   const [copyResult, setCopyResult] = useState<AcrlAssignmentCopyResponse | null>(null);
-  const assignmentsQuery = useQuery({
-    queryKey: ['acrl-assignments', year],
-    queryFn: () => getAcrlSectionAssignments(year),
-  });
-  const usersQuery = useQuery({
-    queryKey: ['acrl-approved-users', search.trim()],
-    queryFn: () => searchAcrlApprovedUsers(search.trim()),
-    enabled: search.trim().length >= 2,
-  });
+  const assignmentsQuery = useQuery({ queryKey: ['acrl-assignments', year], queryFn: () => getAcrlSectionAssignments(year) });
+  const usersQuery = useQuery({ queryKey: ['acrl-approved-users', search.trim()], queryFn: () => searchAcrlApprovedUsers(search.trim()), enabled: search.trim().length >= 2 });
+  const selectedSection = sections.find((item) => item.name === section);
+  const selectedQuestion = selectedSection?.questions.find((question) => acrlQuestionAssignmentKey(question.sheet, question.questionId, question.part) === questionKey);
   const savedAssignment = assignmentsQuery.data?.sections.find((item) => item.section === section);
-  const selectedIds = drafts[section] ?? savedAssignment?.assignees.map((user) => user.id) ?? [];
+  const savedQuestion = selectedQuestion && assignmentsQuery.data?.questions.find((item) => item.sheet === selectedQuestion.sheet && item.questionId === selectedQuestion.questionId && item.part === selectedQuestion.part);
+  const targetKey = questionKey || section;
+  const selectedIds = drafts[targetKey] ?? (selectedQuestion
+    ? savedQuestion?.assignees.map((user) => user.id) ?? []
+    : savedAssignment?.assignees.map((user) => user.id) ?? []);
   const refreshAssignments = () => Promise.all([
     queryClient.invalidateQueries({ queryKey: ['acrl-assignments', year] }),
     queryClient.invalidateQueries({ queryKey: ['acrl-entry', String(year)] }),
   ]);
   const saveMutation = useMutation({
-    mutationFn: ({ targetSection, userIds }: { targetSection: string; userIds: number[] }) => saveAcrlSectionAssignments(year, targetSection, userIds),
+    mutationFn: (variables: { targetKey: string; targetSection: string; userIds: number[]; question?: AcrlQuestionAssignment }) => variables.question
+      ? saveAcrlQuestionAssignments(year, { sheet: variables.question.sheet, questionId: variables.question.questionId, part: variables.question.part, userIds: variables.userIds })
+      : saveAcrlSectionAssignments(year, variables.targetSection, variables.userIds),
     onSuccess: async (result, variables) => {
-      setDrafts((current) => ({ ...current, [variables.targetSection]: result.assignees.map((user) => user.id) }));
+      setDrafts((current) => ({ ...current, [variables.targetKey]: result.assignees.map((user) => user.id) }));
       setSearch('');
       await refreshAssignments();
     },
   });
   const copyMutation = useMutation({
     mutationFn: () => copyAcrlAssignmentsFromPrevious(year),
-    onSuccess: async (result) => {
-      setCopyResult(result);
-      setDrafts({});
-      await refreshAssignments();
-    },
+    onSuccess: async (result) => { setCopyResult(result); setDrafts({}); await refreshAssignments(); },
   });
 
   function toggleUser(userId: number, checked: boolean) {
-    setDrafts((current) => ({
-      ...current,
-      [section]: checked ? [...selectedIds, userId] : selectedIds.filter((id) => id !== userId),
-    }));
+    setDrafts((current) => ({ ...current, [targetKey]: checked ? [...selectedIds, userId] : selectedIds.filter((id) => id !== userId) }));
+  }
+
+  function questionNames(items: AcrlAssignmentCopyResponse['copiedQuestions']): string {
+    return items.length ? items.map((item) => item.label).join(', ') : 'none';
   }
 
   return (
-    <section id="section-assignments" aria-label="Section assignments" className="space-y-4 rounded-xl border border-folio-200 bg-folio-50/50 p-4 sm:p-5">
+    <section id="section-assignments" aria-label="Assignments" className="space-y-4 rounded-xl border border-folio-200 bg-folio-50/50 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-gray-900">Section assignments</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Assignments</h2>
           <p className="text-sm text-gray-600">Assignments help organize the work. Every signed-in user can still edit any section.</p>
         </div>
         {hasPreviousYear && <button className="rounded border border-folio-700 bg-white px-3 py-2 text-sm font-semibold text-folio-800 hover:bg-folio-50 disabled:opacity-50" disabled={copyMutation.isPending} onClick={() => copyMutation.mutate()}>
@@ -67,10 +68,11 @@ export default function AcrlSectionAssignmentPanel({ year, sections, hasPrevious
       </div>
       {sections.length > 0 && <>
         <label className="block text-sm font-medium text-gray-700">Section
-          <select className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2" value={section} onChange={(event) => setSection(event.target.value)}>
+          <select className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2" value={section} onChange={(event) => { setSection(event.target.value); setQuestionKey(''); }}>
             {sections.map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
           </select>
         </label>
+        <AcrlQuestionAssignmentPicker questions={selectedSection?.questions ?? []} selectedKey={questionKey} onChange={setQuestionKey} sectionAssignees={savedAssignment?.assignees ?? []} assignment={savedQuestion} />
         <div className="space-y-2">
           <label className="block text-sm font-medium text-gray-700">Search approved users
             <input className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2" type="search" value={search} onChange={(event) => setSearch(event.target.value)} />
@@ -88,19 +90,22 @@ export default function AcrlSectionAssignmentPanel({ year, sections, hasPrevious
           </fieldset>}
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={saveMutation.isPending || assignmentsQuery.isFetching || assignmentsQuery.isError || !savedAssignment} onClick={() => saveMutation.mutate({ targetSection: section, userIds: selectedIds })}>
-            {saveMutation.isPending ? 'Saving…' : 'Save section assignments'}
+          <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={saveMutation.isPending || assignmentsQuery.isFetching || assignmentsQuery.isError || (selectedQuestion ? !questionKey : !savedAssignment)} onClick={() => saveMutation.mutate({ targetKey, targetSection: section, userIds: selectedIds, question: selectedQuestion })}>
+            {saveMutation.isPending ? 'Saving…' : selectedQuestion ? 'Save question assignments' : 'Save section assignments'}
           </button>
-          <p className="text-sm text-gray-600">{savedAssignment?.assignees.length ? `Assigned: ${savedAssignment.assignees.map((user) => user.displayName).join(', ')}` : 'No users assigned to this section.'}</p>
+          {!selectedQuestion && <p className="text-sm text-gray-600">{savedAssignment?.assignees.length ? `Assigned: ${savedAssignment.assignees.map((user) => user.displayName).join(', ')}` : 'No users assigned to this section.'}</p>}
         </div>
       </>}
       {assignmentsQuery.error && <p role="alert" className="text-sm text-rose-700">Could not load section assignments.</p>}
-      {saveMutation.error && <p role="alert" className="text-sm text-rose-700">Could not save section assignments.</p>}
+      {saveMutation.error && <p role="alert" className="text-sm text-rose-700">{selectedQuestion ? 'Could not save question assignments.' : 'Could not save section assignments.'}</p>}
       {copyMutation.error && <p role="alert" className="text-sm text-rose-700">Could not copy the previous year assignments.</p>}
       {copyResult && <div role="status" className="space-y-1 rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
         <p>Copied assignments for: {copyResult.copiedSections.length ? copyResult.copiedSections.join(', ') : 'none'}.</p>
         <p>Already assigned, skipped: {copyResult.skippedSections.length ? copyResult.skippedSections.join(', ') : 'none'}.</p>
         <p>No matching section from FY{copyResult.sourceYear}: {copyResult.unmatchedSections.length ? copyResult.unmatchedSections.join(', ') : 'none'}.</p>
+        <p>Copied question assignments for: {questionNames(copyResult.copiedQuestions)}.</p>
+        <p>Already assigned, skipped questions: {questionNames(copyResult.skippedQuestions)}.</p>
+        <p>No matching question from FY{copyResult.sourceYear}: {questionNames(copyResult.unmatchedQuestions)}.</p>
       </div>}
     </section>
   );
