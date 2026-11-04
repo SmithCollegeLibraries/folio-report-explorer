@@ -15,6 +15,7 @@ import {
 
 export default function SavedQueries() {
   const isInRouter = useInRouterContext();
+  const basePath = (import.meta.env.VITE_BASE_PATH || '').replace(/\/$/, '');
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, ExecuteResponse>>({});
@@ -261,7 +262,7 @@ export default function SavedQueries() {
                           View report
                         </Link>
                       ) : (
-                        <a href={`/reports/${promotion.data.id}`} className="text-xs text-indigo-600 hover:underline">
+                        <a href={`${basePath}/reports/${promotion.data.id}`} className="text-xs text-indigo-600 hover:underline">
                           View report
                         </a>
                       )
