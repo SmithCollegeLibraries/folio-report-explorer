@@ -105,7 +105,30 @@ function acrlMigrationEnginePrepareCurrentSchema(PDO $admin, string $adminDsn, s
         throw new RuntimeException('The setup did not reach migration 065.');
     }
 
+    $adminDb->createCommand()->insert('report_templates', [
+        'id' => 11,
+        'slug' => 'pol-report',
+        'name' => 'Synthetic purchase order line report',
+        'description' => 'Synthetic fixture for current-schema recognition.',
+        'category' => 'acquisitions',
+        'sql_template' => 'SELECT 1',
+        'parameters' => '[]',
+        'data_source' => 'folio',
+        'is_active' => 0,
+        'created_by' => 'manual',
+    ])->execute();
+    if (!acrlMigrationEngineDatabaseAppearsCurrent($adminDb)) {
+        throw new RuntimeException('Setup check failed: databaseAppearsCurrent() must accept the production-shaped current schema before schema_migrations is cleared.');
+    }
+
     return [$adminDb, $dsn];
+}
+
+function acrlMigrationEngineDatabaseAppearsCurrent($db): bool
+{
+    $method = new ReflectionMethod(MigrationService::class, 'databaseAppearsCurrent');
+    $method->setAccessible(true);
+    return (bool)$method->invoke(null, $db);
 }
 
 function acrlMigrationEngineApplied($db, string $filename): bool
