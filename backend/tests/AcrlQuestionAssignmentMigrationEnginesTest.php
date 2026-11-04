@@ -91,6 +91,21 @@ function acrlMigrationEngineCreateMalformedAssignmentTable($db): void
         . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
 }
 
+function acrlMigrationEngineCreateAssignmentTableWithoutTimestampDefault($db, string $migrationDir): void
+{
+    $sql = (string)file_get_contents($migrationDir . '/066_acrl_question_assignments.sql');
+    $malformedSql = str_replace(
+        'assigned_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)',
+        'assigned_at DATETIME(6) NOT NULL',
+        $sql,
+        $replacementCount
+    );
+    if ($replacementCount !== 1) {
+        throw new RuntimeException('Setup could not remove only the assigned_at default from migration 066.');
+    }
+    acrlMigrationEngineRaw($db, rtrim(trim($malformedSql), ';'));
+}
+
 function acrlMigrationEngineMalformedMigrationError($db, string $path): void
 {
     $error = null;
@@ -230,6 +245,13 @@ try {
     acrlMigrationEngineMalformedMigrationError($appDbB, $migrationDir);
     $adminDbB->createCommand('DELETE FROM schema_migrations')->execute();
     acrlMigrationEngineCheck(acrlMigrationEngineDatabaseAppearsCurrent($appDbB), 'Malformed-table baseline setup must still satisfy the legacy current-schema check.');
+    acrlMigrationEngineMalformedMigrationError($appDbB, $migrationDir);
+
+    $adminDbB->createCommand('DROP TABLE acrl_question_assignments')->execute();
+    acrlMigrationEngineCreateAssignmentTableWithoutTimestampDefault($adminDbB, $migrationDir);
+    acrlMigrationEngineMalformedMigrationError($appDbB, $migrationDir);
+    $adminDbB->createCommand('DELETE FROM schema_migrations')->execute();
+    acrlMigrationEngineCheck(acrlMigrationEngineDatabaseAppearsCurrent($appDbB), 'Missing-timestamp-default baseline setup must satisfy the legacy current-schema check.');
     acrlMigrationEngineMalformedMigrationError($appDbB, $migrationDir);
 
     $scenarioC = $prefix . '_c';

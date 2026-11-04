@@ -607,11 +607,80 @@ describe('ACRL catalogue page', () => {
     await user.click(await screen.findByRole('button', { name: 'Publish year' }));
     await screen.findByRole('button', { name: 'Published' });
 
-    const result = screen.getAllByRole('status').find((item) => item.textContent?.includes('FY 2026'));
-    const text = result?.textContent ?? '';
+    const text = screen.getByRole('status').textContent ?? '';
     const failures: string[] = [];
     if (!text.includes('Q60 · A')) failures.push('publish banner includes the copied question label');
     if (text.includes('Assignments copied from FY 2025 for: none')) failures.push('question-only copy does not claim that no assignments were copied');
+    if (failures.length) throw new Error(failures.join('; '));
+  });
+
+  it('does not show a section copied line when only unmatched sections and copied questions are reported', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    publishYear.mockResolvedValue({
+      ...makeReview(),
+      status: 'published',
+      assignmentCopy: {
+        surveyYear: 2026,
+        sourceYear: 2025,
+        copiedSections: [],
+        skippedSections: [],
+        unmatchedSections: ['Old services'],
+        alreadyAssigned: false,
+        copiedQuestions: [{ sheet: 'survey', questionId: '60', part: 'A', label: 'Q60 · A' }],
+        skippedQuestions: [],
+        unmatchedQuestions: [],
+        questionsAlreadyAssigned: false,
+        failed: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish year' }));
+    await screen.findByRole('button', { name: 'Published' });
+
+    const result = screen.getAllByRole('status').find((item) => item.textContent?.includes('FY 2026'));
+    const text = result?.textContent ?? '';
+    const failures: string[] = [];
+    if (text.includes('Assignments copied from FY 2025 for: none')) failures.push('unmatched sections do not produce a copied-none message');
+    if (text.includes('Assignments copied from FY 2025 for:')) failures.push('the generic assignments-copied line is absent');
+    if (text.includes('Section assignments copied from FY 2025 for:')) failures.push('no section-copy line appears when no section was copied');
+    if (!text.includes('No matching section: Old services.')) failures.push('the unmatched section line remains visible');
+    if (!text.includes('Q60 · A')) failures.push('copied question labels remain visible');
+    if (failures.length) throw new Error(failures.join('; '));
+  });
+
+  it('labels copied sections in the publish result', async () => {
+    listYears.mockResolvedValue([makeYear(2026)]);
+    getReview.mockResolvedValue(makeReview());
+    publishYear.mockResolvedValue({
+      ...makeReview(),
+      status: 'published',
+      assignmentCopy: {
+        surveyYear: 2026,
+        sourceYear: 2025,
+        copiedSections: ['Circulation'],
+        skippedSections: [],
+        unmatchedSections: [],
+        alreadyAssigned: false,
+        copiedQuestions: [],
+        skippedQuestions: [],
+        unmatchedQuestions: [],
+        questionsAlreadyAssigned: false,
+        failed: false,
+      },
+    });
+    const user = userEvent.setup();
+    renderAcrl();
+    await user.click(await screen.findByRole('button', { name: 'Open review' }));
+    await user.click(await screen.findByRole('button', { name: 'Publish year' }));
+    await screen.findByRole('button', { name: 'Published' });
+
+    const text = screen.getByRole('status').textContent ?? '';
+    const failures: string[] = [];
+    if (!text.includes('Section assignments copied from FY 2025 for: Circulation.')) failures.push('the section result names copied sections explicitly');
+    if (text.includes('Assignments copied from FY 2025 for:')) failures.push('the old generic copied line is absent');
     if (failures.length) throw new Error(failures.join('; '));
   });
 
