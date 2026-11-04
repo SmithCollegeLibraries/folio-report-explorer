@@ -70,6 +70,9 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             if (!in_array((string)$actual['part']['COLUMN_DEFAULT'], ['', "''"], true)) {
                 return false;
             }
+            if (strtolower((string)$actual['assigned_at']['COLUMN_DEFAULT']) !== 'current_timestamp(6)') {
+                return false;
+            }
             $rows = $db->createCommand(
                 'SELECT NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME, SUB_PART FROM information_schema.STATISTICS'
                     . ' WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table AND INDEX_NAME = :index ORDER BY SEQ_IN_INDEX',

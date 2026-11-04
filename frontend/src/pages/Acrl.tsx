@@ -284,8 +284,9 @@ export default function AcrlPage() {
           {reviewQuery.error && <p role="alert" className="text-sm text-rose-700">Could not load review: {errorMessage(reviewQuery.error)}</p>}
           {reviewError && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{errorMessage(reviewError)}</p>}
           {assignmentCopyResult && <div role="status" className={`rounded p-3 text-sm ${assignmentCopyResult.failed ? 'bg-amber-50 text-amber-950' : 'bg-emerald-50 text-emerald-900'}`}>
-            {assignmentCopyResult.failed && <p>FY {assignmentCopyResult.surveyYear} was published, but assignments could not be copied from FY {assignmentCopyResult.sourceYear}.</p>}
-            {(assignmentCopyResult.failed || assignmentCopyResult.copiedSections.length > 0 || (!assignmentCopyResult.alreadyAssigned && assignmentCopyResult.unmatchedSections.length > 0)) && <p>Assignments copied from FY {assignmentCopyResult.sourceYear} for: {assignmentCopyResult.copiedSections.length ? assignmentCopyResult.copiedSections.join(', ') : 'none'}.</p>}
+            {assignmentCopyResult.failed
+              ? <p>FY {assignmentCopyResult.surveyYear} was published, but assignments could not be copied from FY {assignmentCopyResult.sourceYear}.</p>
+              : assignmentCopyResult.copiedSections.length > 0 && <p>Section assignments copied from FY {assignmentCopyResult.sourceYear} for: {assignmentCopyResult.copiedSections.join(', ')}.</p>}
             {assignmentCopyResult.alreadyAssigned && <p>FY {assignmentCopyResult.surveyYear} already had section assignments, so sections were not copied.</p>}
             {assignmentCopyResult.skippedSections.length > 0 && <p>Already assigned, skipped: {assignmentCopyResult.skippedSections.join(', ')}.</p>}
             {assignmentCopyResult.unmatchedSections.length > 0 && <p>No matching section: {assignmentCopyResult.unmatchedSections.join(', ')}.</p>}

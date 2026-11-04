@@ -547,7 +547,7 @@ describe('ACRL catalogue page', () => {
     await user.click(await screen.findByRole('button', { name: 'Open review' }));
     await user.click(await screen.findByRole('button', { name: 'Publish year' }));
 
-    expect(await screen.findByText('Assignments copied from FY 2025 for: Circulation.')).toBeInTheDocument();
+    expect(await screen.findByText('Section assignments copied from FY 2025 for: Circulation.')).toBeInTheDocument();
     expect(screen.getByText('No matching section: Old services.')).toBeInTheDocument();
   });
 
