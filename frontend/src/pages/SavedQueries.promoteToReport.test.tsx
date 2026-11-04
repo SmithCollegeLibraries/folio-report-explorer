@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { checkJobStatus, listSaved, promoteToReport } from '../api/client';
 import SavedQueries from './SavedQueries';
@@ -37,7 +38,9 @@ function renderSavedQueries() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <SavedQueries />
+      <MemoryRouter basename="/fre" initialEntries={["/fre/saved-queries"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <SavedQueries />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -79,5 +82,19 @@ describe('SavedQueries Save as Report state', () => {
 
     expect(await screen.findByText(/report already exists/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Saved as report/i })).toBeDisabled();
+  });
+
+  it('renders the promoted report link under the router basename', async () => {
+    vi.mocked(promoteToReport).mockResolvedValue({
+      data: { id: 37, slug: 'synthetic-report', name: 'Synthetic report' },
+      status: 201,
+    });
+    renderSavedQueries();
+
+    fireEvent.click(await screen.findByTitle('Save as Report'));
+
+    const link = await screen.findByRole('link', { name: 'View report' });
+    expect(link.getAttribute('href')).toMatch(/^\/fre\//);
+    expect(link).toHaveAttribute('href', '/fre/reports/37');
   });
 });

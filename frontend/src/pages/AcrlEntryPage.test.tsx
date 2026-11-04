@@ -2,8 +2,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { Link, MemoryRouter, Route, Routes } from 'react-router-dom';
 import AcrlEntryPage from './AcrlEntryPage';
+import AcrlSectionAssignmentsCard from '../components/AcrlSectionAssignmentsCard';
 import type { AcrlEntryQuestion, AcrlEntryResponse } from '../types/acrl';
 
 const { getEntry, saveAnswer, runAutofill, getAutofillMethods, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
@@ -102,9 +103,36 @@ function entry(status: 'open' | 'ready' = 'open'): AcrlEntryResponse {
   };
 }
 
-function renderPage(options: { staleTime?: number; initialEntry?: string } = {}) {
+function renderPage(options: { staleTime?: number; initialEntry?: string; basename?: string; assignmentHashLink?: boolean } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: options.staleTime } } });
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={[options.initialEntry ?? '/acrl/entry/2026']}><Routes><Route path="/acrl/entry/:year" element={<AcrlEntryPage />} /></Routes></MemoryRouter></QueryClientProvider>);
+  const initialEntry = options.initialEntry ?? '/acrl/entry/2026';
+  return render(<QueryClientProvider client={client}><MemoryRouter basename={options.basename} initialEntries={[initialEntry]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    {options.assignmentHashLink && <Link to="/acrl/entry/2026#section-assignments">Go to section assignments</Link>}
+    <Routes><Route path="/acrl/entry/:year" element={<AcrlEntryPage />} /></Routes>
+  </MemoryRouter></QueryClientProvider>);
+}
+
+function renderAssignmentNavigation(initialEntry: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const year = {
+    surveyYear: 2026,
+    status: 'published' as const,
+    sourceFileName: null,
+    surveyPromptCount: 1,
+    trendsPromptCount: 0,
+    surveyItemCount: 1,
+    trendsItemCount: 0,
+    totalItemCount: 1,
+    publishedAt: '2026-01-01',
+  };
+  return render(<QueryClientProvider client={client}><MemoryRouter basename="/fre" initialEntries={[`/fre${initialEntry}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <div onClick={(event) => event.preventDefault()}>
+      <Routes>
+        <Route path="/acrl" element={<AcrlSectionAssignmentsCard years={[year]} />} />
+        <Route path="/acrl/entry/:year" element={<AcrlEntryPage />} />
+      </Routes>
+    </div>
+  </MemoryRouter></QueryClientProvider>);
 }
 
 describe('ACRL entry page', () => {
@@ -121,6 +149,50 @@ describe('ACRL entry page', () => {
 
     const panel = await screen.findByRole('region', { name: 'Section assignments' });
     expect(panel).toHaveAttribute('id', 'section-assignments');
+    await waitFor(() => expect(scrolledElements).toContain(panel));
+  });
+
+  it('scrolls to section assignments after navigating from the ACRL page', async () => {
+    const scrolledElements: HTMLElement[] = [];
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: function (this: HTMLElement) { scrolledElements.push(this); },
+    });
+    const user = userEvent.setup();
+    auth.isAdmin = true;
+    getEntry.mockResolvedValue(entry());
+    renderAssignmentNavigation('/acrl');
+
+    const yearSelect = await screen.findByLabelText('Published year for section assignments');
+    await user.selectOptions(yearSelect, '2026');
+    const assignmentLink = await screen.findByRole('link', { name: 'Assign sections for FY 2026' });
+    expect(assignmentLink.getAttribute('href')).toMatch(/^\/fre\//);
+    expect(assignmentLink).toHaveAttribute('href', '/fre/acrl/entry/2026#section-assignments');
+    await user.click(assignmentLink);
+
+    await waitFor(() => {
+      const panel = document.getElementById('section-assignments');
+      expect(panel).toBeInTheDocument();
+      expect(scrolledElements).toContain(panel);
+    });
+  });
+
+  it('scrolls to section assignments when the hash is navigated to from the entry page itself', async () => {
+    const scrolledElements: HTMLElement[] = [];
+    scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: function (this: HTMLElement) { scrolledElements.push(this); },
+    });
+    const user = userEvent.setup();
+    auth.isAdmin = true;
+    getEntry.mockResolvedValue(entry());
+    renderPage({ basename: '/fre', initialEntry: '/fre/acrl/entry/2026', assignmentHashLink: true });
+
+    const panel = await screen.findByRole('region', { name: 'Section assignments' });
+    await user.click(screen.getByRole('link', { name: 'Go to section assignments' }));
+
     await waitFor(() => expect(scrolledElements).toContain(panel));
   });
 
