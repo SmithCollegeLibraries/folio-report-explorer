@@ -82,6 +82,34 @@ describe('MarcFieldFinderParameters', () => {
     expect(screen.getByRole('button', { name: 'Select all Smith College (2)' })).toBeInTheDocument();
   });
 
+  it('does not show campus controls for a non-location multiselect on another report', async () => {
+    const user = userEvent.setup();
+    render(
+      <ReportParameterFields
+        slug="other-report"
+        values={{ fundIds: '' }}
+        parameters={[{
+          name: 'fundIds',
+          type: 'multiselect',
+          label: 'Funds',
+          required: false,
+          default: '',
+          resolvedDefault: '',
+          max_selections: 100,
+        }]}
+        selectOptions={{ fundIds: campusLocationOptions }}
+        serverFieldErrors={{}}
+        onChange={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select funds' }));
+
+    expect(screen.getByRole('button', { name: 'Select all funds' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Select all Smith College (2)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear Smith College' })).not.toBeInTheDocument();
+  });
+
   it('renders the conditional controls and interpretation summary', () => {
     render(<MarcFieldFinderParameters values={baseValues} parameters={params} selectOptions={options} onChange={() => {}} />);
 
