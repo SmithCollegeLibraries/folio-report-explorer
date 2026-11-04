@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ComponentProps, type ComponentType } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -358,5 +358,93 @@ describe('SearchableMultiSelect campus selection', () => {
 
     expect(screen.queryByRole('button', { name: 'Select all Smith College (2)' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Clear Smith College' })).not.toBeInTheDocument();
+  });
+});
+
+describe('SearchableMultiSelect dismissal', () => {
+  it('closes when a pointer goes down outside the listbox', async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: '' });
+
+    const control = screen.getByRole('button', { name: 'Select receipt status' });
+    await user.click(control);
+    expect(screen.getByRole('listbox', { name: 'Receipt status options' })).toBeInTheDocument();
+
+    fireEvent.pointerDown(document.body);
+
+    expect(screen.queryByRole('listbox', { name: 'Receipt status options' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the listbox open when the search input is clicked', async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: '' });
+
+    await user.click(screen.getByRole('button', { name: 'Select receipt status' }));
+    await user.click(screen.getByRole('searchbox', { name: 'Search receipt status' }));
+
+    expect(screen.getByRole('listbox', { name: 'Receipt status options' })).toBeInTheDocument();
+  });
+
+  it('keeps the listbox open when an option is selected', async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: '' });
+
+    await user.click(screen.getByRole('button', { name: 'Select receipt status' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Pending' }));
+
+    expect(screen.getByRole('listbox', { name: 'Receipt status options' })).toBeInTheDocument();
+  });
+
+  it('keeps the listbox open when Select all is clicked', async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: '' });
+
+    await user.click(screen.getByRole('button', { name: 'Select receipt status' }));
+    await user.click(screen.getByRole('button', { name: 'Select all receipt status' }));
+
+    expect(screen.getByRole('listbox', { name: 'Receipt status options' })).toBeInTheDocument();
+  });
+
+  it('closes with Escape and returns focus to the trigger', async () => {
+    const user = userEvent.setup();
+    renderSelect({ value: '' });
+
+    const control = screen.getByRole('button', { name: 'Select receipt status' });
+    await user.click(control);
+    expect(screen.getByRole('searchbox', { name: 'Search receipt status' })).toHaveFocus();
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('listbox', { name: 'Receipt status options' })).not.toBeInTheDocument();
+    expect(control).toHaveFocus();
+  });
+
+  it('closes the first listbox when another multi-select opens', async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <SearchableMultiSelect
+          id="first-location"
+          label="First location"
+          value=""
+          options={receiptOptions}
+          onChange={() => {}}
+        />
+        <SearchableMultiSelect
+          id="second-location"
+          label="Second location"
+          value=""
+          options={receiptOptions}
+          onChange={() => {}}
+        />
+      </div>,
+    );
+
+    const firstControl = screen.getByRole('button', { name: 'Select first location' });
+    const secondControl = screen.getByRole('button', { name: 'Select second location' });
+    await user.click(firstControl);
+    await user.click(secondControl);
+
+    expect(firstControl).toHaveAttribute('aria-expanded', 'false');
+    expect(secondControl).toHaveAttribute('aria-expanded', 'true');
   });
 });

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import HistoryTable from './HistoryTable';
 import type { HistoryGroupListItem, HistoryGroupResponse } from '../../api/history';
 import type { HistoryItem } from '../../types';
@@ -75,6 +76,17 @@ function renderHistoryTable(
 }
 
 describe('HistoryTable grouped rendering', () => {
+  it('closes the visible columns menu after an outside click', async () => {
+    const user = userEvent.setup();
+    renderHistoryTable([group()]);
+
+    await user.click(screen.getByRole('button', { name: 'Columns' }));
+    expect(screen.getByRole('checkbox', { name: 'Source' })).toBeInTheDocument();
+    await user.click(document.body);
+
+    expect(screen.queryByRole('checkbox', { name: 'Source' })).not.toBeInTheDocument();
+  });
+
   it('keeps the server-provided active-first order until a column is sorted', () => {
     const olderActive = group({
       jobId: 'older-active',
