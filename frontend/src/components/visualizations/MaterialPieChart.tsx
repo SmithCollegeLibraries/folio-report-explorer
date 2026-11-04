@@ -76,25 +76,82 @@ function materialTableRows(items: MaterialItem[]) {
   }));
 }
 
+function measuredTextWidth(value: string) {
+  const fallback = Array.from(value).length * 6;
+  if (typeof document === 'undefined' || typeof CanvasRenderingContext2D === 'undefined') return fallback;
+
+  try {
+    const context = document.createElement('canvas').getContext('2d');
+    if (!context) return fallback;
+    context.font = '10px sans-serif';
+    const width = context.measureText(value).width;
+    return Number.isFinite(width) && width > 0 ? width : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function fitSideLabel(name: string, shareText: string, availableWidth: number) {
+  const fullLabel = `${name} ${shareText}`;
+  if (measuredTextWidth(fullLabel) <= availableWidth) return fullLabel;
+
+  const characters = Array.from(name);
+  let low = 0;
+  let high = characters.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    const candidate = `${characters.slice(0, middle).join('')}… ${shareText}`;
+    if (measuredTextWidth(candidate) <= availableWidth) low = middle;
+    else high = middle - 1;
+  }
+
+  const fittedLabel = `${characters.slice(0, low).join('')}… ${shareText}`;
+  if (measuredTextWidth(fittedLabel) <= availableWidth) return fittedLabel;
+  return measuredTextWidth(shareText) <= availableWidth ? shareText : '';
+}
+
 export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   const viewportNarrow = useNarrowViewport();
   const [chartElement, setChartElement] = useState<HTMLDivElement | null>(null);
-  const [chartWidth, setChartWidth] = useState(0);
+  const [chartSize, setChartSize] = useState({ width: 0, height: 320 });
+  const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
+  const [svgSize, setSvgSize] = useState({ width: 0, height: 0 });
   const [active, setActive] = useState<PieSlice | null>(null);
 
   useEffect(() => {
     if (!chartElement) return;
-    const measure = (width: number) => {
-      if (width > 0) setChartWidth(width);
+    const measure = (width: number, height: number) => {
+      if (width > 0 && height > 0) {
+        setChartSize((current) => current.width === width && current.height === height
+          ? current : { width, height });
+      }
     };
-    measure(chartElement.getBoundingClientRect().width);
+    const bounds = chartElement.getBoundingClientRect();
+    measure(bounds.width, bounds.height);
     if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(([entry]) => measure(entry.contentRect.width));
+    const observer = new ResizeObserver(([entry]) => measure(entry.contentRect.width, entry.contentRect.height));
     observer.observe(chartElement);
     return () => observer.disconnect();
   }, [chartElement]);
 
-  const narrow = viewportNarrow || chartWidth < 480;
+  useEffect(() => {
+    if (!svgElement) return;
+    const measure = (width: number, height: number) => {
+      if (width > 0 && height > 0) {
+        setSvgSize((current) => current.width === width && current.height === height
+          ? current : { width, height });
+      }
+    };
+    const bounds = svgElement.getBoundingClientRect();
+    measure(bounds.width, bounds.height);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => measure(entry.contentRect.width, entry.contentRect.height));
+    observer.observe(svgElement);
+    return () => observer.disconnect();
+  }, [svgElement]);
+
+  const narrow = viewportNarrow || chartSize.width < 480;
+  const phoneLayout = viewportNarrow;
 
   const slices = useMemo(() => buildSlices(items), [items]);
   const colors = useMemo(() => materialColors(slices
@@ -119,29 +176,60 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   if (slices.length === 0) {
     return <p role="status" className="py-16 text-center text-gray-600">No positive purchases for this fiscal year</p>;
   }
-  const center = narrow ? { x: 160, y: 160 } : { x: 180, y: 142 };
-  const radius = narrow ? 144 : 60;
-  const labels = slices.map((slice, index) => {
+  const width = svgSize.width || chartSize.width || 320;
+  const height = phoneLayout ? width : svgSize.height || chartSize.height || 320;
+  const center = { x: width / 2, y: height / 2 };
+  const labelGap = 12;
+  const labelPadding = 16;
+  const maxRadius = Math.max(0, Math.min(
+    height / 2 - 16,
+    width / 2 - (narrow ? labelPadding : labelGap + labelPadding),
+  ));
+  const availableLabelWidth = narrow
+    ? 0
+    : Math.max(0, width / 2 - maxRadius - labelGap - labelPadding);
+  const labelData = slices.map((slice, index) => {
     const prior = slices.slice(0, index).reduce((sum, item) => sum + item.amount, 0);
     const angle = (prior + slice.amount / 2) / total * Math.PI * 2 - Math.PI / 2;
-    return { slice, angle, side: Math.cos(angle) >= 0 ? 'right' : 'left', y: center.y + Math.sin(angle) * 120 };
+    const side = Math.cos(angle) >= 0 ? 'right' : 'left';
+    const shareText = `${slice.percentage.toFixed(1)}%`;
+    const text = narrow ? '' : fitSideLabel(slice.name, shareText, availableLabelWidth);
+    return { slice, angle, side, text, textWidth: text ? measuredTextWidth(text) : 0 };
   });
+  const widestLabel = Math.max(0, ...labelData
+    .filter(({ slice }) => slice.percentage >= 3)
+    .map(({ textWidth }) => textWidth));
+  const radius = narrow ? maxRadius : Math.max(0, Math.min(
+    maxRadius,
+    width / 2 - widestLabel - labelGap - labelPadding,
+  ));
+  const labels = labelData.map((label) => ({
+    ...label,
+    y: center.y + Math.sin(label.angle) * radius,
+  }));
   for (const side of ['left', 'right']) {
     const sideLabels = labels.filter((label) => label.side === side && label.slice.percentage >= 3).sort((a, b) => a.y - b.y);
     sideLabels.forEach((label, index) => {
       label.y = Math.max(label.y, index === 0 ? 24 : sideLabels[index - 1].y + 22);
     });
     if (sideLabels.length) {
-      const overflow = sideLabels[sideLabels.length - 1].y - 298;
+      const overflow = sideLabels[sideLabels.length - 1].y - (height - 24);
       if (overflow > 0) sideLabels.forEach((label) => { label.y -= overflow; });
     }
   }
 
+  const legend = <ChartLegendContent payload={legendPayload} verticalAlign="bottom"
+    className={narrow ? 'flex-col items-start justify-start gap-2 pt-1' : 'flex-wrap gap-4 pt-1'} />;
+  const narrowLegendHeight = legendPayload.length * 24 + 4;
+
   return <div className="space-y-2">
-    <ChartContainer ref={setChartElement} config={config} className="h-80 min-w-0 w-full" aria-label="Paid purchases by material type">
+    <ChartContainer ref={setChartElement} config={config}
+      className={phoneLayout ? 'aspect-auto min-w-0 w-full' : 'h-80 min-w-0 w-full'}
+      style={phoneLayout ? { height: width } : undefined} aria-label="Paid purchases by material type">
       <div className="flex h-full w-full flex-col">
-      <svg className="recharts-surface min-h-0 min-w-0 w-full flex-1"
-        viewBox={narrow ? '0 0 320 320' : '0 0 360 320'} preserveAspectRatio="xMidYMid meet"
+      <svg ref={setSvgElement} className={`recharts-surface min-h-0 min-w-0 w-full ${phoneLayout ? 'flex-none' : 'flex-1'}`}
+        style={phoneLayout ? { height: width } : undefined}
+        viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet"
         role="img" aria-label="Paid purchases by material type">
         <g className="recharts-pie-sectors">
           {slices.map((slice, index) => {
@@ -161,28 +249,27 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
           })}
         </g>
         {!narrow && <g className="recharts-pie-labels">
-          {labels.filter((label) => label.slice.percentage >= 3).map(({ slice, angle, side, y }) => {
+          {labels.filter((label) => label.slice.percentage >= 3).map(({ slice, angle, side, y, text }) => {
             const [x1, y1] = [center.x + Math.cos(angle) * radius, center.y + Math.sin(angle) * radius];
-            const x2 = side === 'right' ? 242 : 118;
-            const x3 = side === 'right' ? 244 : 116;
-            const shareText = `${slice.percentage.toFixed(1)}%`;
-            const availableWidth = side === 'right' ? 360 - x3 : x3;
-            const nameLimit = Math.floor(availableWidth / 5.2) - shareText.length - 1;
-            const labelName = slice.name.length > nameLimit
-              ? `${slice.name.slice(0, Math.max(1, nameLimit - 1))}…` : slice.name;
+            const labelX = side === 'right' ? center.x + radius + labelGap : center.x - radius - labelGap;
+            const lineEndX = side === 'right' ? labelX - 4 : labelX + 4;
+            const elbowX = side === 'right' ? lineEndX - 8 : lineEndX + 8;
             return <g key={slice.key}>
-              <path d={`M ${x1} ${y1} L ${x2} ${y} L ${x3} ${y}`} fill="none" stroke="#6b7280" strokeWidth="1" />
-              <text x={x3} y={y + 4} textAnchor={side === 'right' ? 'start' : 'end'} fill="#374151" fontSize="10">
-                {labelName} {shareText}
+              <path d={`M ${x1} ${y1} L ${elbowX} ${y} L ${lineEndX} ${y}`} fill="none" stroke="#6b7280" strokeWidth="1" />
+              <text x={labelX} y={y + 4} textAnchor={side === 'right' ? 'start' : 'end'} fill="#374151" fontSize="10">
+                {text}
               </text>
             </g>;
           })}
         </g>}
       </svg>
-      <ChartLegendContent payload={legendPayload} verticalAlign="bottom"
-        className={narrow ? 'flex-col items-start gap-2 pt-1' : 'flex-wrap gap-4 pt-1'} />
+      {!phoneLayout && legend}
       </div>
     </ChartContainer>
+    {phoneLayout && <ChartContainer config={config} className="aspect-auto min-w-0 w-full"
+      style={{ height: narrowLegendHeight }}>
+      <div className="flex h-full w-full items-start">{legend}</div>
+    </ChartContainer>}
     {active && <p role="status" className="text-center text-sm text-gray-700">{active.name}: {amount(active.amount)} ({active.percentage.toFixed(1)}%)</p>}
   </div>;
 }

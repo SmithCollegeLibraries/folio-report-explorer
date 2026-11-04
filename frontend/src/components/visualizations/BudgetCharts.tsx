@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, XAxis, YAxis } from 'recharts';
 import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
@@ -32,11 +32,38 @@ function estimatedLabelWidth(value: string) {
   ), 0);
 }
 
+function labelsFitHorizontally(amountWidth: number, changeWidth: number, barWidth: number, showChangeLabels: boolean) {
+  return amountWidth + 8 <= barWidth && (!showChangeLabels || changeWidth + 8 <= barWidth);
+}
+
 export function BudgetCharts({ data }: { data: VisualizationData }) {
   const patternId = useId().replace(/:/g, '');
   const narrow = useNarrowViewport();
+  const [chartElement, setChartElement] = useState<HTMLDivElement | null>(null);
+  const [chartWidth, setChartWidth] = useState(0);
+
+  useEffect(() => {
+    if (!chartElement) return;
+    const measure = (width: number) => {
+      if (width > 0) setChartWidth((current) => current === width ? current : width);
+    };
+    measure(chartElement.getBoundingClientRect().width);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => measure(entry.contentRect.width));
+    observer.observe(chartElement);
+    return () => observer.disconnect();
+  }, [chartElement]);
+
   const showChangeLabels = !narrow && data.budget.length < 15;
-  const topMargin = showChangeLabels && data.budget.length >= 10 ? 112 : 42;
+  const defaultTopMargin = 42;
+  const estimatedBarWidth = Math.max(0, (chartWidth - 92) / Math.max(1, data.budget.length) - 2);
+  const longestRotatedLabel = data.budget.reduce((longest, row) => {
+    const amountWidth = estimatedLabelWidth(compactAmount(row.allocated));
+    const changeWidth = estimatedLabelWidth(changeLabel(row.changePct));
+    return labelsFitHorizontally(amountWidth, changeWidth, estimatedBarWidth, showChangeLabels)
+      ? longest : Math.max(longest, amountWidth, showChangeLabels ? changeWidth : 0);
+  }, 0);
+  const topMargin = Math.max(defaultTopMargin, longestRotatedLabel + 10);
   const title = 'Library budget';
   return <ChartCard title={title} history explanation="Total budget allocated to the acquisitions unit, with the API-reported year-over-year change."
     table={<table><caption>{title}</caption><thead><tr><th scope="col">Fiscal year</th>
@@ -45,7 +72,7 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
       <th scope="row">{row.fiscalYearEnd}</th><td>{amount(row.allocated)}</td><td>{percent(row.changePct)}</td>
       <td>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</td>
     </tr>)}</tbody></table>}>
-    <div className="relative h-80 min-w-0 w-full" aria-label="Allocated budget by fiscal year">
+    <div ref={setChartElement} className="relative h-80 min-w-0 w-full" aria-label="Allocated budget by fiscal year">
       <ChartContainer config={config} className="h-full min-w-0 w-full">
         <BarChart data={data.budget} margin={{ top: topMargin, right: 12, bottom: 12, left: 8 }} barCategoryGap={2}>
         <HistoryPattern id={patternId} />
@@ -74,8 +101,7 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
             const changeText = changeLabel(row.changePct);
             const amountWidth = estimatedLabelWidth(amountText);
             const changeWidth = estimatedLabelWidth(changeText);
-            const horizontal = amountWidth + 8 <= barWidth
-              && (!showChangeLabels || changeWidth + 8 <= barWidth);
+            const horizontal = labelsFitHorizontally(amountWidth, changeWidth, barWidth, showChangeLabels);
             const labelYAboveBar = labelY - 6;
 
             if (!horizontal) {
