@@ -6,6 +6,7 @@ import { MaterialPieChart } from './MaterialPieChart';
 
 let chartSize = { width: 800, height: 320 };
 let pieSvgSize: { width: number; height: number } | null = null;
+let simulateResponsiveNarrowPieLayout = false;
 const originalTextLength = Object.getOwnPropertyDescriptor(SVGElement.prototype, 'getComputedTextLength');
 const originalPieSvgBounds = Object.getOwnPropertyDescriptor(SVGSVGElement.prototype, 'getBoundingClientRect');
 const elementGetBoundingClientRect = Element.prototype.getBoundingClientRect;
@@ -16,6 +17,10 @@ function setChartSize(width: number) {
 
 function setPieSvgSize(width: number, height: number) {
   pieSvgSize = { width, height };
+}
+
+function setResponsiveNarrowPieLayout(enabled: boolean) {
+  simulateResponsiveNarrowPieLayout = enabled;
 }
 
 function measuredRect(width: number, height: number) {
@@ -32,15 +37,21 @@ function mockSvgTextMeasurement() {
 beforeEach(() => {
   setChartSize(800);
   pieSvgSize = null;
-  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({
-    x: 0, y: 0, top: 0, left: 0, right: chartSize.width, bottom: chartSize.height,
-    width: chartSize.width, height: chartSize.height, toJSON: () => ({}),
-  }));
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (simulateResponsiveNarrowPieLayout && this.getAttribute('aria-label') === 'Paid purchases by material type') {
+      const height = Number.parseFloat(this.style.height) || chartSize.height;
+      return measuredRect(chartSize.width, height);
+    }
+    return measuredRect(chartSize.width, chartSize.height);
+  });
   Object.defineProperty(SVGSVGElement.prototype, 'getBoundingClientRect', {
     configurable: true,
     value(this: SVGSVGElement) {
       if (this.getAttribute('aria-label') === 'Paid purchases by material type') {
-        const size = pieSvgSize ?? chartSize;
+        const inlineHeight = Number.parseFloat(this.style.height);
+        const size = pieSvgSize ?? (simulateResponsiveNarrowPieLayout && chartSize.width < 480
+          ? { width: chartSize.width, height: inlineHeight || 150 }
+          : chartSize);
         return measuredRect(size.width, size.height);
       }
       return elementGetBoundingClientRect.call(this);
@@ -66,6 +77,7 @@ afterEach(() => {
   if (originalTextLength) Object.defineProperty(SVGElement.prototype, 'getComputedTextLength', originalTextLength);
   else Reflect.deleteProperty(SVGElement.prototype, 'getComputedTextLength');
   pieSvgSize = null;
+  simulateResponsiveNarrowPieLayout = false;
 });
 
 function viewBox(svg: SVGSVGElement) {
@@ -81,7 +93,7 @@ function circleGeometry(path: SVGPathElement) {
   return { centerX: Number(center[1]), centerY: Number(center[2]), radiusX: Number(arc[1]), radiusY: Number(arc[2]) };
 }
 
-function budgetDataForAmounts(amounts: number[]): VisualizationData {
+function budgetDataForAmounts(amounts: number[], changePct: number | null = null): VisualizationData {
   const fiscalYearEnds = amounts.map((_, index) => 2023 + index);
   const currentFiscalYearEnd = fiscalYearEnds[fiscalYearEnds.length - 1] ?? 2024;
   return {
@@ -92,7 +104,7 @@ function budgetDataForAmounts(amounts: number[]): VisualizationData {
     purchasesByCategory: [],
     purchasesByMaterial: { fiscalYearEnd: currentFiscalYearEnd, items: [] },
     budget: amounts.map((allocated, index) => ({
-      fiscalYearEnd: 2023 + index, allocated, changePct: null, source: 'folio' as const,
+      fiscalYearEnd: 2023 + index, allocated, changePct, source: 'folio' as const,
     })),
   };
 }
@@ -148,6 +160,52 @@ const labelledMaterials = [
 ];
 
 describe('RPT-024 visualization bounds', () => {
+  it('gives a narrow phone pie a square above its legend and keeps the wide box', async () => {
+    setChartSize(330);
+    setResponsiveNarrowPieLayout(true);
+    vi.stubGlobal('innerWidth', 375);
+
+    const narrowRender = render(<MaterialPieChart items={labelledMaterials} />);
+    const narrowSvg = narrowRender.container.querySelector('svg');
+    const narrowChart = narrowRender.container.querySelector('[data-chart]');
+    expect(narrowSvg).not.toBeNull();
+    expect(narrowChart).not.toBeNull();
+    if (!narrowSvg || !narrowChart) return;
+
+    await waitFor(() => expect(narrowSvg.querySelector('.recharts-pie-sector')).not.toBeNull());
+    const narrowPath = narrowSvg.querySelector('.recharts-pie-sector');
+    const narrowLegendItem = narrowRender.container.querySelector('.recharts-legend-item');
+    const narrowLegend = narrowLegendItem?.parentElement;
+    expect(narrowPath).not.toBeNull();
+    if (!narrowPath || !narrowLegend) return;
+    const narrowSvgBounds = narrowSvg.getBoundingClientRect();
+    const narrowChartBounds = narrowChart.getBoundingClientRect();
+    const { radiusX } = circleGeometry(narrowPath as SVGPathElement);
+
+    expect.soft(narrowSvgBounds.width).toBeCloseTo(330, 0);
+    expect.soft(narrowSvgBounds.height).toBeCloseTo(narrowSvgBounds.width, 0);
+    expect.soft(narrowSvgBounds.height).toBeGreaterThanOrEqual(260);
+    expect.soft(radiusX).toBeGreaterThanOrEqual(140);
+    expect.soft(narrowChartBounds.height).toBeGreaterThanOrEqual(narrowSvgBounds.height);
+    expect.soft(narrowChart.contains(narrowLegend)).toBe(false);
+    expect.soft(narrowRender.container.querySelectorAll('.recharts-legend-item')).toHaveLength(7);
+    narrowRender.unmount();
+
+    setChartSize(640);
+    vi.stubGlobal('innerWidth', 1280);
+    const wideRender = render(<MaterialPieChart items={labelledMaterials} />);
+    const wideSvg = wideRender.container.querySelector('svg');
+    expect(wideSvg).not.toBeNull();
+    if (!wideSvg) return;
+    await waitFor(() => expect(wideSvg.querySelector('.recharts-pie-sector')).not.toBeNull());
+    const widePath = wideSvg.querySelector('.recharts-pie-sector');
+    expect(widePath).not.toBeNull();
+    if (!widePath) return;
+    const { radiusX: wideRadius } = circleGeometry(widePath as SVGPathElement);
+    expect.soft(viewBox(wideSvg)).toEqual({ x: 0, y: 0, width: 640, height: 320 });
+    expect.soft(wideRadius).toBe(144);
+  });
+
   it('sizes the material pie responsively inside its SVG', async () => {
     const radii: number[] = [];
 
@@ -227,6 +285,34 @@ describe('RPT-024 visualization bounds', () => {
     const longAmountBarTop = await firstBudgetBarTop([12_000_000_000, 8_000_000_000]);
 
     expect(longAmountBarTop).toBeCloseTo(shortAmountBarTop, 5);
+  });
+
+  it('keeps ten-year horizontal budget labels near the plot top without clipping', async () => {
+    setChartSize(800);
+    const data = budgetDataForAmounts(Array.from({ length: 10 }, () => 12_000), 2.3);
+    const { container } = render(<BudgetCharts data={data} />);
+    const svg = Array.from(container.querySelectorAll('svg'))
+      .find((candidate) => candidate.querySelector('.recharts-bar-rectangles'));
+    expect(svg).toBeDefined();
+    if (!svg) return;
+
+    await waitFor(() => expect(svg.querySelectorAll('.recharts-label-list text').length).toBe(10));
+    const plotTop = svg.querySelector('.recharts-cartesian-grid-horizontal line');
+    const labels = Array.from(svg.querySelectorAll('.recharts-label-list text'));
+    expect(plotTop).not.toBeNull();
+    expect(labels.every((label) => !label.getAttribute('transform')?.includes('rotate(-90'))).toBe(true);
+    expect(labels.every((label) => label.querySelectorAll('tspan').length === 2)).toBe(true);
+    expect.soft(Number(plotTop?.getAttribute('y1'))).toBeLessThanOrEqual(56);
+
+    for (const label of labels) {
+      const baseline = Number(label.getAttribute('y'));
+      const fontSize = Number(label.getAttribute('font-size') ?? 11);
+      const lines = Array.from(label.querySelectorAll('tspan'));
+      for (const [index, line] of lines.entries()) {
+        const offset = index === 0 ? 0 : Number(line.getAttribute('dy') ?? 0);
+        expect.soft(baseline + offset - fontSize).toBeGreaterThanOrEqual(0);
+      }
+    }
   });
 
   it('sizes the pie from the measured SVG box above the legend', async () => {
