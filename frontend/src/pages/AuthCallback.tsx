@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useHref, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
 /**
@@ -9,7 +9,6 @@ import { useAuth } from '../hooks/useAuth';
 export default function AuthCallback() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const homeHref = useHref('/');
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -41,11 +40,6 @@ export default function AuthCallback() {
           <p className="text-red-700">{error}</p>
           <Link
             to="/"
-            ref={(link) => {
-              if (link && homeHref !== '/' && !homeHref.endsWith('/')) {
-                link.setAttribute('href', `${homeHref}/`);
-              }
-            }}
             className="inline-block mt-4 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
           >
             Return to Home
