@@ -14,6 +14,15 @@ const receiptOptions = [
   { value: 'received', label: 'Fully Received' },
 ];
 
+const campusLocationOptions = [
+  { value: 'smith-browse', label: 'Smith College — Neilson Library — Browsing [BROWSE]' },
+  { value: 'smith-stacks', label: 'Smith College — Young Science Library — Stacks [STACKS]' },
+  { value: 'amherst-circulation', label: 'Amherst College — Frost Library — Circulation [CIRC]' },
+  { value: 'amherst-reading-room', label: 'Amherst College — Archives & Special Collections — Reading Room [READ]' },
+  { value: 'umass-periodicals', label: 'University Of Massachusetts — Du Bois Library — Periodicals [PER]' },
+  { value: 'unassigned', label: 'Unassigned location [UNASSIGNED]' },
+];
+
 function renderSelect({
   value,
   options = receiptOptions,
@@ -172,5 +181,107 @@ describe('SearchableMultiSelect summary', () => {
 
     await user.keyboard('{Escape}');
     expect(control).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+describe('SearchableMultiSelect campus selection', () => {
+  it('shows a counted Select all and Clear control for each campus group', async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchableMultiSelect
+        id="locations"
+        label="Locations"
+        value=""
+        options={campusLocationOptions}
+        onChange={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select locations' }));
+
+    expect(screen.getByRole('button', { name: 'Select all Smith College (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear Smith College' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select all Amherst College (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear Amherst College' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select all University Of Massachusetts (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear University Of Massachusetts' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Unassigned location/ })).not.toBeInTheDocument();
+  });
+
+  it('adds only the campus locations not already selected', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <SearchableMultiSelect
+        id="locations"
+        label="Locations"
+        value="amherst-circulation,smith-browse"
+        options={campusLocationOptions}
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '2 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Select all Smith College (2)' }));
+
+    expect(changes).toEqual(['amherst-circulation,smith-browse,smith-stacks']);
+  });
+
+  it('clears only the selected locations from the requested campus', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <SearchableMultiSelect
+        id="locations"
+        label="Locations"
+        value="smith-browse,amherst-circulation,umass-periodicals,unassigned"
+        options={campusLocationOptions}
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '4 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Clear Smith College' }));
+
+    expect(changes).toEqual(['amherst-circulation,umass-periodicals,unassigned']);
+  });
+
+  it('leaves the selection unchanged and names the limit when a campus exceeds it', async () => {
+    const user = userEvent.setup();
+    const changes: string[] = [];
+    render(
+      <SearchableMultiSelect
+        id="locations"
+        label="Locations"
+        value="smith-browse,smith-stacks"
+        options={campusLocationOptions}
+        maxSelections={3}
+        onChange={(value) => changes.push(value)}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '2 locations selected' }));
+    await user.click(screen.getByRole('button', { name: 'Select all Amherst College (2)' }));
+
+    expect(changes).toEqual([]);
+    expect(screen.getByText('Selecting all Amherst College locations would exceed 3 locations')).toBeInTheDocument();
+  });
+
+  it('does not show campus controls without the opt-in prop', async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchableMultiSelect
+        id="locations"
+        label="Locations"
+        value=""
+        options={campusLocationOptions}
+        onChange={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select locations' }));
+
+    expect(screen.queryByRole('button', { name: 'Select all Smith College (2)' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clear Smith College' })).not.toBeInTheDocument();
   });
 });

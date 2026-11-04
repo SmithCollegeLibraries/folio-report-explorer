@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { useState } from 'react';
 import MarcFieldFinderParameters from './MarcFieldFinderParameters';
+import ReportParameterFields from './ReportParameterFields';
 import type { ReportParam } from '../types';
 
 afterEach(cleanup);
@@ -31,6 +32,15 @@ const options = {
   caseExact: [{ value: 'false', label: 'Case-insensitive' }, { value: 'true', label: 'Case-exact' }],
 };
 
+const campusLocationOptions = [
+  { value: 'smith-browse', label: 'Smith College — Neilson Library — Browsing [BROWSE]' },
+  { value: 'smith-stacks', label: 'Smith College — Young Science Library — Stacks [STACKS]' },
+  { value: 'amherst-circulation', label: 'Amherst College — Frost Library — Circulation [CIRC]' },
+  { value: 'amherst-reading-room', label: 'Amherst College — Archives & Special Collections — Reading Room [READ]' },
+  { value: 'umass-periodicals', label: 'University Of Massachusetts — Du Bois Library — Periodicals [PER]' },
+  { value: 'unassigned', label: 'Unassigned location [UNASSIGNED]' },
+];
+
 const baseValues = {
   locationIds: '11111111-1111-4111-8111-111111111111', locationBasis: 'effective_item', marcTag: '035',
   occurrenceCondition: 'missing', firstIndicator: 'blank', secondIndicator: 'char:9', subfieldCode: 'a',
@@ -38,6 +48,40 @@ const baseValues = {
 };
 
 describe('MarcFieldFinderParameters', () => {
+  it('enables campus selection for the MARC Field Finder Locations field', async () => {
+    const user = userEvent.setup();
+    render(
+      <MarcFieldFinderParameters
+        values={{ ...baseValues, locationIds: '' }}
+        parameters={params}
+        selectOptions={{ ...options, locationIds: campusLocationOptions }}
+        onChange={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select locations' }));
+
+    expect(screen.getByRole('button', { name: 'Select all Smith College (2)' })).toBeInTheDocument();
+  });
+
+  it('enables campus selection for the MARC missing-tag report Locations field', async () => {
+    const user = userEvent.setup();
+    render(
+      <ReportParameterFields
+        slug="marc-bibliographic-records-missing-tag"
+        values={{ locationIds: '' }}
+        parameters={[params[0]]}
+        selectOptions={{ locationIds: campusLocationOptions }}
+        serverFieldErrors={{}}
+        onChange={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Select locations' }));
+
+    expect(screen.getByRole('button', { name: 'Select all Smith College (2)' })).toBeInTheDocument();
+  });
+
   it('renders the conditional controls and interpretation summary', () => {
     render(<MarcFieldFinderParameters values={baseValues} parameters={params} selectOptions={options} onChange={() => {}} />);
 
