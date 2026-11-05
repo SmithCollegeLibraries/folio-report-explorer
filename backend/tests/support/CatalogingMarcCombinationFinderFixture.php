@@ -160,11 +160,26 @@ namespace {
             'GROUP_CONCAT(DISTINCT $1)',
             $sql
         );
+        $sql = str_replace(
+            "STRING_AGG(result_value, '; ' ORDER BY first_occurrence, first_subfield)",
+            "GROUP_CONCAT(result_value, '; ')",
+            $sql
+        );
+        $sql = str_replace(
+            'WHERE content_rank = 1) distinct_contents) ordered_contents',
+            'WHERE content_rank = 1 ORDER BY first_occurrence, first_subfield) distinct_contents) ordered_contents',
+            $sql
+        );
         $sql = str_replace(['CHR(92)', 'STRPOS(', 'LEFT(', 'CHAR_LENGTH('], ['CHAR(92)', 'INSTR(', 'LEFT_FN(', 'LENGTH('], $sql);
         $sql = preg_replace('/SUBSTRING\\((:[A-Za-z][A-Za-z0-9_]*) FROM 6\\)/', 'SUBSTR($1, 6)', $sql);
         $sql = str_replace(" ~ '", " REGEXP '", $sql);
         $sql = str_replace(['NULL::text', 'NULL::integer'], ['CAST(NULL AS TEXT)', 'CAST(NULL AS INTEGER)'], $sql);
         $sql = str_replace('id::text AS id', 'id AS id', $sql);
+        if (stripos($sql, 'MATERIALIZED') !== false
+            || stripos($sql, 'STRING_AGG(') !== false
+            || preg_match('/GROUP_CONCAT\\s*\\([^)]*\\bORDER\\s+BY\\b/i', $sql) === 1) {
+            throw new \RuntimeException('SQLite translation left syntax unsupported by SQLite 3.27.');
+        }
         return $sql;
     }
 }

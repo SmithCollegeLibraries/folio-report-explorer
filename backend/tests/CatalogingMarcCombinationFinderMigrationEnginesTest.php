@@ -113,6 +113,18 @@ function marcCombinationEnginePrepareSchema(Connection $adminDb, string $migrati
     if (!$installed) {
         throw new RuntimeException($label . ' setup did not reach the pre-068 migration state.');
     }
+    $adminDb->createCommand()->insert('report_templates', [
+        'id' => 11,
+        'slug' => 'pol-report',
+        'name' => 'Synthetic purchase order line report',
+        'description' => 'Synthetic fixture for current-schema recognition.',
+        'category' => 'acquisitions',
+        'sql_template' => 'SELECT 1',
+        'parameters' => '[]',
+        'data_source' => 'folio',
+        'is_active' => 0,
+        'created_by' => 'manual',
+    ])->execute();
     return $path;
 }
 
