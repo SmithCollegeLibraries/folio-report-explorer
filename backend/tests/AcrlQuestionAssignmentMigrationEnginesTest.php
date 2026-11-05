@@ -72,6 +72,25 @@ function acrlMigrationEngineSame($expected, $actual, string $message): void
         . "\nActual: " . var_export($actual, true));
 }
 
+function acrlMigrationEngineIsLockWaitTimeout(Throwable $error): bool
+{
+    return stripos($error->getMessage(), 'lock wait timeout exceeded') !== false;
+}
+
+function acrlMigrationEngineRollbackActiveTransaction($db): void
+{
+    $transaction = $db->getTransaction();
+    if ($transaction !== null && $transaction->getIsActive()) {
+        $transaction->rollBack();
+    }
+}
+
+function acrlMigrationEngineHasActiveTransaction($db): bool
+{
+    $transaction = $db->getTransaction();
+    return $transaction !== null && $transaction->getIsActive();
+}
+
 function acrlMigrationEngineConnection(string $dsn, string $username, string $password): Connection
 {
     $connection = new Connection(['dsn' => $dsn, 'username' => $username, 'password' => $password, 'charset' => 'utf8mb4']);
@@ -535,137 +554,244 @@ try {
     }
 
     try {
-        if (!function_exists('pcntl_fork')) {
-            acrlMigrationEngineCheck(false, 'PCNTL is required to run deterministic concurrent acceptance/revoke.');
-        } else {
-            $raceInviteId = $appDbC->createCommand()->insert('acrl_invites', [
-                'email' => 'acrl029-race-revoke@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
-                'link_origin' => 'https://reports.example.test', 'status' => 'pending', 'send_count' => 0,
-                'expires_at' => date('Y-m-d H:i:s', time() + 86400),
-            ])->execute();
-            $raceInviteId = (int)$appDbC->getLastInsertID();
-            $appDbC->createCommand()->insert('acrl_invite_targets', [
-                'invite_id' => $raceInviteId, 'kind' => 'section', 'section' => 'ACR-029 rollback section',
-                'sheet' => '', 'question_id' => '', 'part' => '',
-            ])->execute();
-            $raceMarker = sys_get_temp_dir() . '/acrl029-accept-ready-' . bin2hex(random_bytes(8));
-            $lockDb = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
-            $outerTransaction = $lockDb->beginTransaction();
-            $lockDb->createCommand('SELECT survey_year FROM acrl_survey_years WHERE survey_year = 2026 FOR UPDATE')->queryScalar();
-            $raceChild = pcntl_fork();
-            if ($raceChild === 0) {
-                try {
-                    file_put_contents($raceMarker, 'ready');
-                    $childDb = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
-                    Yii::$app->set('db', $childDb);
-                    $childService = new AcrlInviteService($childDb, new AcrlSectionAssignmentRepository($childDb), new AcrlQuestionAssignmentRepository($childDb), new AcrlInviteMailer(function () { return false; }));
-                    $accepted = $childService->acceptOnSignIn(User::findOne($rollbackInviteeId), 'acrl029-race-revoke@smith.example', 'acrl029-race-revoke-user');
-                    exit($accepted ? 21 : 0);
-                } catch (Throwable $error) {
-                    exit(22);
-                }
-            }
-            if ($raceChild < 0) {
-                acrlMigrationEngineCheck(false, 'Could not start the acceptance/revoke concurrency child.');
-                $outerTransaction->rollBack();
-            } else {
-                $deadline = microtime(true) + 5;
-                while (!file_exists($raceMarker) && microtime(true) < $deadline) usleep(10000);
-                acrlMigrationEngineCheck(file_exists($raceMarker), 'Concurrent accept child reached the year-lock boundary.');
-                usleep(250000);
-                Yii::$app->set('db', $lockDb);
-                $revokeService = new AcrlInviteService($lockDb, new AcrlSectionAssignmentRepository($lockDb), new AcrlQuestionAssignmentRepository($lockDb), new AcrlInviteMailer(function () { return false; }));
-                $revoked = $revokeService->revokeInvite($raceInviteId, User::findOne($actorId));
-                acrlMigrationEngineSame('revoked', $revoked['invite']['status'] ?? null, 'Concurrent revoke wins while holding the shared survey-year lock.');
-                $outerTransaction->commit();
-                pcntl_waitpid($raceChild, $raceStatus);
-                acrlMigrationEngineSame(0, pcntl_wexitstatus($raceStatus), 'Acceptance queued behind revoke observes the revoked state and makes no changes.');
-                Yii::$app->set('db', $appDbC);
-                acrlMigrationEngineSame(0, (int)$appDbC->createCommand('SELECT is_approved FROM users WHERE id = :id', [':id' => $rollbackInviteeId])->queryScalar(), 'A concurrent revoke prevents invite acceptance and approval.');
-                acrlMigrationEngineSame(0, (int)$appDbC->createCommand('SELECT COUNT(*) FROM acrl_section_assignments WHERE user_id = :id AND survey_year = 2026', [':id' => $rollbackInviteeId])->queryScalar(), 'A concurrent revoke prevents assignment creation.');
-                @unlink($raceMarker);
-            }
+        $raceInviteId = $appDbC->createCommand()->insert('acrl_invites', [
+            'email' => 'acrl029-race-revoke@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
+            'link_origin' => 'https://reports.example.test', 'status' => 'pending', 'send_count' => 0,
+            'expires_at' => date('Y-m-d H:i:s', time() + 86400),
+        ])->execute();
+        $raceInviteId = (int)$appDbC->getLastInsertID();
+        $appDbC->createCommand()->insert('acrl_invite_targets', [
+            'invite_id' => $raceInviteId, 'kind' => 'section', 'section' => 'ACR-029 rollback section',
+            'sheet' => '', 'question_id' => '', 'part' => '',
+        ])->execute();
+
+        $acceptLockDbA = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
+        $appDbC->createCommand('SET SESSION innodb_lock_wait_timeout = 1')->execute();
+        $acceptLockDbA->beginTransaction();
+        $lockedYear = (int)$acceptLockDbA->createCommand(
+            'SELECT survey_year FROM acrl_survey_years WHERE survey_year = 2026 FOR UPDATE'
+        )->queryScalar();
+        acrlMigrationEngineSame(2026, $lockedYear, 'Connection A locks the invite survey year for accept/revoke.');
+        $lockedInviteId = (int)$acceptLockDbA->createCommand(
+            'SELECT id FROM acrl_invites WHERE id = :id AND status = :status FOR UPDATE',
+            [':id' => $raceInviteId, ':status' => 'pending']
+        )->queryScalar();
+        acrlMigrationEngineSame($raceInviteId, $lockedInviteId, 'Connection A locks the pending invite before the accept attempt.');
+
+        $acceptServiceB = new AcrlInviteService(
+            $appDbC,
+            new AcrlSectionAssignmentRepository($appDbC),
+            new AcrlQuestionAssignmentRepository($appDbC),
+            new AcrlInviteMailer(function () { return false; })
+        );
+        $acceptError = null;
+        $acceptResult = null;
+        try {
+            $acceptResult = $acceptServiceB->acceptOnSignIn(
+                User::findOne($rollbackInviteeId),
+                'acrl029-race-revoke@smith.example',
+                'acrl029-race-revoke-user'
+            );
+        } catch (Throwable $error) {
+            $acceptError = $error;
         }
+        acrlMigrationEngineCheck(
+            $acceptError !== null && acrlMigrationEngineIsLockWaitTimeout($acceptError),
+            'Connection B accept must fail with an InnoDB lock-wait timeout while connection A holds the year/invite locks.'
+        );
+        $acceptTransactionActive = acrlMigrationEngineHasActiveTransaction($appDbC);
+        acrlMigrationEngineCheck(!$acceptTransactionActive, 'Connection B rolls back the acceptance transaction after its lock-wait timeout.');
+        if ($acceptTransactionActive) {
+            acrlMigrationEngineRollbackActiveTransaction($appDbC);
+        }
+        acrlMigrationEngineSame('pending', (string)$acceptLockDbA->createCommand(
+            'SELECT status FROM acrl_invites WHERE id = :id',
+            [':id' => $raceInviteId]
+        )->queryScalar(), 'A timed-out acceptance leaves the invite pending.');
+        acrlMigrationEngineSame(0, (int)$acceptLockDbA->createCommand(
+            'SELECT is_approved FROM users WHERE id = :id',
+            [':id' => $rollbackInviteeId]
+        )->queryScalar(), 'A timed-out acceptance leaves the invitee unapproved.');
+        acrlMigrationEngineSame(0, (int)$acceptLockDbA->createCommand(
+            'SELECT COUNT(*) FROM acrl_section_assignments WHERE user_id = :id AND survey_year = 2026',
+            [':id' => $rollbackInviteeId]
+        )->queryScalar(), 'A timed-out acceptance creates no section assignments.');
+        acrlMigrationEngineSame(0, (int)$acceptLockDbA->createCommand(
+            'SELECT COUNT(*) FROM acrl_question_assignments WHERE user_id = :id AND survey_year = 2026',
+            [':id' => $rollbackInviteeId]
+        )->queryScalar(), 'A timed-out acceptance creates no question assignments.');
+
+        $revokedRows = $acceptLockDbA->createCommand(
+            "UPDATE acrl_invites SET status = 'revoked', revoked_at = CURRENT_TIMESTAMP(6)"
+                . " WHERE id = :id AND status = 'pending'",
+            [':id' => $raceInviteId]
+        )->execute();
+        acrlMigrationEngineSame(1, $revokedRows, 'Connection A revokes the invite while holding the locks.');
+        $acceptLockDbA->getTransaction()->commit();
+
+        $acceptRetryError = null;
+        $acceptRetryResult = null;
+        try {
+            $acceptRetryResult = $acceptServiceB->acceptOnSignIn(
+                User::findOne($rollbackInviteeId),
+                'acrl029-race-revoke@smith.example',
+                'acrl029-race-revoke-user'
+            );
+        } catch (Throwable $error) {
+            $acceptRetryError = $error;
+        }
+        acrlMigrationEngineCheck($acceptRetryError === null, 'Connection B retries acceptance after connection A commits the revoke.');
+        acrlMigrationEngineSame(false, $acceptRetryResult, 'A retry observes the revoked invite and returns false.');
+        acrlMigrationEngineSame('revoked', (string)$acceptLockDbA->createCommand(
+            'SELECT status FROM acrl_invites WHERE id = :id',
+            [':id' => $raceInviteId]
+        )->queryScalar(), 'The concurrent acceptance retry leaves the invite revoked.');
+        acrlMigrationEngineSame(0, (int)$acceptLockDbA->createCommand(
+            'SELECT is_approved FROM users WHERE id = :id',
+            [':id' => $rollbackInviteeId]
+        )->queryScalar(), 'A revoked invite retry leaves the user unapproved.');
+        acrlMigrationEngineSame(0, (int)$acceptLockDbA->createCommand(
+            'SELECT COUNT(*) FROM acrl_section_assignments WHERE user_id = :id AND survey_year = 2026',
+            [':id' => $rollbackInviteeId]
+        )->queryScalar(), 'A revoked invite retry creates no section assignments.');
+        acrlMigrationEngineSame(0, (int)$acceptLockDbA->createCommand(
+            'SELECT COUNT(*) FROM acrl_question_assignments WHERE user_id = :id AND survey_year = 2026',
+            [':id' => $rollbackInviteeId]
+        )->queryScalar(), 'A revoked invite retry creates no question assignments.');
+        $acceptLockDbA->close();
     } catch (Throwable $error) {
-        acrlMigrationEngineCheck(false, 'ACR-029 concurrent accept/revoke scenario failed before concurrent create: ' . get_class($error) . ': ' . $error->getMessage());
-        if (isset($outerTransaction) && $outerTransaction->getIsActive()) {
+        acrlMigrationEngineCheck(false, 'ACR-029 accept/revoke lock-timeout scenario failed before concurrent create: ' . get_class($error) . ': ' . $error->getMessage());
+        if (isset($acceptLockDbA)) {
+            $acceptLockDbA->close();
+        }
+        if (isset($appDbC)) {
             try {
-                $outerTransaction->rollBack();
+                acrlMigrationEngineRollbackActiveTransaction($appDbC);
             } catch (Throwable $cleanupError) {
-                acrlMigrationEngineCheck(false, 'Could not release the concurrent accept/revoke year lock: ' . $cleanupError->getMessage());
+                acrlMigrationEngineCheck(false, 'Could not clear the accept/revoke retry transaction: ' . $cleanupError->getMessage());
             }
-        }
-        if (isset($raceChild) && $raceChild > 0) {
-            pcntl_waitpid($raceChild, $raceStatus);
-        }
-        if (isset($raceMarker)) {
-            @unlink($raceMarker);
         }
     }
 
     try {
-        if (!function_exists('pcntl_fork')) {
-            acrlMigrationEngineCheck(false, 'PCNTL is required to run deterministic concurrent create.');
-        } else {
-            $createReady = sys_get_temp_dir() . '/acrl029-create-ready-' . bin2hex(random_bytes(8));
-            $createStart = sys_get_temp_dir() . '/acrl029-create-start-' . bin2hex(random_bytes(8));
-            $createChildren = [];
-            foreach ([0, 1] as $index) {
-                $child = pcntl_fork();
-                if ($child === 0) {
-                    try {
-                        file_put_contents($createReady . '-' . $index, 'ready');
-                        $deadline = microtime(true) + 10;
-                        while (!file_exists($createStart) && microtime(true) < $deadline) usleep(10000);
-                        if (!file_exists($createStart)) exit(31);
-                        $childDb = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
-                        Yii::$app->set('db', $childDb);
-                        $childService = new AcrlInviteService($childDb, new AcrlSectionAssignmentRepository($childDb), new AcrlQuestionAssignmentRepository($childDb), new AcrlInviteMailer(function () { return false; }));
-                        $target = $index === 0
-                            ? [['kind' => 'section', 'section' => 'ACR-029 rollback section']]
-                            : [['kind' => 'question', 'sheet' => 'survey', 'questionId' => 'ACR28', 'part' => '']];
-                        $childService->createInvite(2026, 'acrl029-race-create@smith.example', $target, User::findOne($actorId), 'https://reports.example.test');
-                        exit(0);
-                    } catch (Throwable $error) {
-                        exit(32);
-                    }
-                }
-                $createChildren[] = $child;
-            }
-            $deadline = microtime(true) + 10;
-            while ((!file_exists($createReady . '-0') || !file_exists($createReady . '-1')) && microtime(true) < $deadline) usleep(10000);
-            acrlMigrationEngineCheck(file_exists($createReady . '-0') && file_exists($createReady . '-1'), 'Both concurrent invite-create workers reach the shared start barrier.');
-            file_put_contents($createStart, 'start');
-            foreach ($createChildren as $child) {
-                pcntl_waitpid($child, $createStatus);
-                acrlMigrationEngineSame(0, pcntl_wexitstatus($createStatus), 'Concurrent create worker completes without error.');
-            }
-            Yii::$app->set('db', $appDbC);
-            $createInviteCount = (int)$appDbC->createCommand('SELECT COUNT(*) FROM acrl_invites WHERE email = :email AND survey_year = 2026 AND status = :status', [':email' => 'acrl029-race-create@smith.example', ':status' => 'pending'])->queryScalar();
-            acrlMigrationEngineSame(1, $createInviteCount, 'Concurrent create for one email/year serializes to one pending invite.');
-            $createTargetCount = (int)$appDbC->createCommand('SELECT COUNT(*) FROM acrl_invite_targets WHERE invite_id = (SELECT id FROM acrl_invites WHERE email = :email AND survey_year = 2026 AND status = :status)', [':email' => 'acrl029-race-create@smith.example', ':status' => 'pending'])->queryScalar();
-            acrlMigrationEngineSame(2, $createTargetCount, 'Concurrent create preserves the targets submitted by both serialized requests.');
-            foreach ([$createReady . '-0', $createReady . '-1', $createStart] as $temporaryPath) @unlink($temporaryPath);
-            }
+        $createLockDbA = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
+        $appDbC->createCommand('SET SESSION innodb_lock_wait_timeout = 1')->execute();
+        $createServiceB = new AcrlInviteService(
+            $appDbC,
+            new AcrlSectionAssignmentRepository($appDbC),
+            new AcrlQuestionAssignmentRepository($appDbC),
+            new AcrlInviteMailer(function () { return false; })
+        );
+        $createAdminB = User::findOne($actorId);
+        $createLockDbA->beginTransaction();
+        $createLockedYear = (int)$createLockDbA->createCommand(
+            'SELECT survey_year FROM acrl_survey_years WHERE survey_year = 2026 FOR UPDATE'
+        )->queryScalar();
+        acrlMigrationEngineSame(2026, $createLockedYear, 'Connection A locks the survey year for concurrent create.');
+
+        $createTarget = [['kind' => 'question', 'sheet' => 'survey', 'questionId' => 'ACR28', 'part' => '']];
+        $createTimeoutError = null;
+        try {
+            $createServiceB->createInvite(
+                2026,
+                'acrl029-race-create@smith.example',
+                $createTarget,
+                $createAdminB,
+                'https://reports.example.test'
+            );
+        } catch (Throwable $error) {
+            $createTimeoutError = $error;
+        }
+        acrlMigrationEngineCheck(
+            $createTimeoutError !== null && acrlMigrationEngineIsLockWaitTimeout($createTimeoutError),
+            'Connection B create must fail with an InnoDB lock-wait timeout while connection A holds the survey-year lock.'
+        );
+        $createTransactionActive = acrlMigrationEngineHasActiveTransaction($appDbC);
+        acrlMigrationEngineCheck(!$createTransactionActive, 'Connection B rolls back the create transaction after its lock-wait timeout.');
+        if ($createTransactionActive) {
+            acrlMigrationEngineRollbackActiveTransaction($appDbC);
+        }
+        acrlMigrationEngineSame(0, (int)$createLockDbA->createCommand(
+            'SELECT COUNT(*) FROM acrl_invites WHERE email = :email AND survey_year = 2026',
+            [':email' => 'acrl029-race-create@smith.example']
+        )->queryScalar(), 'A timed-out create leaves no invite row.');
+        acrlMigrationEngineSame(0, (int)$createLockDbA->createCommand(
+            'SELECT COUNT(*) FROM acrl_invite_targets t'
+                . ' INNER JOIN acrl_invites i ON i.id = t.invite_id'
+                . ' WHERE i.email = :email AND i.survey_year = 2026',
+            [':email' => 'acrl029-race-create@smith.example']
+        )->queryScalar(), 'A timed-out create leaves no target rows.');
+
+        $createLockDbA->createCommand()->insert('acrl_invites', [
+            'email' => 'acrl029-race-create@smith.example',
+            'survey_year' => 2026,
+            'invited_by' => $actorId,
+            'link_origin' => 'https://reports.example.test',
+            'status' => 'pending',
+            'send_count' => 0,
+            'expires_at' => date('Y-m-d H:i:s', time() + 86400),
+        ])->execute();
+        $createInviteId = (int)$createLockDbA->getLastInsertID();
+        $createLockDbA->createCommand()->insert('acrl_invite_targets', [
+            'invite_id' => $createInviteId,
+            'kind' => 'section',
+            'section' => 'ACR-029 rollback section',
+            'sheet' => '',
+            'question_id' => '',
+            'part' => '',
+        ])->execute();
+        $createLockDbA->getTransaction()->commit();
+
+        $createRetryError = null;
+        $createRetryResponse = null;
+        try {
+            $createRetryResponse = $createServiceB->createInvite(
+                2026,
+                'acrl029-race-create@smith.example',
+                $createTarget,
+                $createAdminB,
+                'https://reports.example.test'
+            );
+        } catch (Throwable $error) {
+            $createRetryError = $error;
+        }
+        acrlMigrationEngineCheck($createRetryError === null, 'Connection B retries create after connection A commits the pending invite.');
+        $createResponseInviteId = is_array($createRetryResponse) && isset($createRetryResponse['invite']['id'])
+            ? (int)$createRetryResponse['invite']['id']
+            : null;
+        acrlMigrationEngineSame($createInviteId, $createResponseInviteId, 'A repeated create returns the pending invite created by connection A.');
+        $createPendingCount = (int)$createLockDbA->createCommand(
+            "SELECT COUNT(*) FROM acrl_invites WHERE email = :email AND survey_year = 2026 AND status = 'pending'",
+            [':email' => 'acrl029-race-create@smith.example']
+        )->queryScalar();
+        acrlMigrationEngineSame(1, $createPendingCount, 'Concurrent create leaves one pending invite row.');
+        $createTargetCount = (int)$createLockDbA->createCommand(
+            'SELECT COUNT(*) FROM acrl_invite_targets WHERE invite_id = :id',
+            [':id' => $createInviteId]
+        )->queryScalar();
+        acrlMigrationEngineSame(2, $createTargetCount, 'A repeated create merges its target into the one pending invite.');
+        $createSectionCount = (int)$createLockDbA->createCommand(
+            "SELECT COUNT(*) FROM acrl_invite_targets WHERE invite_id = :id AND kind = 'section'",
+            [':id' => $createInviteId]
+        )->queryScalar();
+        $createQuestionCount = (int)$createLockDbA->createCommand(
+            "SELECT COUNT(*) FROM acrl_invite_targets WHERE invite_id = :id AND kind = 'question' AND sheet = 'survey' AND question_id = 'ACR28' AND part = ''",
+            [':id' => $createInviteId]
+        )->queryScalar();
+        acrlMigrationEngineSame(1, $createSectionCount, 'The connection A section target remains on the invite.');
+        acrlMigrationEngineSame(1, $createQuestionCount, 'The connection B question target is added to the invite.');
+        $createLockDbA->close();
     } catch (Throwable $error) {
-        acrlMigrationEngineCheck(false, 'ACR-029 concurrent create scenario failed: ' . get_class($error) . ': ' . $error->getMessage());
-        if (isset($createStart)) {
-            @file_put_contents($createStart, 'failure');
+        acrlMigrationEngineCheck(false, 'ACR-029 concurrent create lock-timeout scenario failed: ' . get_class($error) . ': ' . $error->getMessage());
+        if (isset($createLockDbA)) {
+            $createLockDbA->close();
         }
-        if (isset($createChildren) && function_exists('pcntl_waitpid')) {
-            foreach ($createChildren as $child) {
-                if ($child > 0) {
-                    pcntl_waitpid($child, $createStatus);
-                }
+        if (isset($appDbC)) {
+            try {
+                acrlMigrationEngineRollbackActiveTransaction($appDbC);
+            } catch (Throwable $cleanupError) {
+                acrlMigrationEngineCheck(false, 'Could not clear the concurrent create retry transaction: ' . $cleanupError->getMessage());
             }
-        }
-        if (isset($createReady)) {
-            foreach (glob($createReady . '*') ?: [] as $temporaryPath) {
-                @unlink($temporaryPath);
-            }
-        }
-        if (isset($createStart)) {
-            @unlink($createStart);
         }
     }
 } catch (Throwable $error) {
