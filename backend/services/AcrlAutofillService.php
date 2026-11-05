@@ -95,6 +95,46 @@ class AcrlAutofillService
                 'This is a current snapshot with no date range.',
             ],
         ],
+        'survey|20|' => [
+            'queryId' => 'acrl-20', 'version' => 1, 'column' => 'q20_one_time', 'file' => 'acr030-20-21-expenditures.sql', 'kind' => 'dated', 'valueType' => 'currency',
+            'summary' => [
+                'Sums Smith payments minus credits in FOLIO fiscal year SCFY<year> on purchase-order lines whose order type is One-Time.',
+                'Material type Admin (fees and services) is left out. PO lines without a material type are included; payments with no purchase-order line and spending outside FOLIO are not included.',
+                'This is FOLIO data only - adjust the value if other spending belongs here.',
+            ],
+        ],
+        'survey|20a|' => [
+            'queryId' => 'acrl-20a', 'version' => 1, 'column' => 'q20a_one_time_ebooks', 'file' => 'acr030-20-21-expenditures.sql', 'kind' => 'dated', 'valueType' => 'currency',
+            'summary' => [
+                'Sums Smith payments minus credits in FOLIO fiscal year SCFY<year> on purchase-order lines whose order type is One-Time and material type is E-Book or E-Book Package.',
+                'Material type Admin (fees and services) is left out. PO lines without a material type are included; payments with no purchase-order line and spending outside FOLIO are not included.',
+                'This is FOLIO data only - adjust the value if other spending belongs here.',
+            ],
+        ],
+        'survey|21|' => [
+            'queryId' => 'acrl-21', 'version' => 1, 'column' => 'q21_ongoing', 'file' => 'acr030-20-21-expenditures.sql', 'kind' => 'dated', 'valueType' => 'currency',
+            'summary' => [
+                'Sums Smith payments minus credits in FOLIO fiscal year SCFY<year> on purchase-order lines whose order type is Ongoing.',
+                'Material type Admin (fees and services) is left out. PO lines without a material type are included; payments with no purchase-order line and spending outside FOLIO are not included.',
+                'This is FOLIO data only - adjust the value if other spending belongs here.',
+            ],
+        ],
+        'survey|21a|' => [
+            'queryId' => 'acrl-21a', 'version' => 1, 'column' => 'q21a_ongoing_ebooks', 'file' => 'acr030-20-21-expenditures.sql', 'kind' => 'dated', 'valueType' => 'currency',
+            'summary' => [
+                'Sums Smith payments minus credits in FOLIO fiscal year SCFY<year> on purchase-order lines whose order type is Ongoing and material type is E-Book or E-Book Package.',
+                'Material type Admin (fees and services) is left out. PO lines without a material type are included; payments with no purchase-order line and spending outside FOLIO are not included.',
+                'This is FOLIO data only - adjust the value if other spending belongs here.',
+            ],
+        ],
+        'survey|21b|' => [
+            'queryId' => 'acrl-21b', 'version' => 1, 'column' => 'q21b_ongoing_ejournals', 'file' => 'acr030-20-21-expenditures.sql', 'kind' => 'dated', 'valueType' => 'currency',
+            'summary' => [
+                'Sums Smith payments minus credits in FOLIO fiscal year SCFY<year> on purchase-order lines whose order type is Ongoing and material type is E-Journal or E-Journal Package.',
+                'Material type Admin (fees and services) is left out. PO lines without a material type are included; payments with no purchase-order line and spending outside FOLIO are not included.',
+                'This is FOLIO data only - adjust the value if other spending belongs here.',
+            ],
+        ],
     ];
 
     private $repository;
@@ -158,9 +198,18 @@ class AcrlAutofillService
             if (!is_array($row) || !array_key_exists($definition['column'], $row) || !is_numeric($row[$definition['column']])) {
                 throw new \RuntimeException('The ACRL auto-fill query did not return its expected count.');
             }
-            $value = (int)$row[$definition['column']];
-            if ($value < 0) {
-                throw new \RuntimeException('The ACRL auto-fill query returned an invalid count.');
+            $rawValue = $row[$definition['column']];
+            if (($definition['valueType'] ?? null) === 'currency') {
+                $value = (float)$rawValue;
+                if ($value < 0) {
+                    throw new \RuntimeException('The ACRL auto-fill query returned an invalid count.');
+                }
+                $value = round($value, 2);
+            } else {
+                $value = (int)$rawValue;
+                if ($value < 0) {
+                    throw new \RuntimeException('The ACRL auto-fill query returned an invalid count.');
+                }
             }
             $transaction->commit();
         } catch (\Throwable $exception) {
