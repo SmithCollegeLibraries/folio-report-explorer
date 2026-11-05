@@ -149,7 +149,9 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     || ($shape[2] !== null && (int)$column['CHARACTER_MAXIMUM_LENGTH'] !== $shape[2])
                     || ($shape[3] !== null && strtolower((string)$column['CHARACTER_SET_NAME']) !== $shape[3])
                     || ($shape[4] !== null && strtolower((string)$column['COLLATION_NAME']) !== $shape[4])
-                    || !self::columnDefaultMatches($column['COLUMN_DEFAULT'], $shape[5], $isMariaDb)) {
+                    || !self::columnDefaultMatches(
+                        $column['COLUMN_DEFAULT'], $shape[5], $isMariaDb, strtoupper((string)$column['IS_NULLABLE']) === 'YES'
+                    )) {
                     return false;
                 }
             }
@@ -178,10 +180,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         return true;
     }
 
-    private static function columnDefaultMatches($actual, $expected, bool $isMariaDb): bool
+    private static function columnDefaultMatches($actual, $expected, bool $isMariaDb, bool $isNullable): bool
     {
         if ($expected === null) {
-            return $isMariaDb ? $actual === 'NULL' : $actual === null;
+            return $isMariaDb && $isNullable ? $actual === 'NULL' : $actual === null;
         }
         if ($actual === null) {
             return false;
