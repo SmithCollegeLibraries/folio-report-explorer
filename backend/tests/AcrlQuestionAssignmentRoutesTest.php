@@ -32,6 +32,10 @@ function acrlQuestionRouteCheck($condition, string $message): void
 $routes = [
     ['POST', 'acrl/years/2026/question-assignments', 'acrl-assignment/save-question-assignments'],
     ['GET', 'acrl/years/2026/assignments', 'acrl-assignment/list-assignments'],
+    ['POST', 'acrl/years/2026/invites', 'acrl-invite/create'],
+    ['GET', 'acrl/years/2026/invites', 'acrl-invite/list'],
+    ['POST', 'acrl/invites/17/resend', 'acrl-invite/resend'],
+    ['POST', 'acrl/invites/17/revoke', 'acrl-invite/revoke'],
 ];
 foreach ($routes as $case) {
     list($method, $path, $expectedRoute) = $case;

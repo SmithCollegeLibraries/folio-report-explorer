@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getAcrlSectionAssignments } from '../api/acrl';
 import type { AcrlSurveyYear } from '../types/acrl';
 import { getPublishedAcrlYears } from '../utils/acrl';
+import { useAcrlInvites } from '../hooks/useAcrlInvites';
 
 export default function AcrlSectionAssignmentsCard({ years }: { years: AcrlSurveyYear[] }) {
   const [year, setYear] = useState<number | ''>('');
@@ -13,6 +14,7 @@ export default function AcrlSectionAssignmentsCard({ years }: { years: AcrlSurve
     queryFn: () => getAcrlSectionAssignments(Number(year)),
     enabled: year !== '',
   });
+  const invites = useAcrlInvites(year === '' ? 0 : year, year !== '');
   const assignedCount = assignmentsQuery.data?.sections.filter((section) => section.assignees.length > 0).length;
 
   return (
@@ -33,7 +35,7 @@ export default function AcrlSectionAssignmentsCard({ years }: { years: AcrlSurve
           {assignmentsQuery.error
             ? <p role="alert" className="text-sm text-rose-700">Could not load section assignments.</p>
             : assignmentsQuery.data
-              ? <p role="status" className="text-sm text-gray-600">{assignedCount} of {assignmentsQuery.data.sections.length} sections have someone assigned · {assignmentsQuery.data.questions.length} questions assigned individually</p>
+              ? <p role="status" className="text-sm text-gray-600">{assignedCount} of {assignmentsQuery.data.sections.length} sections have someone assigned · {assignmentsQuery.data.questions.length} questions assigned individually{(invites.query.data?.pendingCount ?? 0) > 0 && <> <span>· {invites.query.data!.pendingCount} pending invites</span></>}</p>
               : <p role="status" className="text-sm text-gray-500">Loading section assignments…</p>}
           <Link className="rounded border border-folio-700 px-3 py-2 text-sm font-semibold text-folio-800 hover:bg-folio-50" to={`/acrl/entry/${year}#section-assignments`}>Assign sections and questions for FY {year}</Link>
         </div>}

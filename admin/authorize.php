@@ -46,17 +46,23 @@ $config = require dirname(__DIR__) . '/backend/config/web.php';
 new \yii\web\Application($config);
 
 use app\models\User;
+use app\services\AcrlInviteMailer;
+use app\services\AcrlInviteService;
+use app\services\AcrlQuestionAssignmentRepository;
+use app\services\AcrlSectionAssignmentRepository;
 
 // ── Read Shibboleth attributes ────────────────────────────────────
 // Attributes may come as environment variables or HTTP headers depending
 // on Apache/Shibboleth configuration. Check both.
 
 $smithId     = getShibAttr('fcIdNumber');
-$username    = getShibAttr('uid');
+$uid         = getShibAttr('uid');
+$username    = $uid;
 $firstName   = getShibAttr('givenName');
 $lastName    = getShibAttr('sn');
 $affiliation = getShibAttr('fcPersonAffiliation');
 $email       = getShibAttr('eppn');
+$inviteIdentity = \app\services\AcrlInviteSignInOrchestrator::inviteIdentityFromServer($_SERVER);
 
 // Also check REMOTE_USER as fallback for username
 if (!$username) {
@@ -137,27 +143,52 @@ if (!$user) {
     }
 }
 
-// ── Notify admins of new user ─────────────────────────────────────
-if ($isNewUser && !$user->is_approved) {
-    User::notifyAdminsOfNewUser($user);
-}
+// ── Apply invite approval before notifying admins or issuing tokens ─
+$signIn = (new \app\services\AcrlInviteSignInOrchestrator())->run(
+    $user,
+    $isNewUser,
+    $inviteIdentity['eppn'],
+    $inviteIdentity['uid'],
+    function ($signInUser, $eppn, $signInUid) {
+        $inviteDb = \Yii::$app->db;
+        $inviteService = new AcrlInviteService(
+            $inviteDb,
+            new AcrlSectionAssignmentRepository($inviteDb),
+            new AcrlQuestionAssignmentRepository($inviteDb),
+            new AcrlInviteMailer()
+        );
+        return $inviteService->acceptOnSignIn($signInUser, $eppn, $signInUid);
+    },
+    function ($signInUser) {
+        return User::findOne((int)$signInUser->id);
+    },
+    function ($signInUser) {
+        $user = $signInUser;
+        User::notifyAdminsOfNewUser($user);
+    },
+    function ($signInUser) {
+        $signInUser->touchLogin();
+        return [
+            'accessToken' => $signInUser->generateAccessToken(),
+            'refreshToken' => $signInUser->generateRefreshToken(),
+        ];
+    },
+    function ($code) {
+        \Yii::warning($code, 'acrl.invite.accept');
+    }
+);
 
 // ── Build redirect URL ────────────────────────────────────────────
 
 $basePath = rtrim(getenv('APP_BASE_PATH') ?: '', '/');
 
-// If not approved, redirect to pending page
-if (!$user->is_approved) {
+if ($signIn['redirect'] === '/auth/pending') {
     $pendingUrl = $basePath . '/auth/pending';
     header('Location: ' . $pendingUrl);
     exit;
 }
-
-// ── Generate tokens ───────────────────────────────────────────────
-
-$user->touchLogin();
-$accessToken  = $user->generateAccessToken();
-$refreshToken = $user->generateRefreshToken();
+$accessToken = $signIn['tokens']['accessToken'];
+$refreshToken = $signIn['tokens']['refreshToken'];
 
 // ── Redirect to frontend callback ─────────────────────────────────
 // Use fragment (#) so tokens are never sent to the server in a URL

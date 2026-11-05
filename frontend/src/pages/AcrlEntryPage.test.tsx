@@ -7,7 +7,7 @@ import AcrlEntryPage from './AcrlEntryPage';
 import AcrlSectionAssignmentsCard from '../components/AcrlSectionAssignmentsCard';
 import type { AcrlEntryQuestion, AcrlEntryResponse } from '../types/acrl';
 
-const { getEntry, saveAnswer, runAutofill, getAutofillMethods, setStatus, acceptSuggestions, getAssignments, searchUsers, saveAssignments, saveQuestionAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
+const { getEntry, saveAnswer, runAutofill, getAutofillMethods, setStatus, acceptSuggestions, getAssignments, getInvites, createInvite, resendInvite, revokeInvite, searchUsers, saveAssignments, saveQuestionAssignments, copyAssignments, getQuestionDetails, addQuestionNote, editQuestionNote, deleteQuestionNote, downloadCsv, auth } = vi.hoisted(() => ({
   getEntry: vi.fn(),
   saveAnswer: vi.fn(),
   runAutofill: vi.fn(),
@@ -15,6 +15,10 @@ const { getEntry, saveAnswer, runAutofill, getAutofillMethods, setStatus, accept
   setStatus: vi.fn(),
   acceptSuggestions: vi.fn(),
   getAssignments: vi.fn().mockResolvedValue({ surveyYear: 2026, sections: [], questions: [] }),
+  getInvites: vi.fn().mockResolvedValue({ invites: [], pendingCount: 0 }),
+  createInvite: vi.fn(),
+  resendInvite: vi.fn(),
+  revokeInvite: vi.fn(),
   searchUsers: vi.fn().mockResolvedValue({ users: [] }),
   saveAssignments: vi.fn(),
   saveQuestionAssignments: vi.fn(),
@@ -36,6 +40,10 @@ vi.mock('../api/acrl', () => ({
   setAcrlSectionStatus: setStatus,
   acceptAcrlSuggestions: acceptSuggestions,
   getAcrlSectionAssignments: getAssignments,
+  getAcrlInvites: getInvites,
+  createAcrlInvite: createInvite,
+  resendAcrlInvite: resendInvite,
+  revokeAcrlInvite: revokeInvite,
   searchAcrlApprovedUsers: searchUsers,
   saveAcrlSectionAssignments: saveAssignments,
   saveAcrlQuestionAssignments: saveQuestionAssignments,

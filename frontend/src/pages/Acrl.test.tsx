@@ -7,7 +7,7 @@ import AcrlPage from './Acrl';
 import AcrlReviewPanel from '../components/AcrlReviewPanel';
 import type { AcrlQuestionPart, AcrlReviewResponse, AcrlSurveyYear } from '../types/acrl';
 
-const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWorksheetFile, sha256ForFile, getThreshold, saveThreshold, previewImport, confirmImport, getAssignments } = vi.hoisted(() => ({
+const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWorksheetFile, sha256ForFile, getThreshold, saveThreshold, previewImport, confirmImport, getAssignments, getInvites } = vi.hoisted(() => ({
   listYears: vi.fn(),
   getReview: vi.fn(),
   saveLinks: vi.fn(),
@@ -20,10 +20,11 @@ const { listYears, getReview, saveLinks, publishYear, uploadWorksheet, parseWork
   previewImport: vi.fn(),
   confirmImport: vi.fn(),
   getAssignments: vi.fn(),
+  getInvites: vi.fn().mockResolvedValue({ invites: [], pendingCount: 0 }),
 }));
 let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
-vi.mock('../api/acrl', () => ({ listAcrlCatalogueYears: listYears, getAcrlReview: getReview, saveAcrlLinks: saveLinks, publishAcrlYear: publishYear, uploadAcrlWorksheet: uploadWorksheet, getAcrlThreshold: getThreshold, saveAcrlThreshold: saveThreshold, previewAcrlImport: previewImport, confirmAcrlImport: confirmImport, getAcrlSectionAssignments: getAssignments }));
+vi.mock('../api/acrl', () => ({ listAcrlCatalogueYears: listYears, getAcrlReview: getReview, saveAcrlLinks: saveLinks, publishAcrlYear: publishYear, uploadAcrlWorksheet: uploadWorksheet, getAcrlThreshold: getThreshold, saveAcrlThreshold: saveThreshold, previewAcrlImport: previewImport, confirmAcrlImport: confirmImport, getAcrlSectionAssignments: getAssignments, getAcrlInvites: getInvites }));
 vi.mock('../services/acrlWorksheetParser', () => ({ parseWorksheetFile, sha256ForFile }));
 
 afterEach(() => {

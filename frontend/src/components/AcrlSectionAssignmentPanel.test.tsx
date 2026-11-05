@@ -5,12 +5,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import AcrlSectionAssignmentPanel from './AcrlSectionAssignmentPanel';
 import type { AcrlEntryQuestion, AcrlEntrySection } from '../types/acrl';
 
-const { getAssignments, searchUsers, saveAssignments, saveQuestionAssignments, copyAssignments } = vi.hoisted(() => ({
+const { getAssignments, searchUsers, saveAssignments, saveQuestionAssignments, copyAssignments, getInvites, createInvite, resendInvite, revokeInvite } = vi.hoisted(() => ({
   getAssignments: vi.fn(),
   searchUsers: vi.fn(),
   saveAssignments: vi.fn(),
   saveQuestionAssignments: vi.fn(),
   copyAssignments: vi.fn(),
+  getInvites: vi.fn().mockResolvedValue({ invites: [], pendingCount: 0 }),
+  createInvite: vi.fn(),
+  resendInvite: vi.fn(),
+  revokeInvite: vi.fn(),
 }));
 
 vi.mock('../api/acrl', () => ({
@@ -19,6 +23,10 @@ vi.mock('../api/acrl', () => ({
   saveAcrlSectionAssignments: saveAssignments,
   saveAcrlQuestionAssignments: saveQuestionAssignments,
   copyAcrlAssignmentsFromPrevious: copyAssignments,
+  getAcrlInvites: getInvites,
+  createAcrlInvite: createInvite,
+  resendAcrlInvite: resendInvite,
+  revokeAcrlInvite: revokeInvite,
 }));
 
 afterEach(() => {

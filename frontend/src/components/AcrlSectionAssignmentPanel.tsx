@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { copyAcrlAssignmentsFromPrevious, getAcrlSectionAssignments, saveAcrlQuestionAssignments, saveAcrlSectionAssignments, searchAcrlApprovedUsers } from '../api/acrl';
 import type { AcrlAssignmentCopyResponse, AcrlEntrySection, AcrlQuestionAssignment } from '../types/acrl';
 import { acrlQuestionAssignmentKey } from '../utils/acrlAssignments';
+import AcrlInvitePanel from './AcrlInvitePanel';
 import AcrlQuestionAssignmentPicker from './AcrlQuestionAssignmentPicker';
 
 type AcrlSectionAssignmentPanelProps = {
@@ -107,6 +108,7 @@ export default function AcrlSectionAssignmentPanel({ year, sections, hasPrevious
         <p>Already assigned, skipped questions: {questionNames(copyResult.skippedQuestions)}.</p>
         <p>No matching question from FY{copyResult.sourceYear}: {questionNames(copyResult.unmatchedQuestions)}.</p>
       </div>}
+      {selectedSection && <AcrlInvitePanel year={year} section={section} questions={selectedSection.questions} selectedQuestionKey={questionKey} />}
     </section>
   );
 }
