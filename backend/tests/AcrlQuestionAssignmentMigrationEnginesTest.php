@@ -141,6 +141,41 @@ function acrlMigrationEngineCreateInviteTables($db, string $migrationDir): void
     }
 }
 
+function acrlMigrationEngineRestoreAcrlSchemas($db, string $migrationDir): void
+{
+    $db->createCommand('DROP TABLE IF EXISTS acrl_invite_targets')->execute();
+    $db->createCommand('DROP TABLE IF EXISTS acrl_invites')->execute();
+    $db->createCommand('DROP TABLE IF EXISTS acrl_question_assignments')->execute();
+    acrlMigrationEngineRaw($db, rtrim(trim((string)file_get_contents($migrationDir . '/066_acrl_question_assignments.sql')), ';'));
+    acrlMigrationEngineCreateInviteTables($db, $migrationDir);
+    $db->createCommand('DELETE FROM schema_migrations')->execute();
+}
+
+function acrlMigrationEngineCheckMalformedRecognition($label, $adminDb, $appDb, string $migrationDir, string $filename, callable $mutate): void
+{
+    try {
+        $mutate($adminDb);
+        acrlMigrationEngineCheck(!acrlMigrationEngineApplied($appDb, $filename), $label . ' is not recognized as an applied migration.');
+        $error = null;
+        try {
+            MigrationService::run($appDb, $migrationDir, false);
+        } catch (Throwable $caught) {
+            $error = $caught;
+        }
+        acrlMigrationEngineCheck($error !== null, $label . ' fails migration recognition during execution.');
+        $recorded = (int)$appDb->createCommand('SELECT COUNT(*) FROM schema_migrations WHERE filename = :filename', [':filename' => $filename])->queryScalar();
+        acrlMigrationEngineSame(0, $recorded, $label . ' is not recorded in schema_migrations.');
+    } catch (Throwable $error) {
+        acrlMigrationEngineCheck(false, $label . ' test threw ' . get_class($error) . ': ' . $error->getMessage());
+    } finally {
+        try {
+            acrlMigrationEngineRestoreAcrlSchemas($adminDb, $migrationDir);
+        } catch (Throwable $restoreError) {
+            acrlMigrationEngineCheck(false, $label . ' could not restore complete ACRL schemas for later checks: ' . $restoreError->getMessage());
+        }
+    }
+}
+
 function acrlMigrationEngineCreatePartialInviteSchema($db, string $migrationDir): void
 {
     $sql = (string)file_get_contents($migrationDir . '/067_acrl_invites.sql');
@@ -232,9 +267,10 @@ function acrlMigrationEngineApplied($db, string $filename): bool
 try {
     $admin = new PDO($adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $version = (string)$admin->query('SELECT VERSION()')->fetchColumn();
+    $isMariaDb = stripos($version, 'mariadb') !== false;
     echo 'DB engine under test: ' . $version . "\n";
     acrlMigrationEngineCheck(
-        stripos($version, 'mariadb') !== false ? preg_match('/^10\.3\./', $version) === 1 : preg_match('/^8\./', $version) === 1,
+        $isMariaDb ? preg_match('/^10\.3\./', $version) === 1 : preg_match('/^8\./', $version) === 1,
         'Run this script once against MySQL 8.0 and once against MariaDB 10.3; server version was ' . $version . '.'
     );
 
@@ -362,6 +398,43 @@ try {
         acrlMigrationEngineSame(0, $partialNormalLedgerRecorded, 'A partial 067 schema on the normal-ledger path must not be recorded.');
     } catch (Throwable $error) {
         acrlMigrationEngineCheck(false, 'Scenario (e) failed before later scenarios: ' . get_class($error) . ': ' . $error->getMessage());
+    }
+
+    try {
+        $scenarioF = $prefix . '_f';
+        list($adminDbF, $dsnF) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioF, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
+        acrlMigrationEngineRaw($adminDbF, rtrim(trim((string)file_get_contents($migrationDir . '/066_acrl_question_assignments.sql')), ';'));
+        acrlMigrationEngineCreateInviteTables($adminDbF, $migrationDir);
+        $adminDbF->createCommand('DELETE FROM schema_migrations')->execute();
+        $appDbF = acrlMigrationEngineConnection($dsnF, $runtimeUser, $runtimePassword);
+
+        if (!$isMariaDb) {
+            acrlMigrationEngineCheckMalformedRecognition('MySQL email DEFAULT literal NULL', $adminDbF, $appDbF, $migrationDir,
+                '067_acrl_invites.sql', function ($db) {
+                    $db->createCommand("ALTER TABLE acrl_invites MODIFY email VARCHAR(191) NOT NULL DEFAULT 'NULL'")->execute();
+                });
+            acrlMigrationEngineCheckMalformedRecognition('MySQL status DEFAULT containing quote characters around pending', $adminDbF, $appDbF, $migrationDir,
+                '067_acrl_invites.sql', function ($db) {
+                    $db->createCommand("ALTER TABLE acrl_invites MODIFY status VARCHAR(10) NOT NULL DEFAULT '''pending'''")->execute();
+                });
+        }
+
+        acrlMigrationEngineCheckMalformedRecognition('067 missing invited_by foreign key', $adminDbF, $appDbF, $migrationDir,
+            '067_acrl_invites.sql', function ($db) {
+                $db->createCommand('ALTER TABLE acrl_invites DROP FOREIGN KEY fk_acrl_invites_invited_by')->execute();
+            });
+        acrlMigrationEngineCheckMalformedRecognition('067 invited_by foreign key with the wrong delete rule', $adminDbF, $appDbF, $migrationDir,
+            '067_acrl_invites.sql', function ($db) {
+                $db->createCommand('ALTER TABLE acrl_invites DROP FOREIGN KEY fk_acrl_invites_invited_by')->execute();
+                $db->createCommand('ALTER TABLE acrl_invites ADD CONSTRAINT fk_acrl_invites_invited_by'
+                    . ' FOREIGN KEY (invited_by) REFERENCES users (id) ON DELETE CASCADE')->execute();
+            });
+        acrlMigrationEngineCheckMalformedRecognition('066 missing assigned_by foreign key', $adminDbF, $appDbF, $migrationDir,
+            '066_acrl_question_assignments.sql', function ($db) {
+                $db->createCommand('ALTER TABLE acrl_question_assignments DROP FOREIGN KEY fk_acrl_question_assignments_assigned_by')->execute();
+            });
+    } catch (Throwable $error) {
+        acrlMigrationEngineCheck(false, 'Scenario (f) metadata and foreign-key recognition checks failed before later scenarios: ' . get_class($error) . ': ' . $error->getMessage());
     }
 
     try {
@@ -531,6 +604,63 @@ try {
             new AcrlQuestionAssignmentRepository($appDbC),
             new AcrlInviteMailer(function () { return false; })
         );
+
+        try {
+            $paddedCreateError = null;
+            try {
+                $inviteService->createInvite(2026, 'acrl029-padded-create@smith.example', [
+                    ['kind' => 'question', 'sheet' => 'survey', 'questionId' => 'ACR28 ', 'part' => ''],
+                ], User::findOne($actorId), 'https://reports.example.test');
+            } catch (Throwable $error) {
+                $paddedCreateError = $error;
+            }
+            acrlMigrationEngineCheck($paddedCreateError instanceof InvalidArgumentException
+                && strpos($paddedCreateError->getMessage(), 'not in the published survey') !== false,
+                'Create rejects a question ID with trailing PAD SPACE characters as an unknown target.');
+            $paddedCreateRows = (int)$adminDbC->createCommand(
+                'SELECT COUNT(*) FROM acrl_invites WHERE email = :email', [':email' => 'acrl029-padded-create@smith.example']
+            )->queryScalar();
+            acrlMigrationEngineSame(0, $paddedCreateRows, 'Rejected padded question IDs create no invite row.');
+            if ($paddedCreateRows > 0) {
+                $adminDbC->createCommand()->delete('acrl_invites', ['email' => 'acrl029-padded-create@smith.example'])->execute();
+            }
+        } catch (Throwable $error) {
+            acrlMigrationEngineCheck(false, 'Padded question ID create check threw ' . get_class($error) . ': ' . $error->getMessage());
+        }
+
+        try {
+            $paddedInviteeId = $actorId + 13;
+            $appDbC->createCommand()->insert('users', [
+                'id' => $paddedInviteeId, 'smith_id' => 'acrl029-padded-accept-user', 'username' => 'acrl029-padded-accept-user',
+                'email' => null, 'role' => 'user', 'is_approved' => 0,
+            ])->execute();
+            $appDbC->createCommand()->insert('acrl_invites', [
+                'email' => 'acrl029-padded-accept@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
+                'link_origin' => 'https://reports.example.test', 'status' => 'pending', 'send_count' => 0,
+                'expires_at' => date('Y-m-d H:i:s', time() + 86400),
+            ])->execute();
+            $paddedAcceptInviteId = (int)$appDbC->getLastInsertID();
+            $appDbC->createCommand()->insert('acrl_invite_targets', [
+                'invite_id' => $paddedAcceptInviteId, 'kind' => 'question', 'section' => 'ACR-028 test section',
+                'sheet' => 'survey', 'question_id' => 'ACR28 ', 'part' => '',
+            ])->execute();
+            $paddedAcceptResult = $inviteService->acceptOnSignIn(
+                User::findOne($paddedInviteeId), 'acrl029-padded-accept@smith.example', 'acrl029-padded-accept-user'
+            );
+            acrlMigrationEngineSame(false, $paddedAcceptResult, 'Acceptance rejects a stored question ID that only matches after PAD SPACE comparison.');
+            acrlMigrationEngineSame('pending', (string)$adminDbC->createCommand(
+                'SELECT status FROM acrl_invites WHERE id = :id', [':id' => $paddedAcceptInviteId]
+            )->queryScalar(), 'A stored padded question ID leaves its invite pending.');
+            acrlMigrationEngineSame(0, (int)$adminDbC->createCommand(
+                'SELECT is_approved FROM users WHERE id = :id', [':id' => $paddedInviteeId]
+            )->queryScalar(), 'A stored padded question ID does not approve its invitee.');
+            acrlMigrationEngineSame(0, (int)$adminDbC->createCommand(
+                'SELECT COUNT(*) FROM acrl_question_assignments WHERE user_id = :id', [':id' => $paddedInviteeId]
+            )->queryScalar(), 'A stored padded question ID creates no assignment.');
+        } catch (Throwable $error) {
+            acrlMigrationEngineCheck(false, 'Padded question ID acceptance check threw ' . get_class($error) . ': ' . $error->getMessage());
+        }
+
         $rollbackTrigger = 'acrl029_fail_invite_accept';
         $adminDbC->createCommand()->setRawSql(
             'CREATE TRIGGER `' . $rollbackTrigger . '` BEFORE UPDATE ON acrl_invites FOR EACH ROW '

@@ -48,6 +48,8 @@ try {
 acrlInviteHostCheck($devOrigin === 'http://localhost:8080', 'YII_ENV dev allows an HTTP origin for local invite links.');
 acrlInviteHostRejected('http://localhost:8080', false, 'HTTP outside dev');
 acrlInviteHostRejected("https://reports.example.test\r\n.evil.example", false, 'CR/LF Host header');
+acrlInviteHostRejected("https://reports.example.test\n", false, 'terminal LF in Host header');
+acrlInviteHostRejected("https://reports.example.test:8443\n", false, 'terminal LF after Host port');
 acrlInviteHostRejected('https://user@reports.example.test', false, 'user-info in Host header');
 acrlInviteHostRejected('https://reports.example.test/path', false, 'path in Host header');
 acrlInviteHostRejected('https://reports_example.test', false, 'underscore in hostname');

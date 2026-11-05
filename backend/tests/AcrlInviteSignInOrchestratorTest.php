@@ -30,7 +30,7 @@ function acrlInviteOrchestratorCheck($condition, string $message): void
     if (!$condition) $failures[] = $message;
 }
 
-function acrlInviteOrchestratorRun(int $userId, bool $isNewUser, $acceptResult, bool $throw, string $case): array
+function acrlInviteOrchestratorRun(int $userId, bool $isNewUser, $acceptResult, bool $throw, string $case, ?string $eppn = 'sign-in@smith.example', ?string $uid = 'sign-in'): array
 {
     global $db;
     if ($userId === 1) $db->createCommand()->update('users', ['is_approved' => 0], ['id' => 1])->execute();
@@ -43,11 +43,17 @@ function acrlInviteOrchestratorRun(int $userId, bool $isNewUser, $acceptResult, 
         $result = $orchestrator->run(
             $user,
             $isNewUser,
-            'sign-in@smith.example',
-            'sign-in',
+            $eppn,
+            $uid,
             function ($passedUser, $eppn, $uid) use (&$events, $acceptResult, $throw, $case, $db) {
                 $events[] = ['accept', $passedUser->id, $eppn, $uid];
-                if ($throw) throw new RuntimeException('Synthetic database failure with private details jane.test@smith.example');
+                if ($throw) {
+                    $passedUser->is_approved = 1;
+                    throw new RuntimeException('Synthetic database failure with private details jane.test@smith.example');
+                }
+                if (is_callable($acceptResult)) {
+                    return call_user_func($acceptResult, $eppn, $uid);
+                }
                 if ($acceptResult) {
                     $db->createCommand()->update('users', ['is_approved' => 1], ['id' => $passedUser->id])->execute();
                 }
@@ -95,6 +101,7 @@ foreach ([
 
 $failed = acrlInviteOrchestratorRun(1, true, false, true, 'thrown acceptance error');
 acrlInviteOrchestratorCheck(($failed['logs'] ?? null) === ['ACRL_INVITE_ACCEPT_FAILED'], 'Acceptance Throwable logs only the fixed failure code.');
+acrlInviteOrchestratorCheck(array_column($failed['events'], 0) === ['accept', 'reload', 'notify'], 'A Throwable after an in-memory approval reloads the persisted user before notification.');
 acrlInviteOrchestratorCheck(!isset($failed['result']['tokens']), 'Caught acceptance Throwable cannot issue tokens for an unapproved user.');
 
 $approved = acrlInviteOrchestratorRun(2, false, false, false, 'approved user with unmatched invite');
@@ -108,9 +115,21 @@ $orchestratorPosition = strpos($authorizeSource, 'AcrlInviteSignInOrchestrator')
 acrlInviteOrchestratorCheck($findPosition !== false && $orchestratorPosition !== false && $notifyPosition !== false
     && $findPosition < $orchestratorPosition && $orchestratorPosition < $notifyPosition,
     'authorize.php calls the testable invite sign-in orchestrator after find-or-create and before new-user notification.');
-acrlInviteOrchestratorCheck(strpos($authorizeSource, "getShibAttr('uid')") !== false && strpos($authorizeSource, "getShibAttr('uid')") < strpos($authorizeSource, "\$_SERVER['REMOTE_USER']")
-    && strpos($authorizeSource, 'acceptOnSignIn') !== false,
-    'Invite matching receives the Shibboleth uid attribute rather than the REMOTE_USER fallback.');
+$previousRemoteUser = $_SERVER['REMOTE_USER'] ?? null;
+$_SERVER['REMOTE_USER'] = 'sign-in';
+$remoteIdentity = (string)$_SERVER['REMOTE_USER'];
+$withoutShibUid = acrlInviteOrchestratorRun(1, true, function ($eppn, $uid) use ($remoteIdentity) {
+    return ($eppn !== null && strtolower($eppn) === $remoteIdentity . '@smith.example')
+        || ($uid !== null && strtolower($uid) === $remoteIdentity);
+}, false, 'missing Shibboleth uid with matching REMOTE_USER', null, null);
+if ($previousRemoteUser === null) unset($_SERVER['REMOTE_USER']); else $_SERVER['REMOTE_USER'] = $previousRemoteUser;
+$remoteEvents = $withoutShibUid['events'];
+acrlInviteOrchestratorCheck(isset($remoteEvents[0]) && $remoteEvents[0][0] === 'accept'
+    && $remoteEvents[0][2] === null && $remoteEvents[0][3] === null,
+    'With no Shibboleth uid, a matching REMOTE_USER is not passed as an invite identity.');
+acrlInviteOrchestratorCheck(array_column($remoteEvents, 0) === ['accept', 'reload', 'notify']
+    && !isset($withoutShibUid['result']['tokens']),
+    'Absent Shibboleth uid does not accept the invite or issue tokens based on REMOTE_USER.');
 
 if ($failures) {
     fwrite(STDERR, 'FAIL: ' . count($failures) . " ACRL invite sign-in orchestration checks failed:\n");

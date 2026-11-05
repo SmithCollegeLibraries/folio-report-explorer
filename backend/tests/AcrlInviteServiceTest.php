@@ -350,16 +350,28 @@ acrlInviteServiceScenario('accept matches only current Shibboleth identity and r
     acrlInviteServiceCheck((string)$db->createCommand('SELECT status FROM acrl_invites WHERE id = 206')->queryScalar() === 'pending', 'Invite with no usable target remains pending.');
 });
 
-acrlInviteServiceScenario('accept adds both assignment kinds idempotently and preserves existing assignees', function () use ($service, $db) {
+acrlInviteServiceScenario('accept preserves preassigned targets across overlapping pending invites', function () use ($service, $db) {
     acrlInviteServiceInsertInvite(210, 'additive@smith.example');
     acrlInviteServiceInsertTarget(210, 'section', 'Circulation');
     acrlInviteServiceInsertTarget(210, 'question', 'Circulation', 'survey', '60', 'A');
+    acrlInviteServiceInsertInvite(213, 'additive@smith.example');
+    acrlInviteServiceInsertTarget(213, 'section', 'Circulation');
+    acrlInviteServiceInsertTarget(213, 'question', 'Circulation', 'survey', '60', 'A');
+    acrlInviteServiceInsertTarget(213, 'section', 'Library services');
     $db->createCommand()->insert('acrl_section_assignments', ['survey_year' => 2026, 'section' => 'Circulation', 'user_id' => 6, 'assigned_by' => 1])->execute();
     $db->createCommand()->insert('acrl_question_assignments', ['survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 6, 'assigned_by' => 1])->execute();
     $invitee = new User(['smith_id' => 'synthetic-additive-user', 'username' => 'additive', 'role' => 'user', 'is_approved' => 0]);
     $invitee->save(false);
-    acrlInviteServiceCall(function () use ($service, $invitee) { return $service->acceptOnSignIn($invitee, 'additive@smith.example', 'additive'); }, 'First additive acceptance');
-    acrlInviteServiceCall(function () use ($service, $invitee) { return $service->acceptOnSignIn(User::findOne($invitee->id), 'additive@smith.example', 'additive'); }, 'Repeated additive acceptance');
+    $db->createCommand()->insert('acrl_section_assignments', ['survey_year' => 2026, 'section' => 'Circulation', 'user_id' => $invitee->id, 'assigned_by' => 1])->execute();
+    $db->createCommand()->insert('acrl_question_assignments', ['survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => $invitee->id, 'assigned_by' => 1])->execute();
+    $before = $db->createCommand(
+        'SELECT section, user_id, assigned_by FROM acrl_section_assignments WHERE survey_year = 2026 AND section = :section'
+            . ' AND user_id IN (6, :invitee) ORDER BY section, user_id',
+        [':section' => 'Circulation', ':invitee' => $invitee->id]
+    )->queryAll();
+    $accepted = acrlInviteServiceCall(function () use ($service, $invitee) { return $service->acceptOnSignIn($invitee, 'additive@smith.example', 'additive'); }, 'Overlapping pending invite acceptance');
+    acrlInviteServiceCheck($accepted === true, 'A pending invite is accepted even when both target assignments already exist.');
+    acrlInviteServiceCheck((int)$db->createCommand("SELECT COUNT(*) FROM acrl_invites WHERE id IN (210, 213) AND status = 'accepted'")->queryScalar() === 2, 'Both overlapping pending invites are accepted.');
     $sectionRows = $db->createCommand(
         'SELECT user_id, assigned_by FROM acrl_section_assignments WHERE survey_year = 2026 AND section = :section'
             . ' AND user_id IN (:existingUser, :invitee) ORDER BY user_id',
@@ -370,9 +382,21 @@ acrlInviteServiceScenario('accept adds both assignment kinds idempotently and pr
             . ' AND user_id IN (:existingUser, :invitee) ORDER BY user_id',
         [':question' => '60', ':existingUser' => 6, ':invitee' => $invitee->id]
     )->queryAll();
-    acrlInviteServiceCheck(count($sectionRows) === 2 && count($questionRows) === 2, 'Repeated acceptance preserves existing assignees and inserts the invitee once for both target kinds.');
+    acrlInviteServiceCheck(count($sectionRows) === 2 && count($questionRows) === 2
+        && (int)$sectionRows[1]['user_id'] === (int)$invitee->id && (int)$questionRows[1]['user_id'] === (int)$invitee->id,
+        'Overlapping invites create no duplicates and retain exactly one invitee row for each already-held target kind.');
     acrlInviteServiceCheck((int)($sectionRows[0]['user_id'] ?? 0) === 6 && (int)($questionRows[0]['user_id'] ?? 0) === 6, 'Existing section and question assignees are not replaced.');
-    acrlInviteServiceCheck((int)($sectionRows[1]['assigned_by'] ?? 0) === 1 && (int)($questionRows[1]['assigned_by'] ?? 0) === 1, 'New assignment audit actor is the invite creator.');
+    $after = $db->createCommand(
+        'SELECT section, user_id, assigned_by FROM acrl_section_assignments WHERE survey_year = 2026 AND section = :section'
+            . ' AND user_id IN (6, :invitee) ORDER BY section, user_id',
+        [':section' => 'Circulation', ':invitee' => $invitee->id]
+    )->queryAll();
+    acrlInviteServiceCheck($before === $after, 'Existing section assignments remain unchanged after accepting overlapping invites.');
+    $addedSectionActor = $db->createCommand(
+        'SELECT assigned_by FROM acrl_section_assignments WHERE survey_year = 2026 AND section = :section AND user_id = :invitee',
+        [':section' => 'Library services', ':invitee' => $invitee->id]
+    )->queryScalar();
+    acrlInviteServiceCheck((int)$addedSectionActor === 1, 'A newly added target records the invite creator as assigned_by.');
     acrlInviteServiceCheck((string)User::findOne($invitee->id)->role === 'user', 'Acceptance never changes the role.');
 
     acrlInviteServiceInsertInvite(211, 'deleted-admin@smith.example', 'pending', 7);

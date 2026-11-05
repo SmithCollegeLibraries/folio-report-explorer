@@ -7,22 +7,26 @@ require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
 require_once __DIR__ . '/../services/AcrlInviteMailer.php';
 
 use app\services\AcrlInviteMailer;
-use yii\log\FileTarget;
 use yii\web\Application;
 
+$webConfig = require __DIR__ . '/../config/web.php';
+$errorLogPath = sys_get_temp_dir() . '/acrl-invite-mailer-errors-' . bin2hex(random_bytes(8)) . '.log';
+$infoLogPath = sys_get_temp_dir() . '/acrl-invite-mailer-info-' . bin2hex(random_bytes(8)) . '.log';
+$productionTargets = $webConfig['components']['log']['targets'];
+foreach ($productionTargets as $index => $productionTarget) {
+    $productionTargets[$index]['logFile'] = $index === 0 ? $errorLogPath : $infoLogPath;
+}
 $app = new Application([
     'id' => 'acrl-invite-mailer-test',
     'basePath' => dirname(__DIR__),
+    'bootstrap' => ['log'],
     'components' => [
         'request' => ['cookieValidationKey' => 'test-key'],
         'response' => ['class' => yii\web\Response::class],
-        'log' => ['targets' => []],
+        'errorHandler' => $webConfig['components']['errorHandler'],
+        'log' => ['traceLevel' => 3, 'targets' => $productionTargets],
     ],
 ]);
-$app->errorHandler->unregister();
-$logPath = sys_get_temp_dir() . '/acrl-invite-mailer-' . bin2hex(random_bytes(8)) . '.log';
-$target = new FileTarget(['logFile' => $logPath, 'levels' => ['info', 'warning'], 'categories' => ['acrl.invite.mail']]);
-$app->log->targets['acrl-invite-mailer-test'] = $target;
 
 $failures = [];
 function acrlInviteMailerCheck($condition, string $message): void
@@ -87,15 +91,29 @@ try {
     $failures[] = 'Injected sender exception must be converted to false: ' . $error->getMessage();
 }
 acrlInviteMailerCheck($throwingResult === false, 'Mailer converts transport exceptions to false.');
+$warningMailer = new AcrlInviteMailer(function ($warningRecipient, $warningSubject, $warningBody) {
+    trigger_error('synthetic transport warning ' . $warningRecipient . ' ' . $warningBody, E_USER_WARNING);
+    return false;
+});
+$warningResult = null;
+try {
+    $warningResult = $warningMailer->send(101, $recipient, $subject, $body, $from, $from);
+} catch (Throwable $error) {
+    $failures[] = 'A transport warning under the production error handler must become false: ' . $error->getMessage();
+}
+acrlInviteMailerCheck($warningResult === false, 'Mailer converts an injected transport warning to false.');
 
 Yii::getLogger()->flush(true);
-$logText = (string)@file_get_contents($logPath);
-acrlInviteMailerCheck(strpos((string)$logText, '71') !== false && strpos((string)$logText, '99') !== false, 'Mail logs identify both invites by ID.');
+$logText = (string)@file_get_contents($errorLogPath) . (string)@file_get_contents($infoLogPath);
+$infoLogText = (string)@file_get_contents($infoLogPath);
+acrlInviteMailerCheck(strpos($infoLogText, '71') !== false && strpos($infoLogText, '99') !== false, 'The configured production info target records invite outcomes by ID.');
+acrlInviteMailerCheck(strpos($infoLogText, '101') !== false, 'The configured production info target records the warning outcome by invite ID.');
 foreach ([$recipient, 'Synthetic Admin', $subject, $body, $from] as $privateValue) {
     acrlInviteMailerCheck(strpos((string)$logText, $privateValue) === false, 'Mail logs omit recipient, names, subject/body, and host-derived addresses.');
 }
-acrlInviteMailerCheck(preg_match('/"(?:outcome|code)"\s*:\s*"(?:sent|failed|invalid)"/', (string)$logText) === 1, 'Mail logs use a fixed outcome code.');
-@unlink($logPath);
+acrlInviteMailerCheck(preg_match('/"(?:outcome|code)"\s*:\s*"(?:sent|failed|invalid)"/', $infoLogText) === 1, 'Mail logs use a fixed outcome code.');
+@unlink($errorLogPath);
+@unlink($infoLogPath);
 
 $userSource = (string)file_get_contents(__DIR__ . '/../models/User.php');
 $notifyPosition = strpos($userSource, 'public static function notifyAdminsOfNewUser');

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, it, vi } from 'vitest';
 import AcrlSectionAssignmentPanel from './AcrlSectionAssignmentPanel';
@@ -93,6 +93,8 @@ async function settle(condition: () => boolean): Promise<boolean> {
 describe('ACRL invite panel', () => {
   it('submits a question invite and reports successful email delivery', async () => {
     const check = collectFailures();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     getAssignments.mockResolvedValue({ surveyYear: 2026, sections: [{ section: 'Circulation', assignees: [] }], questions: [] });
     getInvites.mockResolvedValue({ invites: [], pendingCount: 0 });
     createInvite.mockImplementation(async (year: number, input: { email?: string; targets?: unknown[] }) => {
@@ -120,6 +122,13 @@ describe('ACRL invite panel', () => {
       email: 'reader@smith.example', targets: [{ kind: 'question', sheet: 'survey', questionId: '60', part: 'A' }],
     }), 'Invite API request sends the selected full question tuple and no extra target fields.');
     check.check(screen.queryByText('Invite emailed to reader@smith.example') !== null, 'Successful delivery names the recipient in the result.');
+    check.check(screen.queryByText(inviteText.subject) !== null, 'Successful delivery also shows the generated subject.');
+    const copyBox = screen.queryByText(inviteText.subject)?.parentElement;
+    check.check(copyBox?.querySelector('pre')?.textContent === inviteText.body, 'Successful delivery also shows the complete plain-text body.');
+    const copy = screen.queryByRole('button', { name: 'Copy invite text' });
+    if (copy) await userEvent.click(copy);
+    check.check(await settle(() => writeText.mock.calls.length === 1), 'Successful delivery exposes a copy action.');
+    check.check(writeText.mock.calls[0]?.[0] === inviteText.subject + '\n\n' + inviteText.body, 'Successful delivery copies the exact subject and body.');
     check.finish();
   });
 
@@ -238,6 +247,10 @@ describe('ACRL invite panel', () => {
     check.check(resendInvite.mock.calls[0]?.[0] === 31, 'Resend API uses the invite id.');
     check.check(revokeInvite.mock.calls.length === 1 && revokeInvite.mock.calls[0]?.[0] === 31, 'Revoke action reaches the API with the invite id.');
     check.check(writeText.mock.calls[0]?.[0] === inviteText.subject + '\n\n' + inviteText.body, 'List copy action uses the invite text shown by the server.');
+    const inviteCard = screen.getByRole('article');
+    check.check(within(inviteCard).queryByText(inviteText.subject) !== null, 'List copy action displays the pending invite subject.');
+    const copyBox = within(inviteCard).queryByText(inviteText.subject)?.parentElement;
+    check.check(copyBox?.querySelector('pre')?.textContent === inviteText.body, 'List copy action displays the pending invite body.');
     check.finish();
   });
 });
