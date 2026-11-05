@@ -38,6 +38,25 @@ class AcrlSectionAssignmentRepository
         )->queryAll();
     }
 
+    /** Add one assignment inside the caller's locked-year transaction. */
+    public function addSectionAssignment(int $year, string $section, int $userId, ?int $assignedBy): void
+    {
+        $exists = $this->db->createCommand(
+            'SELECT COUNT(*) FROM acrl_section_assignments'
+                . ' WHERE survey_year = :year AND section = :section AND user_id = :userId',
+            [':year' => $year, ':section' => $section, ':userId' => $userId]
+        )->queryScalar();
+        if ((int)$exists > 0) {
+            return;
+        }
+        $this->db->createCommand()->insert('acrl_section_assignments', [
+            'survey_year' => $year,
+            'section' => $section,
+            'user_id' => $userId,
+            'assigned_by' => $assignedBy,
+        ])->execute();
+    }
+
     public function replaceSections(int $year, array $assignmentsBySection, int $assignedBy): void
     {
         $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy) {

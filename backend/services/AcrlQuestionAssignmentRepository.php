@@ -53,6 +53,28 @@ class AcrlQuestionAssignmentRepository
         )->queryAll();
     }
 
+    /** Add one assignment inside the caller's locked-year transaction. */
+    public function addQuestionAssignment(int $year, string $sheet, string $questionId, string $part, int $userId, ?int $assignedBy): void
+    {
+        $exists = $this->db->createCommand(
+            'SELECT COUNT(*) FROM acrl_question_assignments'
+                . ' WHERE survey_year = :year AND sheet = :sheet AND question_id = :questionId'
+                . ' AND part = :part AND user_id = :userId',
+            [':year' => $year, ':sheet' => $sheet, ':questionId' => $questionId, ':part' => $part, ':userId' => $userId]
+        )->queryScalar();
+        if ((int)$exists > 0) {
+            return;
+        }
+        $this->db->createCommand()->insert('acrl_question_assignments', [
+            'survey_year' => $year,
+            'sheet' => $sheet,
+            'question_id' => $questionId,
+            'part' => $part,
+            'user_id' => $userId,
+            'assigned_by' => $assignedBy,
+        ])->execute();
+    }
+
     public function approvedLinks(int $previousYear, int $currentYear): array
     {
         return $this->db->createCommand(

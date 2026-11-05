@@ -8,6 +8,9 @@ import type {
   AcrlInstructionsSaveResult,
   AcrlInstructionBlock,
   AcrlInstructionLink,
+  AcrlInviteActionResponse,
+  AcrlInviteCreateInput,
+  AcrlInvitesResponse,
   AcrlLinkDecisionInput,
   AcrlNotesImportPreview,
   AcrlQuestionDetails,
@@ -79,6 +82,26 @@ export async function saveAcrlQuestionAssignments(year: number, input: AcrlQuest
 
 export async function copyAcrlAssignmentsFromPrevious(year: number): Promise<AcrlAssignmentCopyResponse> {
   const { data } = await api.post(`/acrl/years/${year}/assignments/copy-previous`);
+  return data;
+}
+
+export async function getAcrlInvites(year: number): Promise<AcrlInvitesResponse> {
+  const { data } = await api.get(`/acrl/years/${year}/invites`);
+  return data;
+}
+
+export async function createAcrlInvite(year: number, input: AcrlInviteCreateInput): Promise<AcrlInviteActionResponse> {
+  const { data } = await api.post(`/acrl/years/${year}/invites`, input);
+  return data;
+}
+
+export async function resendAcrlInvite(id: number): Promise<AcrlInviteActionResponse> {
+  const { data } = await api.post(`/acrl/invites/${id}/resend`);
+  return data;
+}
+
+export async function revokeAcrlInvite(id: number): Promise<AcrlInviteActionResponse> {
+  const { data } = await api.post(`/acrl/invites/${id}/revoke`);
   return data;
 }
 

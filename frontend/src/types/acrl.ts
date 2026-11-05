@@ -261,6 +261,60 @@ export interface AcrlSectionAssignmentsResponse {
   questions: AcrlQuestionAssignment[];
 }
 
+export type AcrlInviteStatus = 'pending' | 'accepted' | 'revoked' | 'expired';
+
+export type AcrlInviteTargetInput =
+  | { kind: 'section'; section: string }
+  | { kind: 'question'; sheet: AcrlSheet; questionId: string; part: string };
+
+export interface AcrlInviteTarget {
+  kind: 'section' | 'question';
+  section: string;
+  sheet: AcrlSheet | '';
+  questionId: string;
+  part: string;
+  label: string;
+}
+
+export interface AcrlInviteText {
+  subject: string;
+  body: string;
+}
+
+export interface AcrlInvite {
+  id: number;
+  email: string;
+  surveyYear: number;
+  status: AcrlInviteStatus;
+  targets: AcrlInviteTarget[];
+  invitedBy: AcrlAssignmentUser | null;
+  createdAt: string;
+  expiresAt: string;
+  lastSentAt: string | null;
+  sendCount: number;
+  acceptedAt: string | null;
+}
+
+export interface AcrlInviteListItem extends AcrlInvite {
+  inviteText?: AcrlInviteText;
+}
+
+export interface AcrlInvitesResponse {
+  invites: AcrlInviteListItem[];
+  pendingCount: number;
+}
+
+export interface AcrlInviteActionResponse {
+  invite: AcrlInvite;
+  emailSent?: boolean;
+  inviteText?: AcrlInviteText;
+}
+
+export interface AcrlInviteCreateInput {
+  email: string;
+  targets: AcrlInviteTargetInput[];
+}
+
 export interface AcrlAssignmentCopyResponse {
   surveyYear: number;
   sourceYear: number;
