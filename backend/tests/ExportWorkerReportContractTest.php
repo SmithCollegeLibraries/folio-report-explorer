@@ -10,7 +10,75 @@ require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
 use app\commands\ExportWorkerController;
 use app\models\QueryJob;
 use app\services\ReportExecutionContractService;
+use yii\db\Command;
+use yii\db\Connection;
 use yii\console\Application;
+
+class ExportWorkerReadOnlyModeCommand extends Command
+{
+    public function execute()
+    {
+        $result = parent::execute();
+        $this->db->events[] = ['type' => 'read_only_set'];
+        return $result;
+    }
+}
+
+class ExportWorkerFolioPdo extends PDO
+{
+    public $connection;
+
+    #[ReturnTypeWillChange]
+    public function prepare($query, $options = [])
+    {
+        $this->connection->events[] = ['type' => 'prepare', 'sql' => $query];
+
+        if (preg_match('/^\s*(INSERT|UPDATE|DELETE|TRUNCATE)\b/i', $query)) {
+            $readOnly = (int) $this->query('PRAGMA query_only')->fetchColumn() === 1;
+            if ($readOnly) {
+                throw new PDOException('write rejected by read-only session state');
+            }
+        }
+
+        if ($this->connection->failNextReportPrepare && strpos($query, 'AS source') !== false) {
+            $this->connection->failNextReportPrepare = false;
+            throw new PDOException('SSL syscall error: EOF detected');
+        }
+
+        return parent::prepare($query, $options);
+    }
+}
+
+class ExportWorkerFolioConnection extends Connection
+{
+    public $events = [];
+    public $failNextReportPrepare = false;
+
+    protected function createPdoInstance()
+    {
+        $pdo = new ExportWorkerFolioPdo('sqlite::memory:');
+        $pdo->connection = $this;
+        return $pdo;
+    }
+
+    public function createCommand($sql = null, $params = [])
+    {
+        if ($sql === 'SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY') {
+            return new ExportWorkerReadOnlyModeCommand(['db' => $this, 'sql' => 'PRAGMA query_only = ON']);
+        }
+        if (is_string($sql) && strpos($sql, 'SET statement_timeout = ') === 0) {
+            return parent::createCommand('SELECT 1');
+        }
+        if (is_string($sql) && strpos($sql, "SELECT set_config('application_name'") === 0) {
+            return parent::createCommand('SELECT 1');
+        }
+        if ($sql === 'SELECT pg_backend_pid()') {
+            return parent::createCommand('SELECT 123 AS pg_backend_pid');
+        }
+
+        return parent::createCommand($sql, $params);
+    }
+}
 
 $localReportUser = bin2hex(random_bytes(8));
 $localReportPassword = bin2hex(random_bytes(16));
@@ -38,7 +106,7 @@ new Application([
     'components' => [
         'db' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
         'localReportDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
-        'folioDb' => ['class' => yii\db\Connection::class, 'dsn' => 'sqlite::memory:'],
+        'folioDb' => ['class' => ExportWorkerFolioConnection::class, 'dsn' => 'sqlite::memory:'],
     ],
     'params' => [
         'queryTimeoutMs' => 30000,
@@ -129,6 +197,28 @@ function runExportContractJob(string $id, string $sql, ?array $contract = null):
     return $job;
 }
 
+function runFolioExportJob(string $id, string $sql): QueryJob
+{
+    Yii::$app->db->createCommand()->insert('query_jobs', [
+        'id' => $id,
+        'sql_text' => $sql,
+        'params' => '{}',
+        'source' => 'report',
+        'data_source' => 'folio',
+        'status' => 'running',
+        'output_mode' => 'file',
+        'created_at' => '2026-08-06 10:00:00',
+        'started_at' => '2026-08-06 10:00:01',
+    ])->execute();
+    $job = QueryJob::findOne($id);
+    $worker = new ExportWorkerController('export-worker', Yii::$app);
+    $method = new ReflectionMethod($worker, 'executeExportJob');
+    $method->setAccessible(true);
+    $method->invoke($worker, $job);
+    $job->refresh();
+    return $job;
+}
+
 $rowsSql = <<<'SQL'
 SELECT '11111111-1111-4111-8111-111111111111' AS "Instance UUID", 'hrid-1' AS "Instance HRID", 'Alpha' AS "Title", 'Main' AS "Selected Location", 'Effective item' AS "Location Basis", '856' AS "Missing MARC Tag"
 UNION ALL SELECT '11111111-1111-4111-8111-111111111111', 'hrid-2', 'Beta', 'Main', 'Effective item', '856'
@@ -165,6 +255,52 @@ exportContractAssertSame(['UUID'], $identifier->getDecodedColumns(), 'Identifier
 exportContractAssertSame([['UUID' => '11111111-1111-4111-8111-111111111111']], $identifier->getDecodedRows(), 'Identifier previews must contain only projected UUID rows.');
 $identifierContents = file_get_contents($identifier->export_file_path);
 exportContractAssertSame("UUID\r\n11111111-1111-4111-8111-111111111111\r\n", $identifierContents, 'Identifier exports must use CRLF and UUID-only output.');
+
+/** @var ExportWorkerFolioConnection $folioDb */
+$folioDb = Yii::$app->folioDb;
+exportContractAssertSame([], $folioDb->events, 'Local exports must not issue FOLIO session read-only commands.');
+
+$folioSql = "SELECT 'folio' AS source";
+$folioJob = runFolioExportJob('folio-export', $folioSql);
+exportContractAssertSame('completed', $folioJob->status, 'FOLIO file exports must complete.');
+$expectedFolioExportSql = $folioSql . "\nLIMIT 99";
+$readOnlyEvents = [];
+$reportPrepareEvents = [];
+foreach ($folioDb->events as $index => $event) {
+    if ($event['type'] === 'read_only_set') {
+        $readOnlyEvents[] = $index;
+    }
+    if ($event['type'] === 'prepare' && $event['sql'] === $expectedFolioExportSql) {
+        $reportPrepareEvents[] = $index;
+    }
+}
+exportContractAssertSame(1, count($readOnlyEvents), 'Each FOLIO export attempt must set the session read-only.');
+exportContractAssertSame(1, count($reportPrepareEvents), 'The FOLIO report SQL must be prepared once on the successful first attempt.');
+exportContractAssertTrue($readOnlyEvents[0] < $reportPrepareEvents[0], 'The FOLIO session must be read-only before report SQL preparation.');
+
+$folioDb->events = [];
+$folioDb->failNextReportPrepare = true;
+$retriedFolioJob = runFolioExportJob('folio-export-retry', $folioSql);
+exportContractAssertSame('completed', $retriedFolioJob->status, 'A FOLIO export must recover after a transient reconnect.');
+$readOnlyEvents = [];
+$reportPrepareEvents = [];
+foreach ($folioDb->events as $index => $event) {
+    if ($event['type'] === 'read_only_set') {
+        $readOnlyEvents[] = $index;
+    }
+    if ($event['type'] === 'prepare' && $event['sql'] === $expectedFolioExportSql) {
+        $reportPrepareEvents[] = $index;
+    }
+}
+exportContractAssertSame(2, count($readOnlyEvents), 'A reconnect retry must reapply session read-only mode on both attempts.');
+exportContractAssertSame(2, count($reportPrepareEvents), 'The report SQL must be prepared again after reconnect.');
+exportContractAssertTrue($readOnlyEvents[0] < $reportPrepareEvents[0], 'The first attempt must set read-only before preparing the report SQL.');
+exportContractAssertTrue($readOnlyEvents[1] < $reportPrepareEvents[1], 'The retry must set read-only before preparing the report SQL.');
+
+$folioDb->events = [];
+$writeJob = runFolioExportJob('folio-export-write-attempt', "INSERT INTO query_jobs (id) VALUES ('blocked-write')");
+exportContractAssertSame('failed', $writeJob->status, 'A write through the FOLIO export path must be rejected.');
+exportContractAssertTrue(strpos((string) $writeJob->error_message, 'write rejected by read-only session state') !== false, 'The fake FOLIO connection must reject writes based on the session state set by the worker.');
 
 $worker = new ExportWorkerController('export-worker', Yii::$app);
 $prepareExportSql = new ReflectionMethod($worker, 'prepareExportSql');
