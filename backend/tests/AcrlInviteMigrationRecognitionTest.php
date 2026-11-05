@@ -24,8 +24,9 @@ foreach (['acrl_invites', 'acrl_invite_targets', 'COLUMN_TYPE', 'COLUMN_DEFAULT'
     acrlInviteRecognitionCheck(strpos($recognitionSource, $term) !== false, 'Invite recognition checks both tables, column metadata/defaults, and target uniqueness (' . $term . ').');
 }
 acrlInviteRecognitionCheck(strpos($baselineSource, '066_acrl_question_assignments.sql') !== false
-    && strpos($baselineSource, '067_acrl_invites.sql') !== false,
-    'Empty-ledger baseline recognition handles both 066 and 067 independently.');
+    && strpos($baselineSource, '067_acrl_invites.sql') !== false
+    && strpos($baselineSource, '068_marc_field_combination_finder.sql') !== false,
+    'Empty-ledger baseline recognition handles 066, 067, and the canonical 068 report independently.');
 acrlInviteRecognitionCheck($executeSource !== '' && strpos($executeSource, '066_acrl_question_assignments.sql') === false
     && strpos($executeSource, 'AcrlQuestionAssignmentMigrationRecognitionService') !== false,
     'Post-execution schema validation is table-driven instead of hard-coded to 066.');
