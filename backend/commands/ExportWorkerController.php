@@ -7,8 +7,8 @@ use yii\console\Controller;
 use app\models\QueryJob;
 use app\services\DatabaseRetryService;
 use app\services\FolioIdentifierCsvService;
+use app\services\FolioExportSessionService;
 use app\services\LocalReportSqlService;
-use app\services\QueryJobCancellationService;
 use app\services\ReportExecutionContractService;
 
 /**
@@ -198,11 +198,7 @@ class ExportWorkerController extends Controller
             else {
                 $db = Yii::$app->folioDb;
                 $prepareAndExecute = function () use ($db, $job, $sql, $params) {
-                    $db->createCommand("SET statement_timeout = " . (int) Yii::$app->params['queryTimeoutMs'])->execute();
-                    $db->createCommand(
-                        "SELECT set_config('application_name', :application_name, false)",
-                        [':application_name' => QueryJobCancellationService::applicationName($job->id)]
-                    )->queryScalar();
+                    FolioExportSessionService::configure($db, $job->id);
                     if ($job->hasAttribute('pg_backend_pid')) {
                         $pidRow = $db->createCommand('SELECT pg_backend_pid()')->queryOne();
                         if ($pidRow !== false) {
@@ -217,8 +213,6 @@ class ExportWorkerController extends Controller
                     if ($this->isCancellationRequested($job)) {
                         throw new \RuntimeException('Query cancellation requested.');
                     }
-
-                    $db->createCommand('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY')->execute();
 
                     $pdo = $db->getMasterPdo();
                     $stmt = $pdo->prepare($sql);
