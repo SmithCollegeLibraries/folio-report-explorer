@@ -162,7 +162,8 @@ describe('ACRL invite panel', () => {
     if (submit) await userEvent.click(submit);
     check.check(await settle(() => screen.queryByText('Email could not be sent - copy the invite below') !== null), 'Mail failure presents the exact copy fallback.');
     check.check(screen.queryByText(inviteText.subject) !== null, 'Copy fallback shows the generated subject.');
-    check.check(screen.queryByText(inviteText.body) !== null, 'Copy fallback shows the complete plain-text body.');
+    const copyBox = screen.queryByText(inviteText.subject)?.parentElement;
+    check.check(copyBox?.querySelector('pre')?.textContent === inviteText.body, 'Copy fallback shows the complete plain-text body.');
     const copy = screen.queryByRole('button', { name: 'Copy invite text' });
     if (copy) await userEvent.click(copy);
     check.check(await settle(() => writeText.mock.calls.length === 1), 'Copy action writes to the clipboard.');

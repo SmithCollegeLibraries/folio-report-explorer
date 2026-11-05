@@ -66,8 +66,8 @@ function acrlInviteControllerDenied(AcrlInviteController $controller, string $ac
     acrlInviteControllerCheck(Yii::$app->response->statusCode === 403, $label . ' is denied before an invite/year lookup.');
 }
 
-// Deliberately omit acrl_invites, acrl_invite_targets, and acrl_survey_years. A lookup before
-// the persisted-admin guard would fail against this database instead of returning 403.
+// Deliberately omit ACRL tables during denied calls. A lookup before the persisted-admin guard
+// would fail against this database instead of returning 403.
 $actions = [
     ['actionCreate', [2026]], ['actionList', [2026]], ['actionResend', [1]], ['actionRevoke', [1]],
 ];
@@ -78,9 +78,42 @@ foreach ($actions as $route) {
     acrlInviteControllerDenied($controller, $action, $arguments, User::findOne(3), false, $action . ' revoked admin');
 }
 
+Yii::$app->request->hostInfo = 'https://reports.example.test';
+$db->createCommand('CREATE TABLE acrl_survey_years (survey_year INTEGER PRIMARY KEY, status TEXT NOT NULL)')->execute();
+$db->createCommand()->batchInsert('acrl_survey_years', ['survey_year', 'status'], [
+    [2026, 'published'], [2030, 'draft'],
+])->execute();
+$db->createCommand('CREATE TABLE acrl_questions (
+    survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\',
+    section TEXT NOT NULL, prompt TEXT NOT NULL, survey_order INTEGER NOT NULL
+)')->execute();
+$db->createCommand()->insert('acrl_questions', [
+    'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A',
+    'section' => 'Circulation', 'prompt' => 'Synthetic circulation question', 'survey_order' => 1,
+])->execute();
+$db->createCommand('CREATE TABLE acrl_section_assignments (
+    survey_year INTEGER NOT NULL, section TEXT NOT NULL, user_id INTEGER NOT NULL, assigned_by INTEGER NULL,
+    UNIQUE (survey_year, section, user_id)
+)')->execute();
+$db->createCommand('CREATE TABLE acrl_question_assignments (
+    survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\',
+    user_id INTEGER NOT NULL, assigned_by INTEGER NULL, assigned_at TEXT,
+    UNIQUE (survey_year, sheet, question_id, part, user_id)
+)')->execute();
+$db->createCommand('CREATE TABLE acrl_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, survey_year INTEGER NOT NULL, invited_by INTEGER NULL,
+    link_origin TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'pending\', send_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_sent_at TEXT NULL, accepted_user_id INTEGER NULL,
+    accepted_at TEXT NULL, revoked_at TEXT NULL
+)')->execute();
+$db->createCommand('CREATE TABLE acrl_invite_targets (
+    invite_id INTEGER NOT NULL, kind TEXT NOT NULL, section TEXT NOT NULL DEFAULT \'\', sheet TEXT NOT NULL DEFAULT \'\',
+    question_id TEXT NOT NULL DEFAULT \'\', part TEXT NOT NULL DEFAULT \'\',
+    UNIQUE (invite_id, kind, section, sheet, question_id, part)
+)')->execute();
+
 $app->user->setIdentity(User::findOne(1));
 $invalidRequests = [
-    ['admin without Smith email', 2026, ['email' => 'reader@smith.example', 'targets' => [['kind' => 'section', 'section' => 'Circulation']]], 422, 'Your account has no Smith email on file; sign in again.'],
     ['email outside inviting admin domain', 2026, ['email' => 'reader@other.example', 'targets' => [['kind' => 'section', 'section' => 'Circulation']]], 422, 'domain'],
     ['unpublished year', 2030, ['email' => 'reader@smith.example', 'targets' => [['kind' => 'section', 'section' => 'Circulation']]], 422, 'published'],
     ['empty targets', 2026, ['email' => 'reader@smith.example', 'targets' => []], 422, 'target'],

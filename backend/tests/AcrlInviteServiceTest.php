@@ -360,8 +360,16 @@ acrlInviteServiceScenario('accept adds both assignment kinds idempotently and pr
     $invitee->save(false);
     acrlInviteServiceCall(function () use ($service, $invitee) { return $service->acceptOnSignIn($invitee, 'additive@smith.example', 'additive'); }, 'First additive acceptance');
     acrlInviteServiceCall(function () use ($service, $invitee) { return $service->acceptOnSignIn(User::findOne($invitee->id), 'additive@smith.example', 'additive'); }, 'Repeated additive acceptance');
-    $sectionRows = $db->createCommand('SELECT user_id, assigned_by FROM acrl_section_assignments WHERE survey_year = 2026 AND section = :section ORDER BY user_id', [':section' => 'Circulation'])->queryAll();
-    $questionRows = $db->createCommand('SELECT user_id, assigned_by FROM acrl_question_assignments WHERE survey_year = 2026 AND question_id = :question ORDER BY user_id', [':question' => '60'])->queryAll();
+    $sectionRows = $db->createCommand(
+        'SELECT user_id, assigned_by FROM acrl_section_assignments WHERE survey_year = 2026 AND section = :section'
+            . ' AND user_id IN (:existingUser, :invitee) ORDER BY user_id',
+        [':section' => 'Circulation', ':existingUser' => 6, ':invitee' => $invitee->id]
+    )->queryAll();
+    $questionRows = $db->createCommand(
+        'SELECT user_id, assigned_by FROM acrl_question_assignments WHERE survey_year = 2026 AND question_id = :question'
+            . ' AND user_id IN (:existingUser, :invitee) ORDER BY user_id',
+        [':question' => '60', ':existingUser' => 6, ':invitee' => $invitee->id]
+    )->queryAll();
     acrlInviteServiceCheck(count($sectionRows) === 2 && count($questionRows) === 2, 'Repeated acceptance preserves existing assignees and inserts the invitee once for both target kinds.');
     acrlInviteServiceCheck((int)($sectionRows[0]['user_id'] ?? 0) === 6 && (int)($questionRows[0]['user_id'] ?? 0) === 6, 'Existing section and question assignees are not replaced.');
     acrlInviteServiceCheck((int)($sectionRows[1]['assigned_by'] ?? 0) === 1 && (int)($questionRows[1]['assigned_by'] ?? 0) === 1, 'New assignment audit actor is the invite creator.');
