@@ -300,9 +300,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     if (!$dryRun) {
                         $started = microtime(true);
                         MigrationService::executeMigrationFile($db, $file);
-                        if (!self::migrationSchemaAppearsComplete($db, $filename)) {
-                            throw new \RuntimeException('Migration 068 did not install the canonical MARC combination finder definition.');
-                        }
+                        self::assertMigrationSchemaAfterExecution($db, $filename);
                         $db->createCommand()->insert('schema_migrations', [
                             'filename' => $filename,
                             'checksum' => $file['checksum'],

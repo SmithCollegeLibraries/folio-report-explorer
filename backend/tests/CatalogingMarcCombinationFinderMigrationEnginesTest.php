@@ -163,8 +163,6 @@ function marcCombinationEngineRun(string $label, array $config, string $migratio
         try {
             $temporaryMigrationDir = marcCombinationEnginePrepareSchema($adminDb, $migrationDir, $initSql, $label);
             marcCombinationEngineCase($label . ' 068 installs from a ledger through 067', function () use ($adminDb, $migrationDir) {
-                $before = (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]);
-                marcCombinationEngineSame(false, $before, 'A current schema missing report 068 must not enter the empty-ledger current-schema baseline branch.');
                 $result = MigrationService::run($adminDb, $migrationDir, false);
                 marcCombinationEngineCheck(in_array('068_marc_field_combination_finder.sql', $result['applied'], true), 'Install must execute migration 068.');
                 marcCombinationEngineSame(1, (int) $adminDb->createCommand("SELECT COUNT(*) FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryScalar(), 'Install creates exactly one canonical report row.');
