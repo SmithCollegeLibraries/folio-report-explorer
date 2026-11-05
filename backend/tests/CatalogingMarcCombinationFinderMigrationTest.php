@@ -33,7 +33,8 @@ foreach ([
     'LIMIT 100001',
     '"Instance UUID"',
     '{{location_from}}',
-    '{{marc_table_1}}',
+    '{{active_condition_predicates}}',
+    '{{active_condition_columns}}',
     'ON DUPLICATE KEY UPDATE',
 ] as $forbidden) {
     $present = strpos($migration, $forbidden) !== false;
@@ -54,6 +55,28 @@ if (count($values) === 12) {
     marcCombinationMigrationCheck($values[4] === 'cataloging', 'The report category must be cataloging.');
     marcCombinationMigrationCheck($values[7] === 'folio', 'The report data_source must be folio.');
     marcCombinationMigrationCheck((int) $values[9] === 100000, 'The report default_limit must be 100000.');
+
+    $sqlTemplate = $values[5];
+    marcCombinationMigrationCheck(
+        strpos($sqlTemplate, '{{marc_table_') === false,
+        'The report template must not contain fixed per-slot MARC table tokens.'
+    );
+    marcCombinationMigrationCheck(
+        strpos($sqlTemplate, 'condition_results') === false,
+        'The report template must not aggregate all target instances in a joined condition_results CTE.'
+    );
+    preg_match('/\nSELECT\n(.*?)\nFROM matching_instances/s', $sqlTemplate, $finalSelectMatch);
+    $finalSelectAliases = [];
+    if (isset($finalSelectMatch[1])) {
+        preg_match_all('/\bAS\s+"([^"]+)"/', $finalSelectMatch[1], $aliasMatches);
+        $finalSelectAliases = $aliasMatches[1] ?? [];
+    }
+    foreach (['Instance UUID', 'Instance HRID', 'Title', 'Selected Location(s)', 'Location Basis', 'Match'] as $alias) {
+        marcCombinationMigrationCheck(
+            in_array($alias, $finalSelectAliases, true),
+            'The final report SELECT must project the "' . $alias . '" output alias.'
+        );
+    }
 
     $parameters = json_decode($values[6], true);
     marcCombinationMigrationCheck(is_array($parameters), 'The 43 parameter definitions must be valid JSON.');
