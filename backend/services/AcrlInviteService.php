@@ -239,14 +239,19 @@ class AcrlInviteService
     private function resolveStoredTarget(int $year, array $target): ?array
     {
         if ($target['kind'] === 'section') {
-            $exists = $this->db->createCommand(
-                'SELECT COUNT(*) FROM acrl_questions WHERE survey_year = :year AND section = :section',
-                [':year' => $year, ':section' => $target['section']]
-            )->queryScalar();
-            return (int)$exists > 0 ? $target : null;
+            return in_array((string)$target['section'], $this->sectionAssignments->sections($year), true) ? $target : null;
         }
         $question = $this->questionAssignments->question($year, (string)$target['sheet'], (string)$target['question_id'], (string)$target['part']);
-        return $question ? $target : null;
+        if (!$question || (string)$target['sheet'] !== (string)$question['sheet']
+            || (string)$target['question_id'] !== (string)$question['question_id']
+            || (string)$target['part'] !== (string)$question['part']
+            || (string)$target['section'] !== (string)$question['section']) {
+            return null;
+        }
+        return [
+            'kind' => 'question', 'section' => (string)$question['section'], 'sheet' => (string)$question['sheet'],
+            'question_id' => (string)$question['question_id'], 'part' => (string)$question['part'],
+        ];
     }
 
     private function matchesSignIn(string $inviteEmail, string $eppn, string $uid): bool

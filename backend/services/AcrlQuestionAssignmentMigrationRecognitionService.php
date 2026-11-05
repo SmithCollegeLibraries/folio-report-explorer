@@ -60,7 +60,12 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         ];
         return self::tableShapeAppearsComplete($db, 'acrl_question_assignments', $expected)
             && self::indexAppearsComplete($db, 'acrl_question_assignments', 'uq_acrl_question_assignment',
-                ['survey_year', 'sheet', 'question_id', 'part', 'user_id'], true);
+                ['survey_year', 'sheet', 'question_id', 'part', 'user_id'], true)
+            && self::foreignKeysAppearComplete($db, 'acrl_question_assignments', [
+                'survey_year' => ['acrl_survey_years', 'survey_year', 'CASCADE'],
+                'user_id' => ['users', 'id', 'CASCADE'],
+                'assigned_by' => ['users', 'id', 'SET NULL'],
+            ]);
     }
 
     public static function acrlInvitesAppearComplete($db): bool
@@ -95,12 +100,21 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             && self::indexAppearsComplete($db, 'acrl_invites', 'idx_acrl_invites_email_status', ['email', 'status'], false)
             && self::indexAppearsComplete($db, 'acrl_invites', 'idx_acrl_invites_survey_year', ['survey_year'], false)
             && self::indexAppearsComplete($db, 'acrl_invite_targets', 'uq_acrl_invite_target',
-                ['invite_id', 'kind', 'section', 'sheet', 'question_id', 'part'], true);
+                ['invite_id', 'kind', 'section', 'sheet', 'question_id', 'part'], true)
+            && self::foreignKeysAppearComplete($db, 'acrl_invites', [
+                'survey_year' => ['acrl_survey_years', 'survey_year', 'CASCADE'],
+                'invited_by' => ['users', 'id', 'SET NULL'],
+                'accepted_user_id' => ['users', 'id', 'SET NULL'],
+            ])
+            && self::foreignKeysAppearComplete($db, 'acrl_invite_targets', [
+                'invite_id' => ['acrl_invites', 'id', 'CASCADE'],
+            ]);
     }
 
     private static function tableShapeAppearsComplete($db, string $table, array $expected): bool
     {
         try {
+            $isMariaDb = stripos((string)$db->createCommand('SELECT VERSION()')->queryScalar(), 'MariaDB') !== false;
             $tableRows = $db->createCommand(
                 'SELECT ENGINE, TABLE_COLLATION FROM information_schema.TABLES'
                     . ' WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table',
@@ -135,7 +149,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     || ($shape[2] !== null && (int)$column['CHARACTER_MAXIMUM_LENGTH'] !== $shape[2])
                     || ($shape[3] !== null && strtolower((string)$column['CHARACTER_SET_NAME']) !== $shape[3])
                     || ($shape[4] !== null && strtolower((string)$column['COLLATION_NAME']) !== $shape[4])
-                    || !self::columnDefaultMatches($column['COLUMN_DEFAULT'], $shape[5])) {
+                    || !self::columnDefaultMatches($column['COLUMN_DEFAULT'], $shape[5], $isMariaDb)) {
                     return false;
                 }
             }
@@ -164,26 +178,72 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         return true;
     }
 
-    private static function columnDefaultMatches($actual, $expected): bool
+    private static function columnDefaultMatches($actual, $expected, bool $isMariaDb): bool
     {
         if ($expected === null) {
-            return $actual === null || (is_string($actual) && strcasecmp($actual, 'NULL') === 0);
+            return $isMariaDb ? $actual === 'NULL' : $actual === null;
         }
         if ($actual === null) {
             return false;
         }
         $actual = (string)$actual;
         if ($expected === '') {
-            return $actual === '' || $actual === "''";
+            return $isMariaDb ? $actual === "''" : $actual === '';
         }
         if (is_string($expected) && stripos($expected, 'CURRENT_TIMESTAMP') === 0) {
-            return $actual === $expected || $actual === strtolower($expected);
+            return $isMariaDb ? $actual === strtolower($expected) : $actual === $expected;
         }
         if (is_string($expected)) {
             $quotedExpected = "'" . str_replace("'", "''", $expected) . "'";
-            return $actual === $expected || $actual === $quotedExpected;
+            return $isMariaDb ? $actual === $quotedExpected : $actual === $expected;
         }
         return (string)$actual === (string)$expected;
+    }
+
+    private static function foreignKeysAppearComplete($db, string $table, array $expected): bool
+    {
+        try {
+            $rows = $db->createCommand(
+                'SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE'
+                    . ' FROM information_schema.KEY_COLUMN_USAGE k'
+                    . ' INNER JOIN information_schema.REFERENTIAL_CONSTRAINTS r'
+                    . ' ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME'
+                    . ' AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME'
+                    . ' WHERE k.CONSTRAINT_SCHEMA = DATABASE() AND k.TABLE_NAME = :table'
+                    . ' AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.COLUMN_NAME',
+                [':table' => $table]
+            )->queryAll();
+            if (count($rows) !== count($expected)) {
+                return false;
+            }
+            $database = strtolower((string)$db->createCommand('SELECT DATABASE()')->queryScalar());
+            $actual = [];
+            foreach ($rows as $row) {
+                $column = strtolower((string)$row['COLUMN_NAME']);
+                if (isset($actual[$column])) {
+                    return false;
+                }
+                $actual[$column] = [
+                    strtolower((string)$row['REFERENCED_TABLE_SCHEMA']),
+                    strtolower((string)$row['REFERENCED_TABLE_NAME']),
+                    strtolower((string)$row['REFERENCED_COLUMN_NAME']),
+                    strtoupper((string)$row['DELETE_RULE']),
+                ];
+            }
+            foreach ($expected as $column => $shape) {
+                if (!isset($actual[$column]) || $actual[$column] !== [
+                    $database,
+                    strtolower($shape[0]),
+                    strtolower($shape[1]),
+                    strtoupper($shape[2]),
+                ]) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (\Throwable $error) {
+            return false;
+        }
     }
 
     private static function indexAppearsComplete($db, string $table, string $index, array $columns, bool $unique): bool

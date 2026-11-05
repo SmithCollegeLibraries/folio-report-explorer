@@ -46,6 +46,7 @@ export default function AcrlInvitePanel({ year, section, questions, selectedQues
   const [error, setError] = useState<{ message: string; userName: string | null } | null>(null);
   const [actionMessage, setActionMessage] = useState('');
   const [actionError, setActionError] = useState('');
+  const [visibleInviteTextId, setVisibleInviteTextId] = useState<number | null>(null);
 
   const selectedQuestion = questions.find((question) => acrlQuestionAssignmentKey(question.sheet, question.questionId, question.part) === selectedQuestionKey);
   const inviteTarget: AcrlInviteTargetInput = selectedQuestion
@@ -117,7 +118,13 @@ export default function AcrlInvitePanel({ year, section, questions, selectedQues
       </button>
     </form>
     {error && <div role="alert" className="space-y-1 text-sm text-rose-700"><p>{error.message}</p>{error.userName && <p>{error.userName}</p>}</div>}
-    {result?.emailSent === true && <p role="status" className="text-sm text-emerald-800">Invite emailed to {result.invite.email}</p>}
+    {result?.emailSent === true && <div className="space-y-2">
+      <p role="status" className="text-sm text-emerald-800">Invite emailed to {result.invite.email}</p>
+      {result.inviteText && <>
+        <InviteText inviteText={result.inviteText} />
+        <button className="rounded border border-folio-700 px-3 py-2 text-sm font-semibold text-folio-800 hover:bg-folio-50" type="button" onClick={() => void copyInviteText(result.inviteText!)}>Copy invite text</button>
+      </>}
+    </div>}
     {result?.emailSent === false && result.inviteText && <div className="space-y-2">
       <p role="alert" className="text-sm text-amber-800">Email could not be sent - copy the invite below</p>
       <InviteText inviteText={result.inviteText} />
@@ -144,8 +151,12 @@ export default function AcrlInvitePanel({ year, section, questions, selectedQues
         {invite.status === 'pending' && <div className="flex flex-wrap gap-2">
           <button type="button" className="rounded border border-folio-700 px-3 py-1.5 text-sm font-semibold text-folio-800 hover:bg-folio-50 disabled:opacity-50" aria-label={`Resend invite to ${invite.email}`} disabled={resend.isPending} onClick={() => void resendInvite(invite.id)}>Resend</button>
           <button type="button" className="rounded border border-rose-700 px-3 py-1.5 text-sm font-semibold text-rose-800 hover:bg-rose-50 disabled:opacity-50" aria-label={`Revoke invite to ${invite.email}`} disabled={revoke.isPending} onClick={() => void revokeInvite(invite.id)}>Revoke</button>
-          {invite.inviteText && <button type="button" className="rounded border border-gray-400 px-3 py-1.5 text-sm font-semibold text-gray-800 hover:bg-gray-50" aria-label={`Copy invite text for ${invite.email}`} onClick={() => void copyInviteText(invite.inviteText!)}>Copy text</button>}
+          {invite.inviteText && <button type="button" className="rounded border border-gray-400 px-3 py-1.5 text-sm font-semibold text-gray-800 hover:bg-gray-50" aria-label={`Copy invite text for ${invite.email}`} onClick={() => {
+            setVisibleInviteTextId(invite.id);
+            void copyInviteText(invite.inviteText!);
+          }}>Copy text</button>}
         </div>}
+        {invite.status === 'pending' && visibleInviteTextId === invite.id && invite.inviteText && <InviteText inviteText={invite.inviteText} />}
       </article>)}
     </div>
   </section>;

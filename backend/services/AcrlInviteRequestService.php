@@ -20,13 +20,14 @@ class AcrlInviteRequestService
 
     public static function linkOriginFromRequest(string $hostInfo, bool $isDev): string
     {
-        if (preg_match('/^(https?):\/\/([^\/?#@]+)$/i', $hostInfo, $matches) !== 1) {
+        if (strpos($hostInfo, "\r") !== false || strpos($hostInfo, "\n") !== false
+            || preg_match('/\A(https?):\/\/([^\/?#@]+)\z/i', $hostInfo, $matches) !== 1) {
             throw new \InvalidArgumentException('Request host is invalid.');
         }
         $scheme = strtolower($matches[1]);
         $authority = $matches[2];
         if (($scheme !== 'https' && !($isDev && $scheme === 'http'))
-            || preg_match('/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/', $authority) !== 1
+            || preg_match('/\A[A-Za-z0-9.-]+(?::[0-9]{1,5})?\z/', $authority) !== 1
             || strpos($authority, '..') !== false) {
             throw new \InvalidArgumentException('Request host is invalid.');
         }
@@ -44,7 +45,7 @@ class AcrlInviteRequestService
             return false;
         }
         foreach (explode('.', $host) as $label) {
-            if (strlen($label) > 63 || preg_match('/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/', $label) !== 1) {
+            if (strlen($label) > 63 || preg_match('/\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\z/', $label) !== 1) {
                 return false;
             }
         }
@@ -141,12 +142,14 @@ class AcrlInviteRequestService
                     throw new \InvalidArgumentException('An invite target is not in the published survey.');
                 }
                 $question = $this->questionAssignments->question($year, $target['sheet'], $target['questionId'], $target['part']);
-                if (!$question) {
+                if (!$question || (string)$target['sheet'] !== (string)$question['sheet']
+                    || (string)$target['questionId'] !== (string)$question['question_id']
+                    || (string)$target['part'] !== (string)$question['part']) {
                     throw new \InvalidArgumentException('An invite target is not in the published survey.');
                 }
                 $row = [
-                    'kind' => 'question', 'section' => (string)$question['section'], 'sheet' => $target['sheet'],
-                    'question_id' => $target['questionId'], 'part' => $target['part'],
+                    'kind' => 'question', 'section' => (string)$question['section'], 'sheet' => (string)$question['sheet'],
+                    'question_id' => (string)$question['question_id'], 'part' => (string)$question['part'],
                 ];
             } else {
                 throw new \InvalidArgumentException('An invite target is invalid.');

@@ -23,13 +23,25 @@ class AcrlInviteMailer
         }
 
         try {
-            if ($this->sender !== null) {
-                $sent = call_user_func($this->sender, $recipient, $subject, $body, $from, $replyTo);
-            } else {
-                $headers = 'From: ' . $from . "\r\n" . 'Reply-To: ' . $replyTo;
-                $sent = mail($recipient, $subject, $body, $headers);
+            $transportWarning = false;
+            set_error_handler(function ($severity) use (&$transportWarning) {
+                if (error_reporting() & $severity) {
+                    $transportWarning = true;
+                    return true;
+                }
+                return false;
+            });
+            try {
+                if ($this->sender !== null) {
+                    $sent = call_user_func($this->sender, $recipient, $subject, $body, $from, $replyTo);
+                } else {
+                    $headers = 'From: ' . $from . "\r\n" . 'Reply-To: ' . $replyTo;
+                    $sent = mail($recipient, $subject, $body, $headers);
+                }
+            } finally {
+                restore_error_handler();
             }
-            $sent = (bool)$sent;
+            $sent = !$transportWarning && (bool)$sent;
             $this->logOutcome($inviteId, $sent ? 'sent' : 'failed');
             return $sent;
         } catch (\Throwable $error) {

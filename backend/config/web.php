@@ -243,7 +243,7 @@ $config = [
                 [
                     'class' => 'app\components\RedactingFileTarget',
                     'levels' => ['info'],
-                    'categories' => ['nl2sql.telemetry'],
+                    'categories' => ['nl2sql.telemetry', 'acrl.invite.mail'],
                     'logVars' => [],
                 ],
             ],
