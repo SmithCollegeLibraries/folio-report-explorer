@@ -62,6 +62,7 @@ $firstName   = getShibAttr('givenName');
 $lastName    = getShibAttr('sn');
 $affiliation = getShibAttr('fcPersonAffiliation');
 $email       = getShibAttr('eppn');
+$inviteIdentity = \app\services\AcrlInviteSignInOrchestrator::inviteIdentityFromServer($_SERVER);
 
 // Also check REMOTE_USER as fallback for username
 if (!$username) {
@@ -146,8 +147,8 @@ if (!$user) {
 $signIn = (new \app\services\AcrlInviteSignInOrchestrator())->run(
     $user,
     $isNewUser,
-    $email,
-    $uid,
+    $inviteIdentity['eppn'],
+    $inviteIdentity['uid'],
     function ($signInUser, $eppn, $signInUid) {
         $inviteDb = \Yii::$app->db;
         $inviteService = new AcrlInviteService(

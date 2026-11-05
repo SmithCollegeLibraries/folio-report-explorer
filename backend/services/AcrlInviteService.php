@@ -244,8 +244,7 @@ class AcrlInviteService
         $question = $this->questionAssignments->question($year, (string)$target['sheet'], (string)$target['question_id'], (string)$target['part']);
         if (!$question || (string)$target['sheet'] !== (string)$question['sheet']
             || (string)$target['question_id'] !== (string)$question['question_id']
-            || (string)$target['part'] !== (string)$question['part']
-            || (string)$target['section'] !== (string)$question['section']) {
+            || (string)$target['part'] !== (string)$question['part']) {
             return null;
         }
         return [

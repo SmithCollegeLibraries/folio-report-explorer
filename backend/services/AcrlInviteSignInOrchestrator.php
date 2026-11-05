@@ -7,6 +7,26 @@ use app\models\User;
 /** Runs the invite decision before the established sign-in notification and approval checks. */
 class AcrlInviteSignInOrchestrator
 {
+    public static function inviteIdentityFromServer(array $server): array
+    {
+        return [
+            'eppn' => self::shibbolethAttribute($server, 'eppn'),
+            'uid' => self::shibbolethAttribute($server, 'uid'),
+        ];
+    }
+
+    private static function shibbolethAttribute(array $server, string $name): ?string
+    {
+        if (!empty($server[$name])) {
+            return (string)$server[$name];
+        }
+        $httpName = 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+        if (!empty($server[$httpName])) {
+            return (string)$server[$httpName];
+        }
+        return null;
+    }
+
     public function run(User $user, bool $isNewUser, ?string $eppn, ?string $uid, callable $accept, callable $reload, callable $notifyAdmins, callable $issueTokens, callable $log)
     {
         $accepted = false;
