@@ -218,6 +218,8 @@ class ExportWorkerController extends Controller
                         throw new \RuntimeException('Query cancellation requested.');
                     }
 
+                    $db->createCommand('SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY')->execute();
+
                     $pdo = $db->getMasterPdo();
                     $stmt = $pdo->prepare($sql);
                     foreach ($params as $key => $value) $stmt->bindValue($key, $value);
