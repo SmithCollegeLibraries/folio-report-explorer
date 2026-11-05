@@ -307,7 +307,32 @@ namespace {
         __DIR__ . '/../sql/acrl'
     );
     $approvedMethods = $autofillController->actionAutofillMethods();
-    acrlAccessAssert(count($approvedMethods['methods'] ?? []) === 9 && $approvedMethods['methods'][4]['queryVersion'] === 3, 'Approved ACRL users must receive all methods and the Q40a v3 version.');
+    $methods = $approvedMethods['methods'] ?? [];
+    acrlAccessAssert(count($methods) === 14, 'Approved ACRL users must receive all 14 methods.');
+    $methodsByKey = [];
+    foreach ($methods as $method) {
+        $key = ($method['sheet'] ?? '') . '|' . ($method['questionId'] ?? '') . '|' . ($method['part'] ?? '');
+        $methodsByKey[$key] = $method;
+    }
+    $q40aMethod = $methodsByKey['survey|40a|'] ?? null;
+    acrlAccessAssert(is_array($q40aMethod) && ($q40aMethod['queryVersion'] ?? null) === 3, 'The methods catalog must identify Q40a version 3 by its question key.');
+    $newMethods = [
+        'survey|20|' => 'acrl-20',
+        'survey|20a|' => 'acrl-20a',
+        'survey|21|' => 'acrl-21',
+        'survey|21a|' => 'acrl-21a',
+        'survey|21b|' => 'acrl-21b',
+    ];
+    foreach ($newMethods as $key => $queryId) {
+        $method = $methodsByKey[$key] ?? null;
+        acrlAccessAssert(
+            is_array($method)
+                && ($method['queryId'] ?? null) === $queryId
+                && ($method['queryVersion'] ?? null) === 1
+                && ($method['kind'] ?? null) === 'dated',
+            'Approved ACRL users must receive catalog method ' . $key . ' (' . $queryId . ').'
+        );
+    }
     acrlAccessAssert($methodsDb->calls === 0, 'The methods route must not make any FOLIO database calls.');
     $autofillController->autofillService = new AcrlControllerAccessAutofillService();
     acrlAccessAppUser(false, new \app\models\User());

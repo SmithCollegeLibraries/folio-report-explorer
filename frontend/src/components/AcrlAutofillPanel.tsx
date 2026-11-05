@@ -14,6 +14,7 @@ interface TypedPart {
 interface AutofillDefinition {
   noteLabel: string;
   typedParts: TypedPart[];
+  valueType?: 'currency';
 }
 
 interface AcrlAutofillPanelProps {
@@ -30,6 +31,31 @@ interface AcrlAutofillPanelProps {
 const NO_TYPED_PARTS: TypedPart[] = [];
 
 const definitions: Record<string, AutofillDefinition> = {
+  'survey|20|': {
+    noteLabel: 'one-time expenditures',
+    typedParts: NO_TYPED_PARTS,
+    valueType: 'currency',
+  },
+  'survey|20a|': {
+    noteLabel: 'one-time e-book expenditures',
+    typedParts: NO_TYPED_PARTS,
+    valueType: 'currency',
+  },
+  'survey|21|': {
+    noteLabel: 'ongoing expenditures',
+    typedParts: NO_TYPED_PARTS,
+    valueType: 'currency',
+  },
+  'survey|21a|': {
+    noteLabel: 'ongoing e-book expenditures',
+    typedParts: NO_TYPED_PARTS,
+    valueType: 'currency',
+  },
+  'survey|21b|': {
+    noteLabel: 'ongoing e-journal expenditures',
+    typedParts: NO_TYPED_PARTS,
+    valueType: 'currency',
+  },
   'survey|60|A': {
     noteLabel: 'physical circulation',
     typedParts: NO_TYPED_PARTS,
@@ -74,8 +100,11 @@ const definitions: Record<string, AutofillDefinition> = {
   },
 };
 
-function formatCount(value: number): string {
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(value);
+function formatValue(value: number, valueType?: 'currency'): string {
+  const options = valueType === 'currency'
+    ? { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+    : { maximumFractionDigits: 0 };
+  return new Intl.NumberFormat('en-US', options).format(value);
 }
 
 function formatDate(date: string): string {
@@ -139,8 +168,8 @@ export default function AcrlAutofillPanel({ year, sheet, questionId, part, curre
       ? `FY${year}, run ${runDate}`
       : `as of ${result.asOf}`;
     const noteParts = [
-      `FOLIO ${definition.noteLabel} ${formatCount(result.value)} (query ${result.queryId} v${result.queryVersion}, ${timing})`,
-      ...definition.typedParts.map(({ key, label }) => `${label} ${formatCount(Number(typedValues[key]))}`),
+      `FOLIO ${definition.noteLabel} ${formatValue(result.value, definition.valueType)} (query ${result.queryId} v${result.queryVersion}, ${timing})`,
+      ...definition.typedParts.map(({ key, label }) => `${label} ${formatValue(Number(typedValues[key]))}`),
     ];
     const combinedNote = [currentNote.trim(), noteParts.join(' + ')].filter(Boolean).join('\n');
     onUseValue(String(total), combinedNote);
@@ -153,7 +182,7 @@ export default function AcrlAutofillPanel({ year, sheet, questionId, part, curre
     <AcrlFileStatus message={isLoading ? 'Querying FOLIO… collection counts can take a minute or more.' : error ? `Could not get a FOLIO value. ${error}` : null} busy={isLoading} />
     {result && <section aria-label="FOLIO suggestion" className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/60 p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold text-gray-900">FOLIO count: {formatCount(result.value)}</p>
+        <p className="text-sm font-semibold text-gray-900">FOLIO count: {formatValue(result.value, definition.valueType)}</p>
         {result.kind === 'snapshot' && result.asOf
           ? <p className="text-xs font-medium text-gray-600">As of {formatDate(result.asOf)}</p>
           : <p className="text-xs font-medium text-gray-600">FY{year}</p>}
@@ -167,9 +196,9 @@ export default function AcrlAutofillPanel({ year, sheet, questionId, part, curre
         </label>)}
       </div>}
       {definition.typedParts.length > 0 && <p className="text-xs text-gray-600">These typed-in counts come from outside FOLIO.{!typedPartsReady && ' Enter a number for each; enter 0 when there is none.'}</p>}
-      <p className="border-t border-folio-200 pt-2 text-sm font-semibold text-gray-900">Total: {formatCount(total)}</p>
+      <p className="border-t border-folio-200 pt-2 text-sm font-semibold text-gray-900">Total: {formatValue(total, definition.valueType)}</p>
       {hasCurrentValue && <div className="space-y-2 rounded border border-amber-300 bg-white p-3 text-sm text-amber-950">
-        <p>Current value: {formatCount(Number(currentValue))}</p>
+        <p>Current value: {formatValue(Number(currentValue), definition.valueType)}</p>
         <label className="flex items-center gap-2 font-medium">
           <input type="checkbox" checked={confirmOverwrite} onChange={(event) => setConfirmOverwrite(event.target.checked)} />
           I confirm replacing the current answer

@@ -96,6 +96,15 @@ class AcrlAutofillTestCommand
     }
     public function queryOne(): array
     {
+        if (strpos($this->sql, 'q20_one_time') !== false) {
+            return [
+                'q20_one_time' => 1234.56,
+                'q20a_one_time_ebooks' => 234.56,
+                'q21_ongoing' => 3456.78,
+                'q21a_ongoing_ebooks' => 456.78,
+                'q21b_ongoing_ejournals' => 567.89,
+            ];
+        }
         if (strpos($this->sql, 'with scope_items as') !== false) {
             return ['value' => 1287533];
         }
@@ -159,6 +168,11 @@ $expectedQueries = [
     ['42', 'A', 'acrl-42A', 'acr003-42A-physical-media.sql', 'value', 'snapshot', 1077455],
     ['42', 'B', 'acrl-42B', 'acr003-42B-digital-media.sql', 'value', 'snapshot', 1077455],
     ['43', 'A', 'acrl-43A', 'acr003-43A-physical-serials.sql', 'value', 'snapshot', 51600],
+    ['20', '', 'acrl-20', 'acr030-20-21-expenditures.sql', 'q20_one_time', 'dated', 1234.56],
+    ['20a', '', 'acrl-20a', 'acr030-20-21-expenditures.sql', 'q20a_one_time_ebooks', 'dated', 234.56],
+    ['21', '', 'acrl-21', 'acr030-20-21-expenditures.sql', 'q21_ongoing', 'dated', 3456.78],
+    ['21a', '', 'acrl-21a', 'acr030-20-21-expenditures.sql', 'q21a_ongoing_ebooks', 'dated', 456.78],
+    ['21b', '', 'acrl-21b', 'acr030-20-21-expenditures.sql', 'q21b_ongoing_ejournals', 'dated', 567.89],
 ];
 
 $beforeBlankPart = count($db->commands);
