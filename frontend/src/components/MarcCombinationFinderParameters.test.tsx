@@ -164,7 +164,7 @@ describe('MarcCombinationFinderParameters', () => {
 
   it('switches AND/OR and describes the active search in plain language', async () => {
     const user = userEvent.setup();
-    renderPanel(values({ c2_marcTag: '563', c2_occurrenceCondition: 'missing' }));
+    renderPanel(values({ c2_marcTag: '563', c2_occurrenceCondition: 'missing', c2_subfieldCode: 'a' }));
 
     expect(screen.getByLabelText('MARC combination interpretation')).toHaveTextContent(
       'Records in 1 location that have 655 #7 $a AND are missing 563 $a',

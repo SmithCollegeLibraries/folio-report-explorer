@@ -367,7 +367,7 @@ marcCombinationControllerCase('identifier export uses the compiler tag list in i
     $job = marcCombinationControllerJob($jobId);
     $metadata = json_decode((string) $job['metadata'], true);
     $contract = $metadata['reportExecution'] ?? [];
-    marcCombinationControllerSame('marc-field-combination-finder-655+563-main-main-folio-uuids.csv', $contract['downloadFilename'] ?? null, 'The filename uses the active tag list as one safe component.');
+    marcCombinationControllerSame('marc-field-combination-finder-655-563-main-main-folio-uuids.csv', $contract['downloadFilename'] ?? null, 'The filename normalizes the active tag list as one safe component.');
     marcCombinationControllerTranslateQueuedSql($jobId);
     $exportWorker->actionProcessOnce();
     $job = marcCombinationControllerJob($jobId);
