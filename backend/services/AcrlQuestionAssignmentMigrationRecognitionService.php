@@ -167,7 +167,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
     private static function columnDefaultMatches($actual, $expected): bool
     {
         if ($expected === null) {
-            return $actual === null;
+            return $actual === null || (is_string($actual) && strcasecmp($actual, 'NULL') === 0);
         }
         if ($actual === null) {
             return false;
