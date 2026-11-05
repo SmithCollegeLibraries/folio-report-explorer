@@ -172,12 +172,12 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         if ($actual === null) {
             return false;
         }
-        $actual = trim((string)$actual);
-        if (strlen($actual) >= 2 && $actual[0] === "'" && substr($actual, -1) === "'") {
-            $actual = str_replace("''", "'", substr($actual, 1, -1));
+        $actual = (string)$actual;
+        if ($expected === '') {
+            return $actual === '' || $actual === "''";
         }
         if (is_string($expected) && stripos($expected, 'CURRENT_TIMESTAMP') === 0) {
-            return strtolower($actual) === strtolower($expected);
+            return $actual === $expected || $actual === strtolower($expected);
         }
         return (string)$actual === (string)$expected;
     }
