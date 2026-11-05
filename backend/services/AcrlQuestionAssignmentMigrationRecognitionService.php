@@ -179,6 +179,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         if (is_string($expected) && stripos($expected, 'CURRENT_TIMESTAMP') === 0) {
             return $actual === $expected || $actual === strtolower($expected);
         }
+        if (is_string($expected)) {
+            $quotedExpected = "'" . str_replace("'", "''", $expected) . "'";
+            return $actual === $expected || $actual === $quotedExpected;
+        }
         return (string)$actual === (string)$expected;
     }
 
