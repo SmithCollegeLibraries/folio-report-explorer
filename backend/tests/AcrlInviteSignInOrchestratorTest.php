@@ -111,25 +111,53 @@ acrlInviteOrchestratorCheck(($approved['result']['redirect'] ?? null) === '/', '
 $authorizeSource = (string)file_get_contents(__DIR__ . '/../../admin/authorize.php');
 $findPosition = strpos($authorizeSource, 'User::findOne([\'smith_id\' => $smithId])');
 $notifyPosition = strpos($authorizeSource, 'User::notifyAdminsOfNewUser($user)');
-$orchestratorPosition = strpos($authorizeSource, 'AcrlInviteSignInOrchestrator');
+$identityPosition = strpos($authorizeSource, 'AcrlInviteSignInOrchestrator::inviteIdentityFromServer($_SERVER)');
+$orchestratorPosition = strpos($authorizeSource, 'AcrlInviteSignInOrchestrator())->run(');
 acrlInviteOrchestratorCheck($findPosition !== false && $orchestratorPosition !== false && $notifyPosition !== false
     && $findPosition < $orchestratorPosition && $orchestratorPosition < $notifyPosition,
     'authorize.php calls the testable invite sign-in orchestrator after find-or-create and before new-user notification.');
+acrlInviteOrchestratorCheck($identityPosition !== false && $identityPosition < $orchestratorPosition,
+    'authorize.php selects invite identity only from Shibboleth server attributes before the invite decision.');
 $previousRemoteUser = $_SERVER['REMOTE_USER'] ?? null;
 $_SERVER['REMOTE_USER'] = 'sign-in';
 $remoteIdentity = (string)$_SERVER['REMOTE_USER'];
-$withoutShibUid = acrlInviteOrchestratorRun(1, true, function ($eppn, $uid) use ($remoteIdentity) {
-    return ($eppn !== null && strtolower($eppn) === $remoteIdentity . '@smith.example')
+$withoutShibUidIdentity = null;
+try {
+    $withoutShibUidIdentity = AcrlInviteSignInOrchestrator::inviteIdentityFromServer([
+        'REMOTE_USER' => $remoteIdentity,
+    ]);
+} catch (Throwable $error) {
+    $failures[] = 'Identity selection must be testable from the server array: ' . $error->getMessage();
+}
+acrlInviteOrchestratorCheck(is_array($withoutShibUidIdentity)
+    && ($withoutShibUidIdentity['eppn'] ?? null) === null && ($withoutShibUidIdentity['uid'] ?? null) === null,
+    'REMOTE_USER is not an invite identity when Shibboleth eppn and uid are absent.');
+$withoutShibUidIdentity = is_array($withoutShibUidIdentity) ? $withoutShibUidIdentity : ['eppn' => null, 'uid' => null];
+$remoteAccepted = false;
+$withoutShibUid = acrlInviteOrchestratorRun(1, true, function ($eppn, $uid) use ($remoteIdentity, &$remoteAccepted) {
+    $remoteAccepted = ($eppn !== null && strtolower($eppn) === $remoteIdentity . '@smith.example')
         || ($uid !== null && strtolower($uid) === $remoteIdentity);
-}, false, 'missing Shibboleth uid with matching REMOTE_USER', null, null);
+    return $remoteAccepted;
+}, false, 'missing Shibboleth uid with matching REMOTE_USER', $withoutShibUidIdentity['eppn'], $withoutShibUidIdentity['uid']);
 if ($previousRemoteUser === null) unset($_SERVER['REMOTE_USER']); else $_SERVER['REMOTE_USER'] = $previousRemoteUser;
 $remoteEvents = $withoutShibUid['events'];
-acrlInviteOrchestratorCheck(isset($remoteEvents[0]) && $remoteEvents[0][0] === 'accept'
+acrlInviteOrchestratorCheck(!$remoteAccepted && isset($remoteEvents[0]) && $remoteEvents[0][0] === 'accept'
     && $remoteEvents[0][2] === null && $remoteEvents[0][3] === null,
-    'With no Shibboleth uid, a matching REMOTE_USER is not passed as an invite identity.');
+    'The acceptance decision gets no identity when only matching REMOTE_USER is present.');
 acrlInviteOrchestratorCheck(array_column($remoteEvents, 0) === ['accept', 'reload', 'notify']
     && !isset($withoutShibUid['result']['tokens']),
     'Absent Shibboleth uid does not accept the invite or issue tokens based on REMOTE_USER.');
+$withShibUidIdentity = null;
+try {
+    $withShibUidIdentity = AcrlInviteSignInOrchestrator::inviteIdentityFromServer([
+        'eppn' => 'sign-in@smith.example', 'uid' => 'sign-in', 'REMOTE_USER' => 'different-user',
+    ]);
+} catch (Throwable $error) {
+    $failures[] = 'Identity selection with Shibboleth attributes failed: ' . $error->getMessage();
+}
+acrlInviteOrchestratorCheck(is_array($withShibUidIdentity) && ($withShibUidIdentity['uid'] ?? null) === 'sign-in'
+    && ($withShibUidIdentity['eppn'] ?? null) === 'sign-in@smith.example',
+    'Invite identity selection returns the Shibboleth eppn and uid attributes.');
 
 if ($failures) {
     fwrite(STDERR, 'FAIL: ' . count($failures) . " ACRL invite sign-in orchestration checks failed:\n");

@@ -350,6 +350,31 @@ acrlInviteServiceScenario('accept matches only current Shibboleth identity and r
     acrlInviteServiceCheck((string)$db->createCommand('SELECT status FROM acrl_invites WHERE id = 206')->queryScalar() === 'pending', 'Invite with no usable target remains pending.');
 });
 
+acrlInviteServiceScenario('accepts a question target after republishing moves its catalogue section', function () use ($service, $db) {
+    $db->createCommand()->insert('acrl_questions', [
+        'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => 'ACR29MOVE', 'part' => '',
+        'section' => 'Original section', 'prompt' => 'Synthetic moved question', 'survey_order' => 99,
+    ])->execute();
+    acrlInviteServiceInsertInvite(214, 'moved-question@smith.example');
+    acrlInviteServiceInsertTarget(214, 'question', 'Original section', 'survey', 'ACR29MOVE', '');
+    $invitee = new User(['smith_id' => 'synthetic-moved-question-user', 'username' => 'moved-question', 'role' => 'user', 'is_approved' => 0]);
+    $invitee->save(false);
+    $db->createCommand()->update('acrl_questions', ['section' => 'Republished section'], [
+        'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => 'ACR29MOVE', 'part' => '',
+    ])->execute();
+
+    $accepted = acrlInviteServiceCall(function () use ($service, $invitee) {
+        return $service->acceptOnSignIn($invitee, 'moved-question@smith.example', 'moved-question');
+    }, 'Acceptance after catalogue section move');
+    acrlInviteServiceCheck($accepted === true, 'A question invite remains usable when only the catalogue section changes.');
+    acrlInviteServiceCheck((int)User::findOne($invitee->id)->is_approved === 1, 'A question invite with the unchanged tuple approves the invitee after the section move.');
+    acrlInviteServiceCheck((int)$db->createCommand(
+        'SELECT COUNT(*) FROM acrl_question_assignments WHERE survey_year = 2026 AND sheet = :sheet'
+            . ' AND question_id = :question AND part = :part AND user_id = :user',
+        [':sheet' => 'survey', ':question' => 'ACR29MOVE', ':part' => '', ':user' => $invitee->id]
+    )->queryScalar() === 1, 'Acceptance assigns the current catalogue question tuple exactly once.');
+});
+
 acrlInviteServiceScenario('accept preserves preassigned targets across overlapping pending invites', function () use ($service, $db) {
     acrlInviteServiceInsertInvite(210, 'additive@smith.example');
     acrlInviteServiceInsertTarget(210, 'section', 'Circulation');
