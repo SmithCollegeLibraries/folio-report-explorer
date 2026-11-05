@@ -8,6 +8,7 @@ use app\models\ReportTemplate;
 require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/SqlSelectStructureService.php';
 require_once __DIR__ . '/CatalogingMarcLocationScopeService.php';
+require_once __DIR__ . '/CatalogingMarcConditionValidator.php';
 
 final class CatalogingMarcFieldFinderService
 {
@@ -28,27 +29,6 @@ final class CatalogingMarcFieldFinderService
         'contentRule',
         'searchValue',
         'caseExact',
-    ];
-    private const CONTENT_RULES = [
-        'any',
-        'contains',
-        'not_contains',
-        'equals',
-        'not_equals',
-        'begins',
-        'not_begins',
-        'blank',
-        'not_blank',
-        'has_lowercase',
-        'has_non_alphanumeric',
-    ];
-    private const TEXT_CONTENT_RULES = [
-        'contains',
-        'not_contains',
-        'equals',
-        'not_equals',
-        'begins',
-        'not_begins',
     ];
     private const CANONICAL_REPORT_NAME = 'MARC Field, Indicator, and Content Finder';
     private const CANONICAL_TEMPLATE_SHA256 = 'b6663a679553da0ac42a65c9140734d241b67341b46ae979aa42d06b334158a8';
@@ -78,32 +58,15 @@ final class CatalogingMarcFieldFinderService
         self::assertStructuralTokenCount($template, self::MARC_TABLE_TOKEN, 2);
 
         $scope = self::validateLocationScope($inputs);
-        $marcTag = self::validateMarcTag($inputs['marcTag'] ?? null);
-        $occurrenceCondition = self::oneOf(
-            $inputs['occurrenceCondition'] ?? null,
-            ['has', 'missing'],
-            'occurrenceCondition',
-            'Occurrence condition must be has or missing.'
-        );
-        $firstIndicator = self::normalizeIndicator($inputs['firstIndicator'] ?? null, 'firstIndicator');
-        $secondIndicator = self::normalizeIndicator($inputs['secondIndicator'] ?? null, 'secondIndicator');
-        $subfieldCode = self::validateSubfieldCode($inputs['subfieldCode'] ?? null);
-        $contentRule = self::oneOf(
-            $inputs['contentRule'] ?? null,
-            self::CONTENT_RULES,
-            'contentRule',
-            'A supported content rule is required.'
-        );
-        $searchValue = self::validateSearchValue($inputs['searchValue'] ?? null, $contentRule);
-        $caseExact = self::oneOf(
-            $inputs['caseExact'] ?? null,
-            ['true', 'false'],
-            'caseExact',
-            'Case matching must be true or false.'
-        );
-        if (!in_array($contentRule, self::TEXT_CONTENT_RULES, true)) {
-            $caseExact = 'false';
-        }
+        $condition = CatalogingMarcConditionValidator::validate($inputs);
+        $marcTag = $condition['marcTag'];
+        $occurrenceCondition = $condition['occurrenceCondition'];
+        $firstIndicator = $condition['firstIndicator'];
+        $secondIndicator = $condition['secondIndicator'];
+        $subfieldCode = $condition['subfieldCode'];
+        $contentRule = $condition['contentRule'];
+        $searchValue = $condition['searchValue'];
+        $caseExact = $condition['caseExact'];
 
         $marcTable = 'marctab.mt' . $marcTag;
         $locationFragment = $scope['locationFragment'];
@@ -229,69 +192,6 @@ final class CatalogingMarcFieldFinderService
         } catch (\InvalidArgumentException $exception) {
             throw new ReportParameterValidationException('locationIds', $exception->getMessage());
         }
-    }
-
-    private static function validateMarcTag($value): string
-    {
-        if (!is_string($value)
-            || preg_match('/^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/D', $value) !== 1) {
-            throw new ReportParameterValidationException(
-                'marcTag',
-                'MARC tag must be exactly three ASCII digits from 001 through 999.'
-            );
-        }
-        return $value;
-    }
-
-    private static function normalizeIndicator($value, string $field): string
-    {
-        if (!is_string($value)) {
-            throw new ReportParameterValidationException($field, 'Indicator must be any, blank, or char: plus one character.');
-        }
-        if ($value === 'any' || $value === 'blank') {
-            return $value;
-        }
-        if (preg_match('/\Achar:(.)\z/us', $value, $matches) !== 1) {
-            throw new ReportParameterValidationException($field, 'Indicator must be any, blank, or char: plus one character.');
-        }
-        if ($matches[1] === '\\' || trim($matches[1]) === '') {
-            return 'blank';
-        }
-        return $value;
-    }
-
-    private static function validateSubfieldCode($value): string
-    {
-        if (!is_string($value) || ($value !== '' && preg_match('/\A[A-Za-z0-9]\z/D', $value) !== 1)) {
-            throw new ReportParameterValidationException(
-                'subfieldCode',
-                'Subfield code must be blank or one ASCII alphanumeric character.'
-            );
-        }
-        return $value;
-    }
-
-    private static function validateSearchValue($value, string $contentRule): string
-    {
-        if (!is_string($value)) {
-            throw new ReportParameterValidationException('searchValue', 'Search text must be a string.');
-        }
-        $usesText = in_array($contentRule, self::TEXT_CONTENT_RULES, true);
-        if ($usesText && $value === '') {
-            throw new ReportParameterValidationException('searchValue', 'Search text is required for this content rule.');
-        }
-        if (!$usesText && $value !== '') {
-            throw new ReportParameterValidationException('searchValue', 'Search text must be empty for this content rule.');
-        }
-        return $value;
-    }
-
-    private static function oneOf($value, array $allowed, string $field, string $message): string
-    {
-        if (!is_string($value) || !in_array($value, $allowed, true)) {
-            throw new ReportParameterValidationException($field, $message);
-        }
-        return $value;
     }
 
     private static function assertStructuralTokenCount(string $sql, string $token, int $expected): void

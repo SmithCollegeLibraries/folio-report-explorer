@@ -1,8 +1,10 @@
 import type { ReportParam } from '../types';
 import ParamInput from './ParamInput';
 import MarcFieldFinderParameters from './MarcFieldFinderParameters';
+import MarcCombinationFinderParameters from './MarcCombinationFinderParameters';
 import BudgetYearExpenseClassParameters from './BudgetYearExpenseClassParameters';
 import { MARC_FIELD_FINDER_SLUG } from '../utils/marcFieldFinder';
+import { MARC_COMBINATION_FINDER_SLUG } from '../utils/marcFieldFinder';
 
 const BUDGET_YEAR_EXPENSE_CLASS_SLUG = 'budget-year-expense-class';
 const MARC_MISSING_TAG_REPORT_SLUG = 'marc-bibliographic-records-missing-tag';
@@ -39,6 +41,18 @@ export default function ReportParameterFields({
   if (slug === MARC_FIELD_FINDER_SLUG) {
     return (
       <MarcFieldFinderParameters
+        values={values}
+        parameters={parameters}
+        selectOptions={selectOptions}
+        serverFieldErrors={serverFieldErrors}
+        onChange={onChange}
+      />
+    );
+  }
+
+  if (slug === MARC_COMBINATION_FINDER_SLUG) {
+    return (
+      <MarcCombinationFinderParameters
         values={values}
         parameters={parameters}
         selectOptions={selectOptions}

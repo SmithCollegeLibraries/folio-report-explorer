@@ -2,7 +2,9 @@
 
 namespace app\services;
 
-/** Recognizes the ACRL 066 and 067 schemas used by current-schema baselining. */
+require_once __DIR__ . '/CatalogingReportMigrationRecognitionService.php';
+
+/** Recognizes migrations used by current-schema baselining. */
 class AcrlQuestionAssignmentMigrationRecognitionService
 {
     private static function migrationDefinitions(): array
@@ -15,6 +17,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             '067_acrl_invites.sql' => [
                 'check' => 'acrlInvitesAppearComplete',
                 'error' => 'Migration 067 left acrl_invites or acrl_invite_targets without its required schema.',
+            ],
+            '068_marc_field_combination_finder.sql' => [
+                'check' => 'marcCombinationFinderDefinitionAppearsComplete',
+                'error' => 'Migration 068 did not install the canonical MARC combination finder definition.',
             ],
         ];
     }
@@ -109,6 +115,11 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             && self::foreignKeysAppearComplete($db, 'acrl_invite_targets', [
                 'invite_id' => ['acrl_invites', 'id', 'CASCADE'],
             ]);
+    }
+
+    private static function marcCombinationFinderDefinitionAppearsComplete($db): bool
+    {
+        return CatalogingReportMigrationRecognitionService::marcCombinationFinderReportAppearsComplete($db);
     }
 
     private static function tableShapeAppearsComplete($db, string $table, array $expected): bool
@@ -280,6 +291,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         $schemaMigrations = [
             '066_acrl_question_assignments.sql' => true,
             '067_acrl_invites.sql' => true,
+            '068_marc_field_combination_finder.sql' => true,
         ];
         foreach ($files as $file) {
             $filename = $file['filename'];
@@ -288,6 +300,9 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     if (!$dryRun) {
                         $started = microtime(true);
                         MigrationService::executeMigrationFile($db, $file);
+                        if (!self::migrationSchemaAppearsComplete($db, $filename)) {
+                            throw new \RuntimeException('Migration 068 did not install the canonical MARC combination finder definition.');
+                        }
                         $db->createCommand()->insert('schema_migrations', [
                             'filename' => $filename,
                             'checksum' => $file['checksum'],
