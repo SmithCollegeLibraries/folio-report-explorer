@@ -250,6 +250,49 @@ describe('ACRL entry page', () => {
     })));
   });
 
+  it('shows and saves cents for the Q20 currency suggestion in its answer row', async () => {
+    const response = entry();
+    response.sections[0].questions[0] = makeQuestion({
+      questionId: '20', part: '', section: 'Expenditures', prompt: 'One-time expenditures', answerType: 'currency',
+      answer: { value_text: null, value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
+    });
+    getEntry.mockResolvedValue(response);
+    getAutofillMethods.mockResolvedValue({ methods: [{
+      sheet: 'survey', questionId: '20', part: '', queryId: 'acrl-20', queryVersion: 1, kind: 'dated',
+      summary: [
+        'Sums Smith payments minus credits in FOLIO fiscal year SCFY2025 on purchase-order lines whose order type is One-Time.',
+        'Material type Admin (fees and services) is left out; payments with no purchase-order line and spending outside FOLIO are not included.',
+        'This is FOLIO data only - adjust the value if other spending belongs here.',
+      ],
+      sql: 'select q20_one_time;',
+    }] });
+    runAutofill.mockResolvedValue({
+      value: 1234.56, queryId: 'acrl-20', queryVersion: 1, ranAt: '2026-11-05T12:00:00-05:00',
+      asOf: null, fyStart: '2024-07-01', fyEnd: '2025-07-01', kind: 'dated',
+    });
+    saveAnswer.mockResolvedValue({ conflict: false, answer: response.sections[0].questions[0].answer });
+    renderPage();
+
+    const row = (await screen.findByRole('heading', { name: 'One-time expenditures' })).closest('article') as HTMLElement;
+    const fillButton = within(row).queryByRole('button', { name: 'Fill from FOLIO' });
+    expect.soft(fillButton, 'Q20 currency answers should expose Fill from FOLIO in the answer row').toBeInTheDocument();
+    if (fillButton) {
+      await userEvent.click(fillButton);
+      const suggestion = await within(row).findByRole('region', { name: 'FOLIO suggestion' });
+      expect.soft(within(suggestion).queryByText('FOLIO count: 1,234.56')).toBeInTheDocument();
+      expect.soft(within(suggestion).queryByText('Total: 1,234.56')).toBeInTheDocument();
+      const method = await within(suggestion).findByRole('region', { name: 'How Fill from FOLIO counts this now' });
+      expect.soft(method).toHaveTextContent('FOLIO data only - adjust the value if other spending belongs here.');
+
+      await userEvent.click(within(suggestion).getByRole('button', { name: 'Use this value' }));
+      await waitFor(() => expect(saveAnswer).toHaveBeenCalledTimes(1));
+      expect.soft(saveAnswer).toHaveBeenCalledWith(2026, expect.objectContaining({
+        sheet: 'survey', question_id: '20', part: '', value: '1234.56',
+        note: expect.stringContaining('1,234.56'),
+      }));
+    }
+  });
+
   it('clears an autofill suggestion when returning to another cached survey year', async () => {
     const currentYear = entry();
     const previousYear = entry();

@@ -104,6 +104,33 @@ describe('ACRL question details counting method', () => {
     expect(writeText).toHaveBeenCalledWith(method.sql);
   });
 
+  it('shows the Q20 expenditure scope in the question details view', async () => {
+    const expenditureMethod = {
+      sheet: 'survey' as const,
+      questionId: '20',
+      part: '',
+      queryId: 'acrl-20',
+      queryVersion: 1,
+      kind: 'dated' as const,
+      summary: [
+        'Sums Smith payments minus credits in FOLIO fiscal year SCFY2025 on purchase-order lines whose order type is One-Time.',
+        'Material type Admin (fees and services) is left out; payments with no purchase-order line and spending outside FOLIO are not included.',
+        'This is FOLIO data only - adjust the value if other spending belongs here.',
+      ],
+      sql: 'select q20_one_time;',
+    };
+    getMethods.mockResolvedValue({ methods: [expenditureMethod] });
+    getQuestionDetails.mockResolvedValue({ instructions: [], notes: [], canAddNote: false, canManageNotes: false });
+    renderWithClient(<AcrlQuestionDetailsModal year={2026} question={question('20')} isAdmin={false} onClose={vi.fn()} />);
+
+    const methodSection = await screen.findByRole('region', { name: 'How Fill from FOLIO counts this now' });
+    expect(methodSection).toHaveTextContent('One-Time');
+    expect(methodSection).toHaveTextContent('Admin (fees and services) is left out');
+    expect(methodSection).toHaveTextContent('FOLIO data only - adjust the value if other spending belongs here.');
+    await userEvent.click(within(methodSection).getByText('SQL'));
+    expect(methodSection.querySelector('pre')?.textContent).toBe('select q20_one_time;');
+  });
+
   it('keeps closed SQL controls out of the modal focus trap and includes them when expanded', async () => {
     getMethods.mockResolvedValue({ methods: [method] });
     getQuestionDetails.mockResolvedValue({ instructions: [], notes: [], canAddNote: false, canManageNotes: false });
