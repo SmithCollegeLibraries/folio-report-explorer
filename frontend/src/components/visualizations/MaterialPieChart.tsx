@@ -3,6 +3,7 @@ import type { LegendPayload } from 'recharts';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartLegendContent } from '../ui/chart-legend';
 import { amount } from './ChartCard';
+import { useChartLabelSize } from './ChartLabelSize';
 import { useNarrowViewport } from './useNarrowViewport';
 
 type MaterialItem = { materialType: string | null; amount: number };
@@ -76,14 +77,14 @@ function materialTableRows(items: MaterialItem[]) {
   }));
 }
 
-function measuredTextWidth(value: string) {
-  const fallback = Array.from(value).length * 6;
+function measuredTextWidth(value: string, fontSize: number) {
+  const fallback = Array.from(value).length * fontSize * 0.6;
   if (typeof document === 'undefined' || typeof CanvasRenderingContext2D === 'undefined') return fallback;
 
   try {
     const context = document.createElement('canvas').getContext('2d');
     if (!context) return fallback;
-    context.font = '10px sans-serif';
+    context.font = `${fontSize}px sans-serif`;
     const width = context.measureText(value).width;
     return Number.isFinite(width) && width > 0 ? width : fallback;
   } catch {
@@ -91,9 +92,9 @@ function measuredTextWidth(value: string) {
   }
 }
 
-function fitSideLabel(name: string, shareText: string, availableWidth: number) {
+function fitSideLabel(name: string, shareText: string, availableWidth: number, fontSize: number) {
   const fullLabel = `${name} ${shareText}`;
-  if (measuredTextWidth(fullLabel) <= availableWidth) return fullLabel;
+  if (measuredTextWidth(fullLabel, fontSize) <= availableWidth) return fullLabel;
 
   const characters = Array.from(name);
   let low = 0;
@@ -101,16 +102,17 @@ function fitSideLabel(name: string, shareText: string, availableWidth: number) {
   while (low < high) {
     const middle = Math.ceil((low + high) / 2);
     const candidate = `${characters.slice(0, middle).join('')}… ${shareText}`;
-    if (measuredTextWidth(candidate) <= availableWidth) low = middle;
+    if (measuredTextWidth(candidate, fontSize) <= availableWidth) low = middle;
     else high = middle - 1;
   }
 
   const fittedLabel = `${characters.slice(0, low).join('')}… ${shareText}`;
-  if (measuredTextWidth(fittedLabel) <= availableWidth) return fittedLabel;
-  return measuredTextWidth(shareText) <= availableWidth ? shareText : '';
+  if (measuredTextWidth(fittedLabel, fontSize) <= availableWidth) return fittedLabel;
+  return measuredTextWidth(shareText, fontSize) <= availableWidth ? shareText : '';
 }
 
 export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
+  const labelSize = useChartLabelSize();
   const viewportNarrow = useNarrowViewport();
   const [chartElement, setChartElement] = useState<HTMLDivElement | null>(null);
   const [chartSize, setChartSize] = useState({ width: 0, height: 320 });
@@ -193,8 +195,8 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
     const angle = (prior + slice.amount / 2) / total * Math.PI * 2 - Math.PI / 2;
     const side = Math.cos(angle) >= 0 ? 'right' : 'left';
     const shareText = `${slice.percentage.toFixed(1)}%`;
-    const text = narrow ? '' : fitSideLabel(slice.name, shareText, availableLabelWidth);
-    return { slice, angle, side, text, textWidth: text ? measuredTextWidth(text) : 0 };
+    const text = narrow ? '' : fitSideLabel(slice.name, shareText, availableLabelWidth, labelSize);
+    return { slice, angle, side, text, textWidth: text ? measuredTextWidth(text, labelSize) : 0 };
   });
   const widestLabel = Math.max(0, ...labelData
     .filter(({ slice }) => slice.percentage >= 3)
@@ -210,17 +212,18 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
   for (const side of ['left', 'right']) {
     const sideLabels = labels.filter((label) => label.side === side && label.slice.percentage >= 3).sort((a, b) => a.y - b.y);
     sideLabels.forEach((label, index) => {
-      label.y = Math.max(label.y, index === 0 ? 24 : sideLabels[index - 1].y + 22);
+      label.y = Math.max(label.y, index === 0 ? labelSize + 14 : sideLabels[index - 1].y + labelSize + 12);
     });
     if (sideLabels.length) {
-      const overflow = sideLabels[sideLabels.length - 1].y - (height - 24);
+      const overflow = sideLabels[sideLabels.length - 1].y - (height - labelSize - 14);
       if (overflow > 0) sideLabels.forEach((label) => { label.y -= overflow; });
     }
   }
 
   const legend = <ChartLegendContent payload={legendPayload} verticalAlign="bottom"
-    className={narrow ? 'flex-col items-start justify-start gap-2 pt-1' : 'flex-wrap gap-4 pt-1'} />;
-  const narrowLegendHeight = legendPayload.length * 24 + 4;
+    className={`chart-legend-content ${labelSize === 18 ? 'text-[18px]' : 'text-[13px]'} ${narrow
+      ? 'flex-col items-start justify-start gap-2 pt-1' : 'flex-wrap gap-4 pt-1'}`} />;
+  const narrowLegendHeight = legendPayload.length * (labelSize + 12) + 4;
 
   return <div className="space-y-2">
     <ChartContainer ref={setChartElement} config={config}
@@ -256,7 +259,7 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
             const elbowX = side === 'right' ? lineEndX - 8 : lineEndX + 8;
             return <g key={slice.key}>
               <path d={`M ${x1} ${y1} L ${elbowX} ${y} L ${lineEndX} ${y}`} fill="none" stroke="#6b7280" strokeWidth="1" />
-              <text x={labelX} y={y + 4} textAnchor={side === 'right' ? 'start' : 'end'} fill="#374151" fontSize="10">
+              <text x={labelX} y={y + 4} textAnchor={side === 'right' ? 'start' : 'end'} fill="#374151" fontSize={labelSize}>
                 {text}
               </text>
             </g>;

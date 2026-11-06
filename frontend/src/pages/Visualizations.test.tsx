@@ -1024,6 +1024,29 @@ describe('Visualizations RPT-030 chart enlargement', () => {
       expect.soft(cardData.length, `${title} card data`).toBeGreaterThan(0);
       expect.soft(dialogData, `${title} enlarged data`).toEqual(cardData);
       expect.soft(dialogData.length, `${title} enlarged data`).toBeGreaterThan(0);
+
+      const chartTextSizes = (root: ParentNode | null, selector: string) => Array.from(
+        root?.querySelectorAll<SVGTextElement>(selector) ?? [],
+        (text) => Number(text.getAttribute('font-size')),
+      );
+      const cardChartTextSizes = chartTextSizes(region, '.recharts-cartesian-axis-tick text, .recharts-label-list text, .recharts-pie-labels text');
+      const dialogChartTextSizes = chartTextSizes(dialog, '.recharts-cartesian-axis-tick text, .recharts-label-list text, .recharts-pie-labels text');
+      const legendSizes = (root: ParentNode | null) => [
+        ...Array.from(root?.querySelectorAll<HTMLElement>('.chart-legend-content, .chart-history-legend') ?? [],
+          (legend) => legend.classList.contains('text-[18px]') ? 18
+            : legend.classList.contains('text-[13px]') ? 13 : Number.parseFloat(legend.style.fontSize)),
+      ];
+      const cardLegendSizes = legendSizes(region);
+      const dialogLegendSizes = legendSizes(dialog);
+
+      expect.soft(cardChartTextSizes.length, `${title} page labels and ticks`).toBeGreaterThan(0);
+      expect.soft(cardChartTextSizes.every((size) => size >= 13), `${title} page labels and ticks are at least 13px`).toBe(true);
+      expect.soft(dialogChartTextSizes.length, `${title} enlarged labels and ticks`).toBeGreaterThan(0);
+      expect.soft(dialogChartTextSizes.every((size) => size >= 18), `${title} enlarged labels and ticks are at least 18px`).toBe(true);
+      expect.soft(cardLegendSizes.length, `${title} page legend text`).toBeGreaterThan(0);
+      expect.soft(cardLegendSizes.every((size) => size >= 13), `${title} page legend text is at least 13px`).toBe(true);
+      expect.soft(dialogLegendSizes.length, `${title} enlarged legend text`).toBeGreaterThan(0);
+      expect.soft(dialogLegendSizes.every((size) => size >= 18), `${title} enlarged legend text is at least 18px`).toBe(true);
     }
   });
 

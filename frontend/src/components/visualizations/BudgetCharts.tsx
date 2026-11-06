@@ -4,6 +4,7 @@ import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartTooltip, ChartTooltipContent } from '../ui/chart-tooltip';
 import { ChartCard, HistoryPattern, amount, percent } from './ChartCard';
+import { useChartLabelSize } from './ChartLabelSize';
 import { useNarrowViewport } from './useNarrowViewport';
 
 type BudgetRow = VisualizationData['budget'][number];
@@ -23,20 +24,21 @@ function changeLabel(value: number | null) {
   return '– 0.0%';
 }
 
-function estimatedLabelWidth(value: string) {
+function estimatedLabelWidth(value: string, fontSize: number) {
   return Array.from(value).reduce((width, character) => width + (
     /[0-9$%k]/.test(character) ? 7
       : character === 'M' ? 8
         : character === '▲' || character === '▼' ? 10
           : character === ' ' || character === '.' ? 4 : 7
-  ), 0);
+  ), 0) * fontSize / 11;
 }
 
 function labelsFitHorizontally(amountWidth: number, changeWidth: number, barWidth: number, showChangeLabels: boolean) {
   return amountWidth + 8 <= barWidth && (!showChangeLabels || changeWidth + 8 <= barWidth);
 }
 
-export function BudgetCharts({ data }: { data: VisualizationData }) {
+function BudgetBarChart({ data }: { data: VisualizationData }) {
+  const labelSize = useChartLabelSize();
   const patternId = useId().replace(/:/g, '');
   const narrow = useNarrowViewport();
   const [chartElement, setChartElement] = useState<HTMLDivElement | null>(null);
@@ -55,15 +57,68 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
   }, [chartElement]);
 
   const showChangeLabels = !narrow && data.budget.length < 15;
-  const defaultTopMargin = 42;
+  const defaultTopMargin = Math.max(42, showChangeLabels ? labelSize * 3 + 6 : labelSize * 2 + 6);
   const estimatedBarWidth = Math.max(0, (chartWidth - 92) / Math.max(1, data.budget.length) - 2);
   const longestRotatedLabel = data.budget.reduce((longest, row) => {
-    const amountWidth = estimatedLabelWidth(compactAmount(row.allocated));
-    const changeWidth = estimatedLabelWidth(changeLabel(row.changePct));
+    const amountWidth = estimatedLabelWidth(compactAmount(row.allocated), labelSize);
+    const changeWidth = estimatedLabelWidth(changeLabel(row.changePct), labelSize);
     return labelsFitHorizontally(amountWidth, changeWidth, estimatedBarWidth, showChangeLabels)
       ? longest : Math.max(longest, amountWidth, showChangeLabels ? changeWidth : 0);
   }, 0);
   const topMargin = Math.max(defaultTopMargin, longestRotatedLabel + 10);
+  return <div ref={setChartElement} className="relative h-80 min-w-0 w-full" aria-label="Allocated budget by fiscal year">
+    <ChartContainer config={config} className="h-full min-w-0 w-full">
+      <BarChart data={data.budget} margin={{ top: topMargin, right: 12, bottom: 12, left: 8 }} barCategoryGap={2}>
+      <HistoryPattern id={patternId} />
+      <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
+      <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} tick={{ fontSize: labelSize }} />
+      <YAxis width={72} domain={[0, 'auto']} tickFormatter={compactAmount}
+        tickLine={false} axisLine={false} tick={{ fontSize: labelSize }} />
+      <ChartTooltip content={<ChartTooltipContent hideLabel indicator="line" formatter={(_value, _name, item) => {
+        const row = item.payload as BudgetRow;
+        return <div className="grid gap-1.5 text-sm">
+          <strong>FY {row.fiscalYearEnd}</strong><p>Allocated: {amount(row.allocated)}</p>
+          <p>Change: {changeLabel(row.changePct)}</p><p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p>
+        </div>;
+      }} />} />
+      <Bar dataKey="allocated" name="Allocated" fill="var(--chart-1)" radius={[4, 4, 0, 0]} isAnimationActive={false}>
+        {data.budget.map((row) => <Cell key={row.fiscalYearEnd}
+          fill={row.source === 'history' ? `url(#${patternId})` : 'var(--chart-1)'} />)}
+        <LabelList dataKey="allocated" position="top" content={({ x, y, width, index }) => {
+          const barIndex = Number(index);
+          const row = data.budget[barIndex];
+          if (!row) return null;
+          const labelX = Number(x ?? 0) + Number(width ?? 0) / 2;
+          const labelY = Number(y ?? 0);
+          const barWidth = Number(width ?? 0);
+          const amountText = compactAmount(row.allocated);
+          const changeText = changeLabel(row.changePct);
+          const amountWidth = estimatedLabelWidth(amountText, labelSize);
+          const changeWidth = estimatedLabelWidth(changeText, labelSize);
+          const horizontal = labelsFitHorizontally(amountWidth, changeWidth, barWidth, showChangeLabels);
+          const labelYAboveBar = labelY - labelSize / 2;
+
+          if (!horizontal) {
+            return <text x={labelX} y={labelYAboveBar}
+              transform={`rotate(-90 ${labelX} ${labelYAboveBar})`}
+              textAnchor="start" fill="#374151" fontSize={labelSize}>
+              <tspan x={labelX}>{amountText}</tspan>
+              {showChangeLabels && <tspan x={labelX} dy={labelSize}>{changeText}</tspan>}
+            </text>;
+          }
+
+          return <text x={labelX} y={labelY - (showChangeLabels ? labelSize * 2 : labelSize)} textAnchor="middle" fill="#374151" fontSize={labelSize}>
+            <tspan x={labelX}>{amountText}</tspan>
+            {showChangeLabels && <tspan x={labelX} dy={labelSize}>{changeText}</tspan>}
+          </text>;
+        }} />
+      </Bar>
+      </BarChart>
+    </ChartContainer>
+  </div>;
+}
+
+export function BudgetCharts({ data }: { data: VisualizationData }) {
   const title = 'Library budget';
   return <ChartCard title={title} history explanation="Total budget allocated to the acquisitions unit, with the API-reported year-over-year change."
     table={<table><caption>{title}</caption><thead><tr><th scope="col">Fiscal year</th>
@@ -72,55 +127,6 @@ export function BudgetCharts({ data }: { data: VisualizationData }) {
       <th scope="row">{row.fiscalYearEnd}</th><td>{amount(row.allocated)}</td><td>{percent(row.changePct)}</td>
       <td>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</td>
     </tr>)}</tbody></table>}>
-    <div ref={setChartElement} className="relative h-80 min-w-0 w-full" aria-label="Allocated budget by fiscal year">
-      <ChartContainer config={config} className="h-full min-w-0 w-full">
-        <BarChart data={data.budget} margin={{ top: topMargin, right: 12, bottom: 12, left: 8 }} barCategoryGap={2}>
-        <HistoryPattern id={patternId} />
-        <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
-        <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-        <YAxis width={72} domain={[0, 'auto']} tickFormatter={compactAmount}
-          tickLine={false} axisLine={false} tick={{ fontSize: 12 }} />
-        <ChartTooltip content={<ChartTooltipContent hideLabel indicator="line" formatter={(_value, _name, item) => {
-          const row = item.payload as BudgetRow;
-          return <div className="grid gap-1.5 text-sm">
-            <strong>FY {row.fiscalYearEnd}</strong><p>Allocated: {amount(row.allocated)}</p>
-            <p>Change: {changeLabel(row.changePct)}</p><p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p>
-          </div>;
-        }} />} />
-        <Bar dataKey="allocated" name="Allocated" fill="var(--chart-1)" radius={[4, 4, 0, 0]} isAnimationActive={false}>
-          {data.budget.map((row) => <Cell key={row.fiscalYearEnd}
-            fill={row.source === 'history' ? `url(#${patternId})` : 'var(--chart-1)'} />)}
-          <LabelList dataKey="allocated" position="top" content={({ x, y, width, index }) => {
-            const barIndex = Number(index);
-            const row = data.budget[barIndex];
-            if (!row) return null;
-            const labelX = Number(x ?? 0) + Number(width ?? 0) / 2;
-            const labelY = Number(y ?? 0);
-            const barWidth = Number(width ?? 0);
-            const amountText = compactAmount(row.allocated);
-            const changeText = changeLabel(row.changePct);
-            const amountWidth = estimatedLabelWidth(amountText);
-            const changeWidth = estimatedLabelWidth(changeText);
-            const horizontal = labelsFitHorizontally(amountWidth, changeWidth, barWidth, showChangeLabels);
-            const labelYAboveBar = labelY - 6;
-
-            if (!horizontal) {
-              return <text x={labelX} y={labelYAboveBar}
-                transform={`rotate(-90 ${labelX} ${labelYAboveBar})`}
-                textAnchor="start" fill="#374151" fontSize={9}>
-                <tspan x={labelX}>{amountText}</tspan>
-                {showChangeLabels && <tspan x={labelX} dy="10">{changeText}</tspan>}
-              </text>;
-            }
-
-            return <text x={labelX} y={labelY - (showChangeLabels ? 20 : 7)} textAnchor="middle" fill="#374151" fontSize={11}>
-              <tspan x={labelX}>{amountText}</tspan>
-              {showChangeLabels && <tspan x={labelX} dy="13">{changeText}</tspan>}
-            </text>;
-          }} />
-        </Bar>
-        </BarChart>
-      </ChartContainer>
-    </div>
+    <BudgetBarChart data={data} />
   </ChartCard>;
 }
