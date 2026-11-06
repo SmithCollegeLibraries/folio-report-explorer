@@ -5,9 +5,13 @@ import { ChartLegendContent } from '../ui/chart-legend';
 import { amount } from './ChartCard';
 import { useChartLabelSize } from './ChartLabelSize';
 import { useNarrowViewport } from './useNarrowViewport';
+import { materialTypeDescriptions } from './materialTypeDescriptions';
 
 type MaterialItem = { materialType: string | null; amount: number };
-type PieSlice = { key: string; name: string; amount: number; percentage: number };
+type PieSlice = {
+  key: string; name: string; amount: number; percentage: number;
+  foldedItems?: { name: string; amount: number }[];
+};
 const OTHER_KEY = '__rpt022_all_other_materials__';
 const COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)', 'var(--chart-6)'];
 const NEUTRAL = 'var(--chart-neutral)';
@@ -62,11 +66,28 @@ function buildSlices(items: MaterialItem[]) {
   const positive = items.map((item) => ({ ...item, name: item.materialType || 'No material type' }))
     .filter((item) => item.amount > 0)
     .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name));
-  const top = positive.slice(0, 6).map((item) => ({ key: item.name, name: item.name, amount: item.amount, percentage: 0 }));
-  const remainder = positive.slice(6).reduce((sum, item) => sum + item.amount, 0);
-  if (remainder > 0) top.push({ key: OTHER_KEY, name: 'All other types', amount: remainder, percentage: 0 });
+  const top: PieSlice[] = positive.slice(0, 6)
+    .map((item) => ({ key: item.name, name: item.name, amount: item.amount, percentage: 0 }));
+  const foldedItems = positive.slice(6);
+  const remainder = foldedItems.reduce((sum, item) => sum + item.amount, 0);
+  if (remainder > 0) top.push({
+    key: OTHER_KEY, name: 'All other types', amount: remainder, percentage: 0,
+    foldedItems: foldedItems.map(({ name, amount: itemAmount }) => ({ name, amount: itemAmount })),
+  });
   const shares = roundShares(top.map((item) => item.amount));
   return top.map((item, index) => ({ ...item, percentage: shares[index] }));
+}
+
+function MaterialPieBreakdown({ slices }: { slices: PieSlice[] }) {
+  return <aside className="mt-3 rounded-md bg-gray-50 p-3 text-sm text-gray-700">
+    <h3 className="font-semibold text-gray-900">What's in each slice</h3>
+    {slices.map((slice, index) => <p key={`${slice.key}-${index}`}>
+      <strong>{slice.name}: {amount(slice.amount)} ({slice.percentage.toFixed(1)}%)</strong>
+      {slice.foldedItems
+        ? <> — {slice.foldedItems.map((item) => `${item.name}: ${amount(item.amount)}`).join(', ')}</>
+        : materialTypeDescriptions[slice.name] ? <> {materialTypeDescriptions[slice.name]}</> : null}
+    </p>)}
+  </aside>;
 }
 
 function materialTableRows(items: MaterialItem[]) {
@@ -274,6 +295,7 @@ export function MaterialPieChart({ items }: { items: MaterialItem[] }) {
       <div className="flex h-full w-full items-start">{legend}</div>
     </ChartContainer>}
     {active && <p role="status" className="text-center text-sm text-gray-700">{active.name}: {amount(active.amount)} ({active.percentage.toFixed(1)}%)</p>}
+    <MaterialPieBreakdown slices={slices} />
   </div>;
 }
 
