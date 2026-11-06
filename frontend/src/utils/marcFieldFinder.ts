@@ -69,7 +69,7 @@ function indicatorDisplay(value: string | undefined): string | null {
 function combinationIndicatorPositions(firstValue: string, secondValue: string): string {
   const first = indicatorDisplay(firstValue);
   const second = indicatorDisplay(secondValue);
-  if (first === null && second === null) return '';
+  if (firstValue === 'any' && secondValue === 'any') return '';
   return ' ' + (first ?? '?') + (second ?? '?');
 }
 

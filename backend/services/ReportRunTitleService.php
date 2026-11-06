@@ -129,9 +129,9 @@ final class ReportRunTitleService
 
     private function formatMarcCombinationIndicators($first, $second)
     {
+        if ($first === 'any' && $second === 'any') return '';
         $firstPosition = $this->formatMarcCombinationIndicator($first);
         $secondPosition = $this->formatMarcCombinationIndicator($second);
-        if ($firstPosition === '?' && $secondPosition === '?') return '';
         return ' ' . $firstPosition . $secondPosition;
     }
 

@@ -147,7 +147,8 @@ export default function MarcCombinationFinderParameters({
     if (activatedSlot && value !== '' && !values[name]) {
       const slot = Number(activatedSlot[1]);
       SLOT_FIELDS.filter((field) => field !== 'marcTag').forEach((field) => {
-        onChange('c' + slot + '_' + field, defaultValue(field));
+        const parameterName = 'c' + slot + '_' + field;
+        if (values[parameterName] === '') onChange(parameterName, defaultValue(field));
       });
     }
     onChange(name, value);
