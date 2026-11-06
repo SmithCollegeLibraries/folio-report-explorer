@@ -1,4 +1,5 @@
-import { useId, useState, type ReactNode } from 'react';
+import { useCallback, useId, useRef, useState, type ReactNode } from 'react';
+import { ChartEnlargementDialog, chartEnlargementOpenEvent } from './ChartEnlargementDialog';
 
 export const amount = (value: number) => value.toLocaleString('en-US', {
   minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -32,8 +33,21 @@ export function ChartCard({ title, explanation, children, table, controls, histo
 }) {
   const id = useId();
   const [showData, setShowData] = useState(false);
-  return <section aria-labelledby={`${id}-title`} className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6 min-w-0 shadow-sm">
-    <h2 id={`${id}-title`} className="text-lg font-semibold text-gray-900">{title}</h2>
+  const [enlarged, setEnlarged] = useState(false);
+  const enlargeRef = useRef<HTMLButtonElement>(null);
+  const closeEnlarged = useCallback(() => setEnlarged(false), []);
+  const openEnlarged = () => {
+    window.dispatchEvent(new Event(chartEnlargementOpenEvent));
+    setEnlarged(true);
+  };
+  return <section aria-labelledby={`${id}-title`} className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6 min-w-0 shadow-sm dark:bg-gray-900 dark:border-gray-700">
+    <header className="flex items-start justify-between gap-3">
+      <h2 id={`${id}-title`} className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
+      <button ref={enlargeRef} type="button" aria-haspopup="dialog" onClick={openEnlarged}
+        className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-100 dark:hover:bg-gray-800">
+        Enlarge
+      </button>
+    </header>
     <p className="text-sm text-gray-600 mt-1 mb-4">{explanation}</p>
     {controls}
     {history && <HistoryLegend />}
@@ -43,5 +57,7 @@ export function ChartCard({ title, explanation, children, table, controls, histo
       Show data
     </button>
     {showData && <div id={`${id}-table`} className="overflow-x-auto mt-4 text-sm [&_th]:text-left [&_th]:p-2 [&_td]:p-2 [&_tr]:border-b [&_table]:w-full [&_caption]:text-left [&_caption]:font-semibold [&_caption]:pb-2">{table}</div>}
+    {enlarged && <ChartEnlargementDialog title={title} explanation={explanation} controls={controls} legend={history ? <HistoryLegend /> : null}
+      triggerRef={enlargeRef} onClose={closeEnlarged}>{children}</ChartEnlargementDialog>}
   </section>;
 }
