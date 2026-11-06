@@ -228,6 +228,22 @@ reportRunTitleCase('History title formats 1/Blank as 1#', function () {
     );
 });
 
+reportRunTitleCase('History title keeps a literal question mark in the first indicator position', function () {
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655 ??',
+        reportRunTitleCombination(['c1_firstIndicator' => 'char:?', 'c1_secondIndicator' => 'any']),
+        'A literal question mark is a specific character, not the Any marker.'
+    );
+});
+
+reportRunTitleCase('History title keeps a literal question mark in the second indicator position', function () {
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655 ??',
+        reportRunTitleCombination(['c1_firstIndicator' => 'any', 'c1_secondIndicator' => 'char:?']),
+        'A literal question mark is a specific character, not the Any marker.'
+    );
+});
+
 reportRunTitleCase('reportTemplateId merges into metadata without losing reportExecution or composite_config', function () {
     $report = new SyntheticReportRunTitleReport('Metadata Report', []);
     $optionSource = new SyntheticReportRunTitleOptionSource();
@@ -253,4 +269,4 @@ if (!empty($reportRunTitleFailures)) {
     exit(1);
 }
 
-fwrite(STDOUT, "Report run title service tests passed (11 cases).\n");
+fwrite(STDOUT, "Report run title service tests passed (13 cases).\n");

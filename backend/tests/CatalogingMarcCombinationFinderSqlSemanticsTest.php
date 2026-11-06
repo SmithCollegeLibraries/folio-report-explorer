@@ -267,6 +267,10 @@ $syntheticInstances = [
     ['whitespace-empty', 'in0110', 'Empty result'],
     ['whitespace-tab', 'in0111', 'Tab result'],
     ['whitespace-newline', 'in0112', 'Newline result'],
+    ['indicator-question-first', 'in0113', 'Question indicator first'],
+    ['indicator-question-second', 'in0114', 'Question indicator second'],
+    ['pair-cross', 'in0115', 'Cross-row predicates'],
+    ['whitespace-cr', 'in0116', 'Carriage return result'],
 ];
 foreach ($syntheticInstances as $instance) {
     $insertInstance->execute([$instance[0], $instance[1], $instance[2], 'MARC']);
@@ -291,6 +295,11 @@ $syntheticMarcRows = [
     ['whitespace-empty', ' ', ' ', 1, 1, 'a', ''],
     ['whitespace-tab', ' ', ' ', 1, 1, 'a', "\t"],
     ['whitespace-newline', ' ', ' ', 1, 1, 'a', "\n"],
+    ['indicator-question-first', '?', '8', 1, 1, 'a', 'Question marker'],
+    ['indicator-question-second', '1', '?', 1, 1, 'a', 'Question marker'],
+    ['pair-cross', '1', '7', 1, 1, 'b', 'Wrong content'],
+    ['pair-cross', '2', '8', 2, 2, 'a', 'Needle cross'],
+    ['whitespace-cr', ' ', ' ', 1, 1, 'a', "\r"],
 ];
 foreach ($syntheticMarcRows as $row) {
     $insertMarc->execute($row);
@@ -331,6 +340,20 @@ marcCombinationSqliteCase('Condition 1 SQL summary formats 1/Blank as 1#', funct
     marcCombinationSqliteAssertSame('655 1#', $row['Condition 1'] ?? null, 'Specific and blank indicators retain their positions.');
 });
 
+marcCombinationSqliteCase('Condition 1 SQL summary preserves a literal question mark in the first position', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'char:?', 'c1_secondIndicator' => 'any',
+    ]), 'indicator-question-first');
+    marcCombinationSqliteAssertSame('655 ??', $row['Condition 1'] ?? null, 'A literal first-position question mark remains a specific indicator.');
+});
+
+marcCombinationSqliteCase('Condition 1 SQL summary preserves a literal question mark in the second position', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'any', 'c1_secondIndicator' => 'char:?',
+    ]), 'indicator-question-second');
+    marcCombinationSqliteAssertSame('655 ??', $row['Condition 1'] ?? null, 'A literal second-position question mark remains a specific indicator.');
+});
+
 marcCombinationSqliteCase('SQL result cells render null, empty, spaces, tab, and newline as blank', function () use ($pdo) {
     $rows = marcCombinationSqliteRun($pdo, ['c1_subfieldCode' => 'a']);
     $incorrect = [];
@@ -340,6 +363,11 @@ marcCombinationSqliteCase('SQL result cells render null, empty, spaces, tab, and
         if ($actual !== '(blank)') $incorrect[$id] = $actual;
     }
     marcCombinationSqliteAssertSame([], $incorrect, 'Null and whitespace-only result cells should all render as blank.');
+});
+
+marcCombinationSqliteCase('CR-only result cells render as blank', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, ['c1_subfieldCode' => 'a']), 'whitespace-cr');
+    marcCombinationSqliteAssertSame('(blank)', $row['Condition 1 result'] ?? null, 'A carriage-return-only result is blank.');
 });
 
 marcCombinationSqliteCase('explicit first and second indicators must match one occurrence', function () use ($pdo) {
@@ -382,6 +410,16 @@ marcCombinationSqliteCase('indicator, subfield, and content predicates cannot sp
     marcCombinationSqliteAssertSame([], array_values(array_filter(array_column($rows, 'Instance UUID'), function ($id) {
         return $id === 'row-split';
     })), 'The indicator, subfield, and content predicates must be true on the same MARC row.');
+});
+
+marcCombinationSqliteCase('an indicator-pair row with the wrong subfield cannot combine with a content row with wrong indicators', function () use ($pdo) {
+    $rows = marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'char:1', 'c1_secondIndicator' => 'char:7',
+        'c1_subfieldCode' => 'a', 'c1_contentRule' => 'contains', 'c1_searchValue' => 'Needle',
+    ]);
+    marcCombinationSqliteAssertSame(['pair-match'], array_values(array_intersect(
+        ['pair-match', 'pair-cross'], array_column($rows, 'Instance UUID')
+    )), 'The cross-row instance is excluded while the single-row positive control is included.');
 });
 
 if ($failures) {

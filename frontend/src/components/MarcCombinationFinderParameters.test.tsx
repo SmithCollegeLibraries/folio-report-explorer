@@ -146,6 +146,34 @@ describe('MarcCombinationFinderParameters', () => {
     expect.soft(screen.queryByRole('heading', { name: 'Condition 3' })).not.toBeInTheDocument();
   });
 
+  it('preserves configured condition values when the empty card receives a tag', async () => {
+    const user = userEvent.setup();
+    renderPanel(values({
+      c1_marcTag: '',
+      c1_occurrenceCondition: 'missing',
+      c1_firstIndicator: 'char:7',
+      c1_secondIndicator: 'blank',
+      c1_subfieldCode: 'a',
+      c1_contentRule: 'contains',
+      c1_searchValue: 'Needle',
+      c1_caseExact: 'true',
+    }));
+
+    await user.type(screen.getByLabelText('Condition 1 MARC tag'), '655');
+
+    expect.soft(screen.getByLabelText('Condition 1 occurrence')).toHaveValue('missing');
+    expect.soft(screen.getByLabelText('Condition 1 first indicator')).toHaveValue('char:7');
+    expect.soft(screen.getByLabelText('Condition 1 second indicator')).toHaveValue('blank');
+    expect.soft(screen.getByLabelText('Condition 1 subfield code')).toHaveValue('a');
+    expect.soft(screen.getByLabelText('Condition 1 content rule')).toHaveValue('contains');
+    const searchInput = screen.queryByLabelText('Condition 1 search text');
+    const caseMatching = screen.queryByLabelText('Condition 1 case matching');
+    expect.soft(searchInput).not.toBeNull();
+    expect.soft(caseMatching).not.toBeNull();
+    if (searchInput) expect.soft(searchInput).toHaveValue('Needle');
+    if (caseMatching) expect.soft(caseMatching).toHaveValue('true');
+  });
+
   it('removes a middle slot by compacting later values and clearing the last slot', async () => {
     const user = userEvent.setup();
     renderPanel(values({ c2_marcTag: '563', c3_marcTag: '856' }));
@@ -178,7 +206,11 @@ describe('MarcCombinationFinderParameters', () => {
 
   it('switches AND/OR and describes the active search in plain language', async () => {
     const user = userEvent.setup();
-    renderPanel(values({ c2_marcTag: '563', c2_occurrenceCondition: 'missing', c2_subfieldCode: 'a' }));
+    renderPanel(values({
+      c2_marcTag: '563', c2_occurrenceCondition: 'missing',
+      c2_firstIndicator: 'any', c2_secondIndicator: 'any', c2_subfieldCode: 'a',
+      c2_contentRule: 'any', c2_caseExact: 'false',
+    }));
 
     expect(screen.getByLabelText('MARC combination interpretation')).toHaveTextContent(
       'Records in 1 location that have 655 7? $a AND are missing 563 $a',
@@ -194,6 +226,8 @@ describe('MarcCombinationFinderParameters', () => {
     ['any / 7', { c1_firstIndicator: 'any', c1_secondIndicator: 'char:7' }, '655 ?7 $a'],
     ['7 / any', { c1_firstIndicator: 'char:7', c1_secondIndicator: 'any' }, '655 7? $a'],
     ['1 / blank', { c1_marcTag: '245', c1_firstIndicator: 'char:1', c1_secondIndicator: 'blank', c1_subfieldCode: '' }, '245 1#'],
+    ['literal ? / any', { c1_firstIndicator: 'char:?', c1_secondIndicator: 'any' }, '655 ?? $a'],
+    ['any / literal ?', { c1_firstIndicator: 'any', c1_secondIndicator: 'char:?' }, '655 ?? $a'],
     ['any / any', { c1_firstIndicator: 'any', c1_secondIndicator: 'any' }, '655 $a'],
   ])('formats indicator positions in the summary for %s', (_name, overrides, expected) => {
     renderPanel(values(overrides));

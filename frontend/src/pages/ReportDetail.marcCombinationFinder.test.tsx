@@ -164,6 +164,34 @@ describe('ReportDetail MARC combination behavior', () => {
     expect(await screen.findByText('Search text is required for this content rule.')).toBeInTheDocument();
   });
 
+  it('keeps Missing and text criteria configured before entering the tag and submits them', async () => {
+    const emptyParams = new URLSearchParams(searchParams());
+    emptyParams.delete('rp.29.c1_marcTag');
+    renderDetail(`?${emptyParams.toString()}`);
+
+    fireEvent.change(await screen.findByLabelText('Condition 1 occurrence'), { target: { value: 'missing' } });
+    fireEvent.change(screen.getByLabelText('Condition 1 content rule'), { target: { value: 'contains' } });
+    fireEvent.change(await screen.findByLabelText('Condition 1 search text'), { target: { value: 'Needle' } });
+    fireEvent.change(screen.getByLabelText('Condition 1 MARC tag'), { target: { value: '655' } });
+
+    const runButton = screen.getByRole('button', { name: 'Run Report' });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runReportMock).toHaveBeenCalledTimes(1));
+    const [, params] = runReportMock.mock.calls[0];
+    expect(Object.keys(params).sort()).toEqual(parameterDefinitions().map((parameter) => parameter.name).sort());
+    expect(params).toMatchObject({
+      c1_marcTag: '655',
+      c1_occurrenceCondition: 'missing',
+      c1_firstIndicator: 'any',
+      c1_secondIndicator: 'any',
+      c1_subfieldCode: '',
+      c1_contentRule: 'contains',
+      c1_searchValue: 'Needle',
+      c1_caseExact: 'false',
+    });
+  });
+
   it('initializes declared condition defaults when an empty first slot becomes active', async () => {
     const emptyParams = new URLSearchParams(searchParams());
     emptyParams.delete('rp.29.c1_marcTag');
