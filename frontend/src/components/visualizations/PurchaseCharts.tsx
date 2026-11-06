@@ -9,8 +9,16 @@ import { MaterialPieChart, materialRows } from './MaterialPieChart';
 import { errorMessage } from '../../utils/errorMessage';
 
 export const PURCHASE_MATERIAL_GROUPS = {
-  electronic: ['Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package', 'E-Newspaper', 'Streaming Video'],
-  physical: ['Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial'],
+  electronic: [
+    'Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package',
+    'E-Newspaper', 'Streaming Video', 'E-Score', 'Streaming Audio', 'E-Thesis/Dissertation',
+  ],
+  physical: [
+    'Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial', 'Map', 'Microform',
+    'Analog Game', 'Archival material', 'Artifact/Object', 'Audiocassette', 'CD-ROM', 'Equipment', 'Film',
+    'Government Publication', 'Image', 'LP Phonorecord', 'Musical Instrument', 'Supplement',
+    'Thesis/Dissertation', 'Videocassette', 'Video Game',
+  ],
 } as const;
 
 const share = (value: number | null) => value === null ? 'n/a' : `${value.toFixed(1)}%`;
@@ -99,7 +107,8 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
         <h3 className="font-semibold text-gray-900">What's in each group</h3>
         <p><strong>Electronic:</strong> {PURCHASE_MATERIAL_GROUPS.electronic.join(', ')}</p>
         <p><strong>Physical:</strong> {PURCHASE_MATERIAL_GROUPS.physical.join(', ')}</p>
-        <p><strong>Other:</strong> every other material type and purchases without one.</p>
+        <p><strong>Other:</strong> collection support — payments on the SC E-Collection Support (SCECS), SC P-Collection Support (SCPCS) and SC Interlibrary Loan (SCILL) funds — plus payments without a usable material type, including Admin or unspecified values. Unrecognized material types also count as Other.</p>
+        <p>Pre-FOLIO history years keep their recorded split.</p>
       </aside>
     </ChartCard>
     <ChartCard title={materialTitle} explanation="Paid FOLIO purchases by material type; slices show positive amounts, and the table retains every value."
