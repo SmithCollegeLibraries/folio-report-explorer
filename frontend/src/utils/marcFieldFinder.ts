@@ -1,6 +1,7 @@
 import type { ReportFieldErrors, ReportParameterValues } from '../types';
 
 export const MARC_FIELD_FINDER_SLUG = 'marc-field-indicator-content-finder';
+export const MARC_COMBINATION_FINDER_SLUG = 'marc-field-combination-finder';
 
 export const CONTENT_RULES = [
   'any',
@@ -38,6 +39,12 @@ export interface MarcFieldFinderEvaluation {
   valid: boolean;
 }
 
+export interface MarcCombinationFinderEvaluation {
+  fieldErrors: ReportFieldErrors;
+  summary: string;
+  valid: boolean;
+}
+
 export function consumesSearchText(rule: string | undefined): rule is MarcContentRule {
   return typeof rule === 'string' && TEXT_RULES.has(rule as MarcContentRule);
 }
@@ -57,6 +64,13 @@ function indicatorDisplay(value: string | undefined): string | null {
   if (normalized === 'any') return null;
   if (normalized === 'blank') return '#';
   return normalized.startsWith('char:') ? normalized.slice(5) : normalized;
+}
+
+function combinationIndicatorPositions(firstValue: string, secondValue: string): string {
+  const first = indicatorDisplay(firstValue);
+  const second = indicatorDisplay(secondValue);
+  if (firstValue === 'any' && secondValue === 'any') return '';
+  return ' ' + (first ?? '?') + (second ?? '?');
 }
 
 function values(value: string | undefined): string {
@@ -172,4 +186,125 @@ export function evaluateMarcFieldFinder(valuesInput: MarcFieldFinderValues): Mar
   const interpretation = `Return MARC records where ${conditionText}.`;
 
   return { fieldErrors, interpretation, textRule, valid: Object.keys(fieldErrors).length === 0 };
+}
+
+export function evaluateMarcCombinationFinder(input: MarcFieldFinderValues): MarcCombinationFinderEvaluation {
+  const source = input || {};
+  const fieldErrors: ReportFieldErrors = {};
+  const rawIds = values(source.locationIds).trim();
+  const locationIds = rawIds === '' ? [] : rawIds.split(',').map((id) => id.trim());
+  if (!locationIds.length) error(fieldErrors, 'locationIds', 'Select at least one location.');
+  if (locationIds.length > 100) error(fieldErrors, 'locationIds', 'Select no more than 100 locations.');
+  if (locationIds.some((id) => !UUID_PATTERN.test(id))) error(fieldErrors, 'locationIds', 'Every selected location must be a valid UUID.');
+  if (new Set(locationIds.map((id) => id.toLowerCase())).size !== locationIds.length) {
+    error(fieldErrors, 'locationIds', 'Selected locations must be unique.');
+  }
+  if (!['effective_item', 'permanent_item'].includes(values(source.locationBasis))) {
+    error(fieldErrors, 'locationBasis', 'Choose effective item or permanent item.');
+  }
+  const combine = values(source.combine);
+  if (!['all', 'any'].includes(combine)) error(fieldErrors, 'combine', 'Choose all conditions (AND) or any condition (OR).');
+
+  const active: number[] = [];
+  let firstGap: number | null = null;
+  for (let number = 1; number <= 5; number++) {
+    const prefix = 'c' + number + '_';
+    const tag = values(source[prefix + 'marcTag']);
+    if (tag === '') {
+      if (firstGap === null) firstGap = number;
+      continue;
+    }
+    if (firstGap !== null) error(fieldErrors, 'c' + firstGap + '_marcTag', 'Conditions must be contiguous.');
+    active.push(number);
+    if (!/^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/.test(tag)) {
+      error(fieldErrors, prefix + 'marcTag', 'MARC tag must be exactly three digits from 001 through 999.');
+    }
+    const occurrence = values(source[prefix + 'occurrenceCondition']);
+    if (!['has', 'missing'].includes(occurrence)) {
+      error(fieldErrors, prefix + 'occurrenceCondition', 'Choose whether matching occurrences are present or missing.');
+    }
+    const first = values(source[prefix + 'firstIndicator']);
+    const second = values(source[prefix + 'secondIndicator']);
+    validateIndicator(fieldErrors, prefix + 'firstIndicator', first);
+    validateIndicator(fieldErrors, prefix + 'secondIndicator', second);
+    const subfield = values(source[prefix + 'subfieldCode']);
+    if (subfield !== '' && !/^[A-Za-z0-9]$/.test(subfield)) {
+      error(fieldErrors, prefix + 'subfieldCode', 'Subfield code must be blank or one alphanumeric character.');
+    }
+    const ruleValue = values(source[prefix + 'contentRule']);
+    const rule = CONTENT_RULES.includes(ruleValue as MarcContentRule) ? ruleValue as MarcContentRule : null;
+    if (!rule) error(fieldErrors, prefix + 'contentRule', 'Choose a supported content rule.');
+    const search = values(source[prefix + 'searchValue']);
+    const caseExact = values(source[prefix + 'caseExact']);
+    if (rule && consumesSearchText(rule)) {
+      if (search === '') error(fieldErrors, prefix + 'searchValue', 'Search text is required for this content rule.');
+    } else if (search !== '') {
+      error(fieldErrors, prefix + 'searchValue', 'Search text is only used with a text comparison rule.');
+    }
+    if (!['true', 'false'].includes(caseExact)) error(fieldErrors, prefix + 'caseExact', 'Choose whether capitalization must match exactly.');
+  }
+  if (!active.length) error(fieldErrors, 'c1_marcTag', 'Add at least one MARC condition.');
+
+  const clauses = active.map((number) => {
+    const prefix = 'c' + number + '_';
+    const tag = values(source[prefix + 'marcTag']) || '—';
+    const occurrence = values(source[prefix + 'occurrenceCondition']);
+    let clause = (occurrence === 'missing' ? 'are missing ' : 'have ') + tag;
+    clause += combinationIndicatorPositions(
+      values(source[prefix + 'firstIndicator']),
+      values(source[prefix + 'secondIndicator']),
+    );
+    const subfield = values(source[prefix + 'subfieldCode']);
+    if (subfield) clause += ' $' + subfield;
+    const rule = values(source[prefix + 'contentRule']) as MarcContentRule;
+    const search = values(source[prefix + 'searchValue']);
+    const descriptions: Partial<Record<MarcContentRule, string>> = {
+      contains: 'contains', not_contains: 'does not contain', equals: 'equals',
+      not_equals: 'does not equal', begins: 'begins with', not_begins: 'does not begin with',
+      blank: 'is blank', not_blank: 'is not blank', has_lowercase: 'has lowercase',
+      has_non_alphanumeric: 'has non-alphanumeric',
+    };
+    if (descriptions[rule]) {
+      clause += ' ' + descriptions[rule] + (consumesSearchText(rule) ? ' "' + search + '"' : '');
+    }
+    return clause;
+  });
+  const countLabel = locationIds.length + ' ' + (locationIds.length === 1 ? 'location' : 'locations');
+  const summary = clauses.length
+    ? 'Records in ' + countLabel + ' that ' + clauses.join(combine === 'any' ? ' OR ' : ' AND ')
+    : 'Records in ' + countLabel;
+  return { fieldErrors, summary, valid: Object.keys(fieldErrors).length === 0 };
+}
+
+export function hydrateMarcCombinationFinderParameters(
+  parameters: Array<{ name: string; resolvedDefault?: string }>,
+  incoming: Record<string, string>,
+): Record<string, string> {
+  const defaults = Object.fromEntries(parameters.map((parameter) => [parameter.name, parameter.resolvedDefault || '']));
+  const hydrated: Record<string, string> = {};
+  for (const parameter of parameters) {
+    const slot = parameter.name.match(/^c([1-5])_(.+)$/);
+    if (!slot) {
+      hydrated[parameter.name] = incoming[parameter.name] ?? defaults[parameter.name] ?? '';
+    } else if (!(incoming['c' + slot[1] + '_marcTag'] || '')) {
+      hydrated[parameter.name] = '';
+    } else {
+      hydrated[parameter.name] = incoming[parameter.name] ?? defaults[parameter.name] ?? '';
+    }
+  }
+  return hydrated;
+}
+
+export function normalizeMarcCombinationFinderSubmission(
+  parameters: Array<{ name: string }>,
+  valuesInput: Record<string, string>,
+): Record<string, string> {
+  const activeSlots = new Set<number>();
+  for (let number = 1; number <= 5; number++) {
+    if ((valuesInput['c' + number + '_marcTag'] ?? '') !== '') activeSlots.add(number);
+  }
+  return Object.fromEntries(parameters.map((parameter) => {
+    const slot = parameter.name.match(/^c([1-5])_(.+)$/);
+    return [parameter.name, slot && !activeSlots.has(Number(slot[1])) ? '' : valuesInput[parameter.name] ?? ''];
+  }));
 }

@@ -26,6 +26,9 @@ final class ReportRunTitleService
      */
     public function buildTitle($report, array $params, $identifierExport = false)
     {
+        if (($report->slug ?? null) === 'marc-field-combination-finder') {
+            return $this->buildMarcCombinationTitle($report, $params, $identifierExport);
+        }
         $definitions = $report->getDecodedParameters();
         if (!is_array($definitions)) {
             $definitions = [];
@@ -89,6 +92,54 @@ final class ReportRunTitleService
 
         $normalized = call_user_func($this->nameNormalizer, $title);
         return is_string($normalized) ? $normalized : (string) $normalized;
+    }
+
+    private function buildMarcCombinationTitle($report, array $identity, $identifierExport)
+    {
+        $combine = ($identity['combine'] ?? 'all') === 'any' ? 'Any conditions (OR)' : 'All conditions (AND)';
+        $clauses = [];
+        for ($number = 1; $number <= 5; $number++) {
+            $prefix = 'c' . $number . '_';
+            $tag = $identity[$prefix . 'marcTag'] ?? '';
+            if (!is_string($tag) || $tag === '') continue;
+            $clause = (($identity[$prefix . 'occurrenceCondition'] ?? 'has') === 'missing' ? 'missing ' : 'has ') . $tag;
+            $clause .= $this->formatMarcCombinationIndicators(
+                $identity[$prefix . 'firstIndicator'] ?? 'any',
+                $identity[$prefix . 'secondIndicator'] ?? 'any'
+            );
+            $subfield = $identity[$prefix . 'subfieldCode'] ?? '';
+            if ($subfield !== '') $clause .= ' $' . $subfield;
+            $rule = $identity[$prefix . 'contentRule'] ?? 'any';
+            $search = $identity[$prefix . 'searchValue'] ?? '';
+            $labels = [
+                'contains' => 'contains', 'not_contains' => 'does not contain', 'equals' => 'equals',
+                'not_equals' => 'does not equal', 'begins' => 'begins with', 'not_begins' => 'does not begin with',
+                'blank' => 'is blank', 'not_blank' => 'is not blank', 'has_lowercase' => 'has lowercase',
+                'has_non_alphanumeric' => 'has non-alphanumeric',
+            ];
+            if (isset($labels[$rule])) $clause .= ' ' . $labels[$rule] . (in_array($rule, ['contains', 'not_contains', 'equals', 'not_equals', 'begins', 'not_begins'], true) ? ' "' . $search . '"' : '');
+            $clauses[] = $clause;
+        }
+        $title = trim((string) ($report->name ?? ''));
+        if ($clauses) $title .= ' — ' . $combine . ': ' . implode(($identity['combine'] ?? 'all') === 'any' ? ' OR ' : ' AND ', $clauses);
+        if ($identifierExport) $title .= ' (identifiers)';
+        $normalized = call_user_func($this->nameNormalizer, $title);
+        return is_string($normalized) ? $normalized : (string) $normalized;
+    }
+
+    private function formatMarcCombinationIndicators($first, $second)
+    {
+        if ($first === 'any' && $second === 'any') return '';
+        $firstPosition = $this->formatMarcCombinationIndicator($first);
+        $secondPosition = $this->formatMarcCombinationIndicator($second);
+        return ' ' . $firstPosition . $secondPosition;
+    }
+
+    private function formatMarcCombinationIndicator($indicator)
+    {
+        if ($indicator === 'blank') return '#';
+        if (is_string($indicator) && strpos($indicator, 'char:') === 0) return substr($indicator, 5);
+        return '?';
     }
 
     /**

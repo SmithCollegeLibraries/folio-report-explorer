@@ -160,6 +160,17 @@ vi.mock('../api/client', async () => {
           createdAt: '2026-08-06T00:00:00Z',
         },
         {
+          id: 10,
+          slug: 'marc-field-combination-finder',
+          name: 'MARC Field Combination Finder',
+          description: 'Finds MARC instances matching several field conditions.',
+          category: 'cataloging',
+          parameterCount: 43,
+          defaultLimit: 100000,
+          createdBy: 'manual',
+          createdAt: '2026-11-05T00:00:00Z',
+        },
+        {
           id: 9,
           slug: 'marc-field-indicator-content-finder',
           name: 'MARC Field, Indicator, and Content Finder',
@@ -221,8 +232,9 @@ describe('Reports', () => {
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Cataloging' })).toBeInTheDocument();
     expect(screen.getByText('MARC Field, Indicator, and Content Finder')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'All (4)' })).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('4 of 4 reports');
+    expect(screen.getByText('MARC Field Combination Finder')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All (5)' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('5 of 5 reports');
     expect(screen.queryByRole('button', { name: /Delete/ })).not.toBeInTheDocument();
   });
 
@@ -232,12 +244,12 @@ describe('Reports', () => {
 
     fireEvent.change(search, { target: { value: 'ALLOCATED' } });
     expect(await screen.findByText('Fund Allocation by Fiscal Year')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('1 of 4 reports');
+    expect(screen.getByRole('status')).toHaveTextContent('1 of 5 reports');
     expect(screen.queryByText('Budget Report by Material Type')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cataloging (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cataloging (3)' }));
     expect(await screen.findByText('No reports match')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('0 of 4 reports');
+    expect(screen.getByRole('status')).toHaveTextContent('0 of 5 reports');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
     expect(await screen.findByText('MARC Field, Indicator, and Content Finder')).toBeInTheDocument();

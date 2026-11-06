@@ -7,6 +7,7 @@ import SqlPreview from '../components/SqlPreview';
 import ReportDetailHeader from '../components/ReportDetailHeader';
 import ReportParameterFields from '../components/ReportParameterFields';
 import { useJobPolling } from '../hooks/useJobPolling';
+import useMarcCombinationFinder from '../hooks/useMarcCombinationFinder';
 import {
   ArrowLeft,
   ChevronDown,
@@ -24,7 +25,7 @@ import {
   writeReportParamsToSearch,
 } from '../utils/reports';
 import type { ReportExportKind } from '../types';
-import { MARC_FIELD_FINDER_SLUG, evaluateMarcFieldFinder } from '../utils/marcFieldFinder';
+import { MARC_COMBINATION_FINDER_SLUG, MARC_FIELD_FINDER_SLUG, evaluateMarcFieldFinder, hydrateMarcCombinationFinderParameters } from '../utils/marcFieldFinder';
 
 export default function ReportDetail() {
   const navigate = useNavigate();
@@ -79,15 +80,11 @@ export default function ReportDetail() {
       return;
     }
 
-    const defaults: Record<string, string> = {};
-    for (const parameter of report.parameters) {
-      defaults[parameter.name] = parameter.resolvedDefault || '';
-    }
-
-    const merged = {
-      ...defaults,
-      ...readReportParamsFromSearch(reportId, searchParams),
-    };
+    const defaults = Object.fromEntries(report.parameters.map((parameter) => [parameter.name, parameter.resolvedDefault || '']));
+    const incoming = readReportParamsFromSearch(reportId, searchParams);
+    const merged = report.slug === MARC_COMBINATION_FINDER_SLUG
+      ? hydrateMarcCombinationFinderParameters(report.parameters, incoming)
+      : { ...defaults, ...incoming };
 
     setParamValues(merged);
     setSearchParams(writeReportParamsToSearch(reportId, merged, searchParams), { replace: true });
@@ -110,10 +107,8 @@ export default function ReportDetail() {
   }, [paramValues, report]);
 
   const isMarcFieldFinder = report?.slug === MARC_FIELD_FINDER_SLUG;
-  const finderEvaluation = useMemo(
-    () => (isMarcFieldFinder ? evaluateMarcFieldFinder(paramValues) : null),
-    [isMarcFieldFinder, paramValues],
-  );
+  const combinationFinder = useMarcCombinationFinder(report?.slug, paramValues);
+  const finderEvaluation = useMemo(() => (isMarcFieldFinder ? evaluateMarcFieldFinder(paramValues) : null), [isMarcFieldFinder, paramValues]);
 
   const runMut = useMutation({
     mutationFn: ({
@@ -157,21 +152,23 @@ export default function ReportDetail() {
 
   const handleRun = useCallback(
     (outputMode: 'table' | 'file', exportKind?: ReportExportKind) => {
-      const nextParams = isMarcFieldFinder && report
+      const combinationParams = combinationFinder.submission(report?.parameters || [], paramValues);
+      const nextParams = combinationParams || (isMarcFieldFinder && report
         ? Object.fromEntries(report.parameters.map((parameter) => [
             parameter.name,
             paramValues[parameter.name] ?? '',
           ]))
-        : { ...paramValues };
+        : { ...paramValues });
       resetJob();
       runMut.mutate({ params: nextParams, outputMode, exportKind });
     },
-    [isMarcFieldFinder, paramValues, report, resetJob, runMut],
+    [combinationFinder.submission, isMarcFieldFinder, paramValues, report, resetJob, runMut],
   );
 
   const canSubmit = paramsReady
     && hasRequiredParams
-    && (!isMarcFieldFinder || finderEvaluation?.valid === true);
+    && (!isMarcFieldFinder || finderEvaluation?.valid === true)
+    && (!combinationFinder.isCombinationFinder || combinationFinder.valid);
 
   useEffect(() => {
     if (searchParams.get('autorun') !== String(reportId) || autoRunTriggeredRef.current) {

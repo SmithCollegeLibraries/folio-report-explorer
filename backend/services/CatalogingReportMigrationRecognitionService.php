@@ -8,6 +8,7 @@ require_once __DIR__ . '/AcquisitionsMissingUnitReportService.php';
 require_once __DIR__ . '/AcquisitionsInvoiceStatusReportService.php';
 require_once __DIR__ . '/AcquisitionsMissingUnitReportMigrationService.php';
 require_once __DIR__ . '/BudgetYearExpenseClassReportService.php';
+require_once __DIR__ . '/CatalogingMarcCombinationFinderService.php';
 
 /** Keeps governed report migration checks outside the legacy migration service. */
 final class CatalogingReportMigrationRecognitionService
@@ -64,16 +65,30 @@ final class CatalogingReportMigrationRecognitionService
 
     public static function migrationDefinitionAppearsComplete($db, string $filename): bool
     {
-        if ($filename === '051_budget_year_expense_class_report.sql') {
-            return self::budgetYearExpenseClassReportAppearsComplete($db);
-        }
-        if ($filename === '053_acquisitions_feedback_report_filters.sql') {
-            return self::acquisitionsFeedbackReportsAppearComplete($db);
-        }
-        if ($filename === '056_open_order_report_expansion.sql') {
-            return self::acquisitionsOpenOrdersReportAppearsComplete($db);
-        }
-        return false;
+        $definitions = self::migrationDefinitions();
+        if (!isset($definitions[$filename])) return false;
+        $check = $definitions[$filename];
+        return self::$check($db);
+    }
+
+    private static function migrationDefinitions(): array
+    {
+        return [
+            '051_budget_year_expense_class_report.sql' => 'budgetYearExpenseClassReportAppearsComplete',
+            '053_acquisitions_feedback_report_filters.sql' => 'acquisitionsFeedbackReportsAppearComplete',
+            '056_open_order_report_expansion.sql' => 'acquisitionsOpenOrdersReportAppearsComplete',
+            '068_marc_field_combination_finder.sql' => 'marcCombinationFinderReportAppearsComplete',
+        ];
+    }
+
+    public static function marcCombinationFinderReportAppearsComplete($db): bool
+    {
+        $definition = $db->createCommand(
+            'SELECT slug, name, description, help_text, category, sql_template, parameters, data_source, execution_config, composite_config, default_limit, is_active, created_by'
+                . ' FROM report_templates WHERE slug = :slug LIMIT 1',
+            [':slug' => CatalogingMarcCombinationFinderService::REPORT_SLUG]
+        )->queryOne();
+        return is_array($definition) && CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($definition);
     }
 
     public static function acquisitionsFeedbackReportsAppearComplete($db): bool

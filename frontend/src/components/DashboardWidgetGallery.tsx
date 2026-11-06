@@ -318,9 +318,8 @@ function AdminForm({ initial, reportList, onSave, onCancel, busy }: AdminFormPro
 
         {widgetType === 'report' && (
           <div>
-            <label className="block text-xs font-medium text-gray-600 mb-0.5">Report Template</label>
-            <select
-              value={reportId}
+            <label htmlFor="dashboard-report-template" className="block text-xs font-medium text-gray-600 mb-0.5">Report Template</label>
+            <select id="dashboard-report-template" value={reportId}
               onChange={(e) => setReportId(e.target.value)}
               className="w-full text-xs border border-gray-300 rounded px-2 py-1.5 bg-white focus:outline-none focus:border-folio-500"
             >
@@ -435,7 +434,7 @@ export default function DashboardWidgetGallery({ isAdmin, onClose, onChanged }: 
     if (isAdmin && adminOpen && reports.length === 0) {
       listReports().then((grouped) => {
         const flat: ReportSummary[] = [];
-        Object.values(grouped).forEach((arr) => flat.push(...arr));
+        Object.values(grouped).forEach((arr) => flat.push(...arr.filter((report) => report.slug !== 'marc-field-combination-finder')));
         setReports(flat);
       }).catch(() => { /* non-critical */ });
     }

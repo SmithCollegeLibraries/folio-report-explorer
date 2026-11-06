@@ -40,6 +40,8 @@ export default function HistoryResultsModal({
 }: Props) {
   const [sqlOpen, setSqlOpen] = useState(false);
   const resultsRef = useRef<HistoryResultsContentHandle>(null);
+  const isMarcCombinationFinder = item.name?.startsWith('MARC Field Combination Finder')
+    || (job?.sql ?? item.sql).includes('"Condition 1 result"');
 
   const { copiedId, copy } = useCopyToClipboard();
 
@@ -198,6 +200,17 @@ export default function HistoryResultsModal({
               {item.reviewAdvisory.state === 'superseded' ? 'Updated report available' : 'Report limitation noted'}
             </div>
             <p className="mt-0.5 leading-5">{item.reviewAdvisory.message}</p>
+          </aside>
+        )}
+
+        {isMarcCombinationFinder && job?.truncated && (
+          <aside role="alert" className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-900">
+            This report reached its 100,000-row cap.
+          </aside>
+        )}
+        {isMarcCombinationFinder && (job?.identifierSkippedCount ?? 0) > 0 && (
+          <aside role="alert" className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-900">
+            {job?.identifierSkippedCount} identifiers could not be exported because they were not a valid FOLIO UUID.
           </aside>
         )}
 

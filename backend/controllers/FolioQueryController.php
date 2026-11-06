@@ -4867,7 +4867,8 @@ class FolioQueryController extends Controller
         );
         $metadata = $titleService->mergeReportTemplateId($metadata, (int) $report->id);
         try {
-            $jobName = $titleService->buildTitle($report, $userParams, $exportKind === 'identifier');
+            $titleParams = isset($compiled['identity']) ? $compiled['identity'] : $userParams;
+            $jobName = $titleService->buildTitle($report, $titleParams, $exportKind === 'identifier');
         } catch (\Throwable $exception) {
             $jobName = $this->normalizeQueryJobName($report->name);
         }
@@ -4883,9 +4884,10 @@ class FolioQueryController extends Controller
             $job->output_mode = $outputMode;
         }
         if ($job->hasAttribute('history_group_key')) {
+            $historyParams = isset($compiled['identity']) ? $compiled['identity'] : $jobParams;
             $job->history_group_key = \app\services\HistoryGroupKeyService::build(
                 (int) $report->id,
-                $jobParams,
+                $historyParams,
                 $exportKind,
                 $outputMode
             );
@@ -4926,11 +4928,15 @@ class FolioQueryController extends Controller
     {
         $message = $exception->getMessage();
         return strpos($message, 'Reporting schema is missing the expected MARC tag table') === 0
+            || preg_match("/^MARC tag [0-9]{3} \\(condition [1-5]\\) isn't available in the reporting database\\.$/D", $message) === 1
             || $message === 'A selected location no longer exists.';
     }
 
     private function catalogingReportIntegrityMessage(\InvalidArgumentException $exception): string
     {
+        if (strpos($exception->getMessage(), 'MARC tag ') === 0) {
+            return $exception->getMessage();
+        }
         if (strpos($exception->getMessage(), 'Reporting schema is missing the expected MARC tag table') === 0) {
             return 'The selected MARC tag data is unavailable. Please contact an administrator.';
         }
