@@ -56,6 +56,18 @@ const chartTitles = [
   'How the library purchases', 'How the library purchases by material',
   'Library budget',
 ];
+const expectedPurchaseMaterialGroups = {
+  electronic: [
+    'Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package',
+    'E-Newspaper', 'Streaming Video', 'E-Score', 'Streaming Audio', 'E-Thesis/Dissertation',
+  ],
+  physical: [
+    'Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial', 'Map', 'Microform',
+    'Analog Game', 'Archival material', 'Artifact/Object', 'Audiocassette', 'CD-ROM', 'Equipment', 'Film',
+    'Government Publication', 'Image', 'LP Phonorecord', 'Musical Instrument', 'Supplement',
+    'Thesis/Dissertation', 'Videocassette', 'Video Game',
+  ],
+} as const;
 
 // Only the authorized throw-only stub is converted to an empty render. Other
 // errors still escape, so missing behavior produces DOM assertion failures.
@@ -461,7 +473,7 @@ describe('Visualizations RPT-022 new behavior', () => {
     expect.soft(labels).toEqual(expect.arrayContaining(['60%', '30%', '70%', '25%']));
   });
 
-  it('renders the group note with every material mapping from the backend', async () => {
+  it('renders the complete material mappings and explains Other and historical splits', async () => {
     await renderWithData({});
     const region = screen.queryByRole('region', { name: chartTitlesForRestyle.purchases });
     const note = region?.textContent ?? '';
@@ -477,11 +489,18 @@ describe('Visualizations RPT-022 new behavior', () => {
     };
 
     expect.soft(note).toContain("What's in each group");
-    for (const material of [
-      'Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package', 'E-Newspaper', 'Streaming Video',
-      'Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial',
-    ]) expect.soft(note).toContain(material);
-    expect.soft(note).toMatch(/Other.*every other material type.*purchases without one/i);
+    const otherLine = noteLines.find((paragraph) => paragraph.querySelector('strong')?.textContent?.replace(':', '').trim() === 'Other')?.textContent ?? '';
+    for (const material of [...expectedPurchaseMaterialGroups.electronic, ...expectedPurchaseMaterialGroups.physical]) {
+      expect.soft(note).toContain(material);
+    }
+    expect.soft(readRenderedGroup('Electronic')).toEqual(expectedPurchaseMaterialGroups.electronic);
+    expect.soft(readRenderedGroup('Physical')).toEqual(expectedPurchaseMaterialGroups.physical);
+    expect.soft(otherLine).toMatch(/Other:.*collection support/i);
+    expect.soft(otherLine).toContain('SC E-Collection Support (SCECS)');
+    expect.soft(otherLine).toContain('SC P-Collection Support (SCPCS)');
+    expect.soft(otherLine).toContain('SC Interlibrary Loan (SCILL)');
+    expect.soft(otherLine).toMatch(/payments without a usable material type/i);
+    expect.soft(note).toMatch(/Pre-FOLIO history years keep their recorded split/i);
     const electronic = readRenderedGroup('Electronic');
     const physical = readRenderedGroup('Physical');
     const backendElectronic = parseBackendGroup('ELECTRONIC');
@@ -513,6 +532,7 @@ describe('Visualizations RPT-022 new behavior', () => {
       physical: parseBackendGroup('PHYSICAL'),
     };
 
+    expect.soft(frontendGroups).toEqual(expectedPurchaseMaterialGroups);
     expect.soft(frontendGroups).toEqual(backendGroups);
     expect.soft((frontendSource.match(/PURCHASE_MATERIAL_GROUPS/g) ?? []).length).toBeGreaterThan(1);
   });
