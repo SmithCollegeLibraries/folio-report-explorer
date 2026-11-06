@@ -3,21 +3,83 @@ require_once __DIR__ . '/support/VisualizationFixture.php';
 
 use app\services\VisualizationDataService;
 
-visualizationCase('category mapping covers every listed type plus unlisted and null material types', function () {
+visualizationCase('category mapping covers every ticket material type and all unsupported values', function () {
+    $mismatches = [];
     foreach ([
-        'Electronic' => ['Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package', 'E-Newspaper', 'Streaming Video'],
-        'Physical' => ['Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial'],
-        'Other' => ['Synthetic unlisted format', null],
+        'Electronic' => [
+            'Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package',
+            'E-Newspaper', 'Streaming Video', 'E-Score', 'Streaming Audio', 'E-Thesis/Dissertation',
+        ],
+        'Physical' => [
+            'Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial', 'Map', 'Microform',
+            'Analog Game', 'Archival material', 'Artifact/Object', 'Audiocassette', 'CD-ROM', 'Equipment', 'Film',
+            'Government Publication', 'Image', 'LP Phonorecord', 'Musical Instrument', 'Supplement',
+            'Thesis/Dissertation', 'Videocassette', 'Video Game',
+        ],
+        'Other' => ['Admin', 'Unspecified', '', 'None', 'No material type', 'Synthetic unlisted format', null],
     ] as $category => $materials) {
         foreach ($materials as $material) {
-            visualizationSame($category, VisualizationDataService::categoryForMaterial($material), 'Map ' . var_export($material, true) . ' to ' . $category . '.');
+            $mappedCategory = VisualizationDataService::categoryForMaterial($material);
             $f = new VisualizationFixture();
             $f->payment(10, 'amount', 100, $material);
             $point = visualizationByYear($f->service()->get('s', 5)['purchasesByCategory'], 2027);
-            visualizationNear(10, $point[strtolower($category)], 'Generated SQL must use the same mapping for ' . var_export($material, true) . '.');
-            visualizationNear(10, $point['total'], 'Every material payment contributes exactly once.');
+            $sqlAmounts = [
+                'electronic' => (float)$point['electronic'],
+                'physical' => (float)$point['physical'],
+                'other' => (float)$point['other'],
+            ];
+            $expectedAmounts = ['electronic' => 0.0, 'physical' => 0.0, 'other' => 0.0];
+            $expectedAmounts[strtolower($category)] = 10.0;
+            if ($mappedCategory !== $category || $sqlAmounts !== $expectedAmounts || abs($point['total'] - 10) > 0.00001) {
+                $mismatches[] = [
+                    'material' => var_export($material, true), 'expected' => $category,
+                    'mapped' => $mappedCategory, 'sqlAmounts' => $sqlAmounts,
+                    'expectedAmounts' => $expectedAmounts, 'total' => $point['total'],
+                ];
+            }
         }
     }
+    visualizationSame([], $mismatches, 'Every type is checked through categoryForMaterial and the executed purchases SQL.');
+});
+
+visualizationCase('collection-support fund codes override an E-Journal material in the purchases SQL', function () {
+    $f = new VisualizationFixture();
+    $supportFunds = [
+        'SCECS' => 20,
+        'SCPCS' => 30,
+        'SCILL' => 40,
+    ];
+    foreach ($supportFunds as $code => $amount) {
+        $fundId = 'support-' . $code;
+        $f->insert('finance.fund__t', ['id' => $fundId, 'code' => $code, 'name' => 'Synthetic ' . $code]);
+        $f->insert('finance.fund__t__acq_unit_ids', ['id' => $fundId, 'acq_unit_ids' => 's']);
+        $f->payment($amount, 'amount', 100, 'E-Journal', $fundId);
+    }
+    $f->payment(10, 'amount', 100, 'E-Journal', 'fund-s');
+    $response = $f->service()->get('s', 5);
+    $point = visualizationByYear($response['purchasesByCategory'], 2027);
+    $purchaseSql = null;
+    foreach ($f->folio->queries as $query) {
+        if (strpos($query['sql'], ' AS electronic') !== false) $purchaseSql = $query['sql'];
+    }
+    $materials = $response['purchasesByMaterial']['items'];
+    $materialAmounts = [];
+    foreach ($materials as $row) $materialAmounts[$row['materialType']] = $row['amount'];
+    visualizationSame([
+        'executedPurchasesSql' => true,
+        'electronic' => 10.0,
+        'physical' => 0.0,
+        'other' => 90.0,
+        'total' => 100.0,
+        'materialPieEJournal' => 100.0,
+    ], [
+        'executedPurchasesSql' => $purchaseSql !== null,
+        'electronic' => $point['electronic'],
+        'physical' => $point['physical'],
+        'other' => $point['other'],
+        'total' => $point['total'],
+        'materialPieEJournal' => $materialAmounts['E-Journal'] ?? null,
+    ], 'SQLite evaluates the service query against support and ordinary synthetic fund rows; material detail remains unchanged.');
 });
 
 visualizationCase('payment arithmetic in generated SQL covers amount, percentage, missing, mixed-case and NULL values', function () {
@@ -147,6 +209,42 @@ visualizationCase('cache key varies with unit, years, material year and history 
     visualizationSame($first, $service->get('s', 5), 'A warm cache returns the same payload.');
     visualizationSame($reads, count($f->folio->queries), 'A cache hit performs no FOLIO queries.');
     visualizationAssert(in_array(3600, array_column($f->cache->writes, 'duration'), true), 'Chart cache entries have a 3600-second TTL.');
+});
+
+visualizationCase('new purchase split cache version does not reuse a cached pre-RPT-029 split', function () {
+    $f = new VisualizationFixture();
+    $f->db->createCommand("UPDATE finance.fund__t SET code = 'SCECS' WHERE id = 'fund-s'")->execute();
+    $f->payment(20, 'amount', 100, 'E-Journal', 'fund-s');
+    $pointFromCurrentSql = ['fiscalYearEnd' => 2027, 'electronic' => 0.0, 'physical' => 0.0, 'other' => 20.0, 'total' => 20.0];
+    $legacyCacheKey = 'visualizations:' . hash('sha256', serialize(['s', 5, null, 0]));
+    $f->cache->set($legacyCacheKey, [
+        'legacySplit' => true,
+        'purchasesByCategory' => [[
+            'fiscalYearEnd' => 2027, 'electronic' => 20.0, 'physical' => 0.0, 'other' => 0.0, 'total' => 20.0,
+        ]],
+    ]);
+
+    $response = $f->service()->get('s', 5);
+    $point = visualizationByYear($response['purchasesByCategory'], 2027);
+    $writtenKeys = array_column($f->cache->writes, 'key');
+    $newKey = end($writtenKeys);
+    visualizationSame([
+        'legacySplitReturned' => false,
+        'cacheKeyChanged' => true,
+        'purchasesByCategory' => $pointFromCurrentSql,
+        'executedFolioQueries' => true,
+    ], [
+        'legacySplitReturned' => !empty($response['legacySplit']),
+        'cacheKeyChanged' => $newKey !== $legacyCacheKey,
+        'purchasesByCategory' => [
+            'fiscalYearEnd' => $point['fiscalYearEnd'],
+            'electronic' => $point['electronic'],
+            'physical' => $point['physical'],
+            'other' => $point['other'],
+            'total' => $point['total'],
+        ],
+        'executedFolioQueries' => count($f->folio->queries) > 0,
+    ], 'The changed cache key must bypass the previous split and populate fresh SQL results.');
 });
 
 visualizationCase('all generated FOLIO SQL passes both validators and transaction wrapper commits or rolls back with a 30s timeout', function () {

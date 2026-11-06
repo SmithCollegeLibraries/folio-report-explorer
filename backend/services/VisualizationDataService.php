@@ -6,8 +6,17 @@ namespace app\services;
 final class VisualizationDataService
 {
     private const YEARS = [5, 10, 15, 20];
-    private const ELECTRONIC = ['Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package', 'E-Newspaper', 'Streaming Video'];
-    private const PHYSICAL = ['Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial'];
+    private const ELECTRONIC = [
+        'Data File', 'Database', 'E-Book', 'E-Book Package', 'E-Journal', 'E-Journal Package',
+        'E-Newspaper', 'Streaming Video', 'E-Score', 'Streaming Audio', 'E-Thesis/Dissertation',
+    ];
+    private const PHYSICAL = [
+        'Audio CD', 'Book', 'DVD/Blu-ray', 'Journal', 'Newspaper', 'Score', 'Serial', 'Map', 'Microform',
+        'Analog Game', 'Archival material', 'Artifact/Object', 'Audiocassette', 'CD-ROM', 'Equipment', 'Film',
+        'Government Publication', 'Image', 'LP Phonorecord', 'Musical Instrument', 'Supplement',
+        'Thesis/Dissertation', 'Videocassette', 'Video Game',
+    ];
+    private const COLLECTION_SUPPORT_FUNDS = ['SCECS', 'SCPCS', 'SCILL'];
     private $folioDb;
     private $historyDb;
     private $cache;
@@ -115,7 +124,7 @@ final class VisualizationDataService
 
     public static function cacheKey(string $acqUnitId, int $years, $materialFiscalYearEnd, int $historyVersion): string
     {
-        return 'visualizations:' . hash('sha256', serialize([$acqUnitId, $years, $materialFiscalYearEnd, $historyVersion]));
+        return 'visualizations:rpt-029-v2:' . hash('sha256', serialize([$acqUnitId, $years, $materialFiscalYearEnd, $historyVersion]));
     }
 
     private function contextSql(): string
@@ -134,8 +143,8 @@ SQL;
         $range = $withRange ? ' AND EXTRACT(YEAR FROM fy.period_end::date)::int BETWEEN :firstYear AND :lastYear' : '';
         return "WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND NOT is_deleted),\n"
             . "selected_years AS (SELECT fy.id, EXTRACT(YEAR FROM fy.period_end::date)::int AS fiscal_year_end FROM finance.fiscal_year__t fy JOIN selected_unit au ON fy.series = au.unit_code || 'FY' WHERE fy.period_end IS NOT NULL{$range}),\n"
-            . "unit_funds AS (SELECT DISTINCT fau.id AS fund_id FROM finance.fund__t__acq_unit_ids fau JOIN finance.fund__t f ON f.id = fau.id JOIN selected_unit au ON au.id = fau.acq_unit_ids),\n"
-            . "paid_lines AS (SELECT sy.fiscal_year_end, COALESCE(CASE WHEN LOWER(COALESCE(fd.fund_distributions__distribution_type, '')) = 'amount' THEN fd.fund_distributions__value ELSE COALESCE(fd.total, 0) * COALESCE(fd.fund_distributions__value, 0) / 100.0 END, 0) AS amount, COALESCE(ermt.name, pmt.name, 'No material type') AS material_type\n"
+            . "unit_funds AS (SELECT DISTINCT fau.id AS fund_id, f.code AS fund_code FROM finance.fund__t__acq_unit_ids fau JOIN finance.fund__t f ON f.id = fau.id JOIN selected_unit au ON au.id = fau.acq_unit_ids),\n"
+            . "paid_lines AS (SELECT sy.fiscal_year_end, COALESCE(CASE WHEN LOWER(COALESCE(fd.fund_distributions__distribution_type, '')) = 'amount' THEN fd.fund_distributions__value ELSE COALESCE(fd.total, 0) * COALESCE(fd.fund_distributions__value, 0) / 100.0 END, 0) AS amount, COALESCE(ermt.name, pmt.name, 'No material type') AS material_type, COALESCE(uf.fund_code, '') AS fund_code\n"
             . "FROM invoice.invoice_lines__t__fund_distributions fd JOIN invoice.invoices__t inv ON inv.id = fd.invoice_id JOIN selected_years sy ON sy.id = inv.fiscal_year_id JOIN unit_funds uf ON uf.fund_id = fd.fund_distributions__fund_id\n"
             . "LEFT JOIN orders.po_line__t pol ON pol.id = fd.po_line_id LEFT JOIN inventory.material_type__t ermt ON ermt.id = pol.eresource__material_type LEFT JOIN inventory.material_type__t pmt ON pmt.id = pol.physical__material_type WHERE fd.invoice_line_status = 'Paid')\n";
     }
@@ -144,11 +153,12 @@ SQL;
     {
         $electronic = "'" . implode("', '", array_map('strtolower', self::ELECTRONIC)) . "'";
         $physical = "'" . implode("', '", array_map('strtolower', self::PHYSICAL)) . "'";
+        $supportFunds = "'" . implode("', '", self::COLLECTION_SUPPORT_FUNDS) . "'";
         return $this->paymentCtes(true)
             . "SELECT fiscal_year_end AS \"fiscalYearEnd\", SUM(amount) AS total,\n"
-            . "SUM(CASE WHEN LOWER(material_type) IN ({$electronic}) THEN amount ELSE 0 END) AS electronic,\n"
-            . "SUM(CASE WHEN LOWER(material_type) IN ({$physical}) THEN amount ELSE 0 END) AS physical,\n"
-            . "SUM(CASE WHEN LOWER(material_type) NOT IN ({$electronic}, {$physical}) THEN amount ELSE 0 END) AS other\n"
+            . "SUM(CASE WHEN UPPER(fund_code) NOT IN ({$supportFunds}) AND LOWER(material_type) IN ({$electronic}) THEN amount ELSE 0 END) AS electronic,\n"
+            . "SUM(CASE WHEN UPPER(fund_code) NOT IN ({$supportFunds}) AND LOWER(material_type) IN ({$physical}) THEN amount ELSE 0 END) AS physical,\n"
+            . "SUM(CASE WHEN UPPER(fund_code) IN ({$supportFunds}) OR LOWER(material_type) NOT IN ({$electronic}, {$physical}) THEN amount ELSE 0 END) AS other\n"
             . 'FROM paid_lines GROUP BY fiscal_year_end ORDER BY fiscal_year_end';
     }
 
