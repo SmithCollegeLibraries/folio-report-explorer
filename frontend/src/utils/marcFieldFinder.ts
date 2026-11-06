@@ -2,6 +2,10 @@ import type { ReportFieldErrors, ReportParameterValues } from '../types';
 
 export const MARC_FIELD_FINDER_SLUG = 'marc-field-indicator-content-finder';
 export const MARC_COMBINATION_FINDER_SLUG = 'marc-field-combination-finder';
+export const MARC_COMBINATION_RECORD_SCOPES = {
+  holdings_no_items: 'Holdings with no items (Smith)',
+  no_holdings: 'Instances with no holdings (Smith)',
+} as const;
 
 export const CONTENT_RULES = [
   'any',
@@ -191,16 +195,20 @@ export function evaluateMarcFieldFinder(valuesInput: MarcFieldFinderValues): Mar
 export function evaluateMarcCombinationFinder(input: MarcFieldFinderValues): MarcCombinationFinderEvaluation {
   const source = input || {};
   const fieldErrors: ReportFieldErrors = {};
+  const locationBasis = values(source.locationBasis);
+  const recordScope = MARC_COMBINATION_RECORD_SCOPES[locationBasis as keyof typeof MARC_COMBINATION_RECORD_SCOPES];
   const rawIds = values(source.locationIds).trim();
-  const locationIds = rawIds === '' ? [] : rawIds.split(',').map((id) => id.trim());
-  if (!locationIds.length) error(fieldErrors, 'locationIds', 'Select at least one location.');
-  if (locationIds.length > 100) error(fieldErrors, 'locationIds', 'Select no more than 100 locations.');
-  if (locationIds.some((id) => !UUID_PATTERN.test(id))) error(fieldErrors, 'locationIds', 'Every selected location must be a valid UUID.');
-  if (new Set(locationIds.map((id) => id.toLowerCase())).size !== locationIds.length) {
-    error(fieldErrors, 'locationIds', 'Selected locations must be unique.');
+  const locationIds = recordScope || rawIds === '' ? [] : rawIds.split(',').map((id) => id.trim());
+  if (!recordScope) {
+    if (!locationIds.length) error(fieldErrors, 'locationIds', 'Select at least one location.');
+    if (locationIds.length > 100) error(fieldErrors, 'locationIds', 'Select no more than 100 locations.');
+    if (locationIds.some((id) => !UUID_PATTERN.test(id))) error(fieldErrors, 'locationIds', 'Every selected location must be a valid UUID.');
+    if (new Set(locationIds.map((id) => id.toLowerCase())).size !== locationIds.length) {
+      error(fieldErrors, 'locationIds', 'Selected locations must be unique.');
+    }
   }
-  if (!['effective_item', 'permanent_item'].includes(values(source.locationBasis))) {
-    error(fieldErrors, 'locationBasis', 'Choose effective item or permanent item.');
+  if (!['effective_item', 'permanent_item', 'holdings_no_items', 'no_holdings'].includes(locationBasis)) {
+    error(fieldErrors, 'locationBasis', 'Location basis must be one of the four supported scopes.');
   }
   const combine = values(source.combine);
   if (!['all', 'any'].includes(combine)) error(fieldErrors, 'combine', 'Choose all conditions (AND) or any condition (OR).');
@@ -271,8 +279,8 @@ export function evaluateMarcCombinationFinder(input: MarcFieldFinderValues): Mar
   });
   const countLabel = locationIds.length + ' ' + (locationIds.length === 1 ? 'location' : 'locations');
   const summary = clauses.length
-    ? 'Records in ' + countLabel + ' that ' + clauses.join(combine === 'any' ? ' OR ' : ' AND ')
-    : 'Records in ' + countLabel;
+    ? (recordScope || 'Records in ' + countLabel) + ' that ' + clauses.join(combine === 'any' ? ' OR ' : ' AND ')
+    : recordScope || 'Records in ' + countLabel;
   return { fieldErrors, summary, valid: Object.keys(fieldErrors).length === 0 };
 }
 
@@ -300,11 +308,13 @@ export function normalizeMarcCombinationFinderSubmission(
   valuesInput: Record<string, string>,
 ): Record<string, string> {
   const activeSlots = new Set<number>();
+  const locationFree = valuesInput.locationBasis === 'holdings_no_items' || valuesInput.locationBasis === 'no_holdings';
   for (let number = 1; number <= 5; number++) {
     if ((valuesInput['c' + number + '_marcTag'] ?? '') !== '') activeSlots.add(number);
   }
   return Object.fromEntries(parameters.map((parameter) => {
     const slot = parameter.name.match(/^c([1-5])_(.+)$/);
+    if (parameter.name === 'locationIds' && locationFree) return [parameter.name, ''];
     return [parameter.name, slot && !activeSlots.has(Number(slot[1])) ? '' : valuesInput[parameter.name] ?? ''];
   }));
 }

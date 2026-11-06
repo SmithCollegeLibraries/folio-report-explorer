@@ -23,7 +23,7 @@ foreach ($engineConfigs as $config) {
     }
 }
 if (!$configured) {
-    fwrite(STDOUT, "SKIP: RPT-026 migration engine checks need disposable MySQL 8 and MariaDB 10.3 admin connections.\n");
+    fwrite(STDOUT, "SKIP: RPT-028 migration engine checks need disposable MySQL 8 and MariaDB 10.3 admin connections.\n");
     exit(0);
 }
 if (getenv('RPT026_MIGRATION_TEST_ALLOW_SCHEMA_CREATE') !== '1') {
@@ -74,6 +74,17 @@ function marcCombinationEngineSame($expected, $actual, string $message): void
     marcCombinationEngineCheck($expected === $actual, $message
         . "\nExpected: " . var_export($expected, true)
         . "\nActual: " . var_export($actual, true));
+}
+
+function marcCombinationEngineReport(Connection $db): array
+{
+    return $db->createCommand("SELECT * FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryOne();
+}
+
+function marcCombinationEngineRestoreReport(Connection $db, array $row): void
+{
+    unset($row['id']);
+    $db->createCommand()->update('report_templates', $row, ['slug' => 'marc-field-combination-finder'])->execute();
 }
 
 function marcCombinationEngineConnection(string $dsn, string $username, string $password): Connection
@@ -142,7 +153,7 @@ function marcCombinationEngineRun(string $label, array $config, string $migratio
 {
     global $failures;
     $admin = null;
-    $databaseName = 'rpt026_' . strtolower(str_replace([' ', '.'], '_', $label)) . '_' . strtolower(substr(bin2hex(random_bytes(8)), 0, 12));
+    $databaseName = 'rpt028_' . strtolower(str_replace([' ', '.'], '_', $label)) . '_' . strtolower(substr(bin2hex(random_bytes(8)), 0, 12));
     $dbDsn = rtrim((string) $config['dsn'], ';') . ';dbname=' . $databaseName;
     $temporaryMigrationDir = null;
 
@@ -162,49 +173,81 @@ function marcCombinationEngineRun(string $label, array $config, string $migratio
 
         try {
             $temporaryMigrationDir = marcCombinationEnginePrepareSchema($adminDb, $migrationDir, $initSql, $label);
-            marcCombinationEngineCase($label . ' 068 installs from a ledger through 067', function () use ($adminDb, $migrationDir) {
-                $result = MigrationService::run($adminDb, $migrationDir, false);
+            $legacyDefinition = [];
+            $migration068 = rtrim($migrationDir, '/') . '/068_marc_field_combination_finder.sql';
+            if (!copy($migration068, $temporaryMigrationDir . DIRECTORY_SEPARATOR . basename($migration068))) {
+                throw new RuntimeException('Could not add migration 068 to the disposable pre-069 directory.');
+            }
+            marcCombinationEngineCase($label . ' 068 installs from a ledger through 067', function () use ($adminDb, $temporaryMigrationDir, &$legacyDefinition) {
+                $result = MigrationService::run($adminDb, $temporaryMigrationDir, false);
                 marcCombinationEngineCheck(in_array('068_marc_field_combination_finder.sql', $result['applied'], true), 'Install must execute migration 068.');
+                $legacyDefinition = marcCombinationEngineReport($adminDb);
                 marcCombinationEngineSame(1, (int) $adminDb->createCommand("SELECT COUNT(*) FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryScalar(), 'Install creates exactly one canonical report row.');
                 marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('migrationAppearsApplied', [$adminDb, '068_marc_field_combination_finder.sql']), 'Installed migration 068 must be recognized.');
             });
 
-            marcCombinationEngineCase($label . ' 068 reruns without duplicating or changing the seed', function () use ($adminDb, $migrationDir) {
-                $before = (string) $adminDb->createCommand("SELECT name FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryScalar();
+            marcCombinationEngineCase($label . ' 069 updates canonical 068 and is recorded', function () use ($adminDb, $migrationDir) {
                 $result = MigrationService::run($adminDb, $migrationDir, false);
-                marcCombinationEngineCheck(!in_array('068_marc_field_combination_finder.sql', $result['applied'], true), 'A second run must not execute 068 again.');
-                marcCombinationEngineSame($before, (string) $adminDb->createCommand("SELECT name FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryScalar(), 'Rerun leaves the canonical seed unchanged.');
+                marcCombinationEngineCheck(in_array('069_marc_combination_finder_record_scopes.sql', $result['applied'], true), 'Upgrade must execute migration 069.');
+                marcCombinationEngineSame(1, (int) $adminDb->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '069_marc_combination_finder_record_scopes.sql'")->queryScalar(), 'Upgrade records migration 069 exactly once.');
+                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('migrationAppearsApplied', [$adminDb, '068_marc_field_combination_finder.sql']), 'Current 069 definition keeps migration 068 recognized.');
+                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('migrationAppearsApplied', [$adminDb, '069_marc_combination_finder_record_scopes.sql']), 'Installed migration 069 is recognized.');
                 marcCombinationEngineSame(1, (int) $adminDb->createCommand("SELECT COUNT(*) FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryScalar(), 'Rerun leaves one report row.');
             });
 
-            marcCombinationEngineCase($label . ' 068 drift is not overwritten or recognized', function () use ($adminDb, $migrationDir) {
-                $adminDb->createCommand("UPDATE report_templates SET name = 'Drifted synthetic definition' WHERE slug = 'marc-field-combination-finder'")->execute();
-                $adminDb->createCommand("DELETE FROM schema_migrations WHERE filename = '068_marc_field_combination_finder.sql'")->execute();
-                $error = null;
-                try {
-                    MigrationService::run($adminDb, $migrationDir, false);
-                } catch (Throwable $caught) {
-                    $error = $caught;
-                }
-                marcCombinationEngineCheck($error !== null, 'A guarded insert must not treat a drifted same-slug row as successful recognition.');
-                if ($error !== null) {
-                    marcCombinationEngineCheck(stripos($error->getMessage(), 'marc-field-combination-finder') !== false || stripos($error->getMessage(), '068') !== false, 'The drift error must identify migration 068 or its report slug.');
-                }
-                marcCombinationEngineSame('Drifted synthetic definition', (string) $adminDb->createCommand("SELECT name FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryScalar(), 'The guarded insert must not overwrite the pre-existing row.');
-                marcCombinationEngineSame(false, (bool) marcCombinationEngineReflection('migrationAppearsApplied', [$adminDb, '068_marc_field_combination_finder.sql']), 'The drifted row must not be recognized as applied.');
-                marcCombinationEngineSame(0, (int) $adminDb->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '068_marc_field_combination_finder.sql'")->queryScalar(), 'Failed recognition must not record migration 068.');
+            $canonicalDefinition = marcCombinationEngineReport($adminDb);
+            foreach ([
+                'parameters' => '[]', 'help_text' => 'Drifted help text', 'execution_config' => '{}',
+                'name' => 'Drifted synthetic definition', 'sql_template' => $canonicalDefinition['sql_template'] . ' ',
+            ] as $field => $changedValue) {
+                marcCombinationEngineCase($label . ' 069 refuses altered ' . $field . ' without changing the row', function () use ($adminDb, $migrationDir, $canonicalDefinition, $field, $changedValue) {
+                    marcCombinationEngineRestoreReport($adminDb, $canonicalDefinition);
+                    $adminDb->createCommand()->update('report_templates', [$field => $changedValue], ['slug' => 'marc-field-combination-finder'])->execute();
+                    $adminDb->createCommand("DELETE FROM schema_migrations WHERE filename = '069_marc_combination_finder_record_scopes.sql'")->execute();
+                    $before = marcCombinationEngineReport($adminDb);
+                    $error = null;
+                    try { MigrationService::run($adminDb, $migrationDir, false); } catch (Throwable $caught) { $error = $caught; }
+                    marcCombinationEngineCheck($error !== null && strpos($error->getMessage(), '069') !== false && strpos($error->getMessage(), 'marc-field-combination-finder') !== false, 'Guard rejects drift and names migration 069 and its report.');
+                    marcCombinationEngineSame($before, marcCombinationEngineReport($adminDb), 'Failed pre-execution guard leaves the entire row unchanged.');
+                    marcCombinationEngineSame(false, (bool) marcCombinationEngineReflection('migrationAppearsApplied', [$adminDb, '069_marc_combination_finder_record_scopes.sql']), 'Drifted row is not recognized as migration 069.');
+                    marcCombinationEngineSame(0, (int) $adminDb->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '069_marc_combination_finder_record_scopes.sql'")->queryScalar(), 'Failed guard does not record migration 069.');
+                    marcCombinationEngineRestoreReport($adminDb, $canonicalDefinition);
+                    $restored = MigrationService::run($adminDb, $migrationDir, false);
+                    marcCombinationEngineCheck(in_array('069_marc_combination_finder_record_scopes.sql', $restored['baselined'], true), 'Restoring the canonical 069 definition makes it recognizable.');
+                });
+            }
+
+            marcCombinationEngineCase($label . ' 069 reruns without changing its canonical definition', function () use ($adminDb, $migrationDir) {
+                $before = marcCombinationEngineReport($adminDb);
+                $result = MigrationService::run($adminDb, $migrationDir, false);
+                marcCombinationEngineCheck(!in_array('069_marc_combination_finder_record_scopes.sql', $result['applied'], true), 'A second run must not execute 069 again.');
+                marcCombinationEngineSame($before, marcCombinationEngineReport($adminDb), 'Rerun leaves the complete seed unchanged.');
+                marcCombinationEngineSame(1, (int) $adminDb->createCommand("SELECT COUNT(*) FROM report_templates WHERE slug = 'marc-field-combination-finder'")->queryScalar(), 'Rerun leaves one report row.');
             });
 
-            marcCombinationEngineCase($label . ' empty-ledger current-schema run enters the baseline branch for 068', function () use ($adminDb, $migrationDir) {
-                $adminDb->createCommand("UPDATE report_templates SET name = 'MARC Field Combination Finder' WHERE slug = 'marc-field-combination-finder'")->execute();
-                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]), 'The full production-shaped database plus canonical 068 seed satisfies the current-schema prerequisite.');
+            marcCombinationEngineCase($label . ' empty-ledger baseline upgrades canonical 068 and recognizes 069', function () use ($adminDb, $migrationDir, $legacyDefinition) {
+                marcCombinationEngineRestoreReport($adminDb, $legacyDefinition);
                 $adminDb->createCommand('DELETE FROM schema_migrations')->execute();
-                marcCombinationEngineSame(0, (int) $adminDb->createCommand('SELECT COUNT(*) FROM schema_migrations')->queryScalar(), 'The baseline scenario begins with a provably empty ledger.');
-                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]), 'The actual empty-ledger state still passes databaseAppearsCurrent().');
+                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]), 'Canonical historical 068 row satisfies the empty-ledger prerequisite.');
                 $result = MigrationService::run($adminDb, $migrationDir, false);
-                marcCombinationEngineCheck(in_array('068_marc_field_combination_finder.sql', $result['baselined'], true), 'The baseline branch must baseline 068 from its canonical seed.');
-                marcCombinationEngineCheck(!in_array('068_marc_field_combination_finder.sql', $result['applied'], true), 'The empty-ledger baseline must not execute 068.');
-                marcCombinationEngineSame(1, (int) $adminDb->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '068_marc_field_combination_finder.sql'")->queryScalar(), 'The empty-ledger baseline records migration 068 exactly once.');
+                marcCombinationEngineCheck(in_array('068_marc_field_combination_finder.sql', $result['baselined'], true), 'Baseline recognizes the historical 068 definition.');
+                marcCombinationEngineCheck(in_array('069_marc_combination_finder_record_scopes.sql', $result['applied'], true), 'Baseline branch applies 069 after recognizing 068.');
+                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('migrationAppearsApplied', [$adminDb, '069_marc_combination_finder_record_scopes.sql']), 'The post-baseline 069 definition is recognized.');
+            });
+
+            marcCombinationEngineCase($label . ' empty-ledger baseline recognizes canonical 069 and rejects drift', function () use ($adminDb, $migrationDir) {
+                $adminDb->createCommand('DELETE FROM schema_migrations')->execute();
+                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]), 'Canonical 069 row satisfies the empty-ledger prerequisite.');
+                $result = MigrationService::run($adminDb, $migrationDir, false);
+                marcCombinationEngineCheck(in_array('068_marc_field_combination_finder.sql', $result['baselined'], true)
+                    && in_array('069_marc_combination_finder_record_scopes.sql', $result['baselined'], true), 'Empty-ledger baseline records both canonical report definitions.');
+                $adminDb->createCommand("UPDATE report_templates SET name = 'Drifted baseline definition' WHERE slug = 'marc-field-combination-finder'")->execute();
+                $adminDb->createCommand('DELETE FROM schema_migrations')->execute();
+                marcCombinationEngineSame(false, (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]), 'A non-canonical report row fails the empty-ledger baseline prerequisite.');
+                $dryRun = MigrationService::run($adminDb, $migrationDir, true);
+                marcCombinationEngineCheck(!in_array('068_marc_field_combination_finder.sql', $dryRun['baselined'], true)
+                    && !in_array('069_marc_combination_finder_record_scopes.sql', $dryRun['baselined'], true), 'A drifted report is not baseline-recognized as 068 or 069.');
+                marcCombinationEngineSame(0, (int) $adminDb->createCommand('SELECT COUNT(*) FROM schema_migrations')->queryScalar(), 'Rejected baseline remains unrecorded.');
             });
         } catch (Throwable $error) {
             marcCombinationEngineCheck(false, $label . ' setup failed before migration scenarios: ' . get_class($error) . ': ' . $error->getMessage());
@@ -233,8 +276,8 @@ foreach ($engineConfigs as $label => $config) {
 }
 
 if ($failures) {
-    fwrite(STDERR, 'FAIL: ' . count($failures) . " RPT-026 migration engine checks failed.\n");
+    fwrite(STDERR, 'FAIL: ' . count($failures) . " RPT-028 migration engine checks failed.\n");
     exit(1);
 }
 
-fwrite(STDOUT, "PASS: RPT-026 migration 068 install, rerun, drift, and baseline checks passed on MySQL 8 and MariaDB 10.3.\n");
+fwrite(STDOUT, "PASS: RPT-028 migrations 068 and 069 install, rerun, drift, and baseline checks passed on MySQL 8 and MariaDB 10.3.\n");

@@ -22,6 +22,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                 'check' => 'marcCombinationFinderDefinitionAppearsComplete',
                 'error' => 'Migration 068 did not install the canonical MARC combination finder definition.',
             ],
+            '069_marc_combination_finder_record_scopes.sql' => [
+                'check' => 'marcCombinationFinderRecordScopesAppearComplete',
+                'error' => 'Migration 069 did not install the canonical MARC combination finder definition.',
+            ],
         ];
     }
 
@@ -118,6 +122,11 @@ class AcrlQuestionAssignmentMigrationRecognitionService
     }
 
     private static function marcCombinationFinderDefinitionAppearsComplete($db): bool
+    {
+        return CatalogingReportMigrationRecognitionService::marcCombinationFinder068ReportAppearsComplete($db);
+    }
+
+    private static function marcCombinationFinderRecordScopesAppearComplete($db): bool
     {
         return CatalogingReportMigrationRecognitionService::marcCombinationFinderReportAppearsComplete($db);
     }
@@ -292,6 +301,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             '066_acrl_question_assignments.sql' => true,
             '067_acrl_invites.sql' => true,
             '068_marc_field_combination_finder.sql' => true,
+            '069_marc_combination_finder_record_scopes.sql' => true,
         ];
         foreach ($files as $file) {
             $filename = $file['filename'];

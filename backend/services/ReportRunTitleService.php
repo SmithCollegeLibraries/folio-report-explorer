@@ -120,7 +120,10 @@ final class ReportRunTitleService
             if (isset($labels[$rule])) $clause .= ' ' . $labels[$rule] . (in_array($rule, ['contains', 'not_contains', 'equals', 'not_equals', 'begins', 'not_begins'], true) ? ' "' . $search . '"' : '');
             $clauses[] = $clause;
         }
-        $title = trim((string) ($report->name ?? ''));
+        $title = [
+            'holdings_no_items' => 'Holdings with no items (Smith)',
+            'no_holdings' => 'No holdings (Smith)',
+        ][$identity['locationBasis'] ?? ''] ?? trim((string) ($report->name ?? ''));
         if ($clauses) $title .= ' — ' . $combine . ': ' . implode(($identity['combine'] ?? 'all') === 'any' ? ' OR ' : ' AND ', $clauses);
         if ($identifierExport) $title .= ' (identifiers)';
         $normalized = call_user_func($this->nameNormalizer, $title);

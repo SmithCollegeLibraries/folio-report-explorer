@@ -26,7 +26,7 @@ function combinationPanel(): ComponentType<Props> {
 
 function parameterDefinitions(): ReportParam[] {
   const definitions: ReportParam[] = [
-    { name: 'locationIds', type: 'multiselect', label: 'Locations', required: true, default: '', resolvedDefault: '', max_selections: 100 },
+    { name: 'locationIds', type: 'multiselect', label: 'Locations', required: false, default: '', resolvedDefault: '', max_selections: 100 },
     { name: 'locationBasis', type: 'select', label: 'Location basis', required: true, default: 'effective_item', resolvedDefault: 'effective_item' },
     { name: 'combine', type: 'select', label: 'Combine conditions', required: true, default: 'all', resolvedDefault: 'all' },
   ];
@@ -88,7 +88,12 @@ function values(overrides: Record<string, string> = {}): Record<string, string> 
 
 const selectOptions = {
   locationIds: [{ value: '11111111-1111-4111-8111-111111111111', label: 'Smith — Main [MAIN]' }],
-  locationBasis: [{ value: 'effective_item', label: 'Effective item' }, { value: 'permanent_item', label: 'Permanent item' }],
+  locationBasis: [
+    { value: 'effective_item', label: 'Effective item' },
+    { value: 'permanent_item', label: 'Permanent item' },
+    { value: 'holdings_no_items', label: 'Holdings with no items (Smith)' },
+    { value: 'no_holdings', label: 'Instances with no holdings (Smith)' },
+  ],
   combine: [{ value: 'all', label: 'All conditions (AND)' }, { value: 'any', label: 'Any condition (OR)' }],
   c1_occurrenceCondition: [{ value: 'has', label: 'Has' }, { value: 'missing', label: 'Is missing' }],
   c2_occurrenceCondition: [{ value: 'has', label: 'Has' }, { value: 'missing', label: 'Is missing' }],
@@ -118,6 +123,28 @@ function renderPanel(initial: Record<string, string>, serverFieldErrors: Record<
 }
 
 describe('MarcCombinationFinderParameters', () => {
+  it('shows item locations only for the item search and switches to each Smith record scope', async () => {
+    const user = userEvent.setup();
+    renderPanel(values());
+
+    expect(screen.getByRole('radio', { name: 'Items at selected locations' })).toBeChecked();
+    expect(screen.getByLabelText('Locations')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /Location basis/ }).querySelectorAll('option')).toHaveLength(3);
+
+    await user.click(screen.getByRole('radio', { name: 'Holdings with no items (Smith)' }));
+    expect(screen.queryByLabelText('Locations')).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /Location basis/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('MARC combination interpretation')).toHaveTextContent('Holdings with no items (Smith)');
+
+    await user.click(screen.getByRole('radio', { name: 'Instances with no holdings (Smith)' }));
+    expect(screen.getByLabelText('MARC combination interpretation')).toHaveTextContent('Instances with no holdings (Smith)');
+
+    await user.click(screen.getByRole('radio', { name: 'Items at selected locations' }));
+    expect(screen.getByLabelText('Locations')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /Location basis/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Items at selected locations' })).toBeChecked();
+  });
+
   it('adds condition cards through five and then prevents a sixth', async () => {
     const user = userEvent.setup();
     renderPanel(values());
