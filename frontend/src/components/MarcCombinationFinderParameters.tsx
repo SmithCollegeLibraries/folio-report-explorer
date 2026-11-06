@@ -123,6 +123,8 @@ export default function MarcCombinationFinderParameters({
   const visibleCount = Math.max(1, ...Array.from({ length: 5 }, (_, index) => index + 1).filter((slot) => (
     values['c' + slot + '_marcTag'] || values['c' + slot + '_occurrenceCondition']
   )));
+  const hasEmptyVisibleCondition = Array.from({ length: visibleCount }, (_, index) => index + 1)
+    .some((slot) => !values['c' + slot + '_marcTag']);
   const activeCount = Array.from({ length: 5 }, (_, index) => values['c' + (index + 1) + '_marcTag'])
     .filter((tag) => Boolean(tag)).length;
 
@@ -140,6 +142,13 @@ export default function MarcCombinationFinderParameters({
         SLOT_FIELDS.forEach((field) => onChange('c' + slot + '_' + field, ''));
       }
       return;
+    }
+    const activatedSlot = /^c([1-5])_marcTag$/.exec(name);
+    if (activatedSlot && value !== '' && !values[name]) {
+      const slot = Number(activatedSlot[1]);
+      SLOT_FIELDS.filter((field) => field !== 'marcTag').forEach((field) => {
+        onChange('c' + slot + '_' + field, defaultValue(field));
+      });
     }
     onChange(name, value);
     if (/^c[1-5]_contentRule$/.test(name) && !consumesSearchText(value)) {
@@ -222,7 +231,7 @@ export default function MarcCombinationFinderParameters({
       <button
         type="button"
         onClick={addCondition}
-        disabled={visibleCount >= 5}
+        disabled={visibleCount >= 5 || hasEmptyVisibleCondition}
         className="rounded-lg border border-folio-200 px-3 py-2 text-sm font-medium text-folio-700 disabled:cursor-not-allowed disabled:opacity-40"
       >
         Add condition

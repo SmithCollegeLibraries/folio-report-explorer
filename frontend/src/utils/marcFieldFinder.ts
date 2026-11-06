@@ -66,6 +66,13 @@ function indicatorDisplay(value: string | undefined): string | null {
   return normalized.startsWith('char:') ? normalized.slice(5) : normalized;
 }
 
+function combinationIndicatorPositions(firstValue: string, secondValue: string): string {
+  const first = indicatorDisplay(firstValue);
+  const second = indicatorDisplay(secondValue);
+  if (first === null && second === null) return '';
+  return ' ' + (first ?? '?') + (second ?? '?');
+}
+
 function values(value: string | undefined): string {
   return typeof value === 'string' ? value : '';
 }
@@ -243,11 +250,10 @@ export function evaluateMarcCombinationFinder(input: MarcFieldFinderValues): Mar
     const tag = values(source[prefix + 'marcTag']) || '—';
     const occurrence = values(source[prefix + 'occurrenceCondition']);
     let clause = (occurrence === 'missing' ? 'are missing ' : 'have ') + tag;
-    const indicators = [source[prefix + 'firstIndicator'], source[prefix + 'secondIndicator']]
-      .map((value) => indicatorDisplay(values(value)))
-      .filter((value): value is string => value !== null)
-      .map((value) => value === '#' ? '#' : '#' + value);
-    if (indicators.length) clause += ' ' + indicators.join('');
+    clause += combinationIndicatorPositions(
+      values(source[prefix + 'firstIndicator']),
+      values(source[prefix + 'secondIndicator']),
+    );
     const subfield = values(source[prefix + 'subfieldCode']);
     if (subfield) clause += ' $' + subfield;
     const rule = values(source[prefix + 'contentRule']) as MarcContentRule;

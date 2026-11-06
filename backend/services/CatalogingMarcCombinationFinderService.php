@@ -192,8 +192,8 @@ final class CatalogingMarcCombinationFinderService
         $prefix = ':c' . $number . '_';
         $summary = "CASE {$prefix}occurrenceCondition WHEN 'missing' THEN 'missing ' ELSE '' END || {$prefix}marcTag"
             . " || CASE WHEN {$prefix}firstIndicator = 'any' AND {$prefix}secondIndicator = 'any' THEN '' ELSE ' ' || "
-            . "CASE {$prefix}firstIndicator WHEN 'any' THEN '' WHEN 'blank' THEN '#' ELSE '#' || SUBSTRING({$prefix}firstIndicator FROM 6) END || "
-            . "CASE {$prefix}secondIndicator WHEN 'any' THEN '' WHEN 'blank' THEN '#' ELSE '#' || SUBSTRING({$prefix}secondIndicator FROM 6) END END"
+            . self::indicatorPositionSql($prefix . 'firstIndicator') . ' || '
+            . self::indicatorPositionSql($prefix . 'secondIndicator') . ' END'
             . " || CASE WHEN {$prefix}subfieldCode = '' THEN '' ELSE ' $' || {$prefix}subfieldCode END"
             . " || CASE {$prefix}contentRule WHEN 'contains' THEN ' contains \"' || {$prefix}searchValue || '\"'"
             . " WHEN 'not_contains' THEN ' does not contain \"' || {$prefix}searchValue || '\"'"
@@ -210,10 +210,15 @@ final class CatalogingMarcCombinationFinderService
             . $aggregate . "), '(blank)') END ELSE 'Not matched' END AS \"Condition {$number} result\"";
     }
 
+    private static function indicatorPositionSql(string $parameter): string
+    {
+        return "CASE {$parameter} WHEN 'any' THEN '?' WHEN 'blank' THEN '#' ELSE SUBSTRING({$parameter} FROM 6) END";
+    }
+
     private static function resultAggregate(array $condition, int $number): string
     {
         $alias = 'result_' . $number;
-        $display = "CASE WHEN {$alias}.content IS NULL OR TRIM({$alias}.content) = '' THEN '(blank)' ELSE {$alias}.content END";
+        $display = "CASE WHEN {$alias}.content IS NULL OR {$alias}.content ~ ('^[' || CHR(9) || CHR(10) || CHR(13) || ' ]*$') THEN '(blank)' ELSE {$alias}.content END";
         return 'SELECT CASE WHEN CHAR_LENGTH(joined_values) > 500 THEN LEFT(joined_values, 500) || \'…\' ELSE joined_values END FROM ('
             . "SELECT STRING_AGG(result_value, '; ' ORDER BY first_occurrence, first_subfield) AS joined_values FROM ("
             . 'SELECT result_value, first_occurrence, first_subfield FROM ('

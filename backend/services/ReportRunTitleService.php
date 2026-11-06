@@ -103,11 +103,10 @@ final class ReportRunTitleService
             $tag = $identity[$prefix . 'marcTag'] ?? '';
             if (!is_string($tag) || $tag === '') continue;
             $clause = (($identity[$prefix . 'occurrenceCondition'] ?? 'has') === 'missing' ? 'missing ' : 'has ') . $tag;
-            foreach (['firstIndicator', 'secondIndicator'] as $field) {
-                $indicator = $identity[$prefix . $field] ?? 'any';
-                if ($indicator === 'blank') $clause .= ' #';
-                elseif (is_string($indicator) && strpos($indicator, 'char:') === 0) $clause .= ' #' . substr($indicator, 5);
-            }
+            $clause .= $this->formatMarcCombinationIndicators(
+                $identity[$prefix . 'firstIndicator'] ?? 'any',
+                $identity[$prefix . 'secondIndicator'] ?? 'any'
+            );
             $subfield = $identity[$prefix . 'subfieldCode'] ?? '';
             if ($subfield !== '') $clause .= ' $' . $subfield;
             $rule = $identity[$prefix . 'contentRule'] ?? 'any';
@@ -126,6 +125,21 @@ final class ReportRunTitleService
         if ($identifierExport) $title .= ' (identifiers)';
         $normalized = call_user_func($this->nameNormalizer, $title);
         return is_string($normalized) ? $normalized : (string) $normalized;
+    }
+
+    private function formatMarcCombinationIndicators($first, $second)
+    {
+        $firstPosition = $this->formatMarcCombinationIndicator($first);
+        $secondPosition = $this->formatMarcCombinationIndicator($second);
+        if ($firstPosition === '?' && $secondPosition === '?') return '';
+        return ' ' . $firstPosition . $secondPosition;
+    }
+
+    private function formatMarcCombinationIndicator($indicator)
+    {
+        if ($indicator === 'blank') return '#';
+        if (is_string($indicator) && strpos($indicator, 'char:') === 0) return substr($indicator, 5);
+        return '?';
     }
 
     /**
