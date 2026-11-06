@@ -285,6 +285,46 @@ describe('Visualizations RPT-022 new behavior', () => {
     expect.soft(renderedShares.reduce((total, share) => total + share, 0)).toBeCloseTo(100, 8);
   });
 
+  it('explains the displayed material slices and repeats the note in the enlarged chart', async () => {
+    const items = [
+      { materialType: 'Admin', amount: 2500 },
+      { materialType: 'Database', amount: 2000 },
+      { materialType: 'Book', amount: 1500 },
+      { materialType: 'E-Journal', amount: 1200 },
+      { materialType: 'E-Book', amount: 1000 },
+      { materialType: 'Journal', amount: 800 },
+      { materialType: 'E-Newspaper', amount: 600 },
+      { materialType: 'Streaming Video', amount: 400 },
+      { materialType: 'No purchases', amount: 0 },
+      { materialType: 'Credit', amount: -14 },
+    ];
+    const { container } = render(<PurchaseCharts data={{ ...figures,
+      purchasesByMaterial: { fiscalYearEnd: 2026, items },
+    }} materialYear={2026} materialFiscalYearEnds={[2026]} materialLoading={false}
+      materialAvailable onMaterialYear={vi.fn()} />);
+    const region = Array.from(container.querySelectorAll('section[aria-labelledby]'))
+      .find((section) => section.querySelector('h2')?.textContent === chartTitlesForRestyle.material);
+
+    await waitFor(() => expect(region?.querySelectorAll('svg .recharts-pie-sector').length).toBe(7));
+    const note = region?.querySelector('aside');
+    const lines = Array.from(note?.querySelectorAll('p') ?? []);
+    expect(note).not.toBeNull();
+    expect(note?.querySelector('h3')?.textContent).toBe("What's in each slice");
+    expect(lines.map((line) => line.querySelector('strong')?.textContent)).toEqual([
+      'Admin: 2,500.00 (25.0%)', 'Database: 2,000.00 (20.0%)', 'Book: 1,500.00 (15.0%)',
+      'E-Journal: 1,200.00 (12.0%)', 'E-Book: 1,000.00 (10.0%)', 'Journal: 800.00 (8.0%)',
+      'All other types: 1,000.00 (10.0%)',
+    ]);
+    expect(lines[0]).toHaveTextContent('Library services, not materials: cataloging and metadata services (OCLC)');
+    expect(lines[6]).toHaveTextContent('E-Newspaper: 600.00, Streaming Video: 400.00');
+    expect(note?.textContent).not.toContain('No purchases');
+    expect(note?.textContent).not.toContain('Credit');
+
+    await userEvent.click(within(region as HTMLElement).getByRole('button', { name: 'Enlarge' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('complementary').textContent).toBe(note?.textContent);
+  });
+
   it('orders pie slices by descending amount', async () => {
     await renderWithData({ purchasesByMaterial: { fiscalYearEnd: 2027, items: pieFixture } });
     const region = screen.queryByRole('region', { name: chartTitlesForRestyle.material });
