@@ -25,7 +25,10 @@ class MarcCombinationControllerSqliteConnection extends Connection
     public function createCommand($sql = null, $params = [])
     {
         if (is_string($sql)) {
-            if (preg_match('/^\s*SET statement_timeout\b/i', $sql) === 1) {
+            if ($sql === 'SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY') {
+                $sql = 'PRAGMA query_only = ON';
+                $params = [];
+            } elseif (preg_match('/^\s*SET statement_timeout\b/i', $sql) === 1) {
                 $sql = 'SELECT 1';
                 $params = [];
             } elseif (strpos($sql, 'EXPLAIN (FORMAT JSON) ') === 0) {
@@ -34,7 +37,8 @@ class MarcCombinationControllerSqliteConnection extends Connection
             } elseif (strpos($sql, 'to_regclass(') !== false) {
                 $sql = "SELECT (SELECT name FROM marctab.sqlite_master WHERE type = 'table' AND name = SUBSTR(:table_name, 9)) AS \"to_regclass\"";
             } elseif (strpos($sql, "SELECT set_config('application_name'") === 0) {
-                $sql = 'SELECT :application_name';
+                $sql = 'SELECT 1';
+                $params = [];
             } elseif (strpos($sql, 'SELECT pg_backend_pid()') === 0) {
                 $sql = 'SELECT 1 AS pg_backend_pid';
                 $params = [];
