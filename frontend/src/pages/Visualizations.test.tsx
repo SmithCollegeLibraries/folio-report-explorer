@@ -2,7 +2,7 @@ import { Component, type ReactNode } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -133,6 +133,39 @@ async function renderWithData(data: Partial<VisualizationData>, waitForMaterialP
     if (waitForMaterialPie) expect(materialRegion.querySelectorAll('svg .recharts-pie-sector').length).toBeGreaterThan(0);
     expect(budgetRegion.querySelectorAll('svg .recharts-label-list text').length).toBeGreaterThan(0);
   });
+}
+
+async function openChartIfAvailable(title: string) {
+  const region = await chart(title);
+  const enlarge = within(region).queryByRole('button', { name: 'Enlarge' });
+  if (enlarge) await userEvent.click(enlarge);
+  return { region, enlarge, dialog: screen.queryByRole('dialog') };
+}
+
+function setFullscreenApi(available: boolean) {
+  const fullscreenEnabled = Object.getOwnPropertyDescriptor(document, 'fullscreenEnabled');
+  const requestFullscreenDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'requestFullscreen');
+  const requestFullscreen = vi.fn(async function (this: HTMLElement) {});
+  Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: available });
+  if (available) {
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+      configurable: true, value: requestFullscreen,
+    });
+  } else {
+    Reflect.deleteProperty(HTMLElement.prototype, 'requestFullscreen');
+  }
+  return {
+    requestFullscreen,
+    restore() {
+      if (fullscreenEnabled) Object.defineProperty(document, 'fullscreenEnabled', fullscreenEnabled);
+      else Reflect.deleteProperty(document, 'fullscreenEnabled');
+      if (requestFullscreenDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', requestFullscreenDescriptor);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'requestFullscreen');
+      }
+    },
+  };
 }
 
 function pieLabels(region: HTMLElement | null) {
@@ -890,4 +923,202 @@ describe('Visualizations RPT-018 behavior', () => {
     expect(within(table).getByRole('row', { name: /No material type/ })).toBeInTheDocument();
   });
 
+});
+
+describe('Visualizations RPT-030 chart enlargement', () => {
+  const chartExplanations: Record<string, string> = {
+    'How the library purchases': "Electronic, physical and other purchases as a share of each fiscal year's spending.",
+    'How the library purchases by material': 'Paid FOLIO purchases by material type; slices show positive amounts, and the table retains every value.',
+    'Library budget': 'Total budget allocated to the acquisitions unit, with the API-reported year-over-year change.',
+  };
+
+  it('gives every visualization ChartCard an Enlarge button', async () => {
+    await renderWithData({});
+
+    for (const title of chartTitles) {
+      const region = await chart(title);
+      expect.soft(Boolean(within(region).queryByRole('button', { name: 'Enlarge' }))).toBe(true);
+    }
+  });
+
+  it('opens an accessible dialog labelled by the selected chart title', async () => {
+    await renderWithData({});
+    const { enlarge, dialog } = await openChartIfAvailable(chartTitles[0]);
+    const accessibleDialog = screen.queryByRole('dialog', { name: chartTitles[0] });
+    const labelledBy = dialog?.getAttribute('aria-labelledby');
+
+    expect.soft(Boolean(enlarge)).toBe(true);
+    expect.soft(Boolean(dialog)).toBe(true);
+    expect.soft(dialog?.getAttribute('aria-modal')).toBe('true');
+    expect.soft(Boolean(labelledBy)).toBe(true);
+    expect.soft(labelledBy ? document.getElementById(labelledBy)?.textContent?.trim() : null).toBe(chartTitles[0]);
+    expect.soft(accessibleDialog).toBe(dialog);
+  });
+
+  it('keeps the selected chart, its explanation, legend and controls in the dialog', async () => {
+    await renderWithData({});
+
+    for (const title of chartTitles) {
+      const { region, enlarge, dialog } = await openChartIfAvailable(title);
+      const dialogTitle = dialog?.querySelector('h2')?.textContent?.trim();
+      const hasChart = Boolean(dialog?.querySelector('svg.recharts-surface'));
+      const hasCloseButton = Boolean(dialog && within(dialog).queryByRole('button', { name: 'Close' }));
+
+      expect.soft(Boolean(enlarge), `${title} enlarge control`).toBe(true);
+      expect.soft(Boolean(dialog), `${title} dialog`).toBe(true);
+      expect.soft(dialogTitle, `${title} heading`).toBe(title);
+      expect.soft(dialog?.textContent ?? '').toContain(chartExplanations[title]);
+      expect.soft(hasChart, `${title} chart`).toBe(true);
+      expect.soft(hasCloseButton, `${title} close control`).toBe(true);
+      expect.soft(Boolean(region.querySelector('svg.recharts-surface'))).toBe(true);
+
+      if (title === chartTitles[1]) {
+        expect.soft(Boolean(dialog && within(dialog).queryByLabelText('Material fiscal year'))).toBe(true);
+        expect.soft(dialog?.textContent ?? '').toContain('Database');
+      } else if (title === chartTitles[0]) {
+        expect.soft(dialog?.textContent ?? '').toContain('Electronic');
+        expect.soft(dialog?.textContent ?? '').toContain('Stored history');
+      } else {
+        expect.soft(dialog?.textContent ?? '').toContain('Stored history');
+      }
+
+      const closeButton = dialog ? within(dialog).queryByRole('button', { name: 'Close' }) : null;
+      if (closeButton) await userEvent.click(closeButton);
+    }
+  });
+
+  it('renders the same data for every chart when enlarged', async () => {
+    await renderWithData({});
+
+    for (const title of chartTitles) {
+      const { region, dialog } = await openChartIfAvailable(title);
+      const selector = title === chartTitles[1]
+        ? 'path.recharts-pie-sector' : 'svg .recharts-label-list text';
+      const readData = (root: ParentNode | null) => Array.from(root?.querySelectorAll(selector) ?? [])
+        .map((node) => title === chartTitles[1]
+          ? node.getAttribute('aria-label') ?? ''
+          : node.textContent?.replace(/\s+/g, ' ').trim() ?? '');
+      const cardData = readData(region);
+      const dialogData = readData(dialog);
+
+      expect.soft(cardData.length, `${title} card data`).toBeGreaterThan(0);
+      expect.soft(dialogData, `${title} enlarged data`).toEqual(cardData);
+      expect.soft(dialogData.length, `${title} enlarged data`).toBeGreaterThan(0);
+    }
+  });
+
+  it('shares the material fiscal-year picker state between card and dialog', async () => {
+    const user = userEvent.setup();
+    await renderWithData({});
+    const { region, dialog } = await openChartIfAvailable(chartTitles[1]);
+    const cardPicker = within(region).getByLabelText('Material fiscal year') as HTMLSelectElement;
+    const dialogPicker = dialog?.querySelector('select[aria-label], select') as HTMLSelectElement | null;
+
+    expect.soft(dialogPicker?.value).toBe('2027');
+    if (dialogPicker) await user.selectOptions(dialogPicker, '2026');
+
+    expect.soft(cardPicker).toHaveValue('2026');
+    expect.soft(dialogPicker?.value).toBe('2026');
+  });
+
+  it('closes on Escape and restores focus to the Enlarge button', async () => {
+    const user = userEvent.setup();
+    await renderWithData({});
+    const { enlarge, dialog } = await openChartIfAvailable(chartTitles[0]);
+
+    expect.soft(Boolean(dialog)).toBe(true);
+    await user.keyboard('{Escape}');
+
+    expect.soft(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect.soft(document.activeElement).toBe(enlarge);
+  });
+
+  it('closes with its Close button and restores focus to the Enlarge button', async () => {
+    const user = userEvent.setup();
+    await renderWithData({});
+    const { enlarge, dialog } = await openChartIfAvailable(chartTitles[0]);
+    const closeButton = dialog ? within(dialog).queryByRole('button', { name: 'Close' }) : null;
+
+    expect.soft(Boolean(dialog)).toBe(true);
+    expect.soft(Boolean(closeButton)).toBe(true);
+    if (closeButton) await user.click(closeButton);
+
+    expect.soft(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect.soft(document.activeElement).toBe(enlarge);
+  });
+
+  it('closes on a backdrop click and restores focus to the Enlarge button', async () => {
+    await renderWithData({});
+    const { enlarge, dialog } = await openChartIfAvailable(chartTitles[0]);
+
+    expect.soft(Boolean(dialog)).toBe(true);
+    if (dialog) fireEvent.click(dialog);
+
+    expect.soft(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect.soft(document.activeElement).toBe(enlarge);
+  });
+
+  it('moves focus into the dialog when it opens', async () => {
+    await renderWithData({});
+    const { enlarge, dialog } = await openChartIfAvailable(chartTitles[0]);
+
+    expect.soft(Boolean(dialog)).toBe(true);
+    expect.soft(Boolean(dialog?.contains(document.activeElement))).toBe(true);
+    expect.soft(document.activeElement).not.toBe(enlarge);
+  });
+
+  it('keeps Tab and Shift+Tab focus inside the open dialog', async () => {
+    const user = userEvent.setup();
+    await renderWithData({});
+    const { dialog } = await openChartIfAvailable(chartTitles[0]);
+    const focusable = Array.from(dialog?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) ?? []);
+
+    expect.soft(Boolean(dialog)).toBe(true);
+    expect.soft(focusable.length).toBeGreaterThan(0);
+    if (focusable.length > 0) {
+      focusable[0].focus();
+      await user.tab({ shift: true });
+      expect.soft(Boolean(dialog?.contains(document.activeElement))).toBe(true);
+
+      focusable[focusable.length - 1].focus();
+      await user.tab();
+      expect.soft(Boolean(dialog?.contains(document.activeElement))).toBe(true);
+    }
+  });
+
+  it('shows and calls Full screen only when the Fullscreen API is available', async () => {
+    const supported = setFullscreenApi(true);
+    const user = userEvent.setup();
+    try {
+      await renderWithData({});
+      const { dialog } = await openChartIfAvailable(chartTitles[0]);
+      const fullscreenButton = dialog ? within(dialog).queryByRole('button', { name: 'Full screen' }) : null;
+
+      expect.soft(Boolean(dialog)).toBe(true);
+      expect.soft(Boolean(fullscreenButton)).toBe(true);
+      if (fullscreenButton) await user.click(fullscreenButton);
+      expect.soft(supported.requestFullscreen).toHaveBeenCalledTimes(1);
+      expect.soft(supported.requestFullscreen.mock.contexts[0]).toBe(dialog);
+
+      cleanup();
+      // renderWithData waits for a fresh request, so discard the prior scenario's call count.
+      api.fetchVisualizations.mockClear();
+      supported.restore();
+      const unsupported = setFullscreenApi(false);
+      try {
+        await renderWithData({});
+        const unsupportedDialog = (await openChartIfAvailable(chartTitles[0])).dialog;
+        const hiddenButton = unsupportedDialog
+          ? within(unsupportedDialog).queryByRole('button', { name: 'Full screen' }) : null;
+        expect.soft(Boolean(unsupportedDialog)).toBe(true);
+        expect.soft(hiddenButton).not.toBeInTheDocument();
+      } finally {
+        unsupported.restore();
+      }
+    } finally {
+      supported.restore();
+    }
+  });
 });
