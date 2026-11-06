@@ -37,7 +37,6 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
   materialLoading: boolean; materialError?: Error; materialAvailable: boolean;
   onMaterialYear: (year: number | 'all') => void;
 }) {
-  const pickerId = useId();
   const patternId = useId().replace(/:/g, '');
   const [legendPortal, setLegendPortal] = useState<HTMLDivElement | null>(null);
   const purchases = data.purchasesByCategory.filter((row) => row.total > 0);
@@ -112,8 +111,8 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
       </aside>
     </ChartCard>
     <ChartCard title={materialTitle} explanation="Paid FOLIO purchases by material type; slices show positive amounts, and the table retains every value."
-      controls={<div className="mb-4"><label htmlFor={pickerId} className="mb-1 block text-sm font-medium">Material fiscal year</label>
-        <select id={pickerId} value={disabled ? '' : materialYear} disabled={disabled}
+      controls={<label className="mb-4 block text-sm font-medium">Material fiscal year
+        <select value={disabled ? '' : materialYear} disabled={disabled}
           onChange={(event) => onMaterialYear(event.target.value === 'all' ? 'all' : Number(event.target.value))}
           className="rounded border border-gray-300 bg-white px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-500">
           {disabled ? <option value="">No FOLIO years</option> : <>
@@ -121,7 +120,7 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
               .sort((a, b) => b - a).map((year) => <option key={year} value={year}>{year}</option>)}
             <option value="all">All FOLIO years</option>
           </>}
-        </select></div>}
+        </select></label>}
       table={<table><caption>{materialTitle}: amount and share</caption><thead><tr>
         <th scope="col">Material type</th><th scope="col">Amount</th><th scope="col">Percent of positive purchases</th>
       </tr></thead><tbody>{materials.map((row, index) => <tr key={`${row.name}-${index}`}>
