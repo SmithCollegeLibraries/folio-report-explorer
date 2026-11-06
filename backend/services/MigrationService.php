@@ -338,7 +338,7 @@ class MigrationService
         return BudgetYearFundReportMigrationRecognitionService::budgetYearFundReportEncumbranceStatusAppearComplete($db)
             && self::marcMissingTagReportAppearsComplete($db)
             && self::catalogingMarcFieldFinderAppearsComplete($db)
-            && CatalogingReportMigrationRecognitionService::reportsAppearComplete($db) && CatalogingReportMigrationRecognitionService::marcCombinationFinder068ReportAppearsComplete($db) && QueryJobHistoryMigrationRecognitionService::historyGroupKeyAndIndexAppearComplete($db) && VisualizationHistoryMigrationRecognitionService::visualizationHistoryAppearsComplete($db) && VisualizationHistoryMigrationRecognitionService::visualizationHistoryVersionAppearsComplete($db);
+            && CatalogingReportMigrationRecognitionService::reportsAppearComplete($db) && QueryJobHistoryMigrationRecognitionService::historyGroupKeyAndIndexAppearComplete($db) && VisualizationHistoryMigrationRecognitionService::visualizationHistoryAppearsComplete($db) && VisualizationHistoryMigrationRecognitionService::visualizationHistoryVersionAppearsComplete($db);
     }
 
     private static function migrationAppearsApplied($db, string $filename): bool

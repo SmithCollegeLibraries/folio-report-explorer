@@ -84,7 +84,22 @@ function marcCombinationEngineReport(Connection $db): array
 function marcCombinationEngineRestoreReport(Connection $db, array $row): void
 {
     unset($row['id']);
-    $db->createCommand()->update('report_templates', $row, ['slug' => 'marc-field-combination-finder'])->execute();
+    $assignments = [];
+    $params = [':slug' => 'marc-field-combination-finder'];
+    foreach ($row as $column => $value) {
+        $marker = ':restore_' . $column;
+        $assignments[] = '`' . $column . '` = ' . $marker;
+        $params[$marker] = $value;
+    }
+    $db->createCommand('UPDATE `report_templates` SET ' . implode(', ', $assignments) . ' WHERE `slug` = :slug', $params)->execute();
+}
+
+function marcCombinationEngineSetReportValue(Connection $db, string $field, $value): void
+{
+    $db->createCommand('UPDATE `report_templates` SET `' . $field . '` = :value WHERE `slug` = :slug', [
+        ':value' => $value,
+        ':slug' => 'marc-field-combination-finder',
+    ])->execute();
 }
 
 function marcCombinationEngineConnection(string $dsn, string $username, string $password): Connection
@@ -202,7 +217,7 @@ function marcCombinationEngineRun(string $label, array $config, string $migratio
             ] as $field => $changedValue) {
                 marcCombinationEngineCase($label . ' 069 refuses altered ' . $field . ' without changing the row', function () use ($adminDb, $migrationDir, $canonicalDefinition, $field, $changedValue) {
                     marcCombinationEngineRestoreReport($adminDb, $canonicalDefinition);
-                    $adminDb->createCommand()->update('report_templates', [$field => $changedValue], ['slug' => 'marc-field-combination-finder'])->execute();
+                    marcCombinationEngineSetReportValue($adminDb, $field, $changedValue);
                     $adminDb->createCommand("DELETE FROM schema_migrations WHERE filename = '069_marc_combination_finder_record_scopes.sql'")->execute();
                     $before = marcCombinationEngineReport($adminDb);
                     $error = null;
@@ -241,13 +256,16 @@ function marcCombinationEngineRun(string $label, array $config, string $migratio
                 $result = MigrationService::run($adminDb, $migrationDir, false);
                 marcCombinationEngineCheck(in_array('068_marc_field_combination_finder.sql', $result['baselined'], true)
                     && in_array('069_marc_combination_finder_record_scopes.sql', $result['baselined'], true), 'Empty-ledger baseline records both canonical report definitions.');
-                $adminDb->createCommand("UPDATE report_templates SET name = 'Drifted baseline definition' WHERE slug = 'marc-field-combination-finder'")->execute();
+                marcCombinationEngineSetReportValue($adminDb, 'name', 'Drifted baseline definition');
                 $adminDb->createCommand('DELETE FROM schema_migrations')->execute();
-                marcCombinationEngineSame(false, (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]), 'A non-canonical report row fails the empty-ledger baseline prerequisite.');
-                $dryRun = MigrationService::run($adminDb, $migrationDir, true);
-                marcCombinationEngineCheck(!in_array('068_marc_field_combination_finder.sql', $dryRun['baselined'], true)
-                    && !in_array('069_marc_combination_finder_record_scopes.sql', $dryRun['baselined'], true), 'A drifted report is not baseline-recognized as 068 or 069.');
-                marcCombinationEngineSame(0, (int) $adminDb->createCommand('SELECT COUNT(*) FROM schema_migrations')->queryScalar(), 'Rejected baseline remains unrecorded.');
+                marcCombinationEngineSame(true, (bool) marcCombinationEngineReflection('databaseAppearsCurrent', [$adminDb]), 'The current-schema check leaves report recognition to the 068/069 baseline handlers.');
+                $drifted = marcCombinationEngineReport($adminDb);
+                $error = null;
+                try { MigrationService::run($adminDb, $migrationDir, false); } catch (Throwable $caught) { $error = $caught; }
+                marcCombinationEngineCheck($error !== null
+                    && (stripos($error->getMessage(), 'MARC combination finder') !== false || strpos($error->getMessage(), 'marc-field-combination-finder') !== false), 'The baseline handler rejects drift and names the report.');
+                marcCombinationEngineSame($drifted, marcCombinationEngineReport($adminDb), 'A rejected baseline leaves the drifted report row unchanged.');
+                marcCombinationEngineSame(0, (int) $adminDb->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename IN ('068_marc_field_combination_finder.sql', '069_marc_combination_finder_record_scopes.sql')")->queryScalar(), 'A rejected baseline records neither migration 068 nor 069.');
             });
         } catch (Throwable $error) {
             marcCombinationEngineCheck(false, $label . ' setup failed before migration scenarios: ' . get_class($error) . ': ' . $error->getMessage());
