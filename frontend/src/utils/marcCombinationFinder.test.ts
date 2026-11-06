@@ -92,9 +92,9 @@ describe('MARC field combination finder client validation', () => {
     });
     const all = evaluator()(input);
     expect(all.valid).toBe(true);
-    expect(all.summary).toBe('Records in 95 locations that have 655 #7 $a AND are missing 563 $a');
+    expect(all.summary).toBe('Records in 95 locations that have 655 7? $a AND are missing 563 $a');
 
     const any = evaluator()({ ...input, combine: 'any' });
-    expect(any.summary).toBe('Records in 95 locations that have 655 #7 $a OR are missing 563 $a');
+    expect(any.summary).toBe('Records in 95 locations that have 655 7? $a OR are missing 563 $a');
   });
 });

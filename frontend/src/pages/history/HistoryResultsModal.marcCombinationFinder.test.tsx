@@ -7,7 +7,7 @@ afterEach(cleanup);
 
 const item: HistoryItem = {
   jobId: 'synthetic-combination-history-job',
-  name: 'MARC Field Combination Finder — All conditions: 655 #7 $a and 563 $a',
+  name: 'MARC Field Combination Finder — All conditions: 655 7? $a and 563 $a',
   status: 'completed',
   sql: 'SELECT synthetic combination rows',
   source: 'report',

@@ -171,8 +171,9 @@ namespace {
             $sql
         );
         $sql = str_replace(['CHR(92)', 'STRPOS(', 'LEFT(', 'CHAR_LENGTH('], ['CHAR(92)', 'INSTR(', 'LEFT_FN(', 'LENGTH('], $sql);
+        $sql = preg_replace('/\bCHR\((\d+)\)/', 'CHAR($1)', $sql);
         $sql = preg_replace('/SUBSTRING\\((:[A-Za-z][A-Za-z0-9_]*) FROM 6\\)/', 'SUBSTR($1, 6)', $sql);
-        $sql = str_replace(" ~ '", " REGEXP '", $sql);
+        $sql = str_replace([" ~ '", ' ~ ('], [" REGEXP '", ' REGEXP ('], $sql);
         $sql = str_replace(['NULL::text', 'NULL::integer'], ['CAST(NULL AS TEXT)', 'CAST(NULL AS INTEGER)'], $sql);
         $sql = str_replace('id::text AS id', 'id AS id', $sql);
         if (stripos($sql, 'MATERIALIZED') !== false

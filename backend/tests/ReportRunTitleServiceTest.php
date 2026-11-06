@@ -75,6 +75,21 @@ function reportRunTitleIdentityNormalizer($title)
     return $title;
 }
 
+function reportRunTitleCombination(array $identity)
+{
+    $report = new SyntheticReportRunTitleReport('MARC Field Combination Finder', [], 'marc-field-combination-finder');
+    $service = new \app\services\ReportRunTitleService(new SyntheticReportRunTitleOptionSource(), 'reportRunTitleIdentityNormalizer');
+    return $service->buildTitle($report, array_merge([
+        'combine' => 'all',
+        'c1_marcTag' => '655',
+        'c1_occurrenceCondition' => 'has',
+        'c1_firstIndicator' => 'any',
+        'c1_secondIndicator' => 'any',
+        'c1_subfieldCode' => '',
+        'c1_contentRule' => 'any',
+    ], $identity));
+}
+
 reportRunTitleCase('select, text, number, date, empty optional, and up to three multi-select labels', function () {
     $report = new SyntheticReportRunTitleReport('Holdings Report', [
         ['name' => 'campus', 'type' => 'select', 'options_sql' => 'synthetic campus options'],
@@ -173,6 +188,46 @@ reportRunTitleCase('identifier export adds a distinguishing suffix', function ()
     );
 });
 
+reportRunTitleCase('History title omits the indicator positions when both are Any', function () {
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655',
+        reportRunTitleCombination([]),
+        'Any/Any is omitted from the condition title.'
+    );
+});
+
+reportRunTitleCase('History title formats Blank/7 as #7', function () {
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655 #7',
+        reportRunTitleCombination(['c1_firstIndicator' => 'blank', 'c1_secondIndicator' => 'char:7']),
+        'Blank and a specific second indicator occupy their respective positions.'
+    );
+});
+
+reportRunTitleCase('History title formats Any/7 as ?7', function () {
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655 ?7',
+        reportRunTitleCombination(['c1_firstIndicator' => 'any', 'c1_secondIndicator' => 'char:7']),
+        'Any and a specific second indicator occupy their respective positions.'
+    );
+});
+
+reportRunTitleCase('History title formats 7/Any as 7?', function () {
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655 7?',
+        reportRunTitleCombination(['c1_firstIndicator' => 'char:7', 'c1_secondIndicator' => 'any']),
+        'A specific first indicator and Any occupy their respective positions.'
+    );
+});
+
+reportRunTitleCase('History title formats 1/Blank as 1#', function () {
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655 1#',
+        reportRunTitleCombination(['c1_firstIndicator' => 'char:1', 'c1_secondIndicator' => 'blank']),
+        'Specific and blank values occupy their respective positions.'
+    );
+});
+
 reportRunTitleCase('reportTemplateId merges into metadata without losing reportExecution or composite_config', function () {
     $report = new SyntheticReportRunTitleReport('Metadata Report', []);
     $optionSource = new SyntheticReportRunTitleOptionSource();
@@ -198,4 +253,4 @@ if (!empty($reportRunTitleFailures)) {
     exit(1);
 }
 
-fwrite(STDOUT, "Report run title service tests passed (6 cases).\n");
+fwrite(STDOUT, "Report run title service tests passed (11 cases).\n");

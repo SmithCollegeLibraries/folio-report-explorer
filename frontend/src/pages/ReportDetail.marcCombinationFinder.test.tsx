@@ -164,6 +164,65 @@ describe('ReportDetail MARC combination behavior', () => {
     expect(await screen.findByText('Search text is required for this content rule.')).toBeInTheDocument();
   });
 
+  it('initializes declared condition defaults when an empty first slot becomes active', async () => {
+    const emptyParams = new URLSearchParams(searchParams());
+    emptyParams.delete('rp.29.c1_marcTag');
+    renderDetail(`?${emptyParams.toString()}`);
+
+    const tag = await screen.findByLabelText('Condition 1 MARC tag');
+    fireEvent.change(tag, { target: { value: '655' } });
+    const runButton = screen.getByRole('button', { name: 'Run Report' });
+    const canRun = !runButton.hasAttribute('disabled');
+    expect.soft(runButton).toBeEnabled();
+    if (!canRun) return;
+
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runReportMock).toHaveBeenCalledTimes(1));
+    const [, params] = runReportMock.mock.calls[0];
+    expect(Object.keys(params).sort()).toEqual(parameterDefinitions().map((parameter) => parameter.name).sort());
+    expect(params).toMatchObject({
+      c1_marcTag: '655',
+      c1_occurrenceCondition: 'has',
+      c1_firstIndicator: 'any',
+      c1_secondIndicator: 'any',
+      c1_subfieldCode: '',
+      c1_contentRule: 'any',
+      c1_searchValue: '',
+      c1_caseExact: 'false',
+    });
+    for (let slot = 2; slot <= 5; slot++) {
+      for (const field of ['marcTag', 'occurrenceCondition', 'firstIndicator', 'secondIndicator', 'subfieldCode', 'contentRule', 'searchValue', 'caseExact']) {
+        expect(params[`c${slot}_${field}`]).toBe('');
+      }
+    }
+  });
+
+  it('reinitializes declared defaults after clearing and re-entering a condition tag', async () => {
+    renderDetail(searchParams());
+    const tag = await screen.findByLabelText('Condition 1 MARC tag');
+    fireEvent.change(tag, { target: { value: '' } });
+    fireEvent.change(tag, { target: { value: '655' } });
+
+    const runButton = screen.getByRole('button', { name: 'Run Report' });
+    const canRun = !runButton.hasAttribute('disabled');
+    expect.soft(runButton).toBeEnabled();
+    if (!canRun) return;
+
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runReportMock).toHaveBeenCalledTimes(1));
+    const [, params] = runReportMock.mock.calls[0];
+    expect(params).toMatchObject({
+      c1_marcTag: '655',
+      c1_occurrenceCondition: 'has',
+      c1_firstIndicator: 'any',
+      c1_secondIndicator: 'any',
+      c1_subfieldCode: '',
+      c1_contentRule: 'any',
+      c1_searchValue: '',
+      c1_caseExact: 'false',
+    });
+  });
+
   it('submits only the 43 declared string keys and sends inactive slot values as empty strings', async () => {
     renderDetail(searchParams({ unexpected: 'ignore-me', c2_marcTag: '', c2_searchValue: 'stale' }));
     const runButton = await screen.findByRole('button', { name: 'Run Report' });

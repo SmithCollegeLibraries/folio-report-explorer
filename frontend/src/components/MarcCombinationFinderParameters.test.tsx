@@ -125,11 +125,25 @@ describe('MarcCombinationFinderParameters', () => {
     expect(screen.getByRole('heading', { name: 'Condition 1' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Add condition' }));
     expect(screen.getByRole('heading', { name: 'Condition 2' })).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Condition 2 MARC tag'), '563');
     await user.click(screen.getByRole('button', { name: 'Add condition' }));
+    await user.type(screen.getByLabelText('Condition 3 MARC tag'), '856');
     await user.click(screen.getByRole('button', { name: 'Add condition' }));
+    await user.type(screen.getByLabelText('Condition 4 MARC tag'), '245');
     await user.click(screen.getByRole('button', { name: 'Add condition' }));
     expect(screen.getByRole('heading', { name: 'Condition 5' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add condition' })).toBeDisabled();
+  });
+
+  it('prevents adding another card while a visible condition has no tag', async () => {
+    const user = userEvent.setup();
+    renderPanel(values());
+
+    await user.click(screen.getByRole('button', { name: 'Add condition' }));
+    const addButton = screen.getByRole('button', { name: 'Add condition' });
+    expect.soft(addButton).toBeDisabled();
+    await user.click(addButton);
+    expect.soft(screen.queryByRole('heading', { name: 'Condition 3' })).not.toBeInTheDocument();
   });
 
   it('removes a middle slot by compacting later values and clearing the last slot', async () => {
@@ -167,11 +181,24 @@ describe('MarcCombinationFinderParameters', () => {
     renderPanel(values({ c2_marcTag: '563', c2_occurrenceCondition: 'missing', c2_subfieldCode: 'a' }));
 
     expect(screen.getByLabelText('MARC combination interpretation')).toHaveTextContent(
-      'Records in 1 location that have 655 #7 $a AND are missing 563 $a',
+      'Records in 1 location that have 655 7? $a AND are missing 563 $a',
     );
     await user.selectOptions(screen.getByLabelText('Combine conditions'), 'any');
     expect(screen.getByLabelText('MARC combination interpretation')).toHaveTextContent(
-      'Records in 1 location that have 655 #7 $a OR are missing 563 $a',
+      'Records in 1 location that have 655 7? $a OR are missing 563 $a',
+    );
+  });
+
+  it.each([
+    ['blank / 7', { c1_firstIndicator: 'blank', c1_secondIndicator: 'char:7' }, '655 #7 $a'],
+    ['any / 7', { c1_firstIndicator: 'any', c1_secondIndicator: 'char:7' }, '655 ?7 $a'],
+    ['7 / any', { c1_firstIndicator: 'char:7', c1_secondIndicator: 'any' }, '655 7? $a'],
+    ['1 / blank', { c1_marcTag: '245', c1_firstIndicator: 'char:1', c1_secondIndicator: 'blank', c1_subfieldCode: '' }, '245 1#'],
+    ['any / any', { c1_firstIndicator: 'any', c1_secondIndicator: 'any' }, '655 $a'],
+  ])('formats indicator positions in the summary for %s', (_name, overrides, expected) => {
+    renderPanel(values(overrides));
+    expect(screen.getByLabelText('MARC combination interpretation')).toHaveTextContent(
+      'Records in 1 location that have ' + expected,
     );
   });
 

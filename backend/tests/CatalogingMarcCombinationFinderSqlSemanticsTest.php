@@ -70,6 +70,14 @@ function marcCombinationSqliteAssertSame($expected, $actual, string $message): v
     }
 }
 
+function marcCombinationSqliteFind(array $rows, string $instanceId): array
+{
+    foreach ($rows as $row) {
+        if (($row['Instance UUID'] ?? null) === $instanceId) return $row;
+    }
+    return [];
+}
+
 function marcCombinationSqliteCase(string $name, callable $callback): void
 {
     global $failures;
@@ -244,6 +252,136 @@ marcCombinationSqliteCase('location scope honors effective_item and permanent_it
     if (in_array('outside', $effectiveIds, true) || in_array('folio', $effectiveIds, true)) {
         throw new RuntimeException('The scope must exclude other locations and non-MARC instances.');
     }
+});
+
+$syntheticInstances = [
+    ['indicator-blank-7', 'in0101', 'Indicator blank seven'],
+    ['indicator-any-7', 'in0102', 'Indicator any seven'],
+    ['indicator-7-any', 'in0103', 'Indicator seven any'],
+    ['indicator-1-blank', 'in0104', 'Indicator one blank'],
+    ['pair-match', 'in0105', 'Indicator pair match'],
+    ['pair-conflict', 'in0106', 'Indicator pair conflict'],
+    ['subfield-multi', 'in0107', 'Multiple subfields'],
+    ['row-split', 'in0108', 'Split physical rows'],
+    ['whitespace-null', 'in0109', 'Null result'],
+    ['whitespace-empty', 'in0110', 'Empty result'],
+    ['whitespace-tab', 'in0111', 'Tab result'],
+    ['whitespace-newline', 'in0112', 'Newline result'],
+];
+foreach ($syntheticInstances as $instance) {
+    $insertInstance->execute([$instance[0], $instance[1], $instance[2], 'MARC']);
+    $holdingId = 'hold-' . $instance[0];
+    $insertHolding->execute([$holdingId, $instance[0]]);
+    $insertItem->execute(['item-' . $instance[0], $holdingId,
+        '11111111-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111111']);
+}
+$syntheticMarcRows = [
+    ['indicator-blank-7', ' ', '7', 1, 1, 'a', 'Indicator summary'],
+    ['indicator-any-7', '1', '7', 1, 1, 'a', 'Indicator summary'],
+    ['indicator-7-any', '7', '8', 1, 1, 'a', 'Indicator summary'],
+    ['indicator-1-blank', '1', ' ', 1, 1, 'a', 'Indicator summary'],
+    ['pair-match', '1', '7', 1, 1, 'a', 'Needle match'],
+    ['pair-conflict', '1', '8', 1, 1, 'a', 'Needle first only'],
+    ['pair-conflict', '2', '7', 2, 2, 'a', 'Needle second only'],
+    ['subfield-multi', ' ', ' ', 1, 1, 'a', 'Multi A'],
+    ['subfield-multi', ' ', ' ', 2, 2, 'b', 'Multi B'],
+    ['row-split', '1', '8', 1, 1, 'a', 'Different content'],
+    ['row-split', '2', '7', 2, 2, 'b', 'Needle split'],
+    ['whitespace-null', ' ', ' ', 1, 1, 'a', null],
+    ['whitespace-empty', ' ', ' ', 1, 1, 'a', ''],
+    ['whitespace-tab', ' ', ' ', 1, 1, 'a', "\t"],
+    ['whitespace-newline', ' ', ' ', 1, 1, 'a', "\n"],
+];
+foreach ($syntheticMarcRows as $row) {
+    $insertMarc->execute($row);
+}
+
+marcCombinationSqliteCase('Condition 1 SQL summary formats Blank/7 as #7', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'blank', 'c1_secondIndicator' => 'char:7',
+    ]), 'indicator-blank-7');
+    marcCombinationSqliteAssertSame('655 #7', $row['Condition 1'] ?? null, 'The SQL result shows blank and specific indicators in position order.');
+});
+
+marcCombinationSqliteCase('Condition 1 SQL summary omits Any/Any indicators', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'any', 'c1_secondIndicator' => 'any',
+    ]), 'indicator-any-7');
+    marcCombinationSqliteAssertSame('655', $row['Condition 1'] ?? null, 'Two Any indicators are omitted from the condition summary.');
+});
+
+marcCombinationSqliteCase('Condition 1 SQL summary formats Any/7 as ?7', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'any', 'c1_secondIndicator' => 'char:7',
+    ]), 'indicator-any-7');
+    marcCombinationSqliteAssertSame('655 ?7', $row['Condition 1'] ?? null, 'Any occupies the first indicator position.');
+});
+
+marcCombinationSqliteCase('Condition 1 SQL summary formats 7/Any as 7?', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'char:7', 'c1_secondIndicator' => 'any',
+    ]), 'indicator-7-any');
+    marcCombinationSqliteAssertSame('655 7?', $row['Condition 1'] ?? null, 'Any occupies the second indicator position.');
+});
+
+marcCombinationSqliteCase('Condition 1 SQL summary formats 1/Blank as 1#', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_marcTag' => '655', 'c1_firstIndicator' => 'char:1', 'c1_secondIndicator' => 'blank',
+    ]), 'indicator-1-blank');
+    marcCombinationSqliteAssertSame('655 1#', $row['Condition 1'] ?? null, 'Specific and blank indicators retain their positions.');
+});
+
+marcCombinationSqliteCase('SQL result cells render null, empty, spaces, tab, and newline as blank', function () use ($pdo) {
+    $rows = marcCombinationSqliteRun($pdo, ['c1_subfieldCode' => 'a']);
+    $incorrect = [];
+    foreach (['blank-content', 'whitespace-null', 'whitespace-empty', 'whitespace-tab', 'whitespace-newline'] as $id) {
+        $row = marcCombinationSqliteFind($rows, $id);
+        $actual = $row['Condition 1 result'] ?? null;
+        if ($actual !== '(blank)') $incorrect[$id] = $actual;
+    }
+    marcCombinationSqliteAssertSame([], $incorrect, 'Null and whitespace-only result cells should all render as blank.');
+});
+
+marcCombinationSqliteCase('explicit first and second indicators must match one occurrence', function () use ($pdo) {
+    $rows = marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'char:1', 'c1_secondIndicator' => 'char:7',
+        'c1_subfieldCode' => 'a', 'c1_contentRule' => 'contains', 'c1_searchValue' => 'Needle',
+    ]);
+    marcCombinationSqliteAssertSame(['pair-match'], array_values(array_intersect(
+        ['pair-match', 'pair-conflict'], array_column($rows, 'Instance UUID')
+    )), 'Only a row with both indicator values can satisfy the slot.');
+});
+
+marcCombinationSqliteCase('an explicit subfield excludes matching text in another subfield', function () use ($pdo) {
+    $matchingRows = marcCombinationSqliteRun($pdo, [
+        'c1_subfieldCode' => 'a', 'c1_contentRule' => 'contains', 'c1_searchValue' => 'Multi A',
+    ]);
+    $otherSubfieldRows = marcCombinationSqliteRun($pdo, [
+        'c1_subfieldCode' => 'a', 'c1_contentRule' => 'contains', 'c1_searchValue' => 'Multi B',
+    ]);
+    marcCombinationSqliteAssertSame(['subfield-multi'], array_values(array_filter(array_column($matchingRows, 'Instance UUID'), function ($id) {
+        return $id === 'subfield-multi';
+    })), 'The explicit a subfield returns matching content from subfield a.');
+    marcCombinationSqliteAssertSame([], array_values(array_filter(array_column($otherSubfieldRows, 'Instance UUID'), function ($id) {
+        return $id === 'subfield-multi';
+    })), 'Text in subfield b cannot satisfy a condition explicitly scoped to subfield a.');
+});
+
+marcCombinationSqliteCase('blank subfield selection matches and aggregates rows across subfields', function () use ($pdo) {
+    $row = marcCombinationSqliteFind(marcCombinationSqliteRun($pdo, [
+        'c1_subfieldCode' => '', 'c1_contentRule' => 'contains', 'c1_searchValue' => 'Multi',
+    ]), 'subfield-multi');
+    marcCombinationSqliteAssertSame('Multi A; Multi B', $row['Condition 1 result'] ?? null, 'An empty subfield constraint searches all subfields.');
+});
+
+marcCombinationSqliteCase('indicator, subfield, and content predicates cannot split across physical rows', function () use ($pdo) {
+    $rows = marcCombinationSqliteRun($pdo, [
+        'c1_firstIndicator' => 'char:1', 'c1_secondIndicator' => 'char:7',
+        'c1_subfieldCode' => 'a', 'c1_contentRule' => 'contains', 'c1_searchValue' => 'Needle split',
+    ]);
+    marcCombinationSqliteAssertSame([], array_values(array_filter(array_column($rows, 'Instance UUID'), function ($id) {
+        return $id === 'row-split';
+    })), 'The indicator, subfield, and content predicates must be true on the same MARC row.');
 });
 
 if ($failures) {
