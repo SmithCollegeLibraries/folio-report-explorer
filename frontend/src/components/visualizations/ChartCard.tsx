@@ -1,5 +1,6 @@
 import { useCallback, useId, useRef, useState, type ReactNode } from 'react';
 import { ChartEnlargementDialog, chartEnlargementOpenEvent } from './ChartEnlargementDialog';
+import { useChartLabelSize } from './ChartLabelSize';
 
 export const amount = (value: number) => value.toLocaleString('en-US', {
   minimumFractionDigits: 2, maximumFractionDigits: 2,
@@ -9,7 +10,8 @@ export const percent = (value: number | null) => value === null ? 'n/a'
 
 export function HistoryLegend() {
   const patternId = useId().replace(/:/g, '');
-  return <div className="flex flex-wrap gap-5 text-xs text-gray-600 mb-4">
+  const labelSize = useChartLabelSize();
+  return <div className="chart-history-legend flex flex-wrap gap-5 text-gray-600 mb-4" style={{ fontSize: labelSize }}>
     <span className="flex items-center gap-2"><svg aria-hidden="true" width="26" height="14">
       <defs><pattern id={patternId} width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
         <rect width="6" height="6" fill="#f8fafc" /><path d="M 0 0 V 6" stroke="#334155" strokeWidth="2" />
@@ -40,11 +42,11 @@ export function ChartCard({ title, explanation, children, table, controls, histo
     window.dispatchEvent(new Event(chartEnlargementOpenEvent));
     setEnlarged(true);
   };
-  return <section aria-labelledby={`${id}-title`} className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6 min-w-0 shadow-sm dark:bg-gray-900 dark:border-gray-700">
+  return <section aria-labelledby={`${id}-title`} className="bg-white border border-gray-200 rounded-lg p-4 sm:p-6 min-w-0 shadow-sm">
     <header className="flex items-start justify-between gap-3">
-      <h2 id={`${id}-title`} className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
+      <h2 id={`${id}-title`} className="text-lg font-semibold text-gray-900">{title}</h2>
       <button ref={enlargeRef} type="button" aria-haspopup="dialog" onClick={openEnlarged}
-        className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-100 dark:hover:bg-gray-800">
+        className="shrink-0 rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
         Enlarge
       </button>
     </header>

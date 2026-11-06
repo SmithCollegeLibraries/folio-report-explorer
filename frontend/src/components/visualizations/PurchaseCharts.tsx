@@ -6,6 +6,7 @@ import { ChartLegendContent } from '../ui/chart-legend';
 import { ChartTooltip } from '../ui/chart-tooltip';
 import { ChartCard, amount } from './ChartCard';
 import { MaterialPieChart, materialRows } from './MaterialPieChart';
+import { useChartLabelSize } from './ChartLabelSize';
 import { errorMessage } from '../../utils/errorMessage';
 
 export const PURCHASE_MATERIAL_GROUPS = {
@@ -31,14 +32,66 @@ const groupConfig: ChartConfig = Object.fromEntries(groups.map((group) => [`${gr
   label: group.name, color: group.color,
 }]));
 
+function PurchaseCategoryChart({ purchases }: { purchases: VisualizationData['purchasesByCategory'] }) {
+  const labelSize = useChartLabelSize();
+  const patternId = useId().replace(/:/g, '');
+  const [legendPortal, setLegendPortal] = useState<HTMLDivElement | null>(null);
+
+  return <div className="min-w-0 w-full" aria-label="Purchases as percentages by fiscal year">
+    <ChartContainer config={groupConfig} className="h-72 min-w-0 w-full">
+      <BarChart data={purchases} barCategoryGap={2} barGap={2}>
+      <defs>{groups.map((group) => <pattern key={group.key} id={`${patternId}-${group.key}`}
+        width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+        <rect width="6" height="6" fill="#f8fafc" />
+        <path d="M 0 0 V 6" stroke={group.color} strokeWidth="2" />
+      </pattern>)}</defs>
+      <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
+      <XAxis dataKey="fiscalYearEnd" tick={{ fontSize: labelSize }} tickLine={false} axisLine={false} />
+      <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} allowDataOverflow
+        tickFormatter={(value) => `${value}%`} width={56} tick={{ fontSize: labelSize }} tickLine={false} axisLine={false} />
+      <ChartTooltip content={({ active, payload, label }) => {
+        if (!active || !payload?.length) return null;
+        const row = payload[0].payload as VisualizationData['purchasesByCategory'][number];
+        return <div className="rounded-md border border-gray-200 bg-white p-3 text-sm shadow-md"><strong>FY {label}</strong>
+          {groups.map((group) => <p key={group.key}>{group.name}: {amount(row[group.key])} ({share(row[`${group.key}Pct`])})</p>)}
+          <p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p></div>;
+      }} />
+      <Legend content={<ChartLegendContent
+        className={`chart-legend-content ${labelSize === 18 ? 'text-[18px]' : 'text-[13px]'}`} />} portal={legendPortal} />
+      {groups.map((group) => <Bar key={group.key} dataKey={`${group.key}Pct`} name={group.name}
+        stackId="purchases" fill={group.color} radius={[4, 4, 0, 0]} isAnimationActive={false}>
+        {purchases.map((row) => <Cell key={row.fiscalYearEnd}
+          fill={row.source === 'history' ? `url(#${patternId}-${group.key})` : group.color} />)}
+        <LabelList dataKey={`${group.key}Pct`} position="inside" content={({ value, x, y, width, height, index }) => {
+          const percentage = Number(value ?? 0);
+          if (!Number.isFinite(percentage) || percentage < 8 || Number(height ?? 0) < labelSize + 4) return null;
+          const row = purchases[Number(index)];
+          const label = `${Math.round(percentage)}%`;
+          const textWidth = label.length * labelSize * 0.64;
+          if (!row || Number(width ?? 0) < textWidth + 4) return null;
+          const labelX = Number(x ?? 0) + Number(width ?? 0) / 2;
+          const labelY = Number(y ?? 0) + Number(height ?? 0) / 2;
+          const history = row.source === 'history';
+          return <g>
+            {history && <rect x={labelX - textWidth / 2 - 2} y={labelY - labelSize / 2 - 3} width={textWidth + 4} height={labelSize + 6}
+              rx={3} fill="#ffffff" fillOpacity={0.85} />}
+            <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central" fontSize={labelSize}
+              fill={history || group.key !== 'electronic' ? '#111827' : '#ffffff'}>{label}</text>
+          </g>;
+        }} />
+      </Bar>)}
+      </BarChart>
+    </ChartContainer>
+    <div ref={setLegendPortal} className="min-w-0" aria-label="Purchase chart legend" />
+  </div>;
+}
+
 export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, materialLoading, materialError, materialAvailable, onMaterialYear }: {
   data: VisualizationData; materialYear: number | 'all' | '';
   materialFiscalYearEnds: number[];
   materialLoading: boolean; materialError?: Error; materialAvailable: boolean;
   onMaterialYear: (year: number | 'all') => void;
 }) {
-  const patternId = useId().replace(/:/g, '');
-  const [legendPortal, setLegendPortal] = useState<HTMLDivElement | null>(null);
   const purchases = data.purchasesByCategory.filter((row) => row.total > 0);
   const materialItems = data.purchasesByMaterial.items;
   const materials = materialRows(materialItems);
@@ -56,52 +109,7 @@ export function PurchaseCharts({ data, materialYear, materialFiscalYearEnds, mat
           {amount(row[group.key])} / {row.total > 0 ? share(row[`${group.key}Pct`]) : 'no spending'}
         </td>)}<td>{amount(row.total)}</td><td>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</td>
       </tr>)}</tbody></table>}>
-      <div className="min-w-0 w-full" aria-label="Purchases as percentages by fiscal year">
-        <ChartContainer config={groupConfig} className="h-72 min-w-0 w-full">
-          <BarChart data={purchases} barCategoryGap={2} barGap={2}>
-          <defs>{groups.map((group) => <pattern key={group.key} id={`${patternId}-${group.key}`}
-            width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-            <rect width="6" height="6" fill="#f8fafc" />
-            <path d="M 0 0 V 6" stroke={group.color} strokeWidth="2" />
-          </pattern>)}</defs>
-          <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
-          <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} />
-          <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} allowDataOverflow
-            tickFormatter={(value) => `${value}%`} width={56} tickLine={false} axisLine={false} />
-          <ChartTooltip content={({ active, payload, label }) => {
-            if (!active || !payload?.length) return null;
-            const row = payload[0].payload as VisualizationData['purchasesByCategory'][number];
-            return <div className="rounded-md border border-gray-200 bg-white p-3 text-sm shadow-md"><strong>FY {label}</strong>
-              {groups.map((group) => <p key={group.key}>{group.name}: {amount(row[group.key])} ({share(row[`${group.key}Pct`])})</p>)}
-              <p>{row.source === 'history' ? 'Stored history' : 'FOLIO'}</p></div>;
-          }} />
-          <Legend content={<ChartLegendContent />} portal={legendPortal} />
-          {groups.map((group) => <Bar key={group.key} dataKey={`${group.key}Pct`} name={group.name}
-            stackId="purchases" fill={group.color} radius={[4, 4, 0, 0]} isAnimationActive={false}>
-            {purchases.map((row) => <Cell key={row.fiscalYearEnd}
-              fill={row.source === 'history' ? `url(#${patternId}-${group.key})` : group.color} />)}
-            <LabelList dataKey={`${group.key}Pct`} position="inside" content={({ value, x, y, width, height, index }) => {
-              const percentage = Number(value ?? 0);
-              if (!Number.isFinite(percentage) || percentage < 8) return null;
-              const row = purchases[Number(index)];
-              const label = `${Math.round(percentage)}%`;
-              const textWidth = label.length * 7;
-              if (!row || Number(width ?? 0) < textWidth + 4) return null;
-              const labelX = Number(x ?? 0) + Number(width ?? 0) / 2;
-              const labelY = Number(y ?? 0) + Number(height ?? 0) / 2;
-              const history = row.source === 'history';
-              return <g>
-                {history && <rect x={labelX - textWidth / 2 - 2} y={labelY - 8} width={textWidth + 4} height={16}
-                  rx={3} fill="#ffffff" fillOpacity={0.85} />}
-                <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central" fontSize={11}
-                  fill={history || group.key !== 'electronic' ? '#111827' : '#ffffff'}>{label}</text>
-              </g>;
-            }} />
-          </Bar>)}
-          </BarChart>
-        </ChartContainer>
-        <div ref={setLegendPortal} className="min-w-0" aria-label="Purchase chart legend" />
-      </div>
+      <PurchaseCategoryChart purchases={purchases} />
       <aside className="mt-3 rounded-md bg-gray-50 p-3 text-sm text-gray-700">
         <h3 className="font-semibold text-gray-900">What's in each group</h3>
         <p><strong>Electronic:</strong> {PURCHASE_MATERIAL_GROUPS.electronic.join(', ')}</p>

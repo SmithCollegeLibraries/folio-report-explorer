@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { createRef } from 'react';
 import type { VisualizationData } from '../../api/visualizations';
 import { BudgetCharts } from './BudgetCharts';
+import { ChartEnlargementDialog } from './ChartEnlargementDialog';
 import { MaterialPieChart } from './MaterialPieChart';
 
 let chartSize = { width: 800, height: 320 };
@@ -30,7 +32,11 @@ function measuredRect(width: number, height: number) {
 function mockSvgTextMeasurement() {
   Object.defineProperty(SVGElement.prototype, 'getComputedTextLength', {
     configurable: true,
-    value(this: SVGElement) { return Array.from(this.textContent ?? '').length * 6; },
+    value(this: SVGElement) {
+      const text = this.closest('text') ?? this;
+      const fontSize = Number(text.getAttribute('font-size') ?? 10);
+      return Array.from(this.textContent ?? '').length * fontSize * 0.6;
+    },
   });
 }
 
@@ -401,5 +407,39 @@ describe('RPT-024 visualization bounds', () => {
       if (!amount) continue;
       expect.soft(y - (amount as SVGTSpanElement).getComputedTextLength()).toBeGreaterThanOrEqual(0);
     }
+  });
+
+  it('uses enlarged text estimates to keep pie and budget labels inside their chart bounds', async () => {
+    setChartSize(640);
+    const data = budgetDataForAmounts(Array.from({ length: 9 }, () => 987_654_321_000), 1);
+    render(<ChartEnlargementDialog title="Charts" explanation="Enlarged charts"
+      triggerRef={createRef<HTMLButtonElement>()} onClose={() => undefined}>
+      <MaterialPieChart items={labelledMaterials} />
+      <BudgetCharts data={data} />
+    </ChartEnlargementDialog>);
+    const dialog = screen.getByRole('dialog', { name: 'Charts' });
+    const pieSvg = dialog.querySelector('.recharts-pie-labels')?.closest('svg');
+    const budgetSvg = Array.from(dialog.querySelectorAll('svg'))
+      .find((candidate) => candidate.querySelector('.recharts-bar-rectangles'));
+    expect(pieSvg).not.toBeNull();
+    expect(budgetSvg).toBeDefined();
+    if (!pieSvg || !budgetSvg) return;
+
+    await waitFor(() => {
+      expect(pieSvg.querySelectorAll('.recharts-pie-labels text').length).toBeGreaterThan(0);
+      expect(budgetSvg.querySelectorAll('.recharts-label-list text').length).toBe(9);
+    });
+    const pieLabels = expectSideLabelsInsideSvg(pieSvg);
+    const budgetLabels = Array.from(budgetSvg.querySelectorAll('.recharts-label-list text'));
+    const plotTop = budgetSvg.querySelector('.recharts-cartesian-grid-horizontal line');
+
+    expect(pieLabels.every((label) => label.getAttribute('font-size') === '18')).toBe(true);
+    expect(budgetLabels.every((label) => label.getAttribute('font-size') === '18')).toBe(true);
+    expect(Number(plotTop?.getAttribute('y1'))).toBeGreaterThan(90);
+    expect(budgetLabels.every((label) => {
+      const y = Number(label.getAttribute('y'));
+      const amount = label.querySelector('tspan');
+      return amount !== null && y - amount.getComputedTextLength() >= 0;
+    })).toBe(true);
   });
 });
