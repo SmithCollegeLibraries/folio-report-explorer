@@ -491,6 +491,60 @@ describe('ACRL entry page', () => {
     if (failures.length) throw new Error(failures.join('; '));
   });
 
+  it('marks saved answers as filled while preserving highlighted cards', async () => {
+    const response = entry();
+    response.sections[0].questions[2].answer.value_text = null;
+    response.sections[0].questions[3].comparison.highlighted = false;
+    response.sections[0].questions.push(makeQuestion({
+      questionId: '66', prompt: 'Empty string answer', comparison: { previousValue: null, previousLabel: 'No previous value', changePercent: null, highlighted: false, addNote: false },
+      answer: { value_text: '', value_number: null, note: null, source: null, source_label: null, updated_by: null, updated_at: null },
+    }));
+    getEntry.mockResolvedValue(response);
+    renderPage();
+    await screen.findByText('3 of 8 parts filled');
+
+    const row = (prompt: string) => screen.getByRole('heading', { name: prompt }).closest('article') as HTMLElement;
+    const highlightedRow = row('Physical circulation');
+    expect(within(highlightedRow).getByText('Filled')).toBeInTheDocument();
+    expect(highlightedRow).toHaveClass('border-amber-400', 'bg-amber-50');
+
+    const calculatedRow = row('Calculated total');
+    expect(within(calculatedRow).getByText('Filled')).toBeInTheDocument();
+    expect(calculatedRow).toHaveClass('border-emerald-300', 'bg-emerald-50');
+
+    for (const prompt of ['No prior answer', 'Empty string answer']) {
+      const unfilledRow = row(prompt);
+      expect(within(unfilledRow).queryByText('Filled')).not.toBeInTheDocument();
+      expect(unfilledRow).toHaveClass('border-gray-200', 'bg-white');
+    }
+  });
+
+  it('filters unanswered cards independently in open and ready sections', async () => {
+    getEntry.mockResolvedValue(entry());
+    renderPage();
+    await screen.findByText('3 of 8 parts filled');
+
+    const circulation = screen.getByRole('region', { name: 'Circulation section' });
+    const services = screen.getByRole('region', { name: 'Services section' });
+    const circulationToggle = within(circulation).getByRole('checkbox', { name: 'Show unanswered only' });
+    const servicesToggle = within(services).getByRole('checkbox', { name: 'Show unanswered only' });
+    expect(circulationToggle).not.toBeChecked();
+    expect(servicesToggle).not.toBeChecked();
+    expect(within(circulation).getByRole('heading', { name: 'New count' })).toBeInTheDocument();
+    expect(within(services).getByRole('heading', { name: 'Second section item' })).toBeInTheDocument();
+
+    await userEvent.click(circulationToggle);
+    expect(within(circulation).queryByRole('heading', { name: 'New count' })).not.toBeInTheDocument();
+    expect(within(circulation).getByRole('heading', { name: 'No prior answer' })).toBeInTheDocument();
+    expect(within(circulation).getByText('3 of 8 parts filled')).toBeInTheDocument();
+    expect(within(services).getByRole('heading', { name: 'Second section item' })).toBeInTheDocument();
+
+    await userEvent.click(servicesToggle);
+    expect(within(services).queryByRole('heading', { name: 'Second section item' })).not.toBeInTheDocument();
+    expect(within(services).getByText('All parts in this section are filled.')).toBeInTheDocument();
+    expect(within(services).getByText('1 of 2 parts filled')).toBeInTheDocument();
+  });
+
   it('shows progress, approved prior values, advisory change, labels, and calculated mismatch', async () => {
     getEntry.mockResolvedValue(entry());
     saveAnswer.mockResolvedValue({ conflict: false, answer: entry().sections[0].questions[0].answer });
