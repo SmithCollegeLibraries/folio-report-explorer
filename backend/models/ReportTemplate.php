@@ -83,16 +83,21 @@ class ReportTemplate extends ActiveRecord
     /**
      * Resolve default value macros like $fiscal_year_start, $today, etc.
      * @param string $defaultVal The raw default value string
+     * @param \DateTime|null $today Optional clock value for deterministic date resolution
      * @return string The resolved value
      */
-    public static function resolveDefaultMacro($defaultVal)
+    public static function resolveDefaultMacro($defaultVal, ?\DateTime $today = null)
     {
         if (empty($defaultVal) || $defaultVal[0] !== '$') {
             return $defaultVal;
         }
 
-        $today = new \DateTime();
+        $today = $today ?: new \DateTime();
         $currentYear = (int) $today->format('Y');
+        $fyStart = new \DateTime("{$currentYear}-07-01");
+        if ($today < $fyStart) {
+            $fyStart->modify('-1 year');
+        }
 
         switch ($defaultVal) {
             case '$today':
@@ -111,20 +116,16 @@ class ReportTemplate extends ActiveRecord
                 return (string) $currentYear;
 
             case '$fiscal_year_start':
-                // Fiscal year starts July 1
-                $fyStart = new \DateTime("{$currentYear}-07-01");
-                if ($today < $fyStart) {
-                    $fyStart->modify('-1 year');
-                }
                 return $fyStart->format('Y-m-d');
 
             case '$fiscal_year_end':
-                // Fiscal year ends June 30
-                $fyEnd = new \DateTime("{$currentYear}-06-30");
-                if ($today > $fyEnd) {
-                    $fyEnd->modify('+1 year');
-                }
-                return $fyEnd->format('Y-m-d');
+                return (clone $fyStart)->modify('+1 year')->modify('-1 day')->format('Y-m-d');
+
+            case '$previous_fiscal_year_start':
+                return (clone $fyStart)->modify('-1 year')->format('Y-m-d');
+
+            case '$previous_fiscal_year_end':
+                return (clone $fyStart)->modify('-1 year')->modify('+1 year')->modify('-1 day')->format('Y-m-d');
 
             default:
                 return $defaultVal;

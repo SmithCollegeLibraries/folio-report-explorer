@@ -9,6 +9,7 @@ require_once __DIR__ . '/AcquisitionsInvoiceStatusReportService.php';
 require_once __DIR__ . '/AcquisitionsMissingUnitReportMigrationService.php';
 require_once __DIR__ . '/BudgetYearExpenseClassReportService.php';
 require_once __DIR__ . '/CatalogingMarcCombinationFinderService.php';
+require_once __DIR__ . '/GiftReportsMigrationRecognitionService.php';
 
 /** Keeps governed report migration checks outside the legacy migration service. */
 final class CatalogingReportMigrationRecognitionService
@@ -71,6 +72,11 @@ final class CatalogingReportMigrationRecognitionService
         return self::$check($db);
     }
 
+    public static function giftReportsAppearComplete($db): bool
+    {
+        return GiftReportsMigrationRecognitionService::reportsAppearComplete($db);
+    }
+
     private static function migrationDefinitions(): array
     {
         return [
@@ -79,6 +85,7 @@ final class CatalogingReportMigrationRecognitionService
             '056_open_order_report_expansion.sql' => 'acquisitionsOpenOrdersReportAppearsComplete',
             '068_marc_field_combination_finder.sql' => 'marcCombinationFinder068ReportAppearsComplete',
             '069_marc_combination_finder_record_scopes.sql' => 'marcCombinationFinderReportAppearsComplete',
+            '070_gift_reports.sql' => 'giftReportsAppearComplete',
         ];
     }
 
