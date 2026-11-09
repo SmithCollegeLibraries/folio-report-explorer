@@ -77,18 +77,32 @@ final class CatalogingReportMigrationRecognitionService
             '051_budget_year_expense_class_report.sql' => 'budgetYearExpenseClassReportAppearsComplete',
             '053_acquisitions_feedback_report_filters.sql' => 'acquisitionsFeedbackReportsAppearComplete',
             '056_open_order_report_expansion.sql' => 'acquisitionsOpenOrdersReportAppearsComplete',
-            '068_marc_field_combination_finder.sql' => 'marcCombinationFinderReportAppearsComplete',
+            '068_marc_field_combination_finder.sql' => 'marcCombinationFinder068ReportAppearsComplete',
+            '069_marc_combination_finder_record_scopes.sql' => 'marcCombinationFinderReportAppearsComplete',
         ];
     }
 
     public static function marcCombinationFinderReportAppearsComplete($db): bool
     {
-        $definition = $db->createCommand(
+        $definition = self::marcCombinationFinderDefinition($db);
+        return is_array($definition) && CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($definition);
+    }
+
+    public static function marcCombinationFinder068ReportAppearsComplete($db): bool
+    {
+        $definition = self::marcCombinationFinderDefinition($db);
+        return is_array($definition)
+            && (CatalogingMarcCombinationFinderService::isCanonical068SeedDefinition($definition)
+                || CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($definition));
+    }
+
+    private static function marcCombinationFinderDefinition($db)
+    {
+        return $db->createCommand(
             'SELECT slug, name, description, help_text, category, sql_template, parameters, data_source, execution_config, composite_config, default_limit, is_active, created_by'
                 . ' FROM report_templates WHERE slug = :slug LIMIT 1',
             [':slug' => CatalogingMarcCombinationFinderService::REPORT_SLUG]
         )->queryOne();
-        return is_array($definition) && CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($definition);
     }
 
     public static function acquisitionsFeedbackReportsAppearComplete($db): bool

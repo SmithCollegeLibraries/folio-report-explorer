@@ -156,7 +156,7 @@ class MigrationService
             }
 
             $started = microtime(true);
-            self::executeMigrationFile($db, $file); if ($file['filename'] === '068_marc_field_combination_finder.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 068 did not install the canonical MARC combination finder definition.');
+            self::executeMigrationFile($db, $file); if ($file['filename'] === '068_marc_field_combination_finder.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 068 did not install the canonical MARC combination finder definition.'); if ($file['filename'] === '069_marc_combination_finder_record_scopes.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 069 did not install the canonical MARC combination finder definition.');
             self::recordApplied($db, $file, (int)round((microtime(true) - $started) * 1000));
             $result['applied'][] = $file['filename'];
         }
@@ -217,7 +217,7 @@ class MigrationService
             return;
         }
 
-        self::executeSqlFile($db, (string)$file['path']);
+        if (($file['filename'] ?? '') === '069_marc_combination_finder_record_scopes.sql' && !CatalogingReportMigrationRecognitionService::marcCombinationFinder068ReportAppearsComplete($db)) throw new \RuntimeException('Migration 069 cannot update non-canonical report marc-field-combination-finder.'); self::executeSqlFile($db, (string)$file['path']);
         AcrlQuestionAssignmentMigrationRecognitionService::assertMigrationSchemaAfterExecution($db, (string)($file['filename'] ?? ''));
     }
 
@@ -434,7 +434,7 @@ class MigrationService
             case '048_quarterly_open_orders_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db);
             case '049_acquisitions_invoice_status_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db);
             case '050_orders_missing_acquisitions_unit.sql': return CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);
-            case '051_budget_year_expense_class_report.sql': case '053_acquisitions_feedback_report_filters.sql': case '056_open_order_report_expansion.sql': case '068_marc_field_combination_finder.sql': return CatalogingReportMigrationRecognitionService::migrationDefinitionAppearsComplete($db, $filename);
+            case '051_budget_year_expense_class_report.sql': case '053_acquisitions_feedback_report_filters.sql': case '056_open_order_report_expansion.sql': case '068_marc_field_combination_finder.sql': case '069_marc_combination_finder_record_scopes.sql': return CatalogingReportMigrationRecognitionService::migrationDefinitionAppearsComplete($db, $filename);
             case '061_retire_acrl_statistics.sql': return AcrlRetirementMigrationRecognitionService::retirementAppearsComplete($db); case '064_visualization_history.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryAppearsComplete($db); case '065_visualization_history_version.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryVersionAppearsComplete($db);
             case '066_acrl_question_assignments.sql':
             case '067_acrl_invites.sql':

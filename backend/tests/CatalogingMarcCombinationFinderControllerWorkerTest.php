@@ -8,6 +8,7 @@ require __DIR__ . '/../vendor/autoload.php';
 require __DIR__ . '/../vendor/yiisoft/yii2/Yii.php';
 class_exists(\yii\db\ActiveRecord::class);
 require_once __DIR__ . '/support/CatalogingMarcCombinationFinderFixture.php';
+require_once __DIR__ . '/support/CatalogingMarcCombinationFinderControllerScopes.php';
 require_once __DIR__ . '/../services/CatalogingMarcCombinationFinderService.php';
 require_once __DIR__ . '/../services/HistoryGroupKeyService.php';
 
@@ -224,6 +225,7 @@ foreach ([
     $insertItem->execute(['item-' . $index, $holdingId, $locationId, $locationId]);
     $insertMarc->execute([$instance[0], '7', ' ', 1, 1, 'a', $instance[3]]);
 }
+marcCombinationFixturePrepareControllerScopes($folioPdo, $locationId);
 
 $reportDefinition = marcCombinationFixtureSeed();
 $db->createCommand()->insert('report_templates', array_merge($reportDefinition, ['id' => 26]))->execute();
@@ -263,6 +265,8 @@ marcCombinationControllerCase('controller parameters survive into the export wor
         marcCombinationControllerSame('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', $row[0] ?? null, 'The worklist CSV contains the worker-evaluated identifier.');
     }
 });
+
+marcCombinationControllerScopeWorkerCases($controller, $exportWorker, $reportId);
 
 marcCombinationControllerCase('the export worker writes 100000 rows and consumes the 100001st as the truncation sentinel', function () use ($exportWorker) {
     $jobId = 'cap-' . bin2hex(random_bytes(8));

@@ -142,6 +142,37 @@ if (count($values) === 12) {
     }
 }
 
+$recordScopePath = __DIR__ . '/../../mysql/migrations/069_marc_combination_finder_record_scopes.sql';
+$recordScopeMigration = is_file($recordScopePath) ? (string) file_get_contents($recordScopePath) : '';
+marcCombinationMigrationCheck(strpos($recordScopeMigration, 'START TRANSACTION;') === 0, 'Migration 069 must start a transaction.');
+marcCombinationMigrationCheck(substr_count($recordScopeMigration, 'UPDATE `report_templates`') === 1, 'Migration 069 must update exactly one report row.');
+marcCombinationMigrationCheck(stripos($recordScopeMigration, 'INSERT ') === false, 'Migration 069 must not insert a report row.');
+foreach (['DROP ', 'RENAME ', 'TRUNCATE '] as $forbidden) {
+    marcCombinationMigrationCheck(stripos($recordScopeMigration, $forbidden) === false, 'Migration 069 must not contain ' . trim($forbidden) . '.');
+}
+foreach ([
+    'SET `sql_template` =',
+    '`parameters` =',
+    '`help_text` =',
+    "WHERE `slug` = 'marc-field-combination-finder'",
+    "SHA2(`sql_template`, 256) = 'e25101e5af5365f4c64d09486145afaaf9e150c101ee8c52d195c1900cf71122'",
+    'COMMIT;',
+] as $required) {
+    marcCombinationMigrationCheck(strpos($recordScopeMigration, $required) !== false, 'Migration 069 must include its guarded update contract: ' . $required . '.');
+}
+$recordScopeDefinition = marcCombinationFixtureSeed();
+$recordScopeParameters = json_decode($recordScopeDefinition['parameters'], true);
+marcCombinationMigrationCheck(is_array($recordScopeParameters) && empty($recordScopeParameters[0]['required']), 'Record-scope migration makes locationIds optional.');
+preg_match_all("/\\('([^']+)'/", (string) ($recordScopeParameters[1]['options_sql'] ?? ''), $basisOptions);
+marcCombinationMigrationCheck(
+    ($basisOptions[1] ?? []) === ['effective_item', 'permanent_item', 'holdings_no_items', 'no_holdings'],
+    'Record-scope migration adds exactly the two new locationBasis values.'
+);
+marcCombinationMigrationCheck(strpos($recordScopeDefinition['sql_template'], '{{target_instances}}') !== false, 'The 069 template replaces the target-instance CTE as one structural token.');
+marcCombinationMigrationCheck(strpos($recordScopeDefinition['sql_template'], '{{location_from}}') === false, 'The 069 template removes the old location-fragment token.');
+marcCombinationMigrationCheck(strpos($recordScopeDefinition['help_text'], 'suppressed records are included') !== false, 'The 069 help text states that suppressed records are included.');
+marcCombinationMigrationCheck(strpos($recordScopeDefinition['help_text'], 'marked-for-deletion records are excluded') !== false, 'The 069 help text states that marked-for-deletion records are excluded.');
+
 if ($failures) {
     fwrite(STDERR, 'FAIL: ' . count($failures) . " MARC combination migration contract checks failed:\n");
     foreach ($failures as $failure) {

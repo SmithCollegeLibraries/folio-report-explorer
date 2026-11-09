@@ -3,6 +3,7 @@ import ParamInput from './ParamInput';
 import MarcIndicatorInput from './MarcIndicatorInput';
 import {
   CONTENT_RULES,
+  MARC_COMBINATION_RECORD_SCOPES,
   consumesSearchText,
   evaluateMarcCombinationFinder,
   type MarcFieldFinderValues,
@@ -102,12 +103,16 @@ export default function MarcCombinationFinderParameters({
   };
   const renderParam = (name: string, label?: string, groupSelect = false) => {
     const field = parameter(name, label);
+    const availableOptions = selectOptions?.[name] || FALLBACK_OPTIONS[field.name.replace(/^c[1-5]_/, '')];
+    const options = field.name === 'locationBasis'
+      ? availableOptions.filter((option) => option.value === 'effective_item' || option.value === 'permanent_item')
+      : availableOptions;
     return (
       <div key={name}>
         <ParamInput
           param={field}
           value={values[name] || ''}
-          options={selectOptions?.[name] || FALLBACK_OPTIONS[field.name.replace(/^c[1-5]_/, '')]}
+          options={options}
           groupSelect={groupSelect}
           error={errorText(name)}
           errorId={'marc-combination-' + name + '-error'}
@@ -127,6 +132,12 @@ export default function MarcCombinationFinderParameters({
     .some((slot) => !values['c' + slot + '_marcTag']);
   const activeCount = Array.from({ length: 5 }, (_, index) => values['c' + (index + 1) + '_marcTag'])
     .filter((tag) => Boolean(tag)).length;
+  const itemScope = values.locationBasis !== 'holdings_no_items' && values.locationBasis !== 'no_holdings';
+
+  function changeSearchScope(scope: string) {
+    onChange('locationIds', '');
+    onChange('locationBasis', scope === 'items' ? 'effective_item' : scope);
+  }
 
   function change(name: string, value: string) {
     if (/^c[1-5]_marcTag$/.test(name) && value === '') {
@@ -189,9 +200,25 @@ export default function MarcCombinationFinderParameters({
 
   return (
     <div className="space-y-4">
+      <fieldset className="space-y-2">
+        <legend className="text-sm font-semibold text-stone-700">Search</legend>
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          <label className="flex items-center gap-2 text-sm text-stone-700">
+            <input type="radio" name="marc-combination-search" value="items" checked={itemScope} onChange={() => changeSearchScope('items')} />
+            Items at selected locations
+          </label>
+          {Object.entries(MARC_COMBINATION_RECORD_SCOPES).map(([basis, label]) => (
+            <label key={basis} className="flex items-center gap-2 text-sm text-stone-700">
+              <input type="radio" name="marc-combination-search" value={basis} checked={values.locationBasis === basis} onChange={() => changeSearchScope(basis)} />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
       <div className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {renderParam('locationIds', 'Locations', true)}
-        {renderParam('locationBasis', 'Location basis')}
+        {itemScope && renderParam('locationIds', 'Locations', true)}
+        {itemScope && renderParam('locationBasis', 'Location basis')}
         {renderParam('combine', 'Combine conditions')}
       </div>
 

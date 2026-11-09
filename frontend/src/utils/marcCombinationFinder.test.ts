@@ -43,6 +43,38 @@ function values(overrides: Record<string, string> = {}): Record<string, string> 
 }
 
 describe('MARC field combination finder client validation', () => {
+  it.each([
+    ['holdings_no_items', 'Holdings with no items (Smith)'],
+    ['no_holdings', 'Instances with no holdings (Smith)'],
+  ])('accepts %s without locations and names the scope in its summary', (locationBasis, label) => {
+    const result = evaluator()(values({ locationBasis, locationIds: 'stale-location' }));
+    expect(result.valid).toBe(true);
+    expect(result.fieldErrors).toEqual({});
+    expect(result.summary).toContain(label);
+    expect(result.summary).not.toContain('location');
+  });
+
+  it('places an unsupported location basis error on the same field as the server', () => {
+    const result = evaluator()(values({ locationBasis: 'unsupported' }));
+    expect(result.fieldErrors.locationBasis).toBe('Location basis must be one of the four supported scopes.');
+  });
+
+  it('hydrates record scope URLs and drops stale locations from their submission', () => {
+    const parameters = [
+      { name: 'locationIds', resolvedDefault: '' },
+      { name: 'locationBasis', resolvedDefault: 'effective_item' },
+      { name: 'c1_marcTag', resolvedDefault: '' },
+    ];
+    const incoming = {
+      locationIds: '11111111-1111-4111-8111-111111111111',
+      locationBasis: 'no_holdings',
+      c1_marcTag: '650',
+    };
+    const hydrated = marcFieldFinder.hydrateMarcCombinationFinderParameters(parameters, incoming);
+    expect(hydrated.locationBasis).toBe('no_holdings');
+    expect(marcFieldFinder.normalizeMarcCombinationFinderSubmission(parameters, hydrated).locationIds).toBe('');
+  });
+
   it('requires one active condition and places the error on c1_marcTag', () => {
     const result = evaluator()({ ...values(), c1_marcTag: '' });
     expect(result.valid).toBe(false);

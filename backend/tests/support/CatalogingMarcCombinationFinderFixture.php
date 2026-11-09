@@ -72,8 +72,17 @@ namespace {
 
     function marcCombinationFixtureSeed(?string $migrationPath = null): array
     {
-        $path = $migrationPath ?: __DIR__ . '/../../../mysql/migrations/068_marc_field_combination_finder.sql';
-        $values = marcCombinationFixtureSqlValues((string) @file_get_contents($path));
+        $path = $migrationPath ?: __DIR__ . '/../../../mysql/migrations/069_marc_combination_finder_record_scopes.sql';
+        $sql = (string) @file_get_contents($path);
+        if (basename($path) === '069_marc_combination_finder_record_scopes.sql') {
+            $values = marcCombinationFixtureSqlValues((string) @file_get_contents(__DIR__ . '/../../../mysql/migrations/068_marc_field_combination_finder.sql'));
+            $updates = marcCombinationFixtureUpdateValues($sql, ['sql_template', 'parameters', 'help_text']);
+            $values[3] = $updates['help_text'] ?? null;
+            $values[5] = $updates['sql_template'] ?? null;
+            $values[6] = $updates['parameters'] ?? null;
+        } else {
+            $values = marcCombinationFixtureSqlValues($sql);
+        }
         if (count($values) !== 12) {
             throw new \RuntimeException('MARC field combination finder seed is missing or malformed.');
         }
@@ -91,6 +100,30 @@ namespace {
             'is_active' => (int) $values[10],
             'created_by' => $values[11],
         ];
+    }
+
+    function marcCombinationFixtureUpdateValues(string $sql, array $columns): array
+    {
+        $values = [];
+        foreach ($columns as $column) {
+            $marker = '`' . $column . '` = \'';
+            $start = strpos($sql, $marker);
+            if ($start === false) continue;
+            $index = $start + strlen($marker);
+            $value = '';
+            while ($index < strlen($sql)) {
+                if ($sql[$index] === "'" && isset($sql[$index + 1]) && $sql[$index + 1] === "'") {
+                    $value .= "'";
+                    $index += 2;
+                } elseif ($sql[$index] === "'") {
+                    break;
+                } else {
+                    $value .= $sql[$index++];
+                }
+            }
+            $values[$column] = $value;
+        }
+        return $values;
     }
 
     function marcCombinationFixtureReport(array $overrides = []): \app\models\ReportTemplate
@@ -142,9 +175,31 @@ namespace {
         return array_merge($inputs, $overrides);
     }
 
+    function marcCombinationFixturePrepareControllerScopes(\PDO $pdo, string $locationId): void
+    {
+        $pdo->exec('ALTER TABLE inventory.instance__t ADD COLUMN deleted INTEGER');
+        $pdo->exec('ALTER TABLE inventory.holdings_record__t ADD COLUMN permanent_location_id TEXT');
+        $pdo->exec('CREATE TABLE inventory.instance__t__statistical_code_ids (id TEXT, statistical_code_ids TEXT)');
+        $pdo->exec('CREATE TABLE marctab.mt998 (instance_id TEXT, ind1 TEXT, ind2 TEXT, ord INTEGER, line INTEGER, sf TEXT, content TEXT)');
+        $instance = $pdo->prepare('INSERT INTO inventory.instance__t (id,hrid,title,source,deleted) VALUES (?,?,?,?,NULL)');
+        $marc = $pdo->prepare('INSERT INTO marctab.mt655 VALUES (?, ?, ?, ?, ?, ?, ?)');
+        $ownership = $pdo->prepare("INSERT INTO marctab.mt998 VALUES (?, ' ', ' ', 1, 1, 'a', 'SM')");
+        foreach ([
+            ['cccccccc-cccc-4ccc-8ccc-cccccccccccc', 'scope-no-holdings'],
+            ['dddddddd-dddd-4ddd-8ddd-dddddddddddd', 'scope-no-items'],
+        ] as $index => $record) {
+            $instance->execute([$record[0], 'scope' . $index, $record[1], 'MARC']);
+            $marc->execute([$record[0], '7', ' ', 1, 1, 'a', 'Scope fixture']);
+            $ownership->execute([$record[0]]);
+        }
+        $pdo->exec("INSERT INTO inventory.holdings_record__t (id,instance_id,permanent_location_id) VALUES ('scope-holding','dddddddd-dddd-4ddd-8ddd-dddddddddddd','{$locationId}')");
+    }
+
     function marcCombinationFixtureSqliteSql(string $sql): string
     {
         $sql = str_replace('AS MATERIALIZED', 'AS', $sql);
+        $sql = str_replace('UPPER(BTRIM(', 'UPPER(TRIM(', $sql);
+        $sql = preg_replace('/\bOFFSET 0\b/', 'LIMIT -1 OFFSET 0', $sql);
         $sql = str_replace(
             ['"Title" NULLS LAST', '"Instance HRID" NULLS LAST', '"Instance UUID" NULLS LAST'],
             ['("Title" IS NULL), "Title"', '("Instance HRID" IS NULL), "Instance HRID"', '("Instance UUID" IS NULL), "Instance UUID"'],
@@ -158,6 +213,11 @@ namespace {
         $sql = preg_replace(
             "/STRING_AGG\\(\\s*DISTINCT (.*?),\\s*'; ' ORDER BY .*?\\)/s",
             'GROUP_CONCAT(DISTINCT $1)',
+            $sql
+        );
+        $sql = str_replace(
+            "STRING_AGG(location_rows.location_label, '; ' ORDER BY location_rows.location_label)",
+            '(SELECT GROUP_CONCAT(location_label, \'; \') FROM (SELECT location_label FROM location_rows WHERE location_rows.instance_uuid = eligible.instance_uuid ORDER BY location_label))',
             $sql
         );
         $sql = str_replace(

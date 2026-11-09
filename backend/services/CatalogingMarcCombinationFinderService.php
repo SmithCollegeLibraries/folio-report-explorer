@@ -13,14 +13,18 @@ require_once __DIR__ . '/CatalogingMarcConditionValidator.php';
 final class CatalogingMarcCombinationFinderService
 {
     public const REPORT_SLUG = 'marc-field-combination-finder';
-    private const LOCATION_TOKEN = '{{location_from}}';
+    private const LOCATION_TOKEN = '{{target_instances}}';
     private const PREDICATES_TOKEN = '{{active_condition_predicates}}';
     private const COLUMNS_TOKEN = '{{active_condition_columns}}';
     private const FETCH_ROW_LIMIT = 100001;
     private const CANONICAL_REPORT_NAME = 'MARC Field Combination Finder';
-    private const TEMPLATE_HASH = 'e25101e5af5365f4c64d09486145afaaf9e150c101ee8c52d195c1900cf71122';
-    private const PARAMETERS_HASH = '42e71d5b6ab36eb70d872075fefc6d13c89a65b8b6311b295681ce1cfdb6b3f0';
+    private const TEMPLATE_HASH = '007d683165861e57d610040e6cc04e2666ddf79cc1a5eb7695192a3d8f4f0feb';
+    private const PARAMETERS_HASH = 'e649ca1e821eaffa7022f851ece5f3f2805dfa616885fae354e6bff9e7a7a72d';
     private const EXECUTION_HASH = '2efff87a597201b87fee8fe5116a3c03ef4b551193d5dded621b196b8f3efc1b';
+    private const HELP_TEXT = 'Search active locations by campus, library, location name, or location code; select up to 100 locations and choose Effective item or Permanent item as the location basis. Add one to five contiguous MARC conditions and combine them as all conditions (AND) or any condition (OR). A condition can find a matching field occurrence or an instance missing one. Results contain one row per instance and report the conditions evaluated for each row. These findings are facts, not cataloging judgments; review them in the context of record type, cataloging rules, legacy practice, and local policy. Holdings with no items (Smith) searches Smith-owned MARC instances with holdings and no items; suppressed records are included and marked-for-deletion records are excluded. Instances with no holdings (Smith) searches Smith-owned MARC instances without holdings; suppressed records are included and marked-for-deletion records are excluded.';
+    private const LEGACY_HELP_TEXT = 'Search active locations by campus, library, location name, or location code; select up to 100 locations and choose Effective item or Permanent item as the location basis. Add one to five contiguous MARC conditions and combine them as all conditions (AND) or any condition (OR). A condition can find a matching field occurrence or an instance missing one. Results contain one row per instance and report the conditions evaluated for each row. These findings are facts, not cataloging judgments; review them in the context of record type, cataloging rules, legacy practice, and local policy.';
+    private const LEGACY_TEMPLATE_HASH = 'e25101e5af5365f4c64d09486145afaaf9e150c101ee8c52d195c1900cf71122';
+    private const LEGACY_PARAMETERS_HASH = '42e71d5b6ab36eb70d872075fefc6d13c89a65b8b6311b295681ce1cfdb6b3f0';
     private const CONDITION_FIELDS = [
         'marcTag', 'occurrenceCondition', 'firstIndicator', 'secondIndicator',
         'subfieldCode', 'contentRule', 'searchValue', 'caseExact',
@@ -53,10 +57,10 @@ final class CatalogingMarcCombinationFinderService
         }
         $conditions = self::activeConditions($inputs);
         $params = [
-            ':locationIds' => implode(',', $scope['locationIds']),
             ':locationBasis' => $scope['locationBasis'],
             ':combine' => $combine,
         ];
+        if ($scope['locationIds']) $params[':locationIds'] = implode(',', $scope['locationIds']);
         $predicates = [];
         $columns = [];
         $identity = [
@@ -84,22 +88,24 @@ final class CatalogingMarcCombinationFinderService
             $params[':c' . $number . '_marcTag'] = $condition['marcTag'];
         }
 
-        $resolvedSql = str_replace(self::LOCATION_TOKEN, $scope['locationFragment'], $template);
+        if (!CatalogingMarcLocationScopeService::isCombinationTargetInstances($scope['targetInstances'])) {
+            throw new \InvalidArgumentException('MARC combination report has an unreviewed target-instance replacement.');
+        }
+        $resolvedSql = str_replace(self::LOCATION_TOKEN, $scope['targetInstances'], $template);
         $resolvedSql = str_replace(self::PREDICATES_TOKEN, implode($combine === 'all' ? "\n    AND " : "\n    OR ", $predicates), $resolvedSql);
         $resolvedSql = str_replace(self::COLUMNS_TOKEN, implode(",\n  ", $columns), $resolvedSql);
-        $resolvedSql = str_replace(
-            "STRING_AGG(DISTINCT location.name || COALESCE(' [' || location.code || ']', ''), '; ' ORDER BY location.name || COALESCE(' [' || location.code || ']', ''))",
-            "STRING_AGG(DISTINCT location.name || CASE WHEN location.code IS NULL THEN '' ELSE ' [' || location.code || ']' END, '; ' ORDER BY location.name || CASE WHEN location.code IS NULL THEN '' ELSE ' [' || location.code || ']' END)",
-            $resolvedSql
-        );
-        if (preg_match('/\{\{[^{}]+\}\}/', $resolvedSql) === 1
-            || strpos($scope['locationFragment'], ':') !== false) {
+        if (preg_match('/\{\{[^{}]+\}\}/', $resolvedSql) === 1) {
             throw new \InvalidArgumentException('MARC combination report contains an unresolved structural token.');
         }
         if (substr_count($resolvedSql, 'LIMIT ' . self::FETCH_ROW_LIMIT) !== 1) {
             throw new \InvalidArgumentException('MARC combination report must retain its 100001 fetch limit.');
         }
-        $resolvedScope = CatalogingMarcLocationScopeService::resolveLocations($scope, $folioDb);
+        $resolvedScope = $scope['locationIds']
+            ? CatalogingMarcLocationScopeService::resolveLocations($scope, $folioDb)
+            : [
+                'location' => ['name' => $scope['locationBasis'] === 'holdings_no_items' ? 'holdings-no-items' : 'no-holdings', 'code' => 'SM'],
+                'locations' => [],
+            ];
         return [
             'sql' => $resolvedSql,
             'params' => $params,
@@ -112,20 +118,30 @@ final class CatalogingMarcCombinationFinderService
 
     public static function isCanonicalSeedDefinition(array $definition): bool
     {
+        return self::canonicalSeedDefinition($definition, self::HELP_TEXT, self::PARAMETERS_HASH, self::TEMPLATE_HASH);
+    }
+
+    public static function isCanonical068SeedDefinition(array $definition): bool
+    {
+        return self::canonicalSeedDefinition($definition, self::LEGACY_HELP_TEXT, self::LEGACY_PARAMETERS_HASH, self::LEGACY_TEMPLATE_HASH);
+    }
+
+    private static function canonicalSeedDefinition(array $definition, string $helpText, string $parametersHash, string $templateHash): bool
+    {
         return self::exact($definition, 'slug', self::REPORT_SLUG)
             && self::exact($definition, 'name', self::CANONICAL_REPORT_NAME)
             && self::exact($definition, 'description', 'Finds MARC bibliographic instances that have or are missing several specified field conditions, combined with AND or OR.')
-            && self::exact($definition, 'help_text', 'Search active locations by campus, library, location name, or location code; select up to 100 locations and choose Effective item or Permanent item as the location basis. Add one to five contiguous MARC conditions and combine them as all conditions (AND) or any condition (OR). A condition can find a matching field occurrence or an instance missing one. Results contain one row per instance and report the conditions evaluated for each row. These findings are facts, not cataloging judgments; review them in the context of record type, cataloging rules, legacy practice, and local policy.')
+            && self::exact($definition, 'help_text', $helpText)
             && self::exact($definition, 'category', 'cataloging')
             && self::exact($definition, 'data_source', 'folio')
             && self::exact($definition, 'default_limit', '100000')
             && self::exact($definition, 'is_active', '1')
             && self::exact($definition, 'created_by', 'manual')
             && (!array_key_exists('composite_config', $definition) || $definition['composite_config'] === null)
-            && self::canonicalJson($definition['parameters'] ?? null, self::PARAMETERS_HASH)
+            && self::canonicalJson($definition['parameters'] ?? null, $parametersHash)
             && self::canonicalJson($definition['execution_config'] ?? null, self::EXECUTION_HASH)
             && is_string($definition['sql_template'] ?? null)
-            && hash_equals(self::TEMPLATE_HASH, hash('sha256', $definition['sql_template']));
+            && hash_equals($templateHash, hash('sha256', $definition['sql_template']));
     }
 
     private static function activeConditions(array $inputs): array
@@ -232,11 +248,11 @@ final class CatalogingMarcCombinationFinderService
     private static function validateLocationScope(array $inputs): array
     {
         if (!is_string($inputs['locationBasis'] ?? null)
-            || !in_array($inputs['locationBasis'], ['effective_item', 'permanent_item'], true)) {
-            throw new ReportParameterValidationException('locationBasis', 'Location basis must be effective_item or permanent_item.');
+            || !in_array($inputs['locationBasis'], ['effective_item', 'permanent_item', 'holdings_no_items', 'no_holdings'], true)) {
+            throw new ReportParameterValidationException('locationBasis', 'Location basis must be one of the four supported scopes.');
         }
         try {
-            return CatalogingMarcLocationScopeService::validate($inputs, ['effective_item', 'permanent_item']);
+            return CatalogingMarcLocationScopeService::validateCombination($inputs);
         } catch (\InvalidArgumentException $exception) {
             throw new ReportParameterValidationException('locationIds', $exception->getMessage());
         }

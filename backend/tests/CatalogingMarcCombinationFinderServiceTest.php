@@ -56,6 +56,7 @@ final class MarcCombinationServiceLookupCommand
 final class MarcCombinationServiceLookupDb
 {
     private $missingTables;
+    public $locationLookups = 0;
 
     public function __construct(array $missingTables = [])
     {
@@ -64,6 +65,7 @@ final class MarcCombinationServiceLookupDb
 
     public function createCommand(string $sql, array $params = []): MarcCombinationServiceLookupCommand
     {
+        if (strpos($sql, 'FROM inventory.location__t') !== false) $this->locationLookups++;
         return new MarcCombinationServiceLookupCommand($sql, $params, $this->missingTables);
     }
 }
@@ -105,6 +107,35 @@ function marcCombinationServiceBuild(array $overrides = [], array $missingTables
     );
 }
 
+marcCombinationServiceCase('Smith record scopes ignore locations and retain the export binding contract', function () {
+    foreach ([
+        'holdings_no_items' => 'holdings-no-items',
+        'no_holdings' => 'no-holdings',
+    ] as $basis => $locationName) {
+        $db = new MarcCombinationServiceLookupDb();
+        $compiled = \app\services\CatalogingMarcCombinationFinderService::build(
+            marcCombinationFixtureReport(),
+            marcCombinationFixtureInputs(['locationBasis' => $basis, 'locationIds' => 'stale-location']),
+            $db
+        );
+        $placeholders = [];
+        preg_match_all('/(?<!:):([A-Za-z][A-Za-z0-9_]*)/', preg_replace('/::[A-Za-z][A-Za-z0-9_]*(?:\[\])?/', '', $compiled['sql']), $matches);
+        foreach ($matches[1] as $name) $placeholders[] = ':' . $name;
+        $placeholders = array_values(array_unique($placeholders));
+        $bindings = array_keys($compiled['params']);
+        sort($placeholders, SORT_STRING);
+        sort($bindings, SORT_STRING);
+        marcCombinationServiceSame($placeholders, $bindings, 'Scope SQL binds exactly its placeholders.');
+        marcCombinationServiceSame(false, in_array(':locationIds', $bindings, true), 'A record scope never binds selected locations.');
+        marcCombinationServiceSame(0, $db->locationLookups, 'A record scope never resolves location options.');
+        marcCombinationServiceSame('', $compiled['identity']['locationIds'] ?? null, 'Stale locations normalize to an empty identity value.');
+        marcCombinationServiceSame($basis, $compiled['identity']['locationBasis'] ?? null, 'The chosen record scope remains in history identity.');
+        marcCombinationServiceSame($locationName, $compiled['location']['name'] ?? null, 'Export context uses the fixed scope name.');
+        marcCombinationServiceSame('SM', $compiled['location']['code'] ?? null, 'Export context uses the Smith code.');
+        marcCombinationServiceSame([], $compiled['locations'] ?? null, 'Record scopes have no selected location list.');
+    }
+});
+
 function marcCombinationServiceExpectFieldError(array $overrides, string $field, string $message): void
 {
     try {
@@ -138,6 +169,10 @@ marcCombinationServiceCase('the compiler accepts the new report and returns the 
 
 marcCombinationServiceCase('all empty condition slots fail on c1_marcTag', function () {
     marcCombinationServiceExpectFieldError(['c1_marcTag' => ''], 'c1_marcTag', 'At least one active MARC condition is required.');
+});
+
+marcCombinationServiceCase('unknown location bases are reported on locationBasis', function () {
+    marcCombinationServiceExpectFieldError(['locationBasis' => 'all_items'], 'locationBasis', 'Location basis must be one of the four supported scopes.');
 });
 
 marcCombinationServiceCase('active slots must be contiguous and report the first gap', function () {
@@ -238,6 +273,13 @@ marcCombinationServiceCase('the combination seed fingerprint accepts text and de
     marcCombinationServiceSame(true, \app\services\CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($decoded), 'Already-decoded JSON columns match the same fingerprint.');
     $decoded['name'] = 'Changed by local administrator';
     marcCombinationServiceSame(false, \app\services\CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($decoded), 'A non-canonical row must not be recognized.');
+    $decoded = $definition;
+    $decoded['sql_template'] = str_replace('{{target_instances}}', 'SELECT * FROM inventory.instance__t', $decoded['sql_template']);
+    marcCombinationServiceSame(false, \app\services\CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($decoded), 'A replacement other than the four reviewed target constants cannot change the canonical template.');
+    $legacy = marcCombinationFixtureSeed(__DIR__ . '/../../mysql/migrations/068_marc_field_combination_finder.sql');
+    marcCombinationServiceSame(false, \app\services\CatalogingMarcCombinationFinderService::isCanonicalSeedDefinition($legacy), 'Runtime compilation accepts only the 069 definition.');
+    marcCombinationServiceSame(true, \app\services\CatalogingMarcCombinationFinderService::isCanonical068SeedDefinition($legacy), 'Migration recognition retains the exact historical 068 definition.');
+    marcCombinationServiceSame(false, \app\services\CatalogingMarcLocationScopeService::isCombinationTargetInstances('SELECT * FROM inventory.instance__t'), 'Only the four reviewed target-instance constants are accepted.');
 });
 
 if ($failures) {

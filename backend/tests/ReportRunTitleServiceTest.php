@@ -196,6 +196,24 @@ reportRunTitleCase('History title omits the indicator positions when both are An
     );
 });
 
+reportRunTitleCase('record-scope history titles name the fixed scope while item titles stay unchanged', function () {
+    reportRunTitleAssertSame(
+        'Holdings with no items (Smith) — All conditions (AND): has 655',
+        reportRunTitleCombination(['locationBasis' => 'holdings_no_items']),
+        'The holdings-without-items title includes the Smith scope.'
+    );
+    reportRunTitleAssertSame(
+        'No holdings (Smith) — All conditions (AND): has 655',
+        reportRunTitleCombination(['locationBasis' => 'no_holdings']),
+        'The no-holdings title includes the Smith scope.'
+    );
+    reportRunTitleAssertSame(
+        'MARC Field Combination Finder — All conditions (AND): has 655',
+        reportRunTitleCombination(['locationBasis' => 'effective_item']),
+        'Item-basis titles retain their current form.'
+    );
+});
+
 reportRunTitleCase('History title formats Blank/7 as #7', function () {
     reportRunTitleAssertSame(
         'MARC Field Combination Finder — All conditions (AND): has 655 #7',
