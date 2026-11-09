@@ -244,7 +244,7 @@ function acrlMigrationEnginePrepareCurrentSchema(PDO $admin, string $adminDsn, s
         'created_by' => 'manual',
     ])->execute();
     $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/068_marc_field_combination_finder.sql');
-    $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/069_marc_field_combination_finder_canonical.sql');
+    $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/069_marc_combination_finder_record_scopes.sql');
     if (!acrlMigrationEngineDatabaseAppearsCurrent($adminDb)) {
         throw new RuntimeException('Setup check failed: databaseAppearsCurrent() must accept the production-shaped schema including reports 068 and 069 before schema_migrations is cleared.');
     }
