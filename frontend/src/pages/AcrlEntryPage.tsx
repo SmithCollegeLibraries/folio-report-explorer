@@ -58,6 +58,8 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
   const currentCalculated = question.answer.value_number ?? question.answer.value_text;
   const currentDisplay = question.answerDisplay ?? currentCalculated;
   const filled = isQuestionFilled(question);
+  const saveButtonLabel = filled ? 'Update answer' : 'Save answer';
+  const pendingSaveButtonLabel = filled ? 'Updating…' : 'Saving…';
   const isCalculated = Boolean(question.calculatedFrom);
   const calculationLabel = question.calculatedFrom?.replace(/^sum of\s+/i, '').replace(/,\s*/g, ' + ');
   return (
@@ -122,7 +124,7 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
           <textarea className="mt-1 block min-h-10 w-full rounded border border-gray-300 px-3 py-2 disabled:bg-gray-100" value={note} disabled={disabled} onChange={(event) => setNote(event.target.value)} />
         </label>
         <button className="rounded bg-folio-700 px-4 py-2 text-sm font-semibold text-white hover:bg-folio-800 disabled:opacity-50" disabled={disabled || saveMutation.isPending} onClick={() => saveMutation.mutate({ value, note })}>
-          {saveMutation.isPending ? 'Saving…' : 'Save answer'}
+          {saveMutation.isPending ? pendingSaveButtonLabel : saveButtonLabel}
         </button>
       </div>}
       {!isCalculated && <AcrlAutofillPanel

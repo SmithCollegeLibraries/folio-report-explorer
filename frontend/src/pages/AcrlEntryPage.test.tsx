@@ -428,7 +428,7 @@ describe('ACRL entry page', () => {
     expect(answerSelect).toHaveValue('Higher');
     expect(within(row).getByText('Current value: Higher')).toBeInTheDocument();
     await user.selectOptions(answerSelect, 'Lower');
-    await user.click(within(row).getByRole('button', { name: 'Save answer' }));
+    await user.click(within(row).getByRole('button', { name: 'Update answer' }));
 
     await waitFor(() => expect(saveAnswer).toHaveBeenCalledWith(2026, expect.objectContaining({ value: '{"value":"Lower"}' })));
   });
@@ -546,8 +546,15 @@ describe('ACRL entry page', () => {
   });
 
   it('shows progress, approved prior values, advisory change, labels, and calculated mismatch', async () => {
-    getEntry.mockResolvedValue(entry());
-    saveAnswer.mockResolvedValue({ conflict: false, answer: entry().sections[0].questions[0].answer });
+    const initial = entry();
+    const afterFirstSave = entry();
+    afterFirstSave.sections[0].questions[0].answer = { ...initial.sections[0].questions[0].answer, value_text: null, value_number: null, updated_at: '2026-01-02' };
+    const afterSecondSave = entry();
+    afterSecondSave.sections[0].questions[0].answer = afterFirstSave.sections[0].questions[0].answer;
+    afterSecondSave.sections[0].questions[2].answer = { ...initial.sections[0].questions[2].answer, value_text: 'yes', updated_at: '2026-01-03' };
+    getEntry.mockResolvedValueOnce(initial).mockResolvedValueOnce(afterFirstSave).mockResolvedValueOnce(afterSecondSave);
+    let resolveSave: ((value: unknown) => void) | undefined;
+    saveAnswer.mockImplementation(() => new Promise((resolve) => { resolveSave = resolve; }));
     setStatus.mockResolvedValue({ section: 'Circulation', status: 'ready' });
     renderPage();
 
@@ -559,8 +566,27 @@ describe('ACRL entry page', () => {
     expect(screen.getByText('Previous value: No previous value')).toBeInTheDocument();
     expect(screen.getByText(/Entered value differs \(advisory\)/)).toBeInTheDocument();
 
-    await userEvent.click(screen.getAllByRole('button', { name: 'Save answer' })[0]);
-    await waitFor(() => expect(saveAnswer).toHaveBeenCalledWith(2026, expect.objectContaining({ sheet: 'survey', question_id: '60', part: 'A', expected_updated_at: '2026-01-01 00:00:00.000001' })));
+    const filledRow = screen.getByRole('heading', { name: 'Physical circulation' }).closest('article') as HTMLElement;
+    const unfilledRow = screen.getByRole('heading', { name: 'No prior answer' }).closest('article') as HTMLElement;
+    expect(within(filledRow).getByRole('button', { name: 'Update answer' })).toBeInTheDocument();
+    expect(within(unfilledRow).getByRole('button', { name: 'Save answer' })).toBeInTheDocument();
+
+    await userEvent.clear(within(filledRow).getByRole('spinbutton'));
+    expect(within(filledRow).getByRole('button', { name: 'Update answer' })).toBeInTheDocument();
+    await userEvent.click(within(filledRow).getByRole('button', { name: 'Update answer' }));
+    expect(within(filledRow).getByRole('button', { name: 'Updating…' })).toBeDisabled();
+    await act(async () => resolveSave?.({ conflict: false, answer: afterFirstSave.sections[0].questions[0].answer }));
+    await waitFor(() => expect(within(filledRow).getByRole('button', { name: 'Save answer' })).toBeInTheDocument());
+
+    await userEvent.selectOptions(within(unfilledRow).getByRole('combobox', { name: 'Answer' }), 'yes');
+    expect(within(unfilledRow).getByRole('button', { name: 'Save answer' })).toBeInTheDocument();
+    await userEvent.click(within(unfilledRow).getByRole('button', { name: 'Save answer' }));
+    expect(within(unfilledRow).getByRole('button', { name: 'Saving…' })).toBeDisabled();
+    await act(async () => resolveSave?.({ conflict: false, answer: afterSecondSave.sections[0].questions[2].answer }));
+    await waitFor(() => expect(within(unfilledRow).getByRole('button', { name: 'Update answer' })).toBeInTheDocument());
+
+    expect(saveAnswer).toHaveBeenNthCalledWith(1, 2026, expect.objectContaining({ sheet: 'survey', question_id: '60', part: 'A', value: '', expected_updated_at: '2026-01-01 00:00:00.000001' }));
+    expect(saveAnswer).toHaveBeenNthCalledWith(2, 2026, expect.objectContaining({ sheet: 'survey', question_id: '62', part: '', value: 'yes', expected_updated_at: null }));
   });
 
   it('shows the current value after an optimistic-lock conflict', async () => {
@@ -568,7 +594,7 @@ describe('ACRL entry page', () => {
     saveAnswer.mockRejectedValue({ response: { status: 409, data: { current: { value_text: '25' } } } });
     renderPage();
     await screen.findByText('3 of 8 parts filled');
-    await userEvent.click(screen.getAllByRole('button', { name: 'Save answer' })[0]);
+    await userEvent.click(screen.getAllByRole('button', { name: 'Update answer' })[0]);
     expect(await screen.findByRole('alert')).toHaveTextContent('Current value: 25');
   });
 
@@ -585,6 +611,7 @@ describe('ACRL entry page', () => {
     expect(within(calculatedRow as HTMLElement).getByText(/Waiting for 2A/)).toBeInTheDocument();
     expect(within(calculatedRow as HTMLElement).queryByLabelText('Answer')).not.toBeInTheDocument();
     expect(within(calculatedRow as HTMLElement).queryByRole('button', { name: 'Save answer' })).not.toBeInTheDocument();
+    expect(within(calculatedRow as HTMLElement).queryByRole('button', { name: 'Update answer' })).not.toBeInTheDocument();
   });
 
   it('locks ready sections for editors and exposes reopen to administrators', async () => {
