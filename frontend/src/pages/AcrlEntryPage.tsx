@@ -20,6 +20,10 @@ function errorText(error: unknown): string {
   return 'The request could not be completed. Please try again.';
 }
 
+function isQuestionFilled(question: AcrlEntryQuestion): boolean {
+  return question.answer.value_text !== null && question.answer.value_text !== '';
+}
+
 function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, onAcceptSuggestion, onShowDetails, onSaved }: {
   year: number;
   question: AcrlEntryQuestion;
@@ -53,16 +57,18 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
   const numberInput = question.answerType === 'number' || question.answerType === 'currency';
   const currentCalculated = question.answer.value_number ?? question.answer.value_text;
   const currentDisplay = question.answerDisplay ?? currentCalculated;
+  const filled = isQuestionFilled(question);
   const isCalculated = Boolean(question.calculatedFrom);
   const calculationLabel = question.calculatedFrom?.replace(/^sum of\s+/i, '').replace(/,\s*/g, ' + ');
   return (
-    <article id={acrlQuestionAnchorId(question)} className={`scroll-mt-24 space-y-3 rounded-lg border p-4 ${question.comparison.highlighted ? 'border-amber-400 bg-amber-50' : 'border-gray-200 bg-white'}`}>
+    <article id={acrlQuestionAnchorId(question)} className={`scroll-mt-24 space-y-3 rounded-lg border p-4 ${question.comparison.highlighted ? 'border-amber-400 bg-amber-50' : filled ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-white'}`}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Q{question.questionId}{question.part ? ` · ${question.part}` : ''}{question.required === 'yes' ? ' · Required' : ''}</p>
           <h3 className="mt-1 font-medium text-gray-900">{question.prompt}</h3>
         </div>
         <div className="flex items-center gap-2">
+          {filled && <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800"><span aria-hidden="true">✓</span> Filled</span>}
           {question.questionAssignedToCurrentUser && <span className="rounded-full bg-folio-100 px-2 py-0.5 text-xs font-semibold text-folio-800">Yours</span>}
           {question.hasDetailsNotes && <span aria-label="Has collection notes" title="Has collection notes" className="h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-amber-100" />}
           <button type="button" className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50" onClick={(event) => onShowDetails(question, event.currentTarget)}>Details</button>
@@ -147,6 +153,8 @@ function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
   onShowDetails: (question: AcrlEntryQuestion, trigger: HTMLButtonElement) => void;
 }) {
   const locked = section.status === 'ready';
+  const [showUnansweredOnly, setShowUnansweredOnly] = useState(false);
+  const questions = showUnansweredOnly ? section.questions.filter((question) => !isQuestionFilled(question)) : section.questions;
   const suggestions = section.questions.filter((question) => question.suggestion !== null);
   const mutation = useMutation({
     mutationFn: () => setAcrlSectionStatus(year, section.name, locked ? 'open' : 'ready'),
@@ -169,6 +177,10 @@ function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
           <p className="text-xs text-gray-600">{section.assignees.length ? `Assigned to: ${section.assignees.map((assignee) => assignee.displayName).join(', ')}` : 'No users assigned to this section.'}</p>
         </div>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input type="checkbox" checked={showUnansweredOnly} onChange={(event) => setShowUnansweredOnly(event.target.checked)} />
+            Show unanswered only
+          </label>
           <span className={`rounded-full px-3 py-1 text-xs font-semibold ${locked ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-200 text-gray-700'}`}>{locked ? 'Ready for review' : 'Open'}</span>
           {locked ? isAdmin && <button className="rounded border border-gray-400 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-white disabled:opacity-50" disabled={mutation.isPending} onClick={() => mutation.mutate()}>Reopen section</button>
             : <button className="rounded border border-folio-700 px-3 py-1.5 text-sm font-medium text-folio-800 hover:bg-white disabled:opacity-50" disabled={mutation.isPending} onClick={() => mutation.mutate()}>Mark section ready</button>}
@@ -181,7 +193,8 @@ function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
       {mutation.error && <p role="alert" className="text-sm text-rose-700">Could not update section status.</p>}
       {suggestionMutation.error && <p role="alert" className="text-sm text-rose-700">Could not accept the selected suggestions. Refresh the section and try again.</p>}
       <div className="space-y-3">
-        {section.questions.map((question) => <AcrlAnswerRow key={`${question.sheet}-${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onShowDetails={onShowDetails} onSaved={onChanged} />)}
+        {showUnansweredOnly && questions.length === 0 ? <p className="text-sm text-gray-600">All parts in this section are filled.</p>
+          : questions.map((question) => <AcrlAnswerRow key={`${question.sheet}-${question.questionId}-${question.part}`} year={year} question={question} locked={locked} isAdmin={isAdmin} acceptingSuggestion={suggestionMutation.isPending} onAcceptSuggestion={(selected) => suggestionMutation.mutate([selected])} onShowDetails={onShowDetails} onSaved={onChanged} />)}
       </div>
     </section>
   );
