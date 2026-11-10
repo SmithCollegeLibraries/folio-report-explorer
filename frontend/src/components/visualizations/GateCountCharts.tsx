@@ -133,20 +133,46 @@ function DailyVisitsChart({ data }: { data: GateCountResponse }) {
   </ChartCard>;
 }
 
-function Heatmap({ data }: { data: GateCountResponse['heatmap'] }) {
+function weekdayDateCounts(start: string, end: string): number[] {
+  const counts = Array<number>(7).fill(0);
+  const date = new Date(start + 'T00:00:00Z');
+  const last = new Date(end + 'T00:00:00Z');
+  while (date <= last) {
+    counts[date.getUTCDay()] += 1;
+    date.setUTCDate(date.getUTCDate() + 1);
+  }
+  return counts;
+}
+
+function displayAverage(value: number | null): string {
+  if (value === null) return 'no days';
+  if (value > 0 && value < 0.5) return '<1';
+  return Math.round(value).toLocaleString('en-US');
+}
+
+type HeatmapProps = { data: GateCountResponse['heatmap']; period: GateCountResponse['period'] };
+
+function Heatmap({ data, period }: HeatmapProps) {
   const labelSize = useChartLabelSize();
-  const maximum = Math.max(1, ...data.map((cell) => cell.visits));
-  const cell = (weekday: number, hour: number) => data.find((item) =>
+  const dayCounts = weekdayDateCounts(period.start, period.end);
+  const visits = (weekday: number, hour: number) => data.find((item) =>
     item.weekday === weekday && item.hour === hour)?.visits ?? 0;
-  const cellTable = <table><caption>Busiest hours by weekday and hour</caption><thead><tr>
+  const average = (weekday: number, hour: number) => dayCounts[weekday]
+    ? visits(weekday, hour) / dayCounts[weekday] : null;
+  const maximum = Math.max(0, ...data.map((cell) => dayCounts[cell.weekday]
+    ? cell.visits / dayCounts[cell.weekday] : 0));
+  const cellTable = <table><caption>Busiest hours (average entries per day)</caption><thead><tr>
     <th scope="col">Weekday</th>{Array.from({ length: 24 }, (_, hour) =>
       <th key={hour} scope="col">{hour}:00</th>)}
   </tr></thead><tbody>{WEEKDAYS.map((weekday, day) => <tr key={weekday}>
     <th scope="row">{weekday}</th>{Array.from({ length: 24 }, (_, hour) =>
-      <td key={hour}>{cell(day, hour).toLocaleString('en-US')}</td>)}
-  </tr>)}</tbody></table>;
+      <td key={hour}>{displayAverage(average(day, hour))}</td>)}
+  </tr>)}</tbody><tfoot><tr><td colSpan={25} className="pt-2 text-left text-sm">
+    Days in period: {WEEKDAYS.map((weekday, day) => weekday + ': ' + dayCounts[day]).join(', ')}.
+  </td></tr></tfoot></table>;
 
-  return <ChartCard title="Busiest hours" explanation="Entries by Eastern weekday and hour. Focus a cell to read its count."
+  return <ChartCard title="Busiest hours (average per day)"
+    explanation="Average entries per day by Eastern weekday and hour, over the selected period."
     table={cellTable}>
     <div role="group" aria-label="Busiest hours heatmap" className="overflow-x-auto">
       <div className="min-w-[720px]">
@@ -159,12 +185,19 @@ function Heatmap({ data }: { data: GateCountResponse['heatmap'] }) {
           className="grid grid-cols-[5.25rem_repeat(24,minmax(0,1fr))] gap-1 items-center mb-1">
           <span style={{ fontSize: labelSize }} className="text-gray-700">{weekday.slice(0, 3)}</span>
           {Array.from({ length: 24 }, (_, hour) => {
-            const visits = cell(day, hour);
-            const detail = weekday + ' ' + hour + ':00, ' + visits.toLocaleString('en-US') + ' visits';
-            const opacity = visits === 0 ? 0 : 0.15 + (visits / maximum) * 0.85;
+            const value = average(day, hour);
+            const total = visits(day, hour);
+            const display = displayAverage(value);
+            const days = dayCounts[day];
+            const time = `${hour}:00-${(hour + 1) % 24}:00`;
+            const countLabel = display === '1' || display === '<1' ? 'entry' : 'entries';
+            const weekdayLabel = days === 1 ? weekday : weekday + 's';
+            const detail = days === 0 ? `${weekday} ${time}: no days`
+              : `${weekday} ${time}: about ${display} ${countLabel} on an average ${weekday} (${total.toLocaleString('en-US')} over ${days} ${weekdayLabel})`;
+            const opacity = value ? 0.15 + (value / maximum) * 0.85 : 0;
             return <button key={hour} type="button" aria-label={detail} title={detail}
               className="group relative aspect-square min-w-0 rounded-[2px] border border-slate-200 focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-blue-800"
-              style={{ backgroundColor: visits === 0 ? '#f3f4f6' : 'rgba(0, 114, 178, ' + opacity + ')' }}>
+              style={{ backgroundColor: value === null || value === 0 ? '#f3f4f6' : 'rgba(0, 114, 178, ' + opacity + ')' }}>
               <span role="tooltip" className="pointer-events-none invisible absolute bottom-full left-1/2 z-20 mb-1 -translate-x-1/2 whitespace-nowrap rounded border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 shadow group-hover:visible group-focus:visible">
                 {detail}
               </span>
@@ -176,7 +209,7 @@ function Heatmap({ data }: { data: GateCountResponse['heatmap'] }) {
     <div className="mt-3 flex items-center gap-2 text-xs text-gray-600" aria-label="Heatmap legend">
       <span>Fewer</span><span aria-hidden="true" className="h-3 w-40 rounded-sm border border-gray-200"
         style={{ background: 'linear-gradient(to right, #f3f4f6, rgba(0,114,178,.2), rgba(0,114,178,.55), #0072b2)' }} />
-      <span>More visits</span>
+      <span>More entries</span>
     </div>
   </ChartCard>;
 }
@@ -255,7 +288,7 @@ export function GateCountCharts() {
     </p>}
     {data && hasVisits && <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 min-w-0">
       <MonthlyVisitsChart data={data} />
-      <Heatmap data={data.heatmap} />
+      <Heatmap data={data.heatmap} period={data.period} />
       <DailyVisitsChart data={data} />
       <TopDaysChart data={data.topDays} />
     </div>}
