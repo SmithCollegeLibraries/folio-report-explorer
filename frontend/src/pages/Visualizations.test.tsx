@@ -675,10 +675,12 @@ describe('Visualizations RPT-034 gate counts', () => {
     expect(screen.getByLabelText('Gate count years')).toHaveValue('3');
     expect(screen.getByLabelText('Years')).toBeInTheDocument();
 
-    for (const title of ['Monthly visits by fiscal year', 'Busiest hours', 'Daily visits', 'Top 10 busiest days']) {
+    for (const title of ['Monthly visits by fiscal year', 'Busiest hours (average per day)', 'Daily visits', 'Top 10 busiest days']) {
       expect(within(section).getByRole('region', { name: title })).toBeInTheDocument();
     }
-    expect(within(section).getByRole('button', { name: 'Sunday 1:00, 11 visits' })).toBeInTheDocument();
+    expect(within(section).getByRole('button', {
+      name: 'Sunday 1:00-2:00: about 11 entries on an average Sunday (11 over 1 Sunday)',
+    })).toBeInTheDocument();
     const busiestDays = within(section).getByRole('region', { name: 'Top 10 busiest days' });
     await userEvent.click(within(busiestDays).getByRole('button', { name: 'Show data' }));
     expect(within(busiestDays).getByRole('table')).toHaveTextContent('Nov 2, 2025');
@@ -721,6 +723,65 @@ describe('Visualizations RPT-034 gate counts', () => {
     await selectTab('Gate counts');
     const section = await screen.findByRole('region', { name: 'Gate counts' });
     expect(await within(section).findByText('No gate counts for this period.')).toBeInTheDocument();
+  });
+
+  it('shows average weekday visits in the heatmap, tooltip and table using period dates', async () => {
+    const heatmap = Array.from({ length: 168 }, (_, index) => ({
+      weekday: Math.floor(index / 24), hour: index % 24, visits: 0,
+    }));
+    for (const [weekday, hour, visits] of [[0, 12, 1], [0, 13, 1], [1, 12, 1], [2, 12, 1], [3, 12, 1]]) {
+      heatmap[weekday * 24 + hour].visits = visits;
+    }
+    gateCountsApi.fetchGateCounts.mockResolvedValue({
+      ...gateCountFixture(),
+      period: { start: '2025-11-02', end: '2025-11-17' },
+      heatmap,
+    });
+    renderPage({ initialEntry: '/visualizations?tab=gate-counts' });
+
+    const busiestHours = await screen.findByRole('region', { name: 'Busiest hours (average per day)' });
+    expect(within(busiestHours).getByText('Average entries per day by Eastern weekday and hour, over the selected period.')).toBeInTheDocument();
+    expect(within(busiestHours).getByText('More entries')).toBeInTheDocument();
+    expect(within(busiestHours).getByRole('button', {
+      name: 'Tuesday 12:00-13:00: about 1 entry on an average Tuesday (1 over 2 Tuesdays)',
+    })).toBeInTheDocument();
+
+    const tuesdayNoon = within(busiestHours).getByRole('button', { name: /Tuesday 12:00-13:00/ });
+    const opacityOf = (button: HTMLElement) => button.style.backgroundColor.startsWith('rgba')
+      ? Number(button.style.backgroundColor.match(/, ([\d.]+)\)$/)?.[1]) : 1;
+    expect(opacityOf(tuesdayNoon)).toBe(1);
+    const mondayNoon = within(busiestHours).getByRole('button', { name: /Monday 12:00-13:00/ });
+    expect(opacityOf(mondayNoon)).toBeCloseTo(0.15 + ((1 / 3) / 0.5) * 0.85);
+
+    const table = await showData('Busiest hours (average per day)');
+    expect(table.querySelector('caption')?.textContent).toBe('Busiest hours (average entries per day)');
+    expect(within(table).getByText('Days in period: Sunday: 3, Monday: 3, Tuesday: 2, Wednesday: 2, Thursday: 2, Friday: 2, Saturday: 2.')).toBeInTheDocument();
+    const row = (weekday: string) => within(table).getByRole('rowheader', { name: weekday }).closest('tr') as HTMLElement;
+    const monday = row('Monday');
+    const tuesday = row('Tuesday');
+    const wednesday = row('Wednesday');
+    const sunday = row('Sunday');
+    expect(within(monday).getAllByRole('cell')[12]).toHaveTextContent('<1');
+    expect(within(tuesday).getAllByRole('cell')[12]).toHaveTextContent('1');
+    expect(within(wednesday).getAllByRole('cell')[12]).toHaveTextContent('1');
+    expect(within(sunday).getAllByRole('cell')[13]).toHaveTextContent('<1');
+  });
+
+  it('shows no days for weekdays outside a short selected period', async () => {
+    gateCountsApi.fetchGateCounts.mockResolvedValue({
+      ...gateCountFixture(),
+      period: { start: '2025-11-03', end: '2025-11-04' },
+      heatmap: Array.from({ length: 168 }, (_, index) => ({
+        weekday: Math.floor(index / 24), hour: index % 24, visits: 0,
+      })),
+    });
+    renderPage({ initialEntry: '/visualizations?tab=gate-counts' });
+
+    const busiestHours = await chart('Busiest hours (average per day)');
+    expect(within(busiestHours).getByRole('button', { name: 'Sunday 12:00-13:00: no days' })).toBeInTheDocument();
+    const table = await showData('Busiest hours (average per day)');
+    const sunday = within(table).getByRole('rowheader', { name: 'Sunday' }).closest('tr') as HTMLElement;
+    expect(within(sunday).getAllByRole('cell')[12]).toHaveTextContent('no days');
   });
 });
 
