@@ -28,12 +28,14 @@ class AcrlVeaAutofillService
     private $client;
     private $clock;
     private $zoneIds;
+    private $gateZoneService;
 
-    public function __construct(?VeaClientService $client = null, ?callable $clock = null, ?array $zoneIds = null)
+    public function __construct(?VeaClientService $client = null, ?callable $clock = null, ?array $zoneIds = null, ?VeaGateZoneService $gateZoneService = null)
     {
         $this->client = $client ?: new VeaClientService();
         $this->clock = $clock ?: function () { return new \DateTimeImmutable('now'); };
         $this->zoneIds = $zoneIds;
+        $this->gateZoneService = $gateZoneService;
     }
 
     public static function validateWeekStart($weekStart): ?string
@@ -143,8 +145,8 @@ class AcrlVeaAutofillService
     private function selectedZoneIds(): array
     {
         if ($this->zoneIds === null) {
-            $settings = SettingsService::load();
-            $zoneIds = $settings['vea_gate_zone_ids'] ?? [];
+            $gateZoneService = $this->gateZoneService ?: new VeaGateZoneService($this->client);
+            $zoneIds = $gateZoneService->selectedZoneIds();
         } else {
             $zoneIds = $this->zoneIds;
         }

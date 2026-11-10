@@ -30,6 +30,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                 'check' => 'giftReportsAppearComplete',
                 'error' => 'Migration 070 did not install both canonical gift reports.',
             ],
+            '071_vea_gate_zones.sql' => [
+                'check' => 'veaGateZonesAppearComplete',
+                'error' => 'Migration 071 did not install vea_gate_zones with its required schema.',
+            ],
         ];
     }
 
@@ -140,6 +144,14 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         return CatalogingReportMigrationRecognitionService::giftReportsAppearComplete($db);
     }
 
+    private static function veaGateZonesAppearComplete($db): bool
+    {
+        return self::tableShapeAppearsComplete($db, 'vea_gate_zones', [
+            'zone_id' => ['varchar', 'NO', 64, 'utf8mb4', null, null, ''],
+            'sort_order' => ['int', 'NO', null, null, null, null, ''],
+        ]) && self::indexAppearsComplete($db, 'vea_gate_zones', 'PRIMARY', ['zone_id'], true);
+    }
+
     private static function tableShapeAppearsComplete($db, string $table, array $expected): bool
     {
         try {
@@ -178,6 +190,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     || ($shape[2] !== null && (int)$column['CHARACTER_MAXIMUM_LENGTH'] !== $shape[2])
                     || ($shape[3] !== null && strtolower((string)$column['CHARACTER_SET_NAME']) !== $shape[3])
                     || ($shape[4] !== null && strtolower((string)$column['COLLATION_NAME']) !== $shape[4])
+                    || (array_key_exists(6, $shape) && (!isset($column['EXTRA']) || (string)$column['EXTRA'] !== $shape[6]))
                     || !self::columnDefaultMatches(
                         $column['COLUMN_DEFAULT'], $shape[5], $isMariaDb, strtoupper((string)$column['IS_NULLABLE']) === 'YES'
                     )) {
@@ -312,6 +325,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             '068_marc_field_combination_finder.sql' => true,
             '069_marc_combination_finder_record_scopes.sql' => true,
             '070_gift_reports.sql' => true,
+            '071_vea_gate_zones.sql' => true,
         ];
         foreach ($files as $file) {
             $filename = $file['filename'];
