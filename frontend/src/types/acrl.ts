@@ -346,6 +346,10 @@ export interface AcrlAutofillResponse {
   fyStart: string | null;
   fyEnd: string | null;
   kind: 'dated' | 'snapshot';
+  source?: 'folio' | 'vea';
+  doors?: string[];
+  weekStart?: string;
+  weekEnd?: string;
 }
 
 export interface AcrlAutofillMethod {
@@ -356,7 +360,8 @@ export interface AcrlAutofillMethod {
   queryVersion: number;
   kind: 'dated' | 'snapshot';
   summary: string[];
-  sql: string;
+  source?: 'folio' | 'vea';
+  sql: string | null;
 }
 
 export interface AcrlAutofillMethodsResponse {

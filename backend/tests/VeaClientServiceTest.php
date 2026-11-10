@@ -66,6 +66,41 @@ veaClientCase('uses the client credentials token once and sends it as a verified
     veaClientSame(false, $requests[1][1][CURLOPT_POST] ?? false, 'Data reads are not POST requests.');
 });
 
+veaClientCase('builds a GET query URL and supports the longer traffic timeout', function () {
+    putenv('VEA_CLIENT_ID=synthetic-client-id');
+    putenv('VEA_CLIENT_SECRET=synthetic-client-secret');
+    $requests = [];
+    $responses = [
+        ['body' => '{"access_token":"synthetic-access-token"}', 'httpCode' => 200, 'curlError' => ''],
+        ['body' => '{"messages":[],"results":[]}', 'httpCode' => 200, 'curlError' => ''],
+    ];
+    $client = new VeaClientService(function ($url, $options) use (&$requests, &$responses) {
+        $requests[] = [$url, $options];
+        return array_shift($responses);
+    });
+
+    $result = $client->getWithQuery('/data/traffic', [
+        'relativeDate' => 'custom',
+        'startDate' => '2024-07-01T00:00:00-04:00',
+        'endDate' => '2025-07-01T00:00:00-04:00',
+        'entityType' => 'zone',
+        'entityIds' => 'door-a,door-b',
+        'metrics' => 'ins',
+        'excludeClosedHours' => 'false',
+        'dateGroupings' => 'day',
+    ], 60);
+
+    veaClientSame('[]', json_encode($result->results), 'Return the JSON object while preserving its results list.');
+    veaClientSame(2, count($requests), 'Use one token call and one data GET.');
+    veaClientSame('https://vea.sensourceinc.com/api/data/traffic', strtok($requests[1][0], '?'), 'Use the Vea data API path.');
+    parse_str(parse_url($requests[1][0], PHP_URL_QUERY), $query);
+    veaClientSame('door-a,door-b', $query['entityIds'], 'Encode all selected zones as one comma-joined value.');
+    veaClientSame('false', $query['excludeClosedHours'], 'Preserve the literal false query value.');
+    veaClientSame(true, $requests[1][1][CURLOPT_HTTPGET], 'Use GET for the data request.');
+    veaClientSame(60, $requests[1][1][CURLOPT_TIMEOUT], 'Allow the traffic request 60 seconds.');
+    veaClientSame(['Content-Type: application/json', 'Authorization: Bearer synthetic-access-token'], $requests[1][1][CURLOPT_HTTPHEADER], 'Reuse the normal Bearer token handling.');
+});
+
 veaClientCase('reports fixed error codes with unreachable taking precedence and no credential leakage', function () {
     putenv('VEA_CLIENT_ID=synthetic-client-id');
     putenv('VEA_CLIENT_SECRET=synthetic-client-secret');

@@ -11,6 +11,7 @@ use app\services\AcrlCatalogueService;
 use app\services\AcrlEntryService;
 use app\services\AcrlAutofillBusyException;
 use app\services\AcrlAutofillService;
+use app\services\AcrlVeaAutofillService;
 use app\services\AcrlImportService;
 use app\services\AcrlThresholdService;
 use app\models\User;
@@ -168,16 +169,16 @@ class AcrlController extends Controller
         if (($forbidden = $this->requireAcrlUser()) !== null) {
             return $forbidden;
         }
-        if ((string)$part === '_') {
-            $part = '';
-        }
+        if ((string)$part === '_') $part = '';
         try {
+            $weekStart = AcrlVeaAutofillService::validateWeekStart(Yii::$app->request->bodyParams['weekStart'] ?? null);
             set_time_limit(180);
             return $this->createAcrlAutofillService()->run(
                 (int)$year,
                 rawurldecode((string)$sheet),
                 rawurldecode((string)$question),
-                rawurldecode((string)$part)
+                rawurldecode((string)$part),
+                $weekStart
             );
         } catch (\InvalidArgumentException $exception) {
             return $this->errorResponse(422, $exception->getMessage());
@@ -185,6 +186,18 @@ class AcrlController extends Controller
             return $this->errorResponse(409, $exception->getMessage());
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
+        } catch (\RuntimeException $exception) {
+            $code = $exception->getMessage();
+            if ($code === 'no_doors') {
+                return $this->errorResponse(409, 'Choose the gate-count doors in Settings first.');
+            }
+            if ($code === 'not_configured') {
+                return $this->errorResponse(409, 'Vea is not configured.');
+            }
+            if (in_array($code, ['unreachable', 'auth_failed', 'vea_error'], true)) {
+                return $this->errorResponse(502, 'Could not get a gate count from Vea.');
+            }
+            throw $exception;
         }
     }
 

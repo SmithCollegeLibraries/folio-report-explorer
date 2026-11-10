@@ -15,6 +15,7 @@ interface AutofillDefinition {
   noteLabel: string;
   typedParts: TypedPart[];
   valueType?: 'currency';
+  source?: 'vea';
 }
 
 interface AcrlAutofillPanelProps {
@@ -98,7 +99,29 @@ const definitions: Record<string, AutofillDefinition> = {
     noteLabel: 'physical serials',
     typedParts: NO_TYPED_PARTS,
   },
+  'survey|79a|': {
+    noteLabel: 'gate count',
+    typedParts: NO_TYPED_PARTS,
+    source: 'vea',
+  },
+  'survey|79c|': {
+    noteLabel: 'gate count',
+    typedParts: NO_TYPED_PARTS,
+    source: 'vea',
+  },
 };
+
+function defaultWeekStart(year: number): string {
+  const date = new Date(Date.UTC(year - 1, 9, 15));
+  date.setUTCDate(date.getUTCDate() - date.getUTCDay());
+  return date.toISOString().slice(0, 10);
+}
+
+function previousDate(date: string): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() - 1);
+  return value.toISOString().slice(0, 10);
+}
 
 function formatValue(value: number, valueType?: 'currency'): string {
   const options = valueType === 'currency'
@@ -127,10 +150,14 @@ function isSnapshotFarFromYearEnd(year: number, result: AcrlAutofillResponse): b
 export default function AcrlAutofillPanel({ year, sheet, questionId, part, currentValue, currentNote, disabled, onUseValue }: AcrlAutofillPanelProps) {
   const [result, setResult] = useState<AcrlAutofillResponse | null>(null);
   const [typedValues, setTypedValues] = useState<Record<string, string>>({});
+  const [weekSelection, setWeekSelection] = useState<{ year: number; value: string }>({ year, value: defaultWeekStart(year) });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const definition = definitions[`${sheet}|${questionId}|${part}`];
+  const isVea = definition?.source === 'vea';
+  const isWeekly = isVea && questionId === '79c';
+  const weekStart = weekSelection.year === year ? weekSelection.value : defaultWeekStart(year);
   const methodsQuery = useAcrlAutofillMethods(sheet, questionId, part, Boolean(definition));
 
   if (!definition) return null;
@@ -142,7 +169,9 @@ export default function AcrlAutofillPanel({ year, sheet, questionId, part, curre
     setTypedValues({});
     setConfirmOverwrite(false);
     try {
-      setResult(await runAcrlAutofill(year, sheet, questionId, part));
+      setResult(await (isWeekly
+        ? runAcrlAutofill(year, sheet, questionId, part, weekStart)
+        : runAcrlAutofill(year, sheet, questionId, part)));
     } catch (requestError) {
       setError(errorMessage(requestError));
     } finally {
@@ -167,28 +196,50 @@ export default function AcrlAutofillPanel({ year, sheet, questionId, part, curre
     const timing = result.kind === 'dated'
       ? `FY${year}, run ${runDate}`
       : `as of ${result.asOf}`;
-    const noteParts = [
-      `FOLIO ${definition.noteLabel} ${formatValue(result.value, definition.valueType)} (query ${result.queryId} v${result.queryVersion}, ${timing})`,
-      ...definition.typedParts.map(({ key, label }) => `${label} ${formatValue(Number(typedValues[key]))}`),
-    ];
+    const range = isWeekly && result.weekStart && result.weekEnd
+      ? `week ${result.weekStart} to ${result.weekEnd}`
+      : `FY ${result.fyStart} to ${result.fyEnd ? previousDate(result.fyEnd) : ''}`;
+    const sourceNote = isVea
+      ? `Vea gate count ${formatValue(result.value)} (entries at ${(result.doors ?? []).join(', ') || 'Unknown door'}; ${range}; query ${result.queryId} v${result.queryVersion}, run ${runDate})`
+      : `FOLIO ${definition.noteLabel} ${formatValue(result.value, definition.valueType)} (query ${result.queryId} v${result.queryVersion}, ${timing})`;
+    const noteParts = [sourceNote, ...definition.typedParts.map(({ key, label }) => `${label} ${formatValue(Number(typedValues[key]))}`)];
     const combinedNote = [currentNote.trim(), noteParts.join(' + ')].filter(Boolean).join('\n');
     onUseValue(String(total), combinedNote);
   };
 
+  const pendingText = isVea ? 'Querying Vea…' : 'Querying FOLIO… collection counts can take a minute or more.';
+
   return <div className="space-y-2">
+    {isWeekly && <label className="block max-w-xs text-sm font-medium text-gray-700">Week start
+      <input
+        type="date"
+        aria-label="Week start"
+        className="mt-1 block w-full rounded border border-gray-300 bg-white px-3 py-2"
+        value={weekStart}
+        disabled={disabled || isLoading}
+        onChange={(event) => {
+          setWeekSelection({ year, value: event.target.value });
+          setResult(null);
+          setError('');
+          setConfirmOverwrite(false);
+        }}
+      />
+    </label>}
     <button type="button" className="rounded border border-folio-700 bg-white px-3 py-1.5 text-sm font-semibold text-folio-800 hover:bg-folio-50 disabled:opacity-50" disabled={disabled || isLoading} onClick={loadSuggestion}>
-      {isLoading ? 'Querying FOLIO… collection counts can take a minute or more.' : 'Fill from FOLIO'}
+      {isLoading ? pendingText : `Fill from ${isVea ? 'Vea' : 'FOLIO'}`}
     </button>
-    <AcrlFileStatus message={isLoading ? 'Querying FOLIO… collection counts can take a minute or more.' : error ? `Could not get a FOLIO value. ${error}` : null} busy={isLoading} />
-    {result && <section aria-label="FOLIO suggestion" className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/60 p-4">
+    <AcrlFileStatus message={isLoading ? pendingText : error ? `Could not get a ${isVea ? 'Vea' : 'FOLIO'} value. ${error}` : null} busy={isLoading} />
+    {result && <section aria-label={`${isVea ? 'Vea' : 'FOLIO'} suggestion`} className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/60 p-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold text-gray-900">FOLIO count: {formatValue(result.value, definition.valueType)}</p>
-        {result.kind === 'snapshot' && result.asOf
+        <p className="text-sm font-semibold text-gray-900">{isVea ? 'Vea' : 'FOLIO'} count: {formatValue(result.value, definition.valueType)}</p>
+        {isWeekly && result.weekStart && result.weekEnd
+          ? <p className="text-xs font-medium text-gray-600">Week {result.weekStart} to {result.weekEnd}</p>
+          : result.kind === 'snapshot' && result.asOf
           ? <p className="text-xs font-medium text-gray-600">As of {formatDate(result.asOf)}</p>
           : <p className="text-xs font-medium text-gray-600">FY{year}</p>}
       </div>
       <p className="text-xs font-medium text-gray-600">query {result.queryId} v{result.queryVersion}</p>
-      <AcrlCountingMethod title="How Fill from FOLIO counts this now" method={methodsQuery.method} isError={methodsQuery.isError} resultVersion={result.queryVersion} />
+      <AcrlCountingMethod title={`How Fill from ${isVea ? 'Vea' : 'FOLIO'} counts this now`} method={methodsQuery.method} isError={methodsQuery.isError} resultVersion={result.queryVersion} />
       {isSnapshotFarFromYearEnd(year, result) && <p className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">This counts FOLIO today, not on June 30.</p>}
       {definition.typedParts.length > 0 && <div className="grid gap-3 sm:grid-cols-2">
         {definition.typedParts.map(({ key, label }) => <label key={key} className="text-sm font-medium text-gray-700">{label}

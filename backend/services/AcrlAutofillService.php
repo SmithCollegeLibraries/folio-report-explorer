@@ -4,9 +4,10 @@ namespace app\services;
 
 use Yii;
 
-/** Runs the approved, fixed ACRL suggestion queries against the read-only FOLIO connection. */
+/** Dispatches approved ACRL suggestions to their fixed data-source services. */
 class AcrlAutofillService
 {
+    private const VEA_KEYS = ['survey|79a|', 'survey|79c|'];
     private const DEFINITIONS = [
         'survey|60|A' => [
             'queryId' => 'acrl-60', 'version' => 1, 'column' => 'q60_physical_circulation', 'file' => 'acr003-60-81-82-circulation.sql', 'kind' => 'dated',
@@ -141,23 +142,26 @@ class AcrlAutofillService
     private $folioDb;
     private $clock;
     private $sqlDirectory;
+    private $veaAutofill;
 
-    public function __construct($repository = null, $folioDb = null, $clock = null, $sqlDirectory = null)
+    public function __construct($repository = null, $folioDb = null, $clock = null, $sqlDirectory = null, ?AcrlVeaAutofillService $veaAutofill = null)
     {
         $this->repository = $repository ?: new AcrlAnswerRepository();
         $this->folioDb = $folioDb ?: Yii::$app->folioDb;
         $this->clock = $clock ?: function () { return new \DateTimeImmutable('now'); };
         $this->sqlDirectory = $sqlDirectory ?: __DIR__ . '/../sql/acrl';
+        $this->veaAutofill = $veaAutofill;
     }
 
-    public function run(int $year, string $sheet, string $questionId, string $part): array
+    public function run(int $year, string $sheet, string $questionId, string $part, ?string $weekStart = null): array
     {
         if ($year < 1) {
             throw new \InvalidArgumentException('Survey year must be a positive year.');
         }
 
         $key = $sheet . '|' . $questionId . '|' . $part;
-        $definition = self::DEFINITIONS[$key] ?? null;
+        $isVea = in_array($key, self::VEA_KEYS, true);
+        $definition = self::DEFINITIONS[$key] ?? ($isVea ? ['source' => 'vea'] : null);
         if ($definition === null) {
             throw new \DomainException('No auto-fill query is defined for this question.');
         }
@@ -168,6 +172,11 @@ class AcrlAutofillService
         }
         if (!$this->repository->question($year, $sheet, $questionId, $part)) {
             throw new \DomainException('No auto-fill query is defined for this question.');
+        }
+
+        if (($definition['source'] ?? null) === 'vea') {
+            $veaAutofill = $this->veaAutofill ?: new AcrlVeaAutofillService();
+            return $veaAutofill->run($year, $questionId, $weekStart);
         }
 
         $now = call_user_func($this->clock);
@@ -247,7 +256,7 @@ class AcrlAutofillService
                 'sql' => $this->loadSql($definition),
             ];
         }
-        return $methods;
+        return array_merge($methods, AcrlVeaAutofillService::methods());
     }
 
     private function loadSql(array $definition): string

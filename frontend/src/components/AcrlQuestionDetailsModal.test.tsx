@@ -61,6 +61,18 @@ select
      where si.material_type in ('Journal', 'Newspaper', 'Serial')) as value;`,
 };
 
+const veaMethod = {
+  sheet: 'survey' as const,
+  questionId: '79c',
+  part: '',
+  queryId: 'vea-79c',
+  queryVersion: 1,
+  kind: 'dated' as const,
+  source: 'vea' as const,
+  summary: ['Entries at the doors selected in Settings, counted by Vea in Eastern time; a seven-day total for the chosen week.'],
+  sql: null,
+};
+
 function question(questionId = '40a'): AcrlEntryQuestion {
   const fixture = {
     sheet: 'survey', questionId, part: '', section: 'Collections', prompt: 'Physical volumes', answerType: 'number', required: 'yes',
@@ -87,6 +99,17 @@ function DetailsHarness() {
 }
 
 describe('ACRL question details counting method', () => {
+  it('shows a Vea summary without SQL controls in the modal', async () => {
+    getMethods.mockResolvedValue({ methods: [veaMethod] });
+    getQuestionDetails.mockResolvedValue({ instructions: [], notes: [], canAddNote: false, canManageNotes: false });
+    renderWithClient(<AcrlQuestionDetailsModal year={2025} question={question('79c')} isAdmin={false} onClose={vi.fn()} />);
+
+    const methodSection = await screen.findByRole('region', { name: 'How Fill from Vea counts this now' });
+    expect(methodSection).toHaveTextContent('seven-day total for the chosen week');
+    expect(within(methodSection).queryByText('SQL')).not.toBeInTheDocument();
+    expect(within(methodSection).queryByRole('button', { name: 'Copy SQL' })).not.toBeInTheDocument();
+  });
+
   it('shows the 40a summary and SQL in the modal', async () => {
     getMethods.mockResolvedValue({ methods: [method] });
     getQuestionDetails.mockResolvedValue({ instructions: [], notes: [], canAddNote: false, canManageNotes: false });
