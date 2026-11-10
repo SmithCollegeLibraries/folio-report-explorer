@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchReferenceCacheCandidates, fetchReferenceCacheStatus, fetchSettings, refreshReferenceCacheTable, reviewReferenceCacheCandidate, saveSettings, testSettings } from '../api/client';
 import type { AppSettings, SettingsTestResponse } from '../types';
+import SettingsAiProvider from '../components/SettingsAiProvider';
+import VeaConnectionCard from '../components/VeaConnectionCard';
 import {
   Settings as SettingsIcon,
   Database,
@@ -354,6 +356,8 @@ export default function Settings() {
         </div>
       </section>
 
+      <VeaConnectionCard />
+
       {/* ── Local reference cache ─────────────── */}
       <section className="mb-8">
         <div className="flex items-center gap-2 mb-4">
@@ -550,30 +554,7 @@ export default function Settings() {
         </div>
       </section>
 
-      {/* ── Gemini AI ──────────────────────────── */}
-      <section className="mb-8">
-        <div className="flex items-center gap-2 mb-4">
-          <Sparkles size={18} className="text-purple-600" />
-          <h3 className="text-lg font-semibold">AI Provider</h3>
-        </div>
-
-        <div className="bg-white border rounded-lg p-5 space-y-4">
-          <div>
-            <Label>Active Provider</Label>
-            <select
-              value={form.ai_provider}
-              onChange={(e) => update('ai_provider', e.target.value)}
-              className="w-full border rounded px-3 py-2 text-sm bg-white"
-            >
-              <option value="gemini">Gemini</option>
-              <option value="openai">OpenAI</option>
-            </select>
-            <p className="text-xs text-gray-400 mt-1">
-              Ask AI uses this provider after you save settings.
-            </p>
-          </div>
-        </div>
-      </section>
+      <SettingsAiProvider value={form.ai_provider} onChange={(value) => update('ai_provider', value)} />
 
       {/* ── Gemini AI ──────────────────────────── */}
       <section className="mb-8">

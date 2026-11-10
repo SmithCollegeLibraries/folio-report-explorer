@@ -13,13 +13,23 @@ class SettingsService
     private const OPENAI_API_BASE = 'https://api.openai.com/v1';
 
     private static $cache = null;
+    private static $filePathForTests = null;
+
+    /** Override the settings file in standalone tests and reset its cache. */
+    public static function setFilePathForTests(?string $path)
+    {
+        self::$filePathForTests = $path;
+        self::$cache = null;
+    }
 
     /**
      * @return string Path to the settings JSON file.
      */
     private static function filePath()
     {
-        return dirname(__DIR__) . '/data/settings.json';
+        return self::$filePathForTests !== null
+            ? self::$filePathForTests
+            : dirname(__DIR__) . '/data/settings.json';
     }
 
     /**
@@ -65,7 +75,10 @@ class SettingsService
             }
         }
 
-        file_put_contents($path, json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $json = json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($json === false || @file_put_contents($path, $json) === false) {
+            throw new \RuntimeException('Unable to save settings.');
+        }
         self::$cache = $merged;
 
         return $merged;
