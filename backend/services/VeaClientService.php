@@ -52,6 +52,25 @@ class VeaClientService
         return $zones;
     }
 
+    public function getWithQuery(string $path, array $query, int $timeout = 20): \stdClass
+    {
+        $url = self::API_BASE_URL . '/' . ltrim($path, '/') . '?' . http_build_query($query);
+        $response = $this->send($url, [
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $this->accessToken(),
+            ],
+        ], $timeout);
+        $this->assertSuccessfulDataResponse($response);
+
+        $decoded = json_decode($response['body']);
+        if (!$decoded instanceof \stdClass) {
+            throw new \RuntimeException('vea_error');
+        }
+        return $decoded;
+    }
+
     private function accessToken(): string
     {
         if (!$this->isConfigured()) {
@@ -100,10 +119,10 @@ class VeaClientService
         }
     }
 
-    private function send(string $url, array $options): array
+    private function send(string $url, array $options, int $timeout = 20): array
     {
         $options[CURLOPT_RETURNTRANSFER] = true;
-        $options[CURLOPT_TIMEOUT] = 20;
+        $options[CURLOPT_TIMEOUT] = $timeout;
         $options[CURLOPT_CONNECTTIMEOUT] = 10;
         $options[CURLOPT_SSL_VERIFYPEER] = true;
         $options[CURLOPT_SSL_VERIFYHOST] = 2;

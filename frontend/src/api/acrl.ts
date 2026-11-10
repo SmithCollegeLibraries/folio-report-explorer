@@ -117,9 +117,12 @@ export async function saveAcrlAnswer(year: number, input: {
   return data;
 }
 
-export async function runAcrlAutofill(year: number, sheet: 'survey' | 'trends', questionId: string, part: string): Promise<AcrlAutofillResponse> {
+export async function runAcrlAutofill(year: number, sheet: 'survey' | 'trends', questionId: string, part: string, weekStart?: string): Promise<AcrlAutofillResponse> {
   const pathPart = encodeURIComponent(part || '_');
-  const { data } = await api.post(`/acrl/years/${year}/autofill/${encodeURIComponent(sheet)}/${encodeURIComponent(questionId)}/${pathPart}`);
+  const path = `/acrl/years/${year}/autofill/${encodeURIComponent(sheet)}/${encodeURIComponent(questionId)}/${pathPart}`;
+  const { data } = weekStart === undefined
+    ? await api.post(path)
+    : await api.post(path, { weekStart });
   return data;
 }
 

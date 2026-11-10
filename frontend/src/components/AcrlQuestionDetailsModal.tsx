@@ -24,6 +24,7 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
   const closeRef = useRef<HTMLButtonElement>(null);
   const closeHandler = useRef(onClose);
   const queryKey = ['acrl-question-details', year, question.sheet, question.questionId, question.part];
+  const countingSource = question.questionId === '79a' || question.questionId === '79c' ? 'Vea' : 'FOLIO';
   const detailsQuery = useQuery({
     queryKey,
     queryFn: () => getAcrlQuestionDetails(year, question.sheet, question.questionId, question.part),
@@ -150,7 +151,7 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
           </div>}
 
           {tab === 'instructions' && (methodsQuery.method || methodsQuery.isError) && <AcrlCountingMethod
-            title="How Fill from FOLIO counts this now"
+            title={`How Fill from ${countingSource} counts this now`}
             method={methodsQuery.method}
             isError={methodsQuery.isError}
           />}

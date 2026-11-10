@@ -10,8 +10,12 @@ function acrlAutofillAssert(bool $condition, string $message): void
 
 $servicePath = __DIR__ . '/../services/AcrlAutofillService.php';
 $busyExceptionPath = __DIR__ . '/../services/AcrlAutofillBusyException.php';
+$veaAutofillPath = __DIR__ . '/../services/AcrlVeaAutofillService.php';
 acrlAutofillAssert(is_file($busyExceptionPath), 'The busy exception must have its own PSR-4 service file.');
 require_once $busyExceptionPath;
+if (is_file($veaAutofillPath)) {
+    require_once $veaAutofillPath;
+}
 if (is_file($servicePath)) {
     require_once $servicePath;
 }
@@ -295,7 +299,7 @@ $methodsService = new \app\services\AcrlAutofillService(
     __DIR__ . '/../sql/acrl'
 );
 $methods = $methodsService->methods();
-acrlAutofillAssert(count($methods) === count($expectedQueries), 'The methods catalog must return one entry for every auto-fill definition.');
+acrlAutofillAssert(count($methods) === count($expectedQueries) + 2, 'The methods catalog must return one entry for every auto-fill definition.');
 $circulationMethod = null;
 foreach ($methods as $method) {
     if ($method['queryId'] === 'acrl-60') $circulationMethod = $method;
@@ -306,6 +310,7 @@ foreach ($methods as $method) {
     foreach ($method['summary'] as $summaryLine) {
         acrlAutofillAssert(is_string($summaryLine) && trim($summaryLine) !== '', $method['queryId'] . ' summary lines must be non-empty text.');
     }
+    if (($method['source'] ?? null) === 'vea') continue;
     $sourceSql = file_get_contents(__DIR__ . '/../sql/acrl/' . array_column($expectedQueries, 3, 2)[$method['queryId']]);
     $expectedSql = preg_replace('/^[ \t]*--[^\r\n]*(?:\r?\n|$)/m', '', $sourceSql);
     acrlAutofillAssert($method['sql'] === $expectedSql, $method['queryId'] . ' methods SQL must exactly match the executed, stripped SQL.');
@@ -331,6 +336,16 @@ $physicalTitlesSummary = implode(' ', $physicalTitlesMethod['summary']);
 acrlAutofillAssert(strpos($physicalTitlesSummary, 'at Smith College and the Five College Repository') !== false, 'The Q40A summary must name both campuses.');
 acrlAutofillAssert(strpos($physicalTitlesSummary, 'Changed in v2 (2026-10): Five College Repository titles are now included, as in past reporting; v1 counted the Smith campus only.') !== false, 'The Q40A summary must explain its version change.');
 acrlAutofillAssert($methodsDb->calls === 0, 'The methods catalog must not call the FOLIO database.');
+$veaMethods = [];
+foreach ($methods as $method) {
+    if (($method['source'] ?? null) === 'vea') {
+        $veaMethods[$method['queryId']] = $method;
+    }
+}
+acrlAutofillAssert(isset($veaMethods['vea-79a'], $veaMethods['vea-79c']), 'The methods catalog must include annual and weekly Vea fills.');
+foreach ($veaMethods as $queryId => $method) {
+    acrlAutofillAssert($method['kind'] === 'dated' && $method['queryVersion'] === 1 && $method['sql'] === null, $queryId . ' must be a dated Vea method without SQL.');
+}
 $circulationRules = [
     'acrl-60' => ['q60_physical_circulation', 'checked out at a Smith service point and returned at Smith or still checked out'],
     'acrl-81' => ['q81_consortial_lending', 'checked out at a non-Smith service point'],

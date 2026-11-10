@@ -58,6 +58,8 @@ namespace {
     require_once __DIR__ . '/../controllers/AcrlController.php';
     require_once __DIR__ . '/../controllers/AcrlAssignmentController.php';
     require_once __DIR__ . '/../services/AcrlAutofillService.php';
+    $veaAutofillPath = __DIR__ . '/../services/AcrlVeaAutofillService.php';
+    if (is_file($veaAutofillPath)) require_once $veaAutofillPath;
 
     class AcrlControllerAccessMethodsNeverUseFolioDb
     {
@@ -91,12 +93,15 @@ namespace {
                 'sql' => 'select 1',
             ]];
         }
-        public function run($year, $sheet, $questionId, $part)
+        public function run($year, $sheet, $questionId, $part, $weekStart = null)
         {
-            $this->arguments = [$year, $sheet, $questionId, $part];
+            $this->arguments = [$year, $sheet, $questionId, $part, $weekStart];
             if ($this->mode === 'invalid') throw new \InvalidArgumentException('Bad year.');
             if ($this->mode === 'missing') throw new \DomainException('No auto-fill query is defined for this question.');
             if ($this->mode === 'busy') throw new \app\services\AcrlAutofillBusyException('An auto-fill query is already running for this question.');
+            if (in_array($this->mode, ['no_doors', 'not_configured', 'unreachable', 'auth_failed', 'vea_error'], true)) {
+                throw new \RuntimeException($this->mode);
+            }
             return [
                 'value' => 6017,
                 'queryId' => 'acrl-81',
@@ -127,10 +132,11 @@ namespace {
         }
     }
 
-    function acrlAccessAppUser($guest, $identity): void
+    function acrlAccessAppUser($guest, $identity, $bodyParams = []): void
     {
         Yii::$app = (object)[
             'user' => (object)['isGuest' => $guest, 'identity' => $identity],
+            'request' => (object)['bodyParams' => $bodyParams],
             'response' => (object)['statusCode' => 200, 'data' => null, 'format' => null],
         ];
     }
@@ -308,7 +314,7 @@ namespace {
     );
     $approvedMethods = $autofillController->actionAutofillMethods();
     $methods = $approvedMethods['methods'] ?? [];
-    acrlAccessAssert(count($methods) === 14, 'Approved ACRL users must receive all 14 methods.');
+    acrlAccessAssert(count($methods) === 16, 'Approved ACRL users must receive all 16 methods.');
     $methodsByKey = [];
     foreach ($methods as $method) {
         $key = ($method['sheet'] ?? '') . '|' . ($method['questionId'] ?? '') . '|' . ($method['part'] ?? '');
@@ -333,6 +339,19 @@ namespace {
             'Approved ACRL users must receive catalog method ' . $key . ' (' . $queryId . ').'
         );
     }
+    foreach (['survey|79a|' => 'vea-79a', 'survey|79c|' => 'vea-79c'] as $key => $queryId) {
+        $method = $methodsByKey[$key] ?? null;
+        acrlAccessAssert(
+            is_array($method)
+                && ($method['queryId'] ?? null) === $queryId
+                && ($method['queryVersion'] ?? null) === 1
+                && ($method['kind'] ?? null) === 'dated'
+                && ($method['source'] ?? null) === 'vea'
+                && array_key_exists('sql', $method)
+                && $method['sql'] === null,
+            'Approved ACRL users must receive Vea method ' . $key . ' without SQL.'
+        );
+    }
     acrlAccessAssert($methodsDb->calls === 0, 'The methods route must not make any FOLIO database calls.');
     $autofillController->autofillService = new AcrlControllerAccessAutofillService();
     acrlAccessAppUser(false, new \app\models\User());
@@ -340,13 +359,31 @@ namespace {
     \app\models\User::$adminExists = false;
     $autofillResult = $autofillController->actionAutofill(2025, 'survey', '81', '_');
     acrlAccessAssert($autofillResult['queryId'] === 'acrl-81' && $autofillResult['value'] === 6017, 'Approved users must receive the auto-fill suggestion response.');
-    acrlAccessAssert($autofillController->autofillService->arguments === [2025, 'survey', '81', ''], 'The route must pass the requested question key to the service.');
+    acrlAccessAssert($autofillController->autofillService->arguments === [2025, 'survey', '81', '', null], 'The route must pass the requested question key and optional week to the service.');
+    acrlAccessAppUser(false, new \app\models\User(), ['weekStart' => '2025-02-09']);
+    \app\models\User::$approvedExists = true;
+    $autofillController->actionAutofill(2025, 'survey', '79c', '_');
+    acrlAccessAssert($autofillController->autofillService->arguments === [2025, 'survey', '79c', '', '2025-02-09'], 'The route must pass the optional 79c week start to the service.');
+    foreach ([null, ''] as $emptyWeek) {
+        acrlAccessAppUser(false, new \app\models\User(), ['weekStart' => $emptyWeek]);
+        \app\models\User::$approvedExists = true;
+        $autofillController->actionAutofill(2025, 'survey', '79c', '_');
+        acrlAccessAssert($autofillController->autofillService->arguments[4] === null, 'An empty or null week start must select the server default.');
+    }
+    foreach (['2025-02-09T00:00:00', '2025-02-30', 20250209, ['2025-02-09']] as $invalidWeek) {
+        $autofillController->autofillService->arguments = [];
+        acrlAccessAppUser(false, new \app\models\User(), ['weekStart' => $invalidWeek]);
+        \app\models\User::$approvedExists = true;
+        $invalidResponse = $autofillController->actionAutofill(2025, 'survey', '79c', '_');
+        acrlAccessAssert(Yii::$app->response->statusCode === 422 && isset($invalidResponse['error']), 'Invalid weekStart inputs must return 422.');
+        acrlAccessAssert($autofillController->autofillService->arguments === [], 'Invalid weekStart inputs must be rejected before dispatch.');
+    }
     acrlAccessAssert((int)ini_get('max_execution_time') === 180, 'The auto-fill action must allow 180 seconds for the slowest collection query.');
     acrlAccessAppUser(false, new \app\models\User());
     \app\models\User::$approvedExists = false;
     $unapproved = $autofillController->actionAutofill(2025, 'survey', '81', '_');
     acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($unapproved['error'] ?? null) === 'Forbidden', 'The auto-fill route must reject unapproved signed-in users.');
-    foreach ([['missing', 404], ['invalid', 422], ['busy', 409]] as $case) {
+    foreach ([['missing', 404], ['invalid', 422], ['busy', 409], ['no_doors', 409], ['not_configured', 409], ['unreachable', 502], ['auth_failed', 502], ['vea_error', 502]] as $case) {
         $autofillController->autofillService->mode = $case[0];
         acrlAccessAppUser(false, new \app\models\User());
         \app\models\User::$approvedExists = true;
@@ -354,6 +391,15 @@ namespace {
         acrlAccessAssert(Yii::$app->response->statusCode === $case[1] && isset($error['error']), 'The auto-fill route must return the expected error status for ' . $case[0] . '.');
         if ($case[0] === 'busy') {
             acrlAccessAssert($error['error'] === 'An auto-fill query is already running for this question.', 'A busy route response must include the server reason for the panel.');
+        }
+        if ($case[0] === 'no_doors') {
+            acrlAccessAssert($error['error'] === 'Choose the gate-count doors in Settings first.', 'Missing door settings must have a fixed user message.');
+        }
+        if ($case[0] === 'not_configured') {
+            acrlAccessAssert($error['error'] === 'Vea is not configured.', 'Missing Vea configuration must have a fixed user message.');
+        }
+        if (in_array($case[0], ['unreachable', 'auth_failed', 'vea_error'], true)) {
+            acrlAccessAssert(Yii::$app->response->statusCode === 502 && $error['error'] === 'Could not get a gate count from Vea.', 'Vea request failures must return a fixed 502 message.');
         }
     }
 

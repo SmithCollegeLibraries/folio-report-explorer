@@ -78,6 +78,14 @@ select
     sheet: 'survey' as const, questionId: '43', part: 'A', queryId: 'acrl-43A', queryVersion: 1, kind: 'snapshot' as const,
     summary: ['Smith and Five College Repository serials.'], sql: 'select serial_titles;',
   },
+  {
+    sheet: 'survey' as const, questionId: '79a', part: '', queryId: 'vea-79a', queryVersion: 1, kind: 'dated' as const, source: 'vea' as const,
+    summary: ['Entries at the doors selected in Settings, counted by Vea in Eastern time for the Smith fiscal year.'], sql: null,
+  },
+  {
+    sheet: 'survey' as const, questionId: '79c', part: '', queryId: 'vea-79c', queryVersion: 1, kind: 'dated' as const, source: 'vea' as const,
+    summary: ['Entries at the doors selected in Settings, counted by Vea in Eastern time; a seven-day total for the chosen week.'], sql: null,
+  },
 ];
 
 function renderPanel(props: ComponentProps<typeof AcrlAutofillPanel>, fetchMethods = () => Promise.resolve({ methods })) {
@@ -87,6 +95,85 @@ function renderPanel(props: ComponentProps<typeof AcrlAutofillPanel>, fetchMetho
 }
 
 describe('ACRL FOLIO auto-fill panel', () => {
+  it('uses Vea wording, defaults and submits the 79c week, and clears stale suggestions', async () => {
+    runAutofill.mockResolvedValue({
+      value: 987654,
+      queryId: 'vea-79c',
+      queryVersion: 1,
+      ranAt: '2026-10-28T12:00:00-04:00',
+      asOf: null,
+      fyStart: '2025-02-09',
+      fyEnd: '2025-02-16',
+      kind: 'dated' as const,
+      source: 'vea' as const,
+      doors: ['North Door', 'South Door'],
+      weekStart: '2025-02-09',
+      weekEnd: '2025-02-15',
+    });
+    const onUseValue = vi.fn();
+    const panel = renderPanel({ year: 2025, sheet: 'survey', questionId: '79c', part: '', currentValue: null, currentNote: 'Checked the count', disabled: false, onUseValue });
+
+    expect(screen.getByRole('button', { name: 'Fill from Vea' })).toBeInTheDocument();
+    const weekInput = screen.getByLabelText('Week start');
+    expect(weekInput).toHaveValue('2024-10-13');
+    await userEvent.clear(weekInput);
+    await userEvent.type(weekInput, '2025-02-09');
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from Vea' }));
+
+    const suggestion = await screen.findByRole('region', { name: 'Vea suggestion' });
+    expect(within(suggestion).getByText('Vea count: 987,654')).toBeInTheDocument();
+    const method = within(suggestion).getByRole('region', { name: 'How Fill from Vea counts this now' });
+    expect(method).toHaveTextContent('seven-day total for the chosen week');
+    expect(within(method).queryByText('SQL')).not.toBeInTheDocument();
+    expect(within(method).queryByRole('button', { name: 'Copy SQL' })).not.toBeInTheDocument();
+    expect(runAutofill).toHaveBeenCalledWith(2025, 'survey', '79c', '', '2025-02-09');
+
+    await userEvent.click(within(suggestion).getByRole('button', { name: 'Use this value' }));
+    expect(onUseValue).toHaveBeenCalledWith(
+      '987654',
+      'Checked the count\nVea gate count 987,654 (entries at North Door, South Door; week 2025-02-09 to 2025-02-15; query vea-79c v1, run 2026-10-28)',
+    );
+    await userEvent.clear(weekInput);
+    await userEvent.type(weekInput, '2025-02-16');
+    expect(screen.queryByRole('region', { name: 'Vea suggestion' })).not.toBeInTheDocument();
+
+    runAutofill.mockReturnValue(new Promise(() => undefined));
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from Vea' }));
+    expect(weekInput).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Querying Vea…' })).toBeDisabled();
+    panel.unmount();
+
+    runAutofill.mockResolvedValue({
+      value: 123456,
+      queryId: 'vea-79a',
+      queryVersion: 1,
+      ranAt: '2026-10-28T12:00:00-04:00',
+      asOf: null,
+      fyStart: '2024-07-01',
+      fyEnd: '2025-07-01',
+      kind: 'dated' as const,
+      source: 'vea' as const,
+      doors: ['South Door'],
+    });
+    const annualOnUse = vi.fn();
+    renderPanel({ year: 2025, sheet: 'survey', questionId: '79a', part: '', currentValue: null, currentNote: '', disabled: false, onUseValue: annualOnUse });
+    expect(screen.queryByLabelText('Week start')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from Vea' }));
+    const annualSuggestion = await screen.findByRole('region', { name: 'Vea suggestion' });
+    await userEvent.click(within(annualSuggestion).getByRole('button', { name: 'Use this value' }));
+    expect(annualOnUse).toHaveBeenCalledWith(
+      '123456',
+      'Vea gate count 123,456 (entries at South Door; FY 2024-07-01 to 2025-06-30; query vea-79a v1, run 2026-10-28)',
+    );
+  });
+
+  it('uses a Vea error prefix for Vea fills', async () => {
+    runAutofill.mockRejectedValue(new Error('offline'));
+    renderPanel({ year: 2025, sheet: 'survey', questionId: '79a', part: '', currentValue: null, currentNote: '', disabled: false, onUseValue: vi.fn() });
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from Vea' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Could not get a Vea value.');
+  });
+
   it('shows the current Q40a method, executed SQL, and result version when rules changed', async () => {
     runAutofill.mockResolvedValue({
       value: 2180000,
