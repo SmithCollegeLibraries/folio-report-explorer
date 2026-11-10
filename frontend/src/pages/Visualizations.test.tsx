@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VisualizationData, VisualizationHistoryRow, VisualizationOptions } from '../api/visualizations';
 import { PurchaseCharts } from '../components/visualizations/PurchaseCharts';
@@ -109,13 +109,26 @@ class StubBoundary extends Component<{ children: ReactNode }, { missing: boolean
   render() { return this.state.missing ? null : this.props.children; }
 }
 
-function renderPage() {
+function RouterLocation() {
+  const location = useLocation();
+  const navigationType = useNavigationType();
+  return <output data-testid="router-location" data-navigation={navigationType}>{location.pathname}{location.search}</output>;
+}
+
+function renderPage(options: { initialEntry?: string; basename?: string } = {}) {
   const client = new QueryClient({ defaultOptions: {
     queries: { retry: false }, mutations: { retry: false },
   } });
-  return render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/visualizations']}>
-    <StubBoundary><Visualizations /></StubBoundary>
+  return render(<QueryClientProvider client={client}><MemoryRouter basename={options.basename}
+    initialEntries={[options.initialEntry ?? '/visualizations']}
+    future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <RouterLocation /><StubBoundary><Visualizations /></StubBoundary>
   </MemoryRouter></QueryClientProvider>);
+}
+
+async function selectTab(name: string) {
+  const tab = screen.getByRole('tab', { name });
+  if (tab.getAttribute('aria-selected') !== 'true') await userEvent.click(tab);
 }
 
 async function chart(title: string) {
@@ -651,10 +664,12 @@ describe('Visualizations RPT-034 gate counts', () => {
   it('mounts all four accessible charts with independent controls when acquisitions fail', async () => {
     api.fetchVisualizations.mockRejectedValue(new Error('Synthetic acquisitions failure'));
     renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic acquisitions failure');
+    expect(screen.getByLabelText('Years')).toBeInTheDocument();
+    await selectTab('Gate counts');
 
     const section = await screen.findByRole('region', { name: 'Gate counts' });
     expect(await within(section).findByText('Entries at North Door, South Door, from SenSource Vea, Eastern time.')).toBeInTheDocument();
-    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic acquisitions failure');
     expect(screen.getByLabelText('Start date')).toHaveValue('2025-11-02');
     expect(screen.getByLabelText('End date')).toHaveValue('2025-11-05');
     expect(screen.getByLabelText('Gate count years')).toHaveValue('3');
@@ -665,7 +680,8 @@ describe('Visualizations RPT-034 gate counts', () => {
     }
     expect(within(section).getByRole('button', { name: 'Sunday 1:00, 11 visits' })).toBeInTheDocument();
     const busiestDays = within(section).getByRole('region', { name: 'Top 10 busiest days' });
-    expect(within(busiestDays).getAllByRole('table').some((table) => table.textContent?.includes('Sunday'))).toBe(true);
+    await userEvent.click(within(busiestDays).getByRole('button', { name: 'Show data' }));
+    expect(within(busiestDays).getByRole('table')).toHaveTextContent('Nov 2, 2025');
     const monthly = within(section).getByRole('region', { name: 'Monthly visits by fiscal year' });
     await userEvent.click(within(monthly).getByRole('button', { name: 'Show data' }));
     expect(within(monthly).getByRole('table')).toHaveTextContent('July');
@@ -685,12 +701,15 @@ describe('Visualizations RPT-034 gate counts', () => {
       rejectRequest = reject;
     }));
     renderPage();
+    await selectTab('Gate counts');
     const section = await screen.findByRole('region', { name: 'Gate counts' });
     expect(within(section).getByRole('status')).toHaveTextContent('Loading gate counts…');
 
     await act(async () => { rejectRequest(new Error('Synthetic Vea failure')); });
     expect(await within(section).findByRole('alert')).toHaveTextContent('Could not load gate counts.');
+    await selectTab('Acquisitions');
     expect(await screen.findByRole('region', { name: 'How the library purchases' })).toBeInTheDocument();
+    await selectTab('Gate counts');
     gateCountsApi.fetchGateCounts.mockResolvedValueOnce(gateCountFixture());
     await userEvent.click(within(section).getByRole('button', { name: 'Retry gate counts' }));
     expect(await within(section).findByRole('region', { name: 'Monthly visits by fiscal year' })).toBeInTheDocument();
@@ -699,8 +718,100 @@ describe('Visualizations RPT-034 gate counts', () => {
   it('shows the empty state when every gate-count series has zero visits', async () => {
     gateCountsApi.fetchGateCounts.mockResolvedValue(gateCountFixture(0));
     renderPage();
+    await selectTab('Gate counts');
     const section = await screen.findByRole('region', { name: 'Gate counts' });
     expect(await within(section).findByText('No gate counts for this period.')).toBeInTheDocument();
+  });
+});
+
+describe('Visualizations RPT-037 tabs and top days', () => {
+  it('provides URL-backed ARIA tabs with keyboard navigation and an acquisitions fallback', async () => {
+    renderPage({ initialEntry: '/fre/visualizations?tab=unknown', basename: '/fre' });
+
+    const tablist = screen.getByRole('tablist');
+    const acquisitions = within(tablist).getByRole('tab', { name: 'Acquisitions' });
+    const gateCounts = within(tablist).getByRole('tab', { name: 'Gate counts' });
+    expect(acquisitions).toHaveAttribute('aria-selected', 'true');
+    expect(gateCounts).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tabpanel', { name: 'Acquisitions' })).toBeInTheDocument();
+    expect(gateCountsApi.fetchGateCounts).not.toHaveBeenCalled();
+
+    acquisitions.focus();
+    fireEvent.keyDown(acquisitions, { key: 'ArrowRight' });
+    expect(gateCounts).toHaveFocus();
+    expect(gateCounts).toHaveAttribute('aria-selected', 'true');
+    expect(gateCounts).toHaveClass('focus-visible:outline');
+    expect(screen.getByTestId('router-location')).toHaveTextContent('/visualizations?tab=gate-counts');
+    expect(screen.getByTestId('router-location')).toHaveAttribute('data-navigation', 'REPLACE');
+    expect(await screen.findByRole('tabpanel', { name: 'Gate counts' })).toBeInTheDocument();
+    expect(gateCountsApi.fetchGateCounts).toHaveBeenCalled();
+
+    fireEvent.keyDown(gateCounts, { key: 'ArrowLeft' });
+    expect(acquisitions).toHaveFocus();
+    expect(screen.getByTestId('router-location')).toHaveTextContent('/visualizations?tab=acquisitions');
+    fireEvent.keyDown(acquisitions, { key: 'End' });
+    expect(gateCounts).toHaveFocus();
+    fireEvent.keyDown(gateCounts, { key: 'Home' });
+    expect(acquisitions).toHaveFocus();
+  });
+
+  it('opens a gate-count link without fetching acquisitions and retains each group’s controls', async () => {
+    renderPage({ initialEntry: '/fre/visualizations?tab=gate-counts', basename: '/fre' });
+    const gateSection = await screen.findByRole('region', { name: 'Gate counts' });
+    expect(within(gateSection).getByLabelText('Gate count years')).toHaveValue('3');
+    expect(gateCountsApi.fetchGateCounts).toHaveBeenCalledWith({ years: 3 });
+    expect(api.fetchVisualizationOptions).not.toHaveBeenCalled();
+    expect(api.fetchVisualizations).not.toHaveBeenCalled();
+
+    await userEvent.selectOptions(within(gateSection).getByLabelText('Gate count years'), '2');
+    await waitFor(() => expect(gateCountsApi.fetchGateCounts).toHaveBeenLastCalledWith({ years: 2 }));
+    await selectTab('Acquisitions');
+    await waitFor(() => expect(api.fetchVisualizations).toHaveBeenCalled());
+    await userEvent.selectOptions(screen.getByLabelText('Years'), '5');
+    await waitFor(() => expect(api.fetchVisualizations).toHaveBeenLastCalledWith({ acqUnitId: 'unit-sc', years: 5 }));
+
+    await selectTab('Gate counts');
+    expect(within(gateSection).getByLabelText('Gate count years')).toHaveValue('2');
+    await selectTab('Acquisitions');
+    expect(screen.getByLabelText('Years')).toHaveValue('5');
+  });
+
+  it.each([
+    { days: gateCountFixture().topDays, expectedBars: 3, expectedLabels: ['Sun, Nov 2, 2025', 'Mon, Nov 3, 2025', 'Tue, Nov 4, 2025'] },
+    { days: [], expectedBars: 0, expectedLabels: [] },
+  ])('renders the busiest-days chart and ranked table for $expectedBars days', async ({ days, expectedBars, expectedLabels }) => {
+    gateCountsApi.fetchGateCounts.mockResolvedValue({ ...gateCountFixture(), topDays: days });
+    renderPage();
+    await selectTab('Gate counts');
+
+    const busiestDays = await screen.findByRole('region', { name: 'Top 10 busiest days' });
+    if (expectedBars === 0) {
+      expect(within(busiestDays).getByRole('status')).toHaveTextContent('No days with visits in this period.');
+    } else {
+      await waitFor(() => expect(busiestDays.querySelectorAll('.recharts-bar-rectangle .recharts-rectangle'))
+        .toHaveLength(expectedBars));
+      const labels = Array.from(busiestDays.querySelectorAll('.recharts-yAxis-tick-labels .recharts-cartesian-axis-tick-value'))
+        .map((label) => Array.from(label.querySelectorAll('tspan')).map((line) => line.textContent).join(' '));
+      expect(labels).toEqual(expectedLabels);
+      expect(Array.from(busiestDays.querySelectorAll('.recharts-label-list text')).map((label) => label.textContent))
+        .toEqual(['11', '7', '7']);
+      await userEvent.click(within(busiestDays).getByRole('button', { name: 'Enlarge' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Top 10 busiest days' });
+      await waitFor(() => expect(dialog.querySelectorAll('.recharts-bar-rectangle .recharts-rectangle'))
+        .toHaveLength(expectedBars));
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    }
+
+    await userEvent.click(within(busiestDays).getByRole('button', { name: 'Show data' }));
+    const table = within(busiestDays).getByRole('table');
+    expect(within(table).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual(['Rank', 'Date', 'Visits']);
+    expect(within(table).getByRole('columnheader', { name: 'Visits' })).toHaveClass('text-right');
+    if (expectedBars > 0) {
+      expect(within(table).getAllByRole('row').slice(1).map((row) =>
+        Array.from(row.children).map((cell) => cell.textContent))).toEqual([
+        ['1', 'Sun, Nov 2, 2025', '11'], ['2', 'Mon, Nov 3, 2025', '7'], ['3', 'Tue, Nov 4, 2025', '7'],
+      ]);
+    }
   });
 });
 

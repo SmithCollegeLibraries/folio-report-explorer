@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import {
-  CartesianGrid, LabelList, Legend, Line, LineChart, XAxis, YAxis,
+  Bar, BarChart, CartesianGrid, LabelList, Legend, Line, LineChart, XAxis, YAxis,
 } from 'recharts';
 import type { ChartConfig } from '../ui/chart';
 import { ChartContainer } from '../ui/chart';
@@ -182,18 +182,34 @@ function Heatmap({ data }: { data: GateCountResponse['heatmap'] }) {
 }
 
 function TopDaysChart({ data }: { data: GateCountResponse['topDays'] }) {
+  const labelSize = useChartLabelSize();
+  const days = [...data].sort((a, b) => b.visits - a.visits);
+  const chartData = days.map((day) => ({ ...day, label: new Date(day.date + 'T12:00:00Z').toLocaleDateString('en-US', {
+    weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
+  }) }));
   const table = <table><caption>Top 10 busiest days</caption><thead><tr>
-    <th scope="col">Date</th><th scope="col">Visits</th>
-  </tr></thead><tbody>{data.map((day) => {
-    const weekday = new Date(day.date + 'T12:00:00Z').toLocaleDateString('en-US', {
-      weekday: 'long', timeZone: 'UTC',
-    });
-    return <tr key={day.date}>
-      <th scope="row">{weekday}, {day.date}</th><td>{day.visits.toLocaleString('en-US')}</td>
-    </tr>;
-  })}</tbody></table>;
+    <th scope="col">Rank</th><th scope="col">Date</th><th scope="col" className="text-right">Visits</th>
+  </tr></thead><tbody>{chartData.map((day, index) => <tr key={day.date}>
+    <th scope="row">{index + 1}</th><td>{day.label}</td>
+    <td className="text-right tabular-nums">{day.visits.toLocaleString('en-US')}</td>
+  </tr>)}</tbody></table>;
   return <ChartCard title="Top 10 busiest days" explanation="The busiest days with at least one entry, ordered by visits."
-    table={table}>{table}</ChartCard>;
+    table={table}>{chartData.length === 0 ? <p role="status" className="text-sm text-gray-600">No days with visits in this period.</p> :
+      <ChartContainer config={{ visits: { label: 'Visits', color: 'var(--chart-1)' } }}
+        className="h-80 min-w-0 w-full" aria-label="Top 10 busiest days">
+        <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 40, bottom: 8, left: 8 }}>
+          <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" horizontal={false} />
+          <XAxis type="number" allowDecimals={false} tick={{ fontSize: labelSize }} tickLine={false} axisLine={false} />
+          <YAxis type="category" dataKey="label" width={172} interval={0}
+            tick={{ fontSize: labelSize }} tickLine={false} axisLine={false} />
+          <ChartTooltip content={<ChartTooltipContent />} />
+          <Bar dataKey="visits" name="Visits" fill="var(--chart-1)" radius={[0, 4, 4, 0]} isAnimationActive={false}>
+            <LabelList dataKey="visits" position="right" formatter={(value) => Number(value).toLocaleString('en-US')}
+              fill="#374151" fontSize={labelSize} />
+          </Bar>
+        </BarChart>
+      </ChartContainer>}
+  </ChartCard>;
 }
 
 export function GateCountCharts() {
