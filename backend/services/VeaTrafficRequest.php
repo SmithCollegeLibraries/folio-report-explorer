@@ -135,7 +135,8 @@ class VeaTrafficRequest
             throw new \RuntimeException('vea_error');
         }
         $timestamp = new \DateTimeImmutable($value, new \DateTimeZone('UTC'));
-        if (\DateTimeImmutable::getLastErrors() !== false) {
+        $errors = \DateTimeImmutable::getLastErrors();
+        if (is_array($errors) && ($errors['warning_count'] > 0 || $errors['error_count'] > 0)) {
             throw new \RuntimeException('vea_error');
         }
         return $timestamp;
