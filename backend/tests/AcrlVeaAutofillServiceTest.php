@@ -1,6 +1,6 @@
 <?php
 
-foreach (['VeaClientService', 'AcrlVeaAutofillService', 'AcrlAutofillService'] as $serviceName) {
+foreach (['SettingsService', 'VeaClientService', 'VeaGateZoneService', 'AcrlVeaAutofillService', 'AcrlAutofillService'] as $serviceName) {
     $servicePath = __DIR__ . '/../services/' . $serviceName . '.php';
     if (is_file($servicePath)) {
         require_once $servicePath;
@@ -9,7 +9,9 @@ foreach (['VeaClientService', 'AcrlVeaAutofillService', 'AcrlAutofillService'] a
 
 use app\services\AcrlAutofillService;
 use app\services\AcrlVeaAutofillService;
+use app\services\SettingsService;
 use app\services\VeaClientService;
+use app\services\VeaGateZoneService;
 
 function acrlVeaAssert($condition, $message)
 {
@@ -74,6 +76,29 @@ function acrlVeaRows(array $rows)
     return json_encode(['messages' => [], 'results' => $rows]);
 }
 
+class AcrlVeaGateTestDb
+{
+    public $rows = [];
+    public $fail = false;
+    public function __construct(array $rows) { $this->rows = $rows; }
+    public function createCommand($sql = null, $params = [])
+    {
+        return new class($this) {
+            private $db;
+            public function __construct($db) { $this->db = $db; }
+            public function queryColumn()
+            {
+                if ($this->db->fail) {
+                    throw new RuntimeException('synthetic private database details');
+                }
+                $rows = $this->db->rows;
+                usort($rows, function ($left, $right) { return $left['sort_order'] - $right['sort_order']; });
+                return array_column($rows, 'zone_id');
+            }
+        };
+    }
+}
+
 function acrlVeaCase($name, $test)
 {
     try {
@@ -133,6 +158,67 @@ acrlVeaCase('dispatches the annual fill to Vea with six selected doors and no LD
     acrlVeaSame('day', $query['dateGroupings'], 'Request day buckets.');
     acrlVeaSame('false', $query['excludeClosedHours'], 'Include traffic outside opening hours.');
     acrlVeaSame(60, $requests[1][1][CURLOPT_TIMEOUT], 'Use the 60 second traffic timeout.');
+});
+
+acrlVeaCase('reads fill doors through the shared database accessor and stops before Vea on read failure', function () {
+    $directory = sys_get_temp_dir() . '/acrl-vea-settings-' . uniqid('', true);
+    mkdir($directory);
+    $settingsPath = $directory . '/settings.json';
+    file_put_contents($settingsPath, '{"vea_gate_zone_ids":["legacy-door"]}');
+    SettingsService::setFilePathForTests($settingsPath);
+    putenv('VEA_CLIENT_ID=synthetic-client-id');
+    putenv('VEA_CLIENT_SECRET=synthetic-client-secret');
+    $requests = [];
+    $client = new VeaClientService(function ($url, $options) use (&$requests) {
+        $requests[] = [$url, $options];
+        if (strpos($url, 'oauth/token') !== false) {
+            return ['body' => '{"access_token":"synthetic-access-token"}', 'httpCode' => 200, 'curlError' => ''];
+        }
+        if (strpos($url, '/data/traffic?') !== false) {
+            return ['body' => acrlVeaRows([
+                ['zoneId' => 'door-from-db', 'name' => 'Database Door', 'sumins' => 5],
+            ]), 'httpCode' => 200, 'curlError' => ''];
+        }
+        return ['body' => '[]', 'httpCode' => 200, 'curlError' => ''];
+    });
+    $db = new AcrlVeaGateTestDb([
+        ['zone_id' => 'door-from-db', 'sort_order' => 0],
+    ]);
+    $gateZones = new VeaGateZoneService($client, $db);
+    $autofill = new AcrlVeaAutofillService(
+        $client,
+        function () { return new DateTimeImmutable('2026-10-28T12:34:56-04:00'); },
+        null,
+        $gateZones
+    );
+    $result = $autofill->run(2025, '79a');
+    acrlVeaSame(['Database Door'], $result['doors'], 'Use the table selection instead of the stale settings value.');
+    parse_str(parse_url($requests[1][0], PHP_URL_QUERY), $query);
+    acrlVeaSame('door-from-db', $query['entityIds'], 'Send the database selection to Vea.');
+
+    $requests = [];
+    $db->rows = [];
+    try {
+        $autofill->run(2025, '79a');
+        throw new RuntimeException('An empty database selection was accepted.');
+    } catch (RuntimeException $error) {
+        acrlVeaSame('no_doors', $error->getMessage(), 'Only a successful empty read uses the choose-doors response path.');
+    }
+    acrlVeaSame([], $requests, 'An empty database selection makes no Vea request.');
+
+    $db->rows = [['zone_id' => 'door-from-db', 'sort_order' => 0]];
+    $db->fail = true;
+    try {
+        $autofill->run(2025, '79a');
+        throw new RuntimeException('A database read failure was accepted.');
+    } catch (RuntimeException $error) {
+        acrlVeaSame('vea_error', $error->getMessage(), 'Return a sanitized error code.');
+    }
+    acrlVeaSame([], $requests, 'A database read failure makes no Vea request.');
+
+    SettingsService::setFilePathForTests(null);
+    unlink($settingsPath);
+    rmdir($directory);
 });
 
 acrlVeaCase('uses fiscal-year-derived week defaults and DST-safe local bounds', function () {

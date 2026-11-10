@@ -204,6 +204,31 @@ function acrlMigrationEngineMalformedMigrationError($db, string $path, string $f
     acrlMigrationEngineSame(0, $recorded, 'A malformed ' . $table . ' table must not record migration ' . $filename . '.');
 }
 
+function acrlMigrationEngineCheckVeaGateZoneInstall($db, string $migrationDir, string $label): void
+{
+    $first = MigrationService::run($db, $migrationDir, false);
+    acrlMigrationEngineCheck(in_array('071_vea_gate_zones.sql', $first['applied'], true), $label . ' must apply missing 071.');
+    acrlMigrationEngineCheck(acrlMigrationEngineApplied($db, '071_vea_gate_zones.sql'), $label . ' must recognize 071 after applying it.');
+    $recorded = (int)$db->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '071_vea_gate_zones.sql'")->queryScalar();
+    acrlMigrationEngineSame(1, $recorded, $label . ' must record 071 once.');
+    $second = MigrationService::run($db, $migrationDir, false);
+    acrlMigrationEngineCheck(!in_array('071_vea_gate_zones.sql', $second['applied'], true), $label . ' rerun must not apply 071 again.');
+}
+
+function acrlMigrationEngineCheckMalformedVeaGateZone($adminDb, $appDb, string $migrationDir, string $label): void
+{
+    $error = null;
+    try {
+        MigrationService::run($appDb, $migrationDir, false);
+    } catch (Throwable $caught) {
+        $error = $caught;
+    }
+    acrlMigrationEngineCheck($error !== null && strpos($error->getMessage(), 'vea_gate_zones') !== false,
+        $label . ' must reject a malformed vea_gate_zones table.');
+    $recorded = (int)$adminDb->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '071_vea_gate_zones.sql'")->queryScalar();
+    acrlMigrationEngineSame(0, $recorded, $label . ' must not record malformed migration 071.');
+}
+
 function acrlMigrationEnginePrepareCurrentSchema(PDO $admin, string $adminDsn, string $adminUser, string $adminPassword, string $databaseName, string $migrationDir, string $temporaryMigrationDir, array &$createdDatabases, string $runtimeUser, string $runtimePassword): array
 {
     $admin->exec('CREATE DATABASE `' . $databaseName . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci');
@@ -252,6 +277,7 @@ function acrlMigrationEnginePrepareCurrentSchema(PDO $admin, string $adminDsn, s
     if (!acrlMigrationEngineDatabaseAppearsCurrent($adminDb)) {
         throw new RuntimeException('Setup check failed: databaseAppearsCurrent() must accept the production-shaped schema including reports 068, 069, and 070 before schema_migrations is cleared.');
     }
+    $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/071_vea_gate_zones.sql');
 
     return [$adminDb, $dsn];
 }
@@ -560,6 +586,35 @@ try {
         acrlMigrationEngineSame(true, $copyWithQuestionGuard['questionsAlreadyAssigned'] ?? null, 'Question assignments use their independent publish guard.');
     } catch (Throwable $error) {
         acrlMigrationEngineCheck(false, 'Scenario (c) setup and ACR-028 assignment checks failed before invite scenarios: ' . get_class($error) . ': ' . $error->getMessage());
+    }
+
+    try {
+        $scenarioG = $prefix . '_g';
+        list($adminDbG, $dsnG) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioG, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
+        $adminDbG->createCommand('DROP TABLE vea_gate_zones')->execute();
+        $appDbG = acrlMigrationEngineConnection($dsnG, $runtimeUser, $runtimePassword);
+        acrlMigrationEngineCheckVeaGateZoneInstall($appDbG, $migrationDir, 'Scenario (g) normal-ledger path');
+
+        $scenarioH = $prefix . '_h';
+        list($adminDbH, $dsnH) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioH, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
+        $adminDbH->createCommand('DROP TABLE vea_gate_zones')->execute();
+        $adminDbH->createCommand('DELETE FROM schema_migrations')->execute();
+        $appDbH = acrlMigrationEngineConnection($dsnH, $runtimeUser, $runtimePassword);
+        acrlMigrationEngineCheckVeaGateZoneInstall($appDbH, $migrationDir, 'Scenario (h) empty-ledger path');
+    } catch (Throwable $error) {
+        acrlMigrationEngineCheck(false, 'Scenarios (g) and (h) failed before later scenarios: ' . get_class($error) . ': ' . $error->getMessage());
+    }
+
+    try {
+        $scenarioI = $prefix . '_i';
+        list($adminDbI, $dsnI) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioI, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
+        $adminDbI->createCommand('ALTER TABLE vea_gate_zones ADD COLUMN unexpected INT NOT NULL DEFAULT 0')->execute();
+        $appDbI = acrlMigrationEngineConnection($dsnI, $runtimeUser, $runtimePassword);
+        acrlMigrationEngineCheckMalformedVeaGateZone($adminDbI, $appDbI, $migrationDir, 'Scenario (i) normal-ledger path');
+        $adminDbI->createCommand('DELETE FROM schema_migrations')->execute();
+        acrlMigrationEngineCheckMalformedVeaGateZone($adminDbI, $appDbI, $migrationDir, 'Scenario (i) empty-ledger path');
+    } catch (Throwable $error) {
+        acrlMigrationEngineCheck(false, 'Scenario (i) malformed 071 checks failed: ' . get_class($error) . ': ' . $error->getMessage());
     }
 
     try {
