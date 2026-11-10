@@ -1,14 +1,18 @@
+import { useCallback, useRef, useState } from 'react';
 import { useVisualizations } from '../hooks/useVisualizations';
 import { useAuth } from '../hooks/useAuth';
 import { errorMessage } from '../utils/errorMessage';
 import { PurchaseCharts } from '../components/visualizations/PurchaseCharts';
 import { BudgetCharts } from '../components/visualizations/BudgetCharts';
-import { HistoryPanel } from '../components/visualizations/HistoryPanel';
+import { HistoryDialog } from '../components/visualizations/HistoryDialog';
 import { GateCountCharts } from '../components/visualizations/GateCountCharts';
 
 export default function Visualizations() {
   const state = useVisualizations();
   const { isAdmin } = useAuth();
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyButtonRef = useRef<HTMLButtonElement>(null);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
   const data = state.data;
   const error = state.options.error ?? state.figures.error;
   const loading = state.options.isPending || (Boolean(state.unitId) && state.figures.isPending);
@@ -31,6 +35,10 @@ export default function Visualizations() {
             className="border border-gray-300 rounded-md bg-white px-3 py-2">
             {state.options.data.years.map((year) => <option key={year} value={year}>{year}</option>)}
           </select></div>
+        {isAdmin && data && <button ref={historyButtonRef} type="button" onClick={() => setHistoryOpen(true)}
+          className="self-end rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          Manage historical figures
+        </button>}
       </div>}
     </header>
     <div aria-live="polite" role="status" className="text-sm text-gray-600">
@@ -49,8 +57,9 @@ export default function Visualizations() {
           onMaterialYear={state.setMaterialYear} />
         <div className="min-w-0 lg:col-span-2"><BudgetCharts data={data} /></div>
       </div>
-      {isAdmin && <HistoryPanel key={data.unit.code} unitCode={data.unit.code} currentYear={data.currentFiscalYearEnd} />}
     </>}
+    {isAdmin && data && historyOpen && <HistoryDialog key={data.unit.code} unitCode={data.unit.code}
+      currentYear={data.currentFiscalYearEnd} triggerRef={historyButtonRef} onClose={closeHistory} />}
     <GateCountCharts />
   </div>;
 }

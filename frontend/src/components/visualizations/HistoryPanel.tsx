@@ -15,7 +15,7 @@ export function HistoryPanel({ unitCode, currentYear }: { unitCode: string; curr
   const state = useVisualizationHistory(unitCode, currentYear);
   const id = useId();
   const draft = state.draft;
-  return <section aria-labelledby={`${id}-title`} className="mt-8 bg-white border border-gray-200 rounded-lg p-4 sm:p-6">
+  return <section aria-labelledby={`${id}-title`} className="p-4 sm:p-6">
     <div className="flex flex-wrap gap-3 items-center justify-between">
       <div><h2 id={`${id}-title`} className="text-lg font-semibold">Historical figures</h2>
         <p className="text-sm text-gray-600">Manage stored figures for {unitCode}. Stored figures take precedence for that year.</p></div>

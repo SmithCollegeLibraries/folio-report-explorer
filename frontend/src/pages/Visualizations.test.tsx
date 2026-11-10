@@ -232,6 +232,11 @@ function suppressStubError(event: ErrorEvent) {
 
 function historyEditor() { return screen.getByRole('region', { name: 'Historical figures' }); }
 
+async function openHistoryEditor() {
+  await userEvent.click(await screen.findByRole('button', { name: 'Manage historical figures' }));
+  return screen.findByRole('region', { name: 'Historical figures' });
+}
+
 async function fillHistoryForm(year: string, total: string, note: string) {
   const user = userEvent.setup();
   const panel = within(historyEditor());
@@ -873,6 +878,44 @@ describe('Visualizations RPT-018 behavior', () => {
     },
   );
 
+  it('shows admin history management after data loads and opens and closes an accessible dialog', async () => {
+    auth.isAdmin = true;
+    const request = pendingFigures();
+    api.fetchVisualizations.mockReturnValue(request.promise);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByLabelText('Acquisitions unit');
+    expect(screen.queryByRole('button', { name: 'Manage historical figures' })).not.toBeInTheDocument();
+
+    await act(async () => { request.resolve(figures); await request.promise; });
+    const trigger = await screen.findByRole('button', { name: 'Manage historical figures' });
+    expect(trigger.closest('header')).toContainElement(screen.getByLabelText('Acquisitions unit'));
+    expect(trigger.closest('header')).toContainElement(screen.getByLabelText('Years'));
+    await user.click(trigger);
+
+    let dialog = await screen.findByRole('dialog', { name: 'Historical figures' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveClass('w-full', 'max-h-[min(88vh,52rem)]');
+    const panel = within(dialog).getByRole('region', { name: 'Historical figures' });
+    expect(panel).toHaveTextContent('Manage stored figures for SC');
+    const scrollRegion = Array.from(dialog.children).find((child) => child.classList.contains('overflow-y-auto'));
+    expect(scrollRegion).toHaveClass('min-h-0', 'overflow-y-auto');
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(document.body.style.overflow).toBe('hidden');
+    await user.click(within(panel).getByRole('button', { name: 'Add historical figure' }));
+    expect(within(panel).getByLabelText('Fiscal year')).toHaveValue(2027);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Historical figures' })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+    expect(document.body.style.overflow).toBe('');
+
+    await user.click(trigger);
+    dialog = await screen.findByRole('dialog', { name: 'Historical figures' });
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog', { name: 'Historical figures' })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('supports admin history add, edit, delete and field errors while omitting the panel for non-admins', async () => {
     {
       auth.isAdmin = true;
@@ -880,7 +923,7 @@ describe('Visualizations RPT-018 behavior', () => {
       api.saveVisualizationHistory.mockResolvedValue(added);
       api.fetchVisualizationHistory.mockResolvedValueOnce([historyRow]).mockResolvedValue([historyRow, added]);
       renderPage();
-      await screen.findByRole('region', { name: 'Historical figures' });
+      await openHistoryEditor();
       await userEvent.click(within(historyEditor()).getByRole('button', { name: /add/i }));
       await fillHistoryForm('2028', '1000', 'Added figure');
       const callsBeforeSave = api.fetchVisualizations.mock.calls.length;
@@ -899,7 +942,7 @@ describe('Visualizations RPT-018 behavior', () => {
       api.fetchVisualizationHistory.mockResolvedValueOnce([historyRow]).mockResolvedValue([{ ...historyRow, totalAmount: 1200, note: 'Corrected figure' }]);
       api.saveVisualizationHistory.mockResolvedValue({ ...historyRow, totalAmount: 1200, note: 'Corrected figure' });
       renderPage();
-      const panel = await screen.findByRole('region', { name: 'Historical figures' });
+      const panel = await openHistoryEditor();
       const row = await within(panel).findByRole('row', { name: /2026.*purchases/i });
       expect(row).toHaveTextContent('7');
       expect(row).toHaveTextContent('2026-01-02');
@@ -919,11 +962,9 @@ describe('Visualizations RPT-018 behavior', () => {
       auth.isAdmin = true;
       api.fetchVisualizationHistory.mockResolvedValueOnce([historyRow]).mockResolvedValue([]);
       renderPage();
-      const panel = await screen.findByRole('region', { name: 'Historical figures' });
+      const panel = await openHistoryEditor();
       const row = await within(panel).findByRole('row', { name: /2026.*purchases/i });
       await userEvent.click(within(row).getByRole('button', { name: /delete/i }));
-      const dialog = screen.queryByRole('dialog');
-      if (dialog) await userEvent.click(within(dialog).getByRole('button', { name: /delete|confirm/i }));
       await waitFor(() => expect(api.deleteVisualizationHistory).toHaveBeenCalledWith(21));
       await waitFor(() => expect(within(panel).queryByRole('row', { name: /2026.*purchases/i })).not.toBeInTheDocument());
     }
@@ -935,7 +976,7 @@ describe('Visualizations RPT-018 behavior', () => {
         totalAmount: ['Synthetic total field error.'], note: ['Synthetic note field error.'],
       } } } });
       renderPage();
-      const panel = await screen.findByRole('region', { name: 'Historical figures' });
+      const panel = await openHistoryEditor();
       await userEvent.click(within(panel).getByRole('button', { name: /add/i }));
       await fillHistoryForm('2028', '1000', 'Entered note');
       await userEvent.click(within(panel).getByRole('button', { name: /save/i }));
@@ -953,6 +994,7 @@ describe('Visualizations RPT-018 behavior', () => {
       renderPage();
       expect(await chart(chartTitles[0])).toBeInTheDocument();
       expect(screen.queryByRole('region', { name: 'Historical figures' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Manage historical figures' })).not.toBeInTheDocument();
       expect(api.fetchVisualizationHistory).not.toHaveBeenCalled();
     }
   });
@@ -980,7 +1022,7 @@ describe('Visualizations RPT-018 behavior', () => {
       auth.isAdmin = true;
       const user = userEvent.setup();
       renderPage();
-      const panel = await screen.findByRole('region', { name: 'Historical figures' });
+      const panel = await openHistoryEditor();
       const row = await within(panel).findByRole('row', { name: /2026.*purchases/i });
       within(row).getByRole('button', { name: /edit/i }).focus();
       await user.keyboard('{Enter}');
@@ -1032,7 +1074,7 @@ describe('Visualizations RPT-018 behavior', () => {
     auth.isAdmin = true;
     const user = userEvent.setup();
     renderPage();
-    const panel = await screen.findByRole('region', { name: 'Historical figures' });
+    const panel = await openHistoryEditor();
     const row = await within(panel).findByRole('row', { name: /2026.*purchases/i });
     await user.click(within(row).getByRole('button', { name: /edit/i }));
     expect(within(panel).getByLabelText('Fiscal year')).toHaveAttribute('aria-readonly', 'true');
