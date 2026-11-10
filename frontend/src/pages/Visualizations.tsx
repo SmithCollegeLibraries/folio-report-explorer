@@ -4,6 +4,7 @@ import { errorMessage } from '../utils/errorMessage';
 import { PurchaseCharts } from '../components/visualizations/PurchaseCharts';
 import { BudgetCharts } from '../components/visualizations/BudgetCharts';
 import { HistoryPanel } from '../components/visualizations/HistoryPanel';
+import { GateCountCharts } from '../components/visualizations/GateCountCharts';
 
 export default function Visualizations() {
   const state = useVisualizations();
@@ -50,5 +51,6 @@ export default function Visualizations() {
       </div>
       {isAdmin && <HistoryPanel key={data.unit.code} unitCode={data.unit.code} currentYear={data.currentFiscalYearEnd} />}
     </>}
+    <GateCountCharts />
   </div>;
 }

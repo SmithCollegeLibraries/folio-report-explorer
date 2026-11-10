@@ -17,9 +17,38 @@ const api = vi.hoisted(() => ({
   saveVisualizationHistory: vi.fn(),
   deleteVisualizationHistory: vi.fn(),
 }));
+const gateCountsApi = vi.hoisted(() => ({ fetchGateCounts: vi.fn() }));
 const auth = vi.hoisted(() => ({ isAdmin: false }));
 vi.mock('../api/visualizations', () => api);
+vi.mock('../api/gateCounts', () => gateCountsApi);
 vi.mock('../hooks/useAuth', () => ({ useAuth: () => auth }));
+
+function gateCountFixture(visits = 11) {
+  return {
+    doors: ['North Door', 'South Door'],
+    period: { start: '2025-11-02', end: '2025-11-05' },
+    monthlyByFiscalYear: [{
+      fiscalYearEnd: 2026,
+      months: [
+        { month: '2025-07', visits: visits === 0 ? 0 : 4 }, { month: '2025-08', visits: 0 },
+        { month: '2025-09', visits: 0 }, { month: '2025-10', visits: 0 },
+        { month: '2025-11', visits: visits },
+      ],
+    }],
+    daily: [
+      { date: '2025-11-02', visits: visits }, { date: '2025-11-03', visits: visits === 0 ? 0 : 7 },
+      { date: '2025-11-04', visits: visits === 0 ? 0 : 7 }, { date: '2025-11-05', visits: 0 },
+    ],
+    heatmap: Array.from({ length: 168 }, (_, index) => ({
+      weekday: Math.floor(index / 24), hour: index % 24, visits: index === 1 ? visits : 0,
+    })),
+    topDays: visits === 0 ? [] : [
+      { date: '2025-11-02', visits: visits },
+      { date: '2025-11-03', visits: 7 },
+      { date: '2025-11-04', visits: 7 },
+    ],
+  };
+}
 
 const options: VisualizationOptions = {
   units: [
@@ -223,6 +252,7 @@ beforeEach(() => {
   api.fetchVisualizationHistory.mockResolvedValue([historyRow]);
   api.saveVisualizationHistory.mockResolvedValue(historyRow);
   api.deleteVisualizationHistory.mockResolvedValue(undefined);
+  gateCountsApi.fetchGateCounts.mockResolvedValue(gateCountFixture());
   window.addEventListener('error', suppressStubError);
   vi.spyOn(window, 'confirm').mockReturnValue(true);
   // Give real Recharts responsive containers a deterministic jsdom viewport.
@@ -610,6 +640,63 @@ describe('Visualizations RPT-022 new behavior', () => {
     expect.soft((frontendSource.match(/PURCHASE_MATERIAL_GROUPS/g) ?? []).length).toBeGreaterThan(1);
   });
 
+});
+
+describe('Visualizations RPT-034 gate counts', () => {
+  it('mounts all four accessible charts with independent controls when acquisitions fail', async () => {
+    api.fetchVisualizations.mockRejectedValue(new Error('Synthetic acquisitions failure'));
+    renderPage();
+
+    const section = await screen.findByRole('region', { name: 'Gate counts' });
+    expect(await within(section).findByText('Entries at North Door, South Door, from SenSource Vea, Eastern time.')).toBeInTheDocument();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Synthetic acquisitions failure');
+    expect(screen.getByLabelText('Start date')).toHaveValue('2025-11-02');
+    expect(screen.getByLabelText('End date')).toHaveValue('2025-11-05');
+    expect(screen.getByLabelText('Gate count years')).toHaveValue('3');
+    expect(screen.getByLabelText('Years')).toBeInTheDocument();
+
+    for (const title of ['Monthly visits by fiscal year', 'Busiest hours', 'Daily visits', 'Top 10 busiest days']) {
+      expect(within(section).getByRole('region', { name: title })).toBeInTheDocument();
+    }
+    expect(within(section).getByRole('button', { name: 'Sunday 1:00, 11 visits' })).toBeInTheDocument();
+    const busiestDays = within(section).getByRole('region', { name: 'Top 10 busiest days' });
+    expect(within(busiestDays).getAllByRole('table').some((table) => table.textContent?.includes('Sunday'))).toBe(true);
+    const monthly = within(section).getByRole('region', { name: 'Monthly visits by fiscal year' });
+    await userEvent.click(within(monthly).getByRole('button', { name: 'Show data' }));
+    expect(within(monthly).getByRole('table')).toHaveTextContent('July');
+    expect(gateCountsApi.fetchGateCounts).toHaveBeenCalledWith({ years: 3 });
+
+    await userEvent.selectOptions(screen.getByLabelText('Gate count years'), '2');
+    await waitFor(() => expect(gateCountsApi.fetchGateCounts).toHaveBeenLastCalledWith({ years: 2 }));
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2025-11-03' } });
+    await waitFor(() => expect(gateCountsApi.fetchGateCounts).toHaveBeenLastCalledWith({
+      years: 2, start: '2025-11-03', end: '2025-11-05',
+    }));
+  });
+
+  it('shows loading and a retryable error inside the gate-count section', async () => {
+    let rejectRequest!: (error: Error) => void;
+    gateCountsApi.fetchGateCounts.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+      rejectRequest = reject;
+    }));
+    renderPage();
+    const section = await screen.findByRole('region', { name: 'Gate counts' });
+    expect(within(section).getByRole('status')).toHaveTextContent('Loading gate counts…');
+
+    await act(async () => { rejectRequest(new Error('Synthetic Vea failure')); });
+    expect(await within(section).findByRole('alert')).toHaveTextContent('Could not load gate counts.');
+    expect(await screen.findByRole('region', { name: 'How the library purchases' })).toBeInTheDocument();
+    gateCountsApi.fetchGateCounts.mockResolvedValueOnce(gateCountFixture());
+    await userEvent.click(within(section).getByRole('button', { name: 'Retry gate counts' }));
+    expect(await within(section).findByRole('region', { name: 'Monthly visits by fiscal year' })).toBeInTheDocument();
+  });
+
+  it('shows the empty state when every gate-count series has zero visits', async () => {
+    gateCountsApi.fetchGateCounts.mockResolvedValue(gateCountFixture(0));
+    renderPage();
+    const section = await screen.findByRole('region', { name: 'Gate counts' });
+    expect(await within(section).findByText('No gate counts for this period.')).toBeInTheDocument();
+  });
 });
 
 afterEach(() => {

@@ -10,6 +10,7 @@ use yii\web\Response;
 use app\controllers\traits\PersistedAdminAccessTrait;
 use app\models\User;
 use app\services\DevIdentityProvider;
+use app\services\GateCountVisualizationService;
 use app\services\VisualizationDataService;
 use app\services\VisualizationHistoryService;
 
@@ -73,6 +74,22 @@ final class VisualizationController extends Controller
             return $this->dataService()->get($unitId, (int)$rawYears, $materialYear);
         } catch (\InvalidArgumentException $error) {
             return $this->error(400, $error->getMessage());
+        }
+    }
+
+    public function actionGateCounts(): array
+    {
+        if (($denied = $this->requireApprovedUser()) !== null) return $denied;
+        set_time_limit(180);
+        try {
+            return Yii::$container->get(GateCountVisualizationService::class)->get(Yii::$app->request->getQueryParams());
+        } catch (\InvalidArgumentException $error) {
+            return $this->error(422, 'Choose a valid gate-count date range and year count.');
+        } catch (\RuntimeException $error) {
+            $code = $error->getMessage();
+            if ($code === 'no_doors') return $this->error(409, 'Choose the gate-count doors in Settings first.');
+            if ($code === 'not_configured') return $this->error(409, 'Vea is not configured.');
+            return $this->error(502, 'Could not get a gate count from Vea.');
         }
     }
 
