@@ -184,6 +184,12 @@ $config = [
                 'POST settings' => 'folio-query/settings-save',
                 'POST settings/test' => 'folio-query/settings-test',
 
+                // SenSource Vea gate-zone settings (admin only)
+                'GET vea/status' => 'vea/status',
+                'POST vea/test' => 'vea/test',
+                'GET vea/zones' => 'vea/zones',
+                'PUT vea/gate-zones' => 'vea/gate-zones',
+
                 // AI Training Hints
                 'GET training' => 'folio-query/training-list',
                 'GET training/<id:\d+>' => 'folio-query/training-detail',
