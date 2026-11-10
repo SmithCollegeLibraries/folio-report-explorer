@@ -101,6 +101,7 @@ $config = [
                 // Unit-scoped purchase, material and budget visualizations
                 'GET visualizations/options' => 'visualization/options',
                 'GET visualizations' => 'visualization/index',
+                'GET visualizations/gate-counts' => 'visualization/gate-counts',
                 'GET visualizations/history' => 'visualization/history',
                 'PUT visualizations/history' => 'visualization/history-upsert',
                 'DELETE visualizations/history/<id:\d+>' => 'visualization/history-delete',

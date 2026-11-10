@@ -1,11 +1,15 @@
 <?php
 require_once __DIR__ . '/support/VisualizationControllerTestSupport.php';
 
+use app\services\GateCountVisualizationService;
+use app\services\VeaClientService;
+
 visualizationCase('visualization API registers every documented verb and route', function () {
     $source = file_get_contents(__DIR__ . '/../config/web.php');
     foreach ([
         'GET visualizations/options' => 'visualization/options',
         'GET visualizations' => 'visualization/index',
+        'GET visualizations/gate-counts' => 'visualization/gate-counts',
         'GET visualizations/history' => 'visualization/history',
         'PUT visualizations/history' => 'visualization/history-upsert',
         'DELETE visualizations/history/<id:\\d+>' => 'visualization/history-delete',
@@ -15,7 +19,7 @@ visualizationCase('visualization API registers every documented verb and route',
 });
 
 visualizationCase('access rejects guest and persisted-unapproved users on every route including warm caches', function () {
-    foreach (['options', 'index', 'history', 'history-upsert', 'history-delete'] as $action) {
+    foreach (['options', 'index', 'gate-counts', 'history', 'history-upsert', 'history-delete'] as $action) {
         foreach (['guest', 'unapproved'] as $identity) {
             foreach (['cold', 'warm'] as $temperature) {
                 list($f, $controller) = visualizationControllerFixture();
@@ -101,6 +105,60 @@ visualizationCase('API rejects malformed unit UUIDs before executing a FOLIO que
         visualizationSame('Choose a valid acquisitions unit id.', $body['error'], 'Malformed IDs receive the UUID validation error.');
         visualizationSame([], $f->folio->queries, 'Malformed ids must be rejected before PostgreSQL sees them.');
     }
+});
+
+visualizationCase('gate-count controller maps configuration and provider failures to fixed statuses', function () {
+    $cases = [
+        [[], true, 409, 'Choose the gate-count doors in Settings first.'],
+        [['door-a'], false, 409, 'Vea is not configured.'],
+    ];
+    foreach ($cases as $case) {
+        list($f, $controller) = visualizationControllerFixture('user');
+        $calls = 0;
+        if ($case[1]) {
+            putenv('VEA_CLIENT_ID=synthetic-client-id');
+            putenv('VEA_CLIENT_SECRET=synthetic-client-secret');
+        } else {
+            putenv('VEA_CLIENT_ID');
+            putenv('VEA_CLIENT_SECRET');
+        }
+        $client = new VeaClientService(function () use (&$calls) {
+            $calls++;
+            return ['body' => '{}', 'httpCode' => 200, 'curlError' => ''];
+        });
+        Yii::$container->set(GateCountVisualizationService::class, new GateCountVisualizationService(
+            $client, $case[0], function () { return new DateTimeImmutable('2026-11-10T12:00:00-05:00'); }
+        ));
+        Yii::$app->request->setQueryParams(['start' => '2025-01-01', 'end' => '2025-01-01', 'years' => '1']);
+        list($status, $body) = visualizationInvoke($controller, 'GateCounts', [], true);
+        visualizationSame($case[2], $status, 'Use the specified conflict status.');
+        visualizationSame($case[3], $body['error'], 'Return a fixed plain message.');
+        visualizationSame(0, $calls, 'Missing doors or configuration make no provider calls.');
+        visualizationSame([], $f->folio->queries, 'Gate-count errors do not query the LDP.');
+    }
+
+    list($f, $controller) = visualizationControllerFixture('user');
+    putenv('VEA_CLIENT_ID=synthetic-client-id');
+    putenv('VEA_CLIENT_SECRET=synthetic-client-secret');
+    $calls = 0;
+    $client = new VeaClientService(function ($url) use (&$calls) {
+        $calls++;
+        if (strpos($url, 'oauth/token') !== false) {
+            return ['body' => '{"access_token":"synthetic-access-token"}', 'httpCode' => 200, 'curlError' => ''];
+        }
+        return ['body' => 'synthetic raw provider body', 'httpCode' => 503, 'curlError' => ''];
+    });
+    Yii::$container->set(GateCountVisualizationService::class, new GateCountVisualizationService(
+        $client,
+        ['door-a'],
+        function () { return new DateTimeImmutable('2026-11-10T12:00:00-05:00'); }
+    ));
+    Yii::$app->request->setQueryParams(['start' => '2025-01-01', 'end' => '2025-01-01', 'years' => '1']);
+    list($status, $body) = visualizationInvoke($controller, 'GateCounts', [], true);
+    visualizationSame(502, $status, 'A Vea response failure maps to HTTP 502.');
+    visualizationSame('Could not get a gate count from Vea.', $body['error'], 'Do not return raw provider details.');
+    visualizationSame(2, $calls, 'Only the synthetic token and failed traffic calls occur.');
+    visualizationSame([], $f->folio->queries, 'Provider failures do not query the LDP.');
 });
 
 visualizationCase('history API returns 422 field errors and uses session updated_by/deleted_by for valid writes', function () {

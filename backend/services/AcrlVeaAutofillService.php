@@ -2,6 +2,8 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/VeaTrafficRequest.php';
+
 /** Builds the fixed Vea traffic suggestions for ACRL gate-count questions. */
 class AcrlVeaAutofillService
 {
@@ -106,18 +108,10 @@ class AcrlVeaAutofillService
             throw new \RuntimeException('not_configured');
         }
 
-        $response = $this->client->getWithQuery('/data/traffic', [
-            'relativeDate' => 'custom',
-            'startDate' => $start->format('Y-m-d\TH:i:sP'),
-            'endDate' => $end->format('Y-m-d\TH:i:sP'),
-            'entityType' => 'zone',
-            'entityIds' => implode(',', $zoneIds),
-            'metrics' => 'ins',
-            'excludeClosedHours' => 'false',
-            'dateGroupings' => 'day',
-        ], 60);
-        list($value, $names) = $this->parseTrafficResponse($response, $zoneIds);
-        $doors = $this->doorNames($zoneIds, $names);
+        $trafficRequest = new VeaTrafficRequest($this->client);
+        $traffic = $trafficRequest->fetch($zoneIds, $start, $end, 'day');
+        $value = $traffic['total'];
+        $doors = $trafficRequest->doorNames($zoneIds, $traffic['names']);
         $ranAt = call_user_func($this->clock);
         if (!$ranAt instanceof \DateTimeInterface) {
             throw new \UnexpectedValueException('The Vea auto-fill clock must return a date-time value.');
@@ -163,84 +157,4 @@ class AcrlVeaAutofillService
         return $selected;
     }
 
-    private function parseTrafficResponse($response, array $zoneIds): array
-    {
-        if (!$response instanceof \stdClass || !property_exists($response, 'results')
-            || !is_array($response->results) || !$this->isList($response->results)) {
-            throw new \RuntimeException('vea_error');
-        }
-
-        $selected = array_fill_keys($zoneIds, true);
-        $total = 0;
-        $names = [];
-        foreach ($response->results as $row) {
-            if (!$row instanceof \stdClass || !isset($row->zoneId) || !is_string($row->zoneId)
-                || !isset($selected[$row->zoneId]) || !property_exists($row, 'sumins')) {
-                throw new \RuntimeException('vea_error');
-            }
-            $count = $this->parseCount($row->sumins);
-            if ($count > PHP_INT_MAX - $total) {
-                throw new \RuntimeException('vea_error');
-            }
-            $total += $count;
-            if (isset($row->name) && is_string($row->name) && trim($row->name) !== '' && !isset($names[$row->zoneId])) {
-                $names[$row->zoneId] = $row->name;
-            }
-        }
-        return [$total, $names];
-    }
-
-    private function parseCount($raw): int
-    {
-        if (is_int($raw)) {
-            if ($raw < 0) {
-                throw new \RuntimeException('vea_error');
-            }
-            return $raw;
-        }
-        if (!is_string($raw) || preg_match('/^\d+$/D', $raw) !== 1) {
-            throw new \RuntimeException('vea_error');
-        }
-
-        $normalized = ltrim($raw, '0');
-        $normalized = $normalized === '' ? '0' : $normalized;
-        $max = (string)PHP_INT_MAX;
-        if (strlen($normalized) > strlen($max)
-            || (strlen($normalized) === strlen($max) && strcmp($normalized, $max) > 0)) {
-            throw new \RuntimeException('vea_error');
-        }
-        return (int)$normalized;
-    }
-
-    private function doorNames(array $zoneIds, array $names): array
-    {
-        if (count($names) < count($zoneIds)) {
-            foreach ($this->client->getZones() as $zone) {
-                $zoneId = $zone['zoneId'] ?? null;
-                $name = $zone['name'] ?? null;
-                if (is_string($zoneId) && in_array($zoneId, $zoneIds, true)
-                    && is_string($name) && trim($name) !== '' && !isset($names[$zoneId])) {
-                    $names[$zoneId] = $name;
-                }
-            }
-        }
-
-        $doors = [];
-        foreach ($zoneIds as $zoneId) {
-            $doors[] = $names[$zoneId] ?? 'Unknown door';
-        }
-        return $doors;
-    }
-
-    private function isList(array $value): bool
-    {
-        $index = 0;
-        foreach ($value as $key => $item) {
-            if ($key !== $index) {
-                return false;
-            }
-            $index++;
-        }
-        return true;
-    }
 }
