@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/support/HoldingslessReportFixture.php';
+require_once __DIR__ . '/support/CatalogingSharedRecordReportFixture.php';
 require_once __DIR__ . '/../services/MigrationService.php';
 $report = holdingslessReportFixture();
 $definition = [];
@@ -38,4 +39,25 @@ $source = file_get_contents(__DIR__ . '/../services/MigrationService.php');
 if (!preg_match('/function databaseAppearsCurrent.*?holdingslessReportAppearsComplete/s', $source)) {
     fwrite(STDERR, "FAIL: A database without the new report must not baseline migration 045.\n"); exit(1);
 }
-echo "Holdings-less migration recognition tests passed\n";
+$sharedReport = sharedRecordReportFixture();
+$db->definition = sharedRecordDefinition($sharedReport);
+if (!$recognize->invoke(null, $db, '072_shared_record_check.sql')
+    || !app\services\AcrlQuestionAssignmentMigrationRecognitionService::migrationSchemaAppearsComplete($db, '072_shared_record_check.sql')) {
+    fwrite(STDERR, "FAIL: Migration 072 must recognize its canonical shared record report.\n"); exit(1);
+}
+$db->definition['composite_config'] = '{}';
+if ($recognize->invoke(null, $db, '072_shared_record_check.sql')
+    || app\services\AcrlQuestionAssignmentMigrationRecognitionService::migrationSchemaAppearsComplete($db, '072_shared_record_check.sql')) {
+    fwrite(STDERR, "FAIL: Migration 072 must reject a non-null composite configuration.\n"); exit(1);
+}
+$db->definition = sharedRecordDefinition($sharedReport);
+$db->definition['parameters'] = '[]';
+if ($recognize->invoke(null, $db, '072_shared_record_check.sql')) {
+    fwrite(STDERR, "FAIL: Migration 072 must reject changed report parameters.\n"); exit(1);
+}
+$db->definition = sharedRecordDefinition($sharedReport);
+$db->definition['sql_template'] = 'SELECT 1';
+if ($recognize->invoke(null, $db, '072_shared_record_check.sql')) {
+    fwrite(STDERR, "FAIL: Migration 072 must reject changed report SQL.\n"); exit(1);
+}
+echo "Holdings-less and shared record migration recognition tests passed\n";

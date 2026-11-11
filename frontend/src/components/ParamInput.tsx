@@ -49,7 +49,7 @@ export default function ParamInput({
           onChange={(event) => onChange(event.target.value)}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
         >
-          <option value="">-- Any --</option>
+          {!param.required && <option value="">-- Any --</option>}
           {options.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}

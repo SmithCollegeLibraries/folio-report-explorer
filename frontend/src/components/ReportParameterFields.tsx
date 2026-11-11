@@ -8,6 +8,7 @@ import { MARC_COMBINATION_FINDER_SLUG } from '../utils/marcFieldFinder';
 
 const BUDGET_YEAR_EXPENSE_CLASS_SLUG = 'budget-year-expense-class';
 const MARC_MISSING_TAG_REPORT_SLUG = 'marc-bibliographic-records-missing-tag';
+const SHARED_RECORD_REPORT_SLUG = 'shared-record-check';
 
 interface Props {
   slug: string;
@@ -70,7 +71,7 @@ export default function ReportParameterFields({
             param={parameter}
             value={values[parameter.name] || ''}
             options={selectOptions?.[parameter.name]}
-            groupSelect={slug === MARC_MISSING_TAG_REPORT_SLUG && parameter.name === 'locationIds'}
+            groupSelect={(slug === MARC_MISSING_TAG_REPORT_SLUG || slug === SHARED_RECORD_REPORT_SLUG) && parameter.name === 'locationIds'}
             error={serverFieldErrors[parameter.name]}
             errorId={'report-error-' + parameter.name}
             onChange={(value) => onChange(parameter.name, value)}

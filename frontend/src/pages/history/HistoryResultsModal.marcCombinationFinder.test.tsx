@@ -44,6 +44,34 @@ function renderModal(job: JobStatusResponse) {
   );
 }
 
+const sharedRecordItem: HistoryItem = {
+  ...item,
+  jobId: 'synthetic-shared-record-history-job',
+  name: 'Shared Record Check — Cataloging',
+  sql: 'SELECT synthetic shared record rows',
+};
+
+function renderSharedRecordModal(job: JobStatusResponse) {
+  return render(
+    <HistoryResultsModal
+      item={sharedRecordItem}
+      job={job}
+      loading={false}
+      onClose={() => {}}
+      onRename={() => {}}
+      onSave={() => {}}
+      suggestions={[]}
+      suggestionSource={null}
+      suggestionWarnings={[]}
+      suggestionsLoading={false}
+      suggestionsError={null}
+      onGenerateSuggestions={() => {}}
+      onRunSuggestion={() => {}}
+      onAskFollowUp={() => {}}
+    />,
+  );
+}
+
 describe('MARC combination finder history result warnings', () => {
   it('shows the 100,000-row cap warning for a truncated history result', () => {
     renderModal({
@@ -87,5 +115,36 @@ describe('MARC combination finder history result warnings', () => {
     const alerts = screen.getAllByRole('alert');
     expect(alerts[0]).toHaveTextContent('This report reached its 100,000-row cap.');
     expect(alerts[1]).toHaveTextContent('2 identifiers could not be exported because they were not a valid FOLIO UUID.');
+  });
+});
+
+describe('shared record history result warnings', () => {
+  it.each([
+    { truncated: true, warning: true },
+    { truncated: false, warning: false },
+  ])('shows the cap warning only for truncated runs at the 100,000 row count', ({ truncated, warning }) => {
+    renderSharedRecordModal({
+      jobId: sharedRecordItem.jobId,
+      status: 'completed',
+      sql: sharedRecordItem.sql,
+      outputMode: 'file',
+      downloadUrl: '/query/export/synthetic-shared-record-history-job',
+      progressMessage: 'Completed',
+      createdAt: sharedRecordItem.createdAt,
+      startedAt: sharedRecordItem.startedAt,
+      completedAt: sharedRecordItem.completedAt,
+      columns: ['Instance UUID'],
+      rows: [{ 'Instance UUID': '00000000-0000-4000-8000-000000000001' }],
+      rowCount: 100000,
+      executionTimeMs: 15,
+      truncated,
+    });
+
+    if (warning) {
+      expect(screen.getByText('This report reached its 100,000-row cap.')).toBeInTheDocument();
+    } else {
+      expect(screen.queryByText('This report reached its 100,000-row cap.')).not.toBeInTheDocument();
+    }
+    expect(screen.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument();
   });
 });
