@@ -45,6 +45,7 @@ namespace app\models {
         public $started_at;
         public $completed_at;
         public $output_mode = 'table';
+        public $name;
         public $estimated_rows;
         public $estimated_cost;
         public $metadata;
@@ -286,6 +287,15 @@ namespace {
     catalogingAssertSame(10, catalogingLastJob()->estimated_rows, 'Fixed report estimates must be saved on the job.');
     catalogingAssertSame(100.0, catalogingLastJob()->estimated_cost, 'Fixed report cost estimates must be saved on the job.');
     catalogingAssertSame([
+        'inputs' => validCatalogingParams(),
+        'outputMode' => 'file',
+        'exportKind' => 'worklist',
+    ], [
+        'inputs' => (array) catalogingLastJob()->metadata['reportReplay']['inputs'],
+        'outputMode' => catalogingLastJob()->metadata['reportReplay']['outputMode'] ?? null,
+        'exportKind' => catalogingLastJob()->metadata['reportReplay']['exportKind'] ?? null,
+    ], 'Governed report runs retain submitted replay inputs and the final file mode.');
+    catalogingAssertSame([
         'exportKind' => 'worklist',
         'marcTag' => '856',
         'locationName' => '2 Locations',
@@ -298,6 +308,15 @@ namespace {
     $identifier = runCatalogingReport(['params' => validCatalogingParams(), 'outputMode' => 'table', 'exportKind' => 'identifier']);
     catalogingAssertSame('file', $identifier['outputMode'] ?? null, 'Identifier exports must always route to file output.');
     catalogingAssertSame('identifier', catalogingLastJob()->metadata['reportExecution']['exportKind'] ?? null, 'Identifier exports must be persisted in governed job metadata.');
+    catalogingAssertSame([
+        'inputs' => validCatalogingParams(),
+        'outputMode' => 'file',
+        'exportKind' => 'identifier',
+    ], [
+        'inputs' => (array) catalogingLastJob()->metadata['reportReplay']['inputs'],
+        'outputMode' => catalogingLastJob()->metadata['reportReplay']['outputMode'] ?? null,
+        'exportKind' => catalogingLastJob()->metadata['reportReplay']['exportKind'] ?? null,
+    ], 'Identifier reports retain their submitted inputs and forced-file replay mode.');
 
     // The newer governed finder must use the same dispatcher and bypass the
     // generic ReportTemplate binder just like the legacy fixed report.
@@ -309,6 +328,15 @@ namespace {
     catalogingAssertSame(1, count(\app\services\SqlBuilderService::$policyCalls), 'Finder SQL must receive table-policy validation.');
     catalogingAssertSame(1, count(\app\services\SqlPreflightService::$calls), 'Finder SQL must receive preflight validation.');
     catalogingAssertSame('marc-field-indicator-content-finder', catalogingLastJob()->metadata['reportExecution']['reportSlug'] ?? null, 'Finder execution metadata must be persisted.');
+    catalogingAssertSame([
+        'inputs' => validFinderParams(),
+        'outputMode' => 'file',
+        'exportKind' => 'worklist',
+    ], [
+        'inputs' => (array) catalogingLastJob()->metadata['reportReplay']['inputs'],
+        'outputMode' => catalogingLastJob()->metadata['reportReplay']['outputMode'] ?? null,
+        'exportKind' => catalogingLastJob()->metadata['reportReplay']['exportKind'] ?? null,
+    ], 'Governed finder runs retain their replay inputs and actual output mode.');
 
     resetCatalogingState();
     \app\models\ReportTemplate::$report = finderReport();

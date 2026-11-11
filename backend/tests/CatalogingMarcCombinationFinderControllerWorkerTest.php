@@ -192,6 +192,14 @@ CREATE TABLE report_templates (
 )
 SQL
 )->execute();
+$db->createCommand(<<<'SQL'
+CREATE TABLE saved_queries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT NOT NULL, description TEXT,
+    query_definition TEXT NOT NULL, generated_sql TEXT, source TEXT, nl_prompt TEXT, last_job_id TEXT,
+    is_pinned INTEGER DEFAULT 0, is_global INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT
+)
+SQL
+)->execute();
 
 $folioDb = Yii::$app->folioDb;
 $folioDb->open();
@@ -266,6 +274,74 @@ marcCombinationControllerCase('controller parameters survive into the export wor
     }
 });
 
+marcCombinationControllerCase('saved MARC combination replay matches a direct compiler run', function () use ($controller, $reportId) {
+    $params = marcCombinationControllerParameters();
+    for ($slot = 3; $slot <= 5; $slot++) {
+        foreach (['marcTag', 'occurrenceCondition', 'firstIndicator', 'secondIndicator', 'subfieldCode', 'contentRule', 'searchValue', 'caseExact'] as $field) {
+            unset($params['c' . $slot . '_' . $field]);
+        }
+    }
+
+    $source = marcCombinationControllerRun($controller, $reportId, $params);
+    marcCombinationControllerSame(202, $source['status'], 'Queue a report run to save.');
+    Yii::$app->request->setBodyParams(['fromJobId' => $source['body']['jobId'], 'name' => 'Saved MARC combination']);
+    Yii::$app->response->statusCode = 200;
+    $saved = $controller->actionSave();
+    marcCombinationControllerSame(201, Yii::$app->response->statusCode, 'Save the report run from history.');
+    $savedDefinition = $saved['query_definition'];
+    marcCombinationControllerSame($params, $savedDefinition['report_replay']['inputs'] ?? null, 'The saved snapshot keeps submitted inputs without inactive condition slots.');
+
+    $direct = marcCombinationControllerRun($controller, $reportId, $params);
+    $directJob = marcCombinationControllerJob((string) $direct['body']['jobId']);
+    Yii::$app->response->statusCode = 200;
+    $refresh = $controller->actionDashboardRefresh($saved['id']);
+    marcCombinationControllerSame(202, Yii::$app->response->statusCode, 'Refresh a saved compiled MARC report.');
+    $refreshJob = marcCombinationControllerJob((string) $refresh['jobId']);
+    foreach (['sql_text', 'params', 'data_source', 'output_mode', 'history_group_key', 'metadata'] as $field) {
+        marcCombinationControllerSame($directJob[$field], $refreshJob[$field], 'Compiled refresh matches the direct run on ' . $field . '.');
+    }
+
+    $insertSavedReplay = function ($name, array $inputs) use ($reportId) {
+        Yii::$app->db->createCommand()->insert('saved_queries', [
+            'user_id' => 1,
+            'name' => $name,
+            'query_definition' => json_encode([
+                'report_template_id' => $reportId,
+                'report_replay' => [
+                    'inputs' => (object) $inputs,
+                    'outputMode' => 'file',
+                    'exportKind' => 'worklist',
+                ],
+            ]),
+            'generated_sql' => 'SELECT stored_sql_fallthrough',
+            'source' => 'report',
+            'last_job_id' => 'prior-job',
+        ])->execute();
+        return (int) Yii::$app->db->getLastInsertID();
+    };
+    $noConditions = array_merge($params, ['c1_marcTag' => '', 'c2_marcTag' => '']);
+    foreach ([
+        ['invalid MARC condition', $noConditions, 400],
+        ['deleted location', array_merge($params, ['locationIds' => '99999999-9999-4999-8999-999999999999']), 422],
+    ] as $index => $errorCase) {
+        $invalidId = $insertSavedReplay('Invalid compiled replay ' . $index, $errorCase[1]);
+        $beforeJobs = (int) Yii::$app->db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar();
+        Yii::$app->response->statusCode = 200;
+        $invalid = $controller->actionDashboardRefresh($invalidId);
+        marcCombinationControllerSame($errorCase[2], Yii::$app->response->statusCode, $errorCase[0] . ' keeps its report validation status.');
+        if ($errorCase[2] === 400) {
+            marcCombinationControllerSame('Report parameters are invalid.', $invalid['error'] ?? null, 'Compiler field errors keep the run response.');
+            marcCombinationControllerSame(['c1_marcTag' => 'At least one active MARC condition is required.'], $invalid['fieldErrors'] ?? null, 'Compiler field errors keep their field details.');
+        } else {
+            marcCombinationControllerSame('A selected location is unavailable. Please update the selection.', $invalid['error'] ?? null, 'Deleted locations use the safe integrity message.');
+        }
+        marcCombinationControllerSame($beforeJobs, (int) Yii::$app->db->createCommand('SELECT COUNT(*) FROM query_jobs')->queryScalar(), $errorCase[0] . ' queues no job.');
+        marcCombinationControllerSame('prior-job', Yii::$app->db->createCommand(
+            'SELECT last_job_id FROM saved_queries WHERE id = :id', [':id' => $invalidId]
+        )->queryScalar(), $errorCase[0] . ' leaves last_job_id untouched.');
+    }
+});
+
 marcCombinationControllerScopeWorkerCases($controller, $exportWorker, $reportId);
 
 marcCombinationControllerCase('the export worker writes 100000 rows and consumes the 100001st as the truncation sentinel', function () use ($exportWorker) {
@@ -329,9 +405,19 @@ marcCombinationControllerCase('controller returns the safe condition-specific mi
 
 marcCombinationControllerCase('controller titles and history identity include active tags and combine mode only', function () use ($controller, $reportId) {
     $base = marcCombinationControllerParameters(['c3_marcTag' => '', 'c3_searchValue' => 'ignored']);
+    for ($slot = 3; $slot <= 5; $slot++) {
+        foreach (['marcTag', 'occurrenceCondition', 'firstIndicator', 'secondIndicator', 'subfieldCode', 'contentRule', 'searchValue', 'caseExact'] as $field) {
+            unset($base['c' . $slot . '_' . $field]);
+        }
+    }
     $all = marcCombinationControllerRun($controller, $reportId, $base);
     marcCombinationControllerSame(202, $all['status'], 'Queue the two-condition AND run.');
     $allJob = marcCombinationControllerJob((string) $all['body']['jobId']);
+    $allMetadata = json_decode((string) $allJob['metadata'], true);
+    $replayInputs = $allMetadata['reportReplay']['inputs'] ?? [];
+    marcCombinationControllerSame($base, $replayInputs, 'The replay snapshot retains submitted values and omits inactive MARC slots.');
+    marcCombinationControllerSame('file', $allMetadata['reportReplay']['outputMode'] ?? null, 'MARC combinations persist their final file mode.');
+    marcCombinationControllerSame('worklist', $allMetadata['reportReplay']['exportKind'] ?? null, 'MARC combinations persist their export kind.');
     $allParams = marcCombinationControllerParameters($base);
     $identity = ['locationIds' => $allParams['locationIds'], 'locationBasis' => $allParams['locationBasis'], 'combine' => 'all'];
     for ($slot = 1; $slot <= 2; $slot++) {
@@ -374,6 +460,11 @@ marcCombinationControllerCase('identifier export uses the compiler tag list in i
     $jobId = (string) $result['body']['jobId'];
     $job = marcCombinationControllerJob($jobId);
     $metadata = json_decode((string) $job['metadata'], true);
+    marcCombinationControllerSame([
+        'inputs' => marcCombinationControllerParameters(),
+        'outputMode' => 'file',
+        'exportKind' => 'identifier',
+    ], $metadata['reportReplay'] ?? null, 'MARC identifier runs persist their input snapshot and final mode.');
     $contract = $metadata['reportExecution'] ?? [];
     marcCombinationControllerSame('marc-field-combination-finder-655-563-main-main-folio-uuids.csv', $contract['downloadFilename'] ?? null, 'The filename normalizes the active tag list as one safe component.');
     marcCombinationControllerTranslateQueuedSql($jobId);

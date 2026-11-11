@@ -55,6 +55,7 @@ require_once __DIR__ . '/../services/AskUserExplanationService.php';
 require_once __DIR__ . '/../services/ExpenseClassScopeService.php';
 require_once __DIR__ . '/../services/ExpenseAllocationApiService.php';
 require_once __DIR__ . '/../services/ReportRunTitleService.php';
+require_once __DIR__ . '/../services/ReportRunService.php';
 require_once __DIR__ . '/../services/ReportRunTitleOptionSource.php';
 require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
 
@@ -3727,6 +3728,21 @@ class FolioQueryController extends Controller
     public function actionSave()
     {
         $body = Yii::$app->request->getBodyParams();
+        if (array_key_exists('fromJobId', $body)) {
+            $saved = \app\services\ReportReplayService::saveFromJob($body, $this->getCurrentUserId());
+            Yii::$app->response->statusCode = $saved['statusCode'];
+            if (isset($saved['query'])) {
+                return $this->formatSaved($saved['query']);
+            }
+            $response = ['error' => $saved['error']];
+            if (isset($saved['reason'])) {
+                $response['reason'] = $saved['reason'];
+            }
+            if (isset($saved['errors'])) {
+                $response['errors'] = $saved['errors'];
+            }
+            return $response;
+        }
         $queryDefinition = $body['queryDefinition'] ?? [];
         $generatedSql = $body['generatedSql'] ?? null;
 
@@ -3996,6 +4012,39 @@ class FolioQueryController extends Controller
             Yii::$app->response->statusCode = 404;
             return ['error' => 'Saved query not found'];
         }
+        $replay = \app\services\ReportReplayService::savedRefresh($sq->query_definition);
+        if ($replay['hasReplay']) {
+            if (empty($replay['valid'])) {
+                Yii::$app->response->statusCode = 422;
+                return ['error' => "This saved report can't be refreshed; save it again from History."];
+            }
+            $report = ReportTemplate::findOne($replay['reportTemplateId']);
+            if (!$report) {
+                Yii::$app->response->statusCode = 404;
+                return ['error' => 'This report no longer exists.'];
+            }
+            if ((int) $report->is_active !== 1) {
+                Yii::$app->response->statusCode = 410;
+                return ['error' => 'This report has been retired.'];
+            }
+            $snapshot = $replay['snapshot'];
+            $result = \app\services\ReportRunService::run(
+                $report,
+                [
+                    'params' => (array) $snapshot->inputs,
+                    'outputMode' => $snapshot->outputMode,
+                    'exportKind' => $snapshot->exportKind,
+                ],
+                $userId,
+                $this->reportRunHooks()
+            );
+            if (Yii::$app->response->statusCode !== 202) {
+                return $result;
+            }
+            $sq->last_job_id = $result['jobId'];
+            $sq->save(false);
+            return ['jobId' => $result['jobId']];
+        }
         if (!$sq->generated_sql) {
             Yii::$app->response->statusCode = 422;
             return ['error' => 'Saved query has no SQL'];
@@ -4119,6 +4168,12 @@ class FolioQueryController extends Controller
         if (!$query) {
             Yii::$app->response->statusCode = 404;
             return ['error' => 'Saved query not found'];
+        }
+
+        $reportReplayConflict = \app\services\SavedQueryPromotionService::reportReplayConflict($query);
+        if ($reportReplayConflict !== null) {
+            Yii::$app->response->statusCode = 409;
+            return ['error' => $reportReplayConflict];
         }
 
         if (!$query->generated_sql) {
@@ -4694,233 +4749,24 @@ class FolioQueryController extends Controller
             return ['error' => 'Report not found'];
         }
 
-        $body = Yii::$app->request->getBodyParams();
-        $userParams = $body['params'] ?? [];
-        $outputMode = strtolower((string)($body['outputMode'] ?? 'table')) === 'file' ? 'file' : 'table';
-        $exportKind = $body['exportKind'] ?? 'worklist';
-
-        if (!is_string($exportKind) || !in_array($exportKind, ['worklist', 'identifier'], true)) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'Unsupported report export kind.'];
-        }
-        if ($exportKind === 'identifier' && !$report->hasIdentifierExport()) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'This report does not support identifier export.'];
-        }
-
-        // Validate required params
-        $paramDefs = $report->getDecodedParameters();
-        $isGovernedReport = CatalogingReportCompilerService::supports($report);
-        $missing = [];
-        foreach ($paramDefs as $def) {
-            if (!empty($def['required']) && empty($userParams[$def['name']])) {
-                // Check if there's a default
-                $resolved = ReportTemplate::resolveDefaultMacro($def['default'] ?? '');
-                if (empty($resolved)) {
-                    $missing[] = $def['label'] ?? $def['name'];
-                }
-            }
-        }
-        if (!empty($missing) && !$isGovernedReport) {
-            Yii::$app->response->statusCode = 400;
-            return ['error' => 'Missing required parameters: ' . implode(', ', $missing)];
-        }
-
-        $compiled = null;
-        if (CatalogingReportCompilerService::supports($report)) {
-            try {
-                $compiled = CatalogingReportCompilerService::build(
-                    $report,
-                    $userParams,
-                    Yii::$app->folioDb
-                );
-            } catch (\app\exceptions\ReportParameterValidationException $e) {
-                Yii::$app->response->statusCode = 400;
-                return [
-                    'error' => 'Report parameters are invalid.',
-                    'fieldErrors' => $e->getFieldErrors(),
-                ];
-            } catch (\InvalidArgumentException $e) {
-                if ($this->isCatalogingReportIntegrityError($e)) {
-                    Yii::$app->response->statusCode = 422;
-                    return ['error' => $this->catalogingReportIntegrityMessage($e)];
-                }
-                if ($isGovernedReport) {
-                    Yii::$app->response->statusCode = 422;
-                    return ['error' => 'The report definition could not be validated. Please contact an administrator.'];
-                }
-                Yii::$app->response->statusCode = 400;
-                return ['error' => $e->getMessage()];
-            } catch (\Throwable $e) {
-                Yii::$app->response->statusCode = 422;
-                return ['error' => 'The report could not be validated. Please try again or contact an administrator.'];
-            }
-            $bound = ['sql' => $compiled['sql'], 'params' => $compiled['params']];
-        } else {
-            $bound = $report->bindParams($userParams);
-            $bound['sql'] = $this->normalizeLegacyReportSql($report, $bound['sql']);
-        }
-
-        // Determine data source from report template
-        $rawDataSource = $report->hasAttribute('data_source') ? $report->data_source : null;
-        $dataSource = in_array($rawDataSource, ['folio', 'local', 'composite'])
-            ? $rawDataSource
-            : 'folio';
-
-        // Safety validation
-        try {
-            if ($dataSource === 'local') {
-                LocalReportSqlService::validateSql($bound['sql']);
-            } else {
-                SqlBuilderService::validateSafety($bound['sql']);
-                SqlBuilderService::validateTablePolicy($bound['sql']);
-            }
-        } catch (\InvalidArgumentException $e) {
-            Yii::$app->response->statusCode = 403;
-            return ['error' => 'This query is blocked by reporting data policy.'];
-        }
-
-        // For composite reports, attach the composite_config as job metadata.
-        $metadata = null;
-        if ($dataSource === 'composite') {
-            $compositeConfig = $report->getCompositeConfig();
-            if (!$compositeConfig) {
-                Yii::$app->response->statusCode = 400;
-                return ['error' => 'Composite report is missing composite_config'];
-            }
-            if (isset($compositeConfig['secondary_sql'])) {
-                try {
-                    LocalReportSqlService::validateSql($compositeConfig['secondary_sql']);
-                } catch (\InvalidArgumentException $exception) {
-                    Yii::$app->response->statusCode = 403;
-                    return ['error' => LocalReportSqlService::POLICY_MESSAGE];
-                }
-            }
-            // Bind secondary SQL params too (secondary uses same param set)
-            $metadata = [
-                'composite_config' => $compositeConfig,
-                'bound_params' => array_merge($bound['params'], is_array($compiled) ? ($compiled['compositeParams'] ?? []) : []),
-            ];
-        }
-
-        $estimate = null;
-        $reportExecution = null;
-        if ($compiled !== null && $dataSource === 'folio' && $report->getExecutionConfig() !== null) {
-            try {
-                $reportExecution = ReportExecutionContractService::fromReport($report, [
-                    'exportKind' => $exportKind,
-                    'marcTag' => $compiled['marcTag'],
-                    'locationName' => $compiled['location']['name'],
-                    'locationCode' => $compiled['location']['code'],
-                ]);
-            } catch (\InvalidArgumentException $e) {
-                Yii::$app->response->statusCode = 422;
-                return ['error' => 'The report execution configuration is invalid. Please contact an administrator.'];
-            }
-
-            try {
-                $estimate = $this->estimateQueryComplexity($bound['sql'], 'folio', $bound['params']);
-            } catch (\app\exceptions\DatabaseQueryCancelledException $exception) {
-                return $this->buildDatabaseCancelledResponse();
-            } catch (\Throwable $exception) {
-                Yii::$app->response->statusCode = 422;
-                return ['error' => 'Query validation failed before execution.'];
-            }
-            if (isset($estimate['error'])) {
-                $this->logPreflightValidationFailure(
-                    'api.report_run',
-                    (string) $estimate['error'],
-                    $dataSource,
-                    'report',
-                    $bound['sql']
-                );
-                Yii::$app->response->statusCode = 422;
-                return ['error' => 'Query validation failed before execution.'];
-            }
-            if ($estimate !== null) {
-                $thresholdRows = (int) (Yii::$app->params['exportRowThreshold'] ?? Yii::$app->params['maxQueryRows']);
-                $thresholdCost = (float) (Yii::$app->params['exportCostThreshold'] ?? 500000);
-                $estimatedRows = $estimate['rows'] ?? null;
-                $estimatedCost = $estimate['cost'] ?? null;
-                if (($estimatedRows !== null && $estimatedRows > $thresholdRows)
-                    || ($estimatedCost !== null && $estimatedCost > $thresholdCost)) {
-                    $outputMode = 'file';
-                }
-            }
-        }
-        // Governed reports stream to a file regardless of planner estimates.
-        // Their sentinel/cap contract is enforced by the export worker, so a
-        // table job must never materialize an unexpectedly large result set.
-        if ($reportExecution !== null || $exportKind === 'identifier') {
-            $outputMode = 'file';
-        }
-        if ($reportExecution !== null) {
-            $metadata = is_array($metadata) ? $metadata : [];
-            $metadata[ReportExecutionContractService::METADATA_KEY] = $reportExecution;
-        }
-
-        $titleService = new ReportRunTitleService(
-            new ReportRunTitleOptionSource(),
-            function ($title) {
-                return $this->normalizeQueryJobName($title);
-            }
+        return \app\services\ReportRunService::run(
+            $report,
+            Yii::$app->request->getBodyParams(),
+            $this->getCurrentUserId(),
+            $this->reportRunHooks()
         );
-        $metadata = $titleService->mergeReportTemplateId($metadata, (int) $report->id);
-        try {
-            $titleParams = isset($compiled['identity']) ? $compiled['identity'] : $userParams;
-            $jobName = $titleService->buildTitle($report, $titleParams, $exportKind === 'identifier');
-        } catch (\Throwable $exception) {
-            $jobName = $this->normalizeQueryJobName($report->name);
-        }
+    }
 
-        // Create async job
-        $jobParams = is_array($metadata)
-            ? array_merge($bound['params'], $metadata['bound_params'] ?? [])
-            : $bound['params'];
-        $job = QueryJob::createJob($bound['sql'], $jobParams, 'report', $dataSource, $metadata);
-        $job->name = $jobName;
-        $job->user_id = $this->getCurrentUserId();
-        if ($job->hasAttribute('output_mode')) {
-            $job->output_mode = $outputMode;
-        }
-        if ($job->hasAttribute('history_group_key')) {
-            $historyParams = isset($compiled['identity']) ? $compiled['identity'] : $jobParams;
-            $job->history_group_key = \app\services\HistoryGroupKeyService::build(
-                (int) $report->id,
-                $historyParams,
-                $exportKind,
-                $outputMode
-            );
-        }
-        if ($outputMode === 'file') {
-            $job->status = 'pending_export';
-            $job->progress_message = 'Queued for CSV export';
-        }
-        if ($estimate !== null) {
-            if ($job->hasAttribute('estimated_rows')) {
-                $job->estimated_rows = $estimate['rows'] ?? null;
-            }
-            if ($job->hasAttribute('estimated_cost')) {
-                $cost = $estimate['cost'] ?? null;
-                $job->estimated_cost = $cost !== null ? min((float) $cost, 1.0e15) : null;
-            }
-        }
-        if (!$job->save()) {
-            Yii::$app->response->statusCode = 500;
-            return ['error' => 'Failed to create job', 'details' => $job->errors];
-        }
-
-        Yii::$app->response->statusCode = 202;
+    private function reportRunHooks()
+    {
         return [
-            'jobId' => $job->id,
-            'reportName' => $report->name,
-            'status' => $job->status,
-            'outputMode' => $job->hasAttribute('output_mode') ? ($job->output_mode ?: 'table') : 'table',
-            'dataSource' => $dataSource,
-            'progressMessage' => $job->progress_message,
-            'createdAt' => $job->created_at,
-            'startedAt' => $job->started_at,
-            'completedAt' => $job->completed_at,
+            'isCatalogingReportIntegrityError' => function ($error) { return $this->isCatalogingReportIntegrityError($error); },
+            'catalogingReportIntegrityMessage' => function ($error) { return $this->catalogingReportIntegrityMessage($error); },
+            'normalizeLegacyReportSql' => function ($report, $sql) { return $this->normalizeLegacyReportSql($report, $sql); },
+            'estimateQueryComplexity' => function ($sql, $dataSource, $params) { return $this->estimateQueryComplexity($sql, $dataSource, $params); },
+            'buildDatabaseCancelledResponse' => function () { return $this->buildDatabaseCancelledResponse(); },
+            'logPreflightValidationFailure' => function ($route, $error, $dataSource, $source, $sql) { $this->logPreflightValidationFailure($route, $error, $dataSource, $source, $sql); },
+            'normalizeQueryJobName' => function ($name) { return $this->normalizeQueryJobName($name); },
         ];
     }
 

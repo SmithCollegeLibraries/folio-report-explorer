@@ -8,6 +8,26 @@ use app\models\SavedQuery;
 class SavedQueryPromotionService
 {
     /**
+     * Return a conflict when this saved query already replays a fixed report.
+     */
+    public static function reportReplayConflict(SavedQuery $query)
+    {
+        if (!$query->hasAttribute('query_definition')) {
+            return null;
+        }
+        $definition = json_decode((string) $query->query_definition);
+        if (!is_object($definition) || !property_exists($definition, 'report_replay')) {
+            return null;
+        }
+        $reportId = isset($definition->report_template_id) ? (int) $definition->report_template_id : 0;
+        $report = $reportId > 0 ? ReportTemplate::findOne($reportId) : null;
+        if (!$report || (int) $report->is_active !== 1) {
+            return 'This saved query already runs a report that has been retired or deleted.';
+        }
+        return "This saved query already runs the report '" . $report->name . "'.";
+    }
+
+    /**
      * Find an active report that exactly matches a saved query's name and SQL.
      */
     public static function findActiveMatch(SavedQuery $query)
