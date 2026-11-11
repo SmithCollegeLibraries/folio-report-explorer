@@ -3735,6 +3735,9 @@ class FolioQueryController extends Controller
                 return $this->formatSaved($saved['query']);
             }
             $response = ['error' => $saved['error']];
+            if (isset($saved['reason'])) {
+                $response['reason'] = $saved['reason'];
+            }
             if (isset($saved['errors'])) {
                 $response['errors'] = $saved['errors'];
             }

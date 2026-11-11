@@ -78,7 +78,18 @@ final class ReportReplayService
             'metadata' => $job->metadata,
         ]);
         if (!$eligibility['canSave']) {
-            return ['statusCode' => 422, 'error' => $eligibility['reason']];
+            $reason = $eligibility['reason'];
+            $messages = [
+                'older_run' => "Run this report again to save it - older runs didn't keep their settings.",
+                'invalid_snapshot' => "This run's saved settings can't be read - run the report again to save it.",
+                'report_retired' => 'This report has been retired.',
+                'report_deleted' => 'This report no longer exists.',
+            ];
+            return [
+                'statusCode' => 422,
+                'error' => $messages[$reason] ?? $reason,
+                'reason' => $reason,
+            ];
         }
 
         $metadata = self::decodeObject($job->metadata);
@@ -133,6 +144,9 @@ final class ReportReplayService
             return null;
         }
         $decoded = json_decode($json);
+        if (is_string($decoded)) {
+            $decoded = json_decode($decoded);
+        }
         return is_object($decoded) ? $decoded : null;
     }
 }

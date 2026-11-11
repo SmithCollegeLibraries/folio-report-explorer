@@ -363,18 +363,47 @@ reportRunIntegrationCase('history exposes report replay eligibility and establis
         return \app\services\HistoryItemSerializer::serialize([
             'id' => 'synthetic-history-job',
             'source' => $source,
-            'metadata' => json_encode($metadata),
+            'metadata' => is_array($metadata) ? json_encode($metadata) : $metadata,
         ]);
     };
 
-    reportRunIntegrationAssertSame([
-        'reportTemplateId' => $compositeReportId,
-        'canSave' => true,
-        'reason' => null,
-    ], $serialize('report', [
+    $metadataJson = json_encode([
         'reportTemplateId' => $compositeReportId,
         'reportReplay' => $validReplay,
-    ])['reportRun'] ?? null, 'An active report with a valid replay snapshot can be saved.');
+    ]);
+    $definitionJson = json_encode([
+        'report_template_id' => $compositeReportId,
+        'report_replay' => $validReplay,
+    ]);
+    foreach ([
+        ['plain JSON text', $metadataJson, $definitionJson],
+        ['double-encoded JSON string', json_encode($metadataJson), json_encode($definitionJson)],
+        ['decoded object', json_decode($metadataJson), json_decode($definitionJson)],
+    ] as $representation) {
+        list($label, $metadata, $definition) = $representation;
+        reportRunIntegrationAssertSame([
+            'reportTemplateId' => $compositeReportId,
+            'canSave' => true,
+            'reason' => null,
+        ], $serialize('report', $metadata)['reportRun'] ?? null, 'History accepts ' . $label . '.');
+
+        $refresh = \app\services\ReportReplayService::savedRefresh($definition);
+        reportRunIntegrationAssertSame([
+            'hasReplay' => true,
+            'valid' => true,
+            'reportTemplateId' => $compositeReportId,
+            'inputs' => ['choice' => 'first'],
+            'outputMode' => 'table',
+            'exportKind' => 'worklist',
+        ], [
+            'hasReplay' => $refresh['hasReplay'] ?? false,
+            'valid' => $refresh['valid'] ?? false,
+            'reportTemplateId' => $refresh['reportTemplateId'] ?? null,
+            'inputs' => isset($refresh['snapshot']->inputs) ? (array) $refresh['snapshot']->inputs : null,
+            'outputMode' => $refresh['snapshot']->outputMode ?? null,
+            'exportKind' => $refresh['snapshot']->exportKind ?? null,
+        ], 'Saved refresh accepts ' . $label . '.');
+    }
 
     reportRunIntegrationAssertSame('older_run', $serialize('report', [
         'reportTemplateId' => $compositeReportId,
@@ -476,22 +505,44 @@ reportRunIntegrationCase('saving from report history stores a replay snapshot ow
     reportRunIntegrationAssertSame(404, Yii::$app->response->statusCode, 'A missing history job returns 404.');
     reportRunIntegrationAssertSame('Job not found', $missing['error'] ?? null, 'A missing history job has the stable error.');
 
-    $insertJob('replay-save-older', 2, ['reportTemplateId' => $compositeReportId]);
-    Yii::$app->request->setBodyParams(['fromJobId' => 'replay-save-older', 'name' => 'Older']);
-    Yii::$app->response->statusCode = 200;
-    $older = $controller->actionSave();
-    reportRunIntegrationAssertSame(422, Yii::$app->response->statusCode, 'An older report run cannot be saved.');
-    reportRunIntegrationAssertSame('older_run', $older['error'] ?? null, 'Ineligible saves return the history reason.');
-
-    $insertJob('replay-save-invalid', 2, [
-        'reportTemplateId' => $compositeReportId,
-        'reportReplay' => ['inputs' => [], 'outputMode' => 'bad', 'exportKind' => 'worklist'],
-    ]);
-    Yii::$app->request->setBodyParams(['fromJobId' => 'replay-save-invalid', 'name' => 'Invalid']);
-    Yii::$app->response->statusCode = 200;
-    $invalid = $controller->actionSave();
-    reportRunIntegrationAssertSame(422, Yii::$app->response->statusCode, 'A malformed replay cannot be saved.');
-    reportRunIntegrationAssertSame('invalid_snapshot', $invalid['error'] ?? null, 'Malformed saves return the shared validation reason.');
+    foreach ([
+        [
+            'older_run',
+            ['reportTemplateId' => $compositeReportId],
+            "Run this report again to save it - older runs didn't keep their settings.",
+        ],
+        [
+            'invalid_snapshot',
+            ['reportTemplateId' => $compositeReportId, 'reportReplay' => ['inputs' => [], 'outputMode' => 'bad', 'exportKind' => 'worklist']],
+            "This run's saved settings can't be read - run the report again to save it.",
+        ],
+        [
+            'report_retired',
+            ['reportTemplateId' => $compositeReportId, 'reportReplay' => $replay],
+            'This report has been retired.',
+        ],
+        [
+            'report_deleted',
+            ['reportTemplateId' => 99999, 'reportReplay' => $replay],
+            'This report no longer exists.',
+        ],
+    ] as $index => $scenario) {
+        list($reason, $metadata, $errorText) = $scenario;
+        if ($reason === 'report_retired') {
+            Yii::$app->db->createCommand()->update('report_templates', ['is_active' => 0], ['id' => $compositeReportId])->execute();
+        }
+        $jobId = 'replay-save-ineligible-' . $index;
+        $insertJob($jobId, 2, $metadata);
+        Yii::$app->request->setBodyParams(['fromJobId' => $jobId, 'name' => 'Ineligible']);
+        Yii::$app->response->statusCode = 200;
+        $ineligible = $controller->actionSave();
+        reportRunIntegrationAssertSame(422, Yii::$app->response->statusCode, $reason . ' cannot be saved.');
+        reportRunIntegrationAssertSame($errorText, $ineligible['error'] ?? null, $reason . ' returns its explanatory text.');
+        reportRunIntegrationAssertSame($reason, $ineligible['reason'] ?? null, $reason . ' remains machine-readable.');
+        if ($reason === 'report_retired') {
+            Yii::$app->db->createCommand()->update('report_templates', ['is_active' => 1], ['id' => $compositeReportId])->execute();
+        }
+    }
 
     $parameterlessReportId = $insertReport('Synthetic Parameterless Report', 'local', [], null, 'SELECT 1');
     Yii::$app->request->setBodyParams(['params' => []]);
