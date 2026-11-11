@@ -252,6 +252,44 @@ describe('MarcCombinationFinderParameters', () => {
     );
   });
 
+  it('describes subfield coding on every condition input and removes it when corrected', async () => {
+    const user = userEvent.setup();
+    const conditions: Array<[string, string]> = [
+      ['$a Women owners. $2 local/mns', '$a'],
+      ['‡a Women', '‡a'],
+      ['ǂ2 local', 'ǂ2'],
+      ['ends with $a', '$a'],
+      ['$9 text', '$9'],
+    ];
+    const overrides: Record<string, string> = {};
+    conditions.forEach(([searchValue], index) => {
+      const slot = index + 1;
+      overrides[`c${slot}_marcTag`] = String(600 + slot);
+      overrides[`c${slot}_contentRule`] = 'contains';
+      overrides[`c${slot}_searchValue`] = searchValue;
+    });
+    renderPanel(values(overrides));
+
+    conditions.forEach(([, expectedCode], index) => {
+      const condition = screen.getByRole('group', { name: `Condition ${index + 1}` });
+      const warning = within(condition).getByRole('status');
+      const description = `This looks like MARC subfield coding (${expectedCode}). Enter only the text inside one subfield, and choose the subfield in the Subfield box.${index === 0 ? ' To also match $2, add another condition on the same tag.' : ''}`;
+      expect(warning).toHaveTextContent(description);
+      expect(warning).toHaveAttribute('aria-live', 'polite');
+      expect(within(condition).getByLabelText(`Condition ${index + 1} search text`)).toHaveAccessibleDescription(description);
+    });
+    expect(within(screen.getByRole('group', { name: 'Condition 1' })).getByRole('status')).toHaveTextContent(
+      'To also match $2, add another condition on the same tag.',
+    );
+
+    const firstCondition = screen.getByRole('group', { name: 'Condition 1' });
+    const firstSearchInput = within(firstCondition).getByLabelText('Condition 1 search text');
+    await user.clear(firstSearchInput);
+    await user.type(firstSearchInput, 'Women');
+    expect(within(firstCondition).queryByRole('status')).not.toBeInTheDocument();
+    expect(firstSearchInput).not.toHaveAccessibleDescription();
+  });
+
   it.each([
     ['blank / 7', { c1_firstIndicator: 'blank', c1_secondIndicator: 'char:7' }, '655 #7 $a'],
     ['any / 7', { c1_firstIndicator: 'any', c1_secondIndicator: 'char:7' }, '655 ?7 $a'],

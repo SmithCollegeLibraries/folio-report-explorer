@@ -8,6 +8,7 @@ export default function ParamInput({
   onChange,
   error,
   errorId,
+  descriptionId,
   groupSelect = false,
 }: {
   param: ReportParam;
@@ -16,9 +17,11 @@ export default function ParamInput({
   onChange: (value: string) => void;
   error?: string;
   errorId?: string;
+  descriptionId?: string;
   groupSelect?: boolean;
 }) {
   const inputId = `report-param-${param.name}`;
+  const describedBy = [error ? errorId : undefined, descriptionId].filter(Boolean).join(' ') || undefined;
 
   return (
     <div>
@@ -45,7 +48,7 @@ export default function ParamInput({
           id={inputId}
           value={value}
           aria-invalid={error ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={describedBy}
           onChange={(event) => onChange(event.target.value)}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
         >
@@ -61,7 +64,7 @@ export default function ParamInput({
           id={inputId}
           value={value}
           aria-invalid={error ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={describedBy}
           onChange={(event) => onChange(event.target.value)}
           className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
         >
@@ -74,7 +77,7 @@ export default function ParamInput({
           id={inputId}
           value={value}
           aria-invalid={error ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={describedBy}
           onChange={(event) => onChange(event.target.value)}
           placeholder={param.placeholder || 'One value per line'}
           className="h-24 w-full resize-none rounded-lg border border-stone-300 px-3 py-2 font-mono text-sm outline-none transition focus:border-folio-500 focus:ring-2 focus:ring-folio-200"
@@ -84,7 +87,7 @@ export default function ParamInput({
           id={inputId}
           type={param.type === 'date' ? 'date' : param.type === 'number' ? 'number' : 'text'}
           aria-invalid={error ? true : undefined}
-          aria-describedby={error ? errorId : undefined}
+          aria-describedby={describedBy}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder={param.placeholder}

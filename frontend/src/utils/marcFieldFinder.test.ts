@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateMarcFieldFinder, normalizeIndicator } from './marcFieldFinder';
+import { evaluateMarcFieldFinder, findMarcSubfieldCodes, normalizeIndicator } from './marcFieldFinder';
 
 const validValues = {
   locationIds: '11111111-1111-4111-8111-111111111111',
@@ -103,5 +103,24 @@ describe('evaluateMarcFieldFinder', () => {
     });
     expect(result.valid).toBe(false);
     expect(result.fieldErrors.locationIds).toContain('valid UUID');
+  });
+});
+
+describe('findMarcSubfieldCodes', () => {
+  const cases: Array<[string, string[]]> = [
+    ['$a Women owners.', ['$a']],
+    ['Women owners. $2 local/mns', ['$2']],
+    ['‡a Women', ['‡a']],
+    ['ǂ2 local', ['ǂ2']],
+    ['ends with ‡a', ['‡a']],
+    ['$a Women owners. $2 local/mns', ['$a', '$2']],
+    ['Women owners.', []],
+    ['$25.00', []],
+    ['US$5', []],
+    ['', []],
+  ];
+
+  it.each(cases)('detects subfield codes in %s', (searchText, codes) => {
+    expect(findMarcSubfieldCodes(searchText)).toEqual(codes);
   });
 });
