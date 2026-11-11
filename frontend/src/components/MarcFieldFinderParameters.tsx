@@ -75,6 +75,7 @@ export default function MarcFieldFinderParameters({
   const showTextFields = consumesSearchText(contentRule);
   const validMarcTag = /^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/.test(values.marcTag || '');
   const searchSubfieldCodes = showTextFields ? findMarcSubfieldCodes(values.searchValue || '') : [];
+  const searchWarningId = 'marc-finder-searchValue-warning';
 
   useEffect(() => {
     if (showTextFields) return;
@@ -93,7 +94,7 @@ export default function MarcFieldFinderParameters({
   const fieldErrorText = (name: string): string | undefined => fieldErrors(name).join(' ') || undefined;
   const fieldErrorId = (name: string): string => `marc-finder-${name}-error`;
 
-  const renderParam = (name: string, groupSelect = false) => {
+  const renderParam = (name: string, groupSelect = false, descriptionId?: string) => {
     const parameter = getParam(parameters, name);
     return (
       <div key={name}>
@@ -103,6 +104,7 @@ export default function MarcFieldFinderParameters({
           options={optionsFor(name)}
           error={fieldErrorText(name)}
           errorId={fieldErrorId(name)}
+          descriptionId={descriptionId}
           groupSelect={groupSelect}
           onChange={(value) => onChange(name, value)}
         />
@@ -138,9 +140,9 @@ export default function MarcFieldFinderParameters({
         {renderParam('contentRule')}
         {showTextFields && (
           <div>
-            {renderParam('searchValue')}
+            {renderParam('searchValue', false, searchSubfieldCodes.length ? searchWarningId : undefined)}
             {searchSubfieldCodes.length > 0 && (
-              <p role="status" aria-live="polite" className="mt-1 text-xs text-amber-800">
+              <p id={searchWarningId} role="status" aria-live="polite" className="mt-1 text-xs text-amber-800">
                 This looks like MARC subfield coding ({searchSubfieldCodes[0]}). Enter only the text inside one subfield, and choose the subfield in the Subfield box.
                 {searchSubfieldCodes[1] && ' To match two subfields, use the MARC Field Combination Finder.'}
               </p>

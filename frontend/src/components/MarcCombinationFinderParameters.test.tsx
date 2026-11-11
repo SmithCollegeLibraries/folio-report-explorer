@@ -252,7 +252,8 @@ describe('MarcCombinationFinderParameters', () => {
     );
   });
 
-  it('announces subfield coding in every condition slot and names a second code', () => {
+  it('describes subfield coding on every condition input and removes it when corrected', async () => {
+    const user = userEvent.setup();
     const conditions: Array<[string, string]> = [
       ['$a Women owners. $2 local/mns', '$a'],
       ['‡a Women', '‡a'],
@@ -272,14 +273,21 @@ describe('MarcCombinationFinderParameters', () => {
     conditions.forEach(([, expectedCode], index) => {
       const condition = screen.getByRole('group', { name: `Condition ${index + 1}` });
       const warning = within(condition).getByRole('status');
-      expect(warning).toHaveTextContent(
-        `This looks like MARC subfield coding (${expectedCode}). Enter only the text inside one subfield, and choose the subfield in the Subfield box.`,
-      );
+      const description = `This looks like MARC subfield coding (${expectedCode}). Enter only the text inside one subfield, and choose the subfield in the Subfield box.${index === 0 ? ' To also match $2, add another condition on the same tag.' : ''}`;
+      expect(warning).toHaveTextContent(description);
       expect(warning).toHaveAttribute('aria-live', 'polite');
+      expect(within(condition).getByLabelText(`Condition ${index + 1} search text`)).toHaveAccessibleDescription(description);
     });
     expect(within(screen.getByRole('group', { name: 'Condition 1' })).getByRole('status')).toHaveTextContent(
       'To also match $2, add another condition on the same tag.',
     );
+
+    const firstCondition = screen.getByRole('group', { name: 'Condition 1' });
+    const firstSearchInput = within(firstCondition).getByLabelText('Condition 1 search text');
+    await user.clear(firstSearchInput);
+    await user.type(firstSearchInput, 'Women');
+    expect(within(firstCondition).queryByRole('status')).not.toBeInTheDocument();
+    expect(firstSearchInput).not.toHaveAccessibleDescription();
   });
 
   it.each([

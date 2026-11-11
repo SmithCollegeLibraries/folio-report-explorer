@@ -102,7 +102,7 @@ export default function MarcCombinationFinderParameters({
       description: found?.description,
     };
   };
-  const renderParam = (name: string, label?: string, groupSelect = false) => {
+  const renderParam = (name: string, label?: string, groupSelect = false, descriptionId?: string) => {
     const field = parameter(name, label);
     const availableOptions = selectOptions?.[name] || FALLBACK_OPTIONS[field.name.replace(/^c[1-5]_/, '')];
     const options = field.name === 'locationBasis'
@@ -117,6 +117,7 @@ export default function MarcCombinationFinderParameters({
           groupSelect={groupSelect}
           error={errorText(name)}
           errorId={'marc-combination-' + name + '-error'}
+          descriptionId={descriptionId}
           onChange={(value) => change(name, value)}
         />
         {field.type !== 'multiselect' && errors(name).map((message, index) => (
@@ -228,6 +229,7 @@ export default function MarcCombinationFinderParameters({
           const prefix = 'c' + slot + '_';
           const hasTextRule = consumesSearchText(values[prefix + 'contentRule'] || '');
           const searchSubfieldCodes = findMarcSubfieldCodes(values[prefix + 'searchValue'] || '');
+          const searchWarningId = 'marc-combination-' + prefix + 'searchValue-warning';
           const validTag = /^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/.test(values[prefix + 'marcTag'] || '');
           return (
             <section key={slot} role="group" aria-label={'Condition ' + slot} className="rounded-xl border border-stone-200 p-4">
@@ -252,9 +254,9 @@ export default function MarcCombinationFinderParameters({
                 {renderParam(prefix + 'contentRule', 'Condition ' + slot + ' content rule')}
                 {hasTextRule && (
                   <div>
-                    {renderParam(prefix + 'searchValue', 'Condition ' + slot + ' search text')}
+                    {renderParam(prefix + 'searchValue', 'Condition ' + slot + ' search text', false, searchSubfieldCodes.length ? searchWarningId : undefined)}
                     {searchSubfieldCodes.length > 0 && (
-                      <p role="status" aria-live="polite" className="mt-1 text-xs text-amber-800">
+                      <p id={searchWarningId} role="status" aria-live="polite" className="mt-1 text-xs text-amber-800">
                         This looks like MARC subfield coding ({searchSubfieldCodes[0]}). Enter only the text inside one subfield, and choose the subfield in the Subfield box.
                         {searchSubfieldCodes[1] && ` To also match ${searchSubfieldCodes[1]}, add another condition on the same tag.`}
                       </p>

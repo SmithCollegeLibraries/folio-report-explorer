@@ -146,10 +146,15 @@ describe('MarcFieldFinderParameters', () => {
     expect(warning).toHaveTextContent(
       'This looks like MARC subfield coding (‡a). Enter only the text inside one subfield, and choose the subfield in the Subfield box. To match two subfields, use the MARC Field Combination Finder.',
     );
-    expect(screen.getByLabelText('Search text')).not.toHaveAttribute('aria-invalid', 'true');
+    const searchInput = screen.getByLabelText('Search text');
+    expect(searchInput).toHaveAccessibleDescription(
+      'This looks like MARC subfield coding (‡a). Enter only the text inside one subfield, and choose the subfield in the Subfield box. To match two subfields, use the MARC Field Combination Finder.',
+    );
+    expect(searchInput).not.toHaveAttribute('aria-invalid', 'true');
 
     rerender(<MarcFieldFinderParameters {...props} values={{ ...values, searchValue: 'Women' }} />);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Search text')).not.toHaveAccessibleDescription();
   });
 
   it('clears stale text values when the rule no longer consumes text', () => {
