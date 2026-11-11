@@ -127,4 +127,24 @@ describe('HistoryTable grouped rendering', () => {
     expect(memberCell).not.toBeNull();
     expect(memberCell).toHaveAttribute('colspan', String(visibleColumnCount));
   });
+
+  it('disables report saves in list rows and expanded members with their eligibility reason', () => {
+    const olderReason = "Run this report again to save it - older runs didn't keep their settings.";
+    const missingReason = "This run's saved settings can't be read - run the report again to save it.";
+    const representative = {
+      ...group(),
+      reportRun: { reportTemplateId: 7, canSave: false, reason: 'older_run' },
+    } as HistoryGroupListItem;
+    const member = {
+      ...group({ jobId: 'missing-snapshot', name: 'Missing snapshot run' }),
+    } as HistoryItem;
+    const page: HistoryGroupResponse = { items: [representative, member], total: 2, offset: 0, limit: 20 };
+    renderHistoryTable([representative], new Set(['stable-group']), { 'stable-group': page });
+
+    const olderActions = screen.getAllByTitle(olderReason);
+    const missingActions = screen.getAllByTitle(missingReason);
+    expect(olderActions).toHaveLength(2);
+    expect(missingActions).toHaveLength(2);
+    expect([...olderActions, ...missingActions].every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+  });
 });

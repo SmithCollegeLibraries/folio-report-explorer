@@ -92,12 +92,48 @@ describe('SavedQueries full CSV download', () => {
       query_definition: { report_template_id: 7, bound_params: {} },
     }]);
     vi.mocked(refreshDashboardCard).mockRejectedValue({
-      response: { data: { error: 'This report has been retired.' } },
+      response: { data: { error: 'This report has been retired.', fieldErrors: { campus: 'Choose a current campus.' } } },
     });
     renderSavedQueries();
+
+    fireEvent.click((await screen.findAllByRole('button'))[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Load saved result' }));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
 
     expect(await screen.findByText('This report has been retired.')).toBeInTheDocument();
+    expect(screen.getByText('campus: Choose a current campus.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Download Full CSV' })).toBeInTheDocument();
+  });
+
+  it('refreshes a saved report and downloads a completed export with no preview rows', async () => {
+    const savedReport = {
+      ...savedQuery,
+      source: 'report' as const,
+      last_job_id: null,
+      query_definition: { report_template_id: 7, report_replay: { inputs: {}, outputMode: 'file', exportKind: 'csv' } },
+    };
+    vi.mocked(listSaved).mockResolvedValue([savedReport]);
+    vi.mocked(refreshDashboardCard).mockResolvedValue({ jobId: 'report-export-7' });
+    vi.mocked(checkJobStatus).mockResolvedValue({
+      jobId: 'report-export-7',
+      status: 'completed',
+      outputMode: 'file',
+      downloadUrl: '/query/export/report-export-7',
+      sql: savedReport.generated_sql,
+      progressMessage: 'Completed',
+      createdAt: null,
+      startedAt: null,
+      completedAt: null,
+      rowCount: 241,
+      executionTimeMs: 18,
+    });
+
+    renderSavedQueries();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Download Full CSV' }));
+
+    expect(refreshDashboardCard).toHaveBeenCalledWith(4);
+    expect(downloadExportCsv).toHaveBeenCalledWith('report-export-7');
   });
 });

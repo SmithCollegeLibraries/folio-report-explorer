@@ -3,6 +3,7 @@ import { Activity, ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import type { HistoryItem } from '../../types';
 import type { HistoryGroupListItem } from '../../api/history';
 import type { HistoryGroupResponse } from '../../api/history';
+import HistorySaveActions from './HistorySaveActions';
 
 export interface HistoryGroupRowsProps {
   group: HistoryGroupListItem;
@@ -14,6 +15,7 @@ export interface HistoryGroupRowsProps {
   onDelete: (jobId: string) => void;
   onCancel: (jobId: string) => void;
   onRename: (member: HistoryItem) => void;
+  onSave?: (item: HistoryItem, pinned: boolean, event: React.MouseEvent<HTMLButtonElement>) => void;
   onConfirmDelete?: (jobId: string) => void;
   onCancelDelete?: () => void;
   confirmDeleteId?: string | null;
@@ -34,7 +36,7 @@ const activeStatuses = new Set(['pending', 'pending_export', 'running', 'cancell
 
 export default function HistoryGroupRows({
   group, members, expanded, loading, onToggle, onOpen, onDelete, onCancel, onRename,
-  onConfirmDelete, onCancelDelete, confirmDeleteId, deletingId,
+  onConfirmDelete, onCancelDelete, confirmDeleteId, deletingId, onSave,
   renamingId, renameValue, onRenameValueChange, renameSaving, onCommitRename, onCancelRename,
   page, onPageChange, columnCount = 1, renderRepresentative,
 }: HistoryGroupRowsProps) {
@@ -84,6 +86,7 @@ export default function HistoryGroupRows({
                 <button type="button" onClick={onCancelDelete}>No</button>
               </span> : <button type="button" onClick={() => onConfirmDelete ? onConfirmDelete(member.jobId) : onDelete(member.jobId)} className="text-red-600 hover:underline">Delete</button>)}
               {member.status === 'completed' && <button type="button" onClick={() => onRename(member)} className="text-gray-600 hover:underline">Rename</button>}
+              {member.status === 'completed' && onSave && <HistorySaveActions item={member} variant="text" onSave={onSave} />}
               {activeStatuses.has(member.status) && member.status !== 'cancelling' && (
                 <button type="button" onClick={() => onCancel(member.jobId)} className="text-amber-700 hover:underline">Cancel</button>
               )}
