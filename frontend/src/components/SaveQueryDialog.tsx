@@ -3,6 +3,7 @@ import { Bookmark, LayoutDashboard, X, Loader2, CheckCircle2 } from 'lucide-reac
 import { saveQuery } from '../api/client';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import type { HistoryItem, SavedQuery } from '../types';
+import { reportRunSaveState } from '../utils/reportRunSave';
 
 export interface SaveQueryDialogProps {
   item: HistoryItem;
@@ -19,7 +20,10 @@ export default function SaveQueryDialog({
   const [isPinned, setIsPinned] = useState(initialPinned);
   const [saving, setSaving] = useState(false);
   const [savedOk, setSavedOk] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const reportSave = reportRunSaveState(item);
+  const [err, setErr] = useState<string | null>(
+    item.source === 'report' && !reportSave.canSave ? reportSave.reason : null,
+  );
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { nameRef.current?.focus(); }, []);
@@ -28,18 +32,20 @@ export default function SaveQueryDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) { setErr('Name is required'); return; }
+    if (item.source === 'report' && !reportSave.canSave) { setErr(reportSave.reason); return; }
     setSaving(true);
     setErr(null);
     try {
-      const source = (item.source === 'nl' || item.source === 'builder') ? item.source : 'builder';
-      const sq = await saveQuery({
-        name: name.trim(),
-        description: description.trim() || undefined,
-        generatedSql: item.sql,
-        queryDefinition: { sql: item.sql },
-        source,
-        isPinned,
-      });
+      const sq = item.source === 'report'
+        ? await saveQuery({ fromJobId: item.jobId, name: name.trim(), description: description.trim() || undefined, isPinned })
+        : await saveQuery({
+          name: name.trim(),
+          description: description.trim() || undefined,
+          generatedSql: item.sql,
+          queryDefinition: { sql: item.sql },
+          source: item.source === 'nl' ? 'nl' : 'builder',
+          isPinned,
+        });
       setSavedOk(true);
       setTimeout(() => { onSaved(sq, isPinned); onClose(); }, 900);
     } catch (e: any) {
@@ -106,7 +112,7 @@ export default function SaveQueryDialog({
             </button>
             <button
               type="submit"
-              disabled={saving || savedOk}
+              disabled={saving || savedOk || (item.source === 'report' && !reportSave.canSave)}
               className="px-4 py-2 text-sm bg-folio-600 text-white rounded-lg hover:bg-folio-700 disabled:opacity-60 flex items-center gap-1.5 transition-colors"
             >
               {savedOk

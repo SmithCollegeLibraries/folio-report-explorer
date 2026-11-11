@@ -80,6 +80,21 @@ describe('History deep links', () => {
     expect(screen.getByText('synthetic')).toBeInTheDocument();
   });
 
+  it('disables save and pin in a deep-linked results modal with the report reason', async () => {
+    vi.mocked(fetchQueryHistory).mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
+    vi.mocked(fetchHistoryItem).mockResolvedValue({
+      ...item('retired-report-job', 'completed'),
+      reportRun: { reportTemplateId: 7, canSave: false, reason: 'report_retired' },
+    } as HistoryItem);
+    vi.mocked(checkJobStatus).mockResolvedValue({ ...completedStatus, jobId: 'retired-report-job' });
+
+    renderHistory('/history/retired-report-job');
+
+    const reason = await screen.findAllByTitle('This report has been retired.');
+    expect(reason).toHaveLength(2);
+    expect(reason.every((button) => (button as HTMLButtonElement).disabled)).toBe(true);
+  });
+
   it('loads a direct link when the current page is empty', async () => {
     vi.mocked(fetchQueryHistory).mockResolvedValue({ items: [], total: 0, offset: 0, limit: 50 });
     vi.mocked(fetchHistoryItem).mockResolvedValue(item('empty-page-job', 'failed', 'Synthetic failure'));

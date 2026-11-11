@@ -8,6 +8,7 @@ import type {
   NlResponse,
   SchemaAskResponse,
   SavedQuery,
+  SaveQueryInput,
   AppSettings,
   SettingsTestResponse,
   ReferenceCacheStatus,
@@ -248,16 +249,7 @@ export async function askSchema(
 
 // ─── Saved Queries ────────────────────────────────────────────────
 
-export async function saveQuery(query: {
-  name: string;
-  description?: string;
-  queryDefinition: QueryDefinition | Record<string, unknown>;
-  generatedSql?: string;
-  sqlEdited?: boolean;
-  source?: 'builder' | 'nl';
-  nlPrompt?: string;
-  isPinned?: boolean;
-}): Promise<SavedQuery> {
+export async function saveQuery(query: SaveQueryInput): Promise<SavedQuery> {
   const { data } = await api.post('/saved', query);
   return data;
 }

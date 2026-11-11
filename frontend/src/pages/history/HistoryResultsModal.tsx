@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import {
-  X, Download, Bookmark, LayoutDashboard, Clock, User,
+  X, Download, Clock, User,
   Loader2, Code2, ChevronDown, ChevronUp, Pencil, Lightbulb, Play, Sparkles,
   Copy as CopyIcon,
 } from 'lucide-react';
@@ -12,6 +12,7 @@ import HistoryResultsContent from './HistoryResultsContent';
 import type { HistoryResultsContentHandle } from './HistoryResultsContent';
 import { fmtDate, fmtTime } from '../../utils/format';
 import type { HistoryItem, JobStatusResponse } from '../../types';
+import HistorySaveActions from './HistorySaveActions';
 
 interface Props {
   item: HistoryItem;
@@ -137,20 +138,7 @@ export default function HistoryResultsModal({
             >
               <Sparkles size={14} /> Ask follow-up
             </button>
-            <button
-              onClick={() => onSave(false)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 text-gray-600 rounded hover:bg-gray-100 transition-colors"
-              title="Save to Library"
-            >
-              <Bookmark size={14} /> Save
-            </button>
-            <button
-              onClick={() => onSave(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 text-gray-600 rounded hover:bg-gray-100 transition-colors"
-              title="Pin to Dashboard"
-            >
-              <LayoutDashboard size={14} /> Dashboard
-            </button>
+            <HistorySaveActions item={item} variant="text" onSave={(_savedItem, pinned) => onSave(pinned)} />
             {job && (
               <button
                 onClick={() => resultsRef.current?.download()}

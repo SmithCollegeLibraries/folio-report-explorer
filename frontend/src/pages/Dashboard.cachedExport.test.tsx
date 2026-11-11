@@ -23,7 +23,8 @@ const dashboardItem: DashboardItem = {
   id: 4,
   name: 'Cached export',
   description: null,
-  source: 'builder',
+  source: 'report',
+  query_definition: { report_template_id: 7, report_replay: { inputs: {}, outputMode: 'file', exportKind: 'csv' } },
   is_pinned: false,
   is_global: false,
   last_job_id: 'job-cache-42',
@@ -91,8 +92,9 @@ describe('Dashboard cached file exports', () => {
 
   it('shows a retired refresh error while keeping the cached result available', async () => {
     vi.mocked(refreshDashboardCard).mockRejectedValue({
-      response: { data: { error: 'This report has been retired.' } },
+      response: { data: { error: 'This report has been retired.', fieldErrors: { campus: 'Choose a current campus.' } } },
     });
+    const onExpand = vi.fn();
     render(
       <DashboardCard
         item={dashboardItem}
@@ -106,7 +108,7 @@ describe('Dashboard cached file exports', () => {
         onUnpin={() => undefined}
         onHide={() => undefined}
         onToggleGlobal={() => undefined}
-        onExpand={() => undefined}
+        onExpand={onExpand}
       />,
     );
 
@@ -114,6 +116,9 @@ describe('Dashboard cached file exports', () => {
     fireEvent.click(screen.getByTitle('Re-run query'));
 
     expect(await screen.findByText('This report has been retired.')).toBeInTheDocument();
+    expect(screen.getByText('campus: Choose a current campus.')).toBeInTheDocument();
     expect(screen.getByTitle('Expand results')).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Expand results'));
+    expect(onExpand).toHaveBeenCalledWith(expect.objectContaining({ jobId: 'job-cache-42', outputMode: 'file' }), 'Cached export');
   });
 });

@@ -8,12 +8,13 @@ import {
   type SortingState,
   type VisibilityState,
 } from '@tanstack/react-table';
-import { Database, Loader2, ChevronDown, ChevronUp, AlertCircle, XCircle, Code, Check, Copy, User, Pencil, Bookmark, LayoutDashboard, Eye, Trash2, SlidersHorizontal } from 'lucide-react';
+import { Database, Loader2, ChevronDown, ChevronUp, AlertCircle, XCircle, Code, Check, Copy, User, Pencil, Eye, Trash2, SlidersHorizontal } from 'lucide-react';
 import StatusBadge from '../../components/StatusBadge';
 import SourceBadge from '../../components/SourceBadge';
 import { fmtDate, fmtTime } from '../../utils/format';
 import type { HistoryItem } from '../../types';
 import HistoryGroupRows from './HistoryGroupRows';
+import HistorySaveActions from './HistorySaveActions';
 import type { HistoryGroupListItem, HistoryGroupResponse } from '../../api/history';
 import { isDeletableHistoryItem } from './historyDeletionState';
 import { useDismiss } from '../../hooks/useDismiss';
@@ -314,20 +315,7 @@ export default function HistoryTable({
                 >
                   <Pencil size={13} />
                 </button>
-                <button
-                  onClick={(e) => onSave(item, false, e)}
-                  title="Save to Library"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-500 hover:text-folio-600 hover:bg-folio-50 transition-colors"
-                >
-                  <Bookmark size={13} />
-                </button>
-                <button
-                  onClick={(e) => onSave(item, true, e)}
-                  title="Add to Dashboard"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-200 text-gray-500 hover:text-folio-600 hover:bg-folio-50 transition-colors"
-                >
-                  <LayoutDashboard size={13} />
-                </button>
+                <HistorySaveActions item={item} variant="icon" onSave={onSave} />
                 <button
                   onClick={() => onOpen(item)}
                   title="View results"
@@ -582,7 +570,7 @@ export default function HistoryTable({
                 )}
                 {grouped && <HistoryGroupRows group={group} members={membersByGroup[group.groupId!]?.items ?? []}
                   expanded={expandedGroupIds.has(group.groupId!)} loading={loadingGroupIds.has(group.groupId!)} onToggle={onToggleGroup!}
-                  onOpen={onOpen} onDelete={onDelete} onConfirmDelete={onConfirmDelete} onCancelDelete={onCancelDelete} confirmDeleteId={confirmDeleteId} deletingId={deletingId}
+                  onOpen={onOpen} onDelete={onDelete} onSave={onSave} onConfirmDelete={onConfirmDelete} onCancelDelete={onCancelDelete} confirmDeleteId={confirmDeleteId} deletingId={deletingId}
                   onCancel={(id) => onCancel(id, { stopPropagation() {} } as React.MouseEvent)} onRename={(member) => onStartRename(member, { stopPropagation() {} } as React.MouseEvent)}
                   renamingId={renamingId} renameValue={renameValue} onRenameValueChange={onRenameValueChange} renameSaving={renameSaving} onCommitRename={onCommitRename} onCancelRename={onCancelRename}
                   page={membersByGroup[group.groupId!]} onPageChange={(nextOffset) => onGroupPage?.(group, nextOffset)} columnCount={row.getVisibleCells().length} />}

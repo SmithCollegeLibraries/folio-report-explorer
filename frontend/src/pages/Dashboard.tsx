@@ -10,10 +10,10 @@ import { useAuth } from '../hooks/useAuth';
 import { useJobPolling } from '../hooks/useJobPolling';
 import { jobStatusToExecuteResponse } from '../utils/jobStatus';
 import ResultsModal from '../components/ResultsModal';
-import ChartPanel from '../components/ChartPanel';
+import ChartPanel, { type ChartType } from '../components/ChartPanel';
 import ExpenseMonitorCard from '../components/ExpenseMonitorCard';
 import DashboardWidgetGallery from '../components/DashboardWidgetGallery';
-import type { ChartType } from '../components/ChartPanel';
+import RefreshErrorNotice, { formatRefreshError } from '../components/RefreshErrorNotice';
 import type { DashboardItem, ExecuteResponse, ChartConfig } from '../types';
 import {
   LayoutDashboard, PinOff, Maximize2, Wrench, MessageSquare,
@@ -64,7 +64,7 @@ export function DashboardCard({
   const [cachedResults, setCachedResults] = useState<ExecuteResponse | null>(null);
   const [loadingCache, setLoadingCache] = useState(false);
   const [lastJobId, setLastJobId] = useState<string | null>(item.last_job_id);
-  const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<ReturnType<typeof formatRefreshError> | null>(null);
 
   const [pollingJobId, setPollingJobId] = useState<string | null>(null);
   const { results: polledResults, isRunning, error: pollError } = useJobPolling(pollingJobId);
@@ -105,7 +105,7 @@ export function DashboardCard({
       setLastJobId(jobId);
       setPollingJobId(jobId);
     } catch (error: any) {
-      setRefreshError(error.response?.data?.error || 'Failed to refresh report');
+      setRefreshError(formatRefreshError(error, 'Failed to refresh report'));
     }
   };
 
@@ -224,7 +224,7 @@ export function DashboardCard({
             <span className="text-sm text-gray-500">{isRunning ? 'Running…' : 'Loading…'}</span>
           </div>
         )}
-        {refreshError && <div role="alert" className="flex items-center gap-2 text-sm text-red-600 px-4 py-2"><AlertCircle size={14} />{refreshError}</div>}
+        <RefreshErrorNotice error={refreshError} />
         {pollError && (
           <div className="flex items-center gap-2 text-sm text-red-600 p-4">
             <AlertCircle size={14} />
