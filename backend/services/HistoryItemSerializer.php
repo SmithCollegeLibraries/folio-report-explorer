@@ -29,6 +29,10 @@ final class HistoryItemSerializer
             'canDelete' => $authorized && $terminal,
         ];
 
+        if (($job['source'] ?? null) === 'report') {
+            $item['reportRun'] = ReportReplayService::historyEligibility($job);
+        }
+
         $reviewState = $advisory['reviewAdvisoryState'] ?? ($job['reviewAdvisoryState'] ?? null);
         $supersededByJobId = $advisory['reviewSupersededByJobId'] ?? ($job['reviewSupersededByJobId'] ?? null);
         if ($reviewState === 'cautioned') {

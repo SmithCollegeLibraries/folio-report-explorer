@@ -159,6 +159,39 @@ final class ReportRunTitleService
         return $merged;
     }
 
+    /**
+     * Store the submitted report inputs and final execution mode for a replay.
+     *
+     * @param array|null $metadata
+     * @param object $report
+     * @param mixed $inputs
+     * @param string $outputMode
+     * @param string $exportKind
+     * @return array
+     */
+    public function mergeReportReplay($metadata, $report, $inputs, $outputMode, $exportKind)
+    {
+        $merged = $this->mergeReportTemplateId($metadata, (int) $report->id);
+        $submitted = [];
+        if (is_array($inputs)) {
+            foreach ($report->getDecodedParameters() as $definition) {
+                if (!is_array($definition) || !isset($definition['name'])) {
+                    continue;
+                }
+                $name = (string) $definition['name'];
+                if ($name !== '' && array_key_exists($name, $inputs) && is_scalar($inputs[$name])) {
+                    $submitted[$name] = $inputs[$name];
+                }
+            }
+        }
+        $merged['reportReplay'] = [
+            'inputs' => (object) $submitted,
+            'outputMode' => $outputMode,
+            'exportKind' => $exportKind,
+        ];
+        return $merged;
+    }
+
     private function resolveValue(array $definition, array $params)
     {
         $name = (string) $definition['name'];
