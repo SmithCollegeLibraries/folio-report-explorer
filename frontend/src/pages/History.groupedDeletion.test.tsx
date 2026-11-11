@@ -90,9 +90,9 @@ describe('History grouped deletion', () => {
     await user.click(within(newestRow!).getByTitle('Delete from history'));
     await user.click(within(newestRow!).getByRole('button', { name: 'Yes' }));
 
-    expect(await screen.findByText('Next newest synthetic run')).toBeInTheDocument();
     await waitFor(() => expect(fetchQueryHistory).toHaveBeenCalledTimes(2));
-    expect(screen.queryByText('Newest synthetic run')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Newest synthetic run')).not.toBeInTheDocument());
+    expect(await screen.findByText('Next newest synthetic run')).toBeInTheDocument();
   });
 
   it('keeps a late-page expansion open on the next representative after deletion', async () => {
@@ -146,7 +146,7 @@ describe('History grouped deletion', () => {
     await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument());
     const nextRow = await screen.findByText('Late page next newest');
     await waitFor(() => expect(within(nextRow.closest('tr')!).getByTitle('Delete from history')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /run 2 times/i })).toHaveAttribute('aria-expanded', 'true');
+    expect(await screen.findByRole('button', { name: /run 2 times/i })).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('Late page older member')).toBeInTheDocument();
   });
 
