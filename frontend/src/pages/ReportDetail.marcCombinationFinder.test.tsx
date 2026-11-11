@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ReportDetail from './ReportDetail';
@@ -267,19 +267,29 @@ describe('ReportDetail MARC combination behavior', () => {
     expect(options).toEqual({ outputMode: 'table', exportKind: undefined });
   });
 
-  it('wires Run, CSV, and UUID export with the selected combination values', async () => {
-    renderDetail(searchParams({ c1_searchValue: 'Fiction', c1_contentRule: 'contains' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Run Report' })).toBeEnabled());
+  it('keeps Run enabled and submits MARC-coded search text literally', async () => {
+    const searchValue = '$a Women owners. $2 local/mns';
+    renderDetail(searchParams({ c1_searchValue: searchValue, c1_contentRule: 'contains' }));
+    const runButton = await screen.findByRole('button', { name: 'Run Report' });
+    await waitFor(() => expect(runButton).toBeEnabled());
+    const condition = screen.getByRole('group', { name: 'Condition 1' });
+    expect(within(condition).getByRole('status')).toHaveTextContent('To also match $2, add another condition on the same tag.');
+    fireEvent.click(runButton);
+    await waitFor(() => expect(runReportMock).toHaveBeenLastCalledWith(
+      29,
+      expect.objectContaining({ c1_marcTag: '655', c1_searchValue: searchValue }),
+      { outputMode: 'table', exportKind: undefined },
+    ));
     fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
     await waitFor(() => expect(runReportMock).toHaveBeenLastCalledWith(
       29,
-      expect.objectContaining({ c1_marcTag: '655', c1_searchValue: 'Fiction' }),
+      expect.objectContaining({ c1_marcTag: '655', c1_searchValue: searchValue }),
       { outputMode: 'file', exportKind: 'worklist' },
     ));
     fireEvent.click(screen.getByRole('button', { name: 'Export FOLIO UUID list' }));
     await waitFor(() => expect(runReportMock).toHaveBeenLastCalledWith(
       29,
-      expect.objectContaining({ c1_marcTag: '655', c1_searchValue: 'Fiction' }),
+      expect.objectContaining({ c1_marcTag: '655', c1_searchValue: searchValue }),
       { outputMode: 'file', exportKind: 'identifier' },
     ));
   });

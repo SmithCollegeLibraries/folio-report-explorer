@@ -5,6 +5,7 @@ import {
   CONTENT_RULES,
   consumesSearchText,
   evaluateMarcFieldFinder,
+  findMarcSubfieldCodes,
   type MarcFieldFinderValues,
 } from '../utils/marcFieldFinder';
 import type { ReportFieldErrors, ReportParam } from '../types';
@@ -73,6 +74,7 @@ export default function MarcFieldFinderParameters({
   const contentRule = values.contentRule || '';
   const showTextFields = consumesSearchText(contentRule);
   const validMarcTag = /^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/.test(values.marcTag || '');
+  const searchSubfieldCodes = showTextFields ? findMarcSubfieldCodes(values.searchValue || '') : [];
 
   useEffect(() => {
     if (showTextFields) return;
@@ -134,7 +136,17 @@ export default function MarcFieldFinderParameters({
         {validMarcTag && <div>{indicator('secondIndicator', 'Second indicator')}</div>}
         {validMarcTag && renderParam('subfieldCode')}
         {renderParam('contentRule')}
-        {showTextFields && renderParam('searchValue')}
+        {showTextFields && (
+          <div>
+            {renderParam('searchValue')}
+            {searchSubfieldCodes.length > 0 && (
+              <p role="status" aria-live="polite" className="mt-1 text-xs text-amber-800">
+                This looks like MARC subfield coding ({searchSubfieldCodes[0]}). Enter only the text inside one subfield, and choose the subfield in the Subfield box.
+                {searchSubfieldCodes[1] && ' To match two subfields, use the MARC Field Combination Finder.'}
+              </p>
+            )}
+          </div>
+        )}
         {showTextFields && renderParam('caseExact')}
       </div>
 

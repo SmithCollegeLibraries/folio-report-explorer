@@ -53,6 +53,14 @@ export function consumesSearchText(rule: string | undefined): rule is MarcConten
   return typeof rule === 'string' && TEXT_RULES.has(rule as MarcContentRule);
 }
 
+export function findMarcSubfieldCodes(searchText: string): string[] {
+  const codes = new Set<string>();
+  for (const match of searchText.matchAll(/(?:^| )([$‡ǂ][A-Za-z0-9])(?= |$)/g)) {
+    codes.add(match[1]);
+  }
+  return Array.from(codes);
+}
+
 export function normalizeIndicator(value: string | undefined): string {
   if (!value) return 'any';
   if (value === 'any' || value === 'blank') return value;

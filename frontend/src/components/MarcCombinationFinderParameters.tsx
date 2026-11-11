@@ -6,6 +6,7 @@ import {
   MARC_COMBINATION_RECORD_SCOPES,
   consumesSearchText,
   evaluateMarcCombinationFinder,
+  findMarcSubfieldCodes,
   type MarcFieldFinderValues,
 } from '../utils/marcFieldFinder';
 import type { ReportFieldErrors, ReportParam } from '../types';
@@ -226,6 +227,7 @@ export default function MarcCombinationFinderParameters({
         {Array.from({ length: visibleCount }, (_, index) => index + 1).map((slot) => {
           const prefix = 'c' + slot + '_';
           const hasTextRule = consumesSearchText(values[prefix + 'contentRule'] || '');
+          const searchSubfieldCodes = findMarcSubfieldCodes(values[prefix + 'searchValue'] || '');
           const validTag = /^(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$/.test(values[prefix + 'marcTag'] || '');
           return (
             <section key={slot} role="group" aria-label={'Condition ' + slot} className="rounded-xl border border-stone-200 p-4">
@@ -248,7 +250,17 @@ export default function MarcCombinationFinderParameters({
                 {validTag && indicator(slot, 'secondIndicator', 'Condition ' + slot + ' second indicator')}
                 {validTag && renderParam(prefix + 'subfieldCode', 'Condition ' + slot + ' subfield code')}
                 {renderParam(prefix + 'contentRule', 'Condition ' + slot + ' content rule')}
-                {hasTextRule && renderParam(prefix + 'searchValue', 'Condition ' + slot + ' search text')}
+                {hasTextRule && (
+                  <div>
+                    {renderParam(prefix + 'searchValue', 'Condition ' + slot + ' search text')}
+                    {searchSubfieldCodes.length > 0 && (
+                      <p role="status" aria-live="polite" className="mt-1 text-xs text-amber-800">
+                        This looks like MARC subfield coding ({searchSubfieldCodes[0]}). Enter only the text inside one subfield, and choose the subfield in the Subfield box.
+                        {searchSubfieldCodes[1] && ` To also match ${searchSubfieldCodes[1]}, add another condition on the same tag.`}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {hasTextRule && renderParam(prefix + 'caseExact', 'Condition ' + slot + ' case matching')}
               </div>
             </section>

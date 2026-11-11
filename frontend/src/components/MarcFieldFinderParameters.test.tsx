@@ -137,6 +137,21 @@ describe('MarcFieldFinderParameters', () => {
     expect(screen.getByRole('option', { name: 'Contains' })).toBeInTheDocument();
   });
 
+  it('announces MARC subfield coding and clears the warning when the text is corrected', () => {
+    const values = { ...baseValues, contentRule: 'contains', searchValue: '‡a Women $2 local' };
+    const props = { values, parameters: params, selectOptions: options, onChange: () => {} };
+    const { rerender } = render(<MarcFieldFinderParameters {...props} />);
+
+    const warning = screen.getByRole('status');
+    expect(warning).toHaveTextContent(
+      'This looks like MARC subfield coding (‡a). Enter only the text inside one subfield, and choose the subfield in the Subfield box. To match two subfields, use the MARC Field Combination Finder.',
+    );
+    expect(screen.getByLabelText('Search text')).not.toHaveAttribute('aria-invalid', 'true');
+
+    rerender(<MarcFieldFinderParameters {...props} values={{ ...values, searchValue: 'Women' }} />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('clears stale text values when the rule no longer consumes text', () => {
     const changes: Array<[string, string]> = [];
     const values = { ...baseValues, contentRule: 'any', searchValue: 'stale', caseExact: 'true' };
