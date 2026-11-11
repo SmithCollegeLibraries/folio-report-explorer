@@ -156,7 +156,7 @@ class MigrationService
             }
 
             $started = microtime(true);
-            self::executeMigrationFile($db, $file); if ($file['filename'] === '068_marc_field_combination_finder.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 068 did not install the canonical MARC combination finder definition.'); if ($file['filename'] === '069_marc_combination_finder_record_scopes.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 069 did not install the canonical MARC combination finder definition.');
+            self::executeMigrationFile($db, $file); if ($file['filename'] === '068_marc_field_combination_finder.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 068 did not install the canonical MARC combination finder definition.'); if ($file['filename'] === '069_marc_combination_finder_record_scopes.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 069 did not install the canonical MARC combination finder definition.'); if ($file['filename'] === '072_shared_record_check.sql' && !self::migrationAppearsApplied($db, $file['filename'])) throw new \RuntimeException('Migration 072 did not install the canonical shared record report.');
             self::recordApplied($db, $file, (int)round((microtime(true) - $started) * 1000));
             $result['applied'][] = $file['filename'];
         }
@@ -427,10 +427,9 @@ class MigrationService
                 return self::marcMissingTagReportAppearsComplete($db);
             case '043_cataloging_marc_field_finder.sql':
                 return self::catalogingMarcFieldFinderAppearsComplete($db);
-            case '045_cataloging_instances_without_holdings.sql':
-            case '046_cataloging_holdingsless_marker_patterns.sql':
-            case '047_cataloging_holdingsless_exclusion_match.sql':
+            case '045_cataloging_instances_without_holdings.sql': case '046_cataloging_holdingsless_marker_patterns.sql': case '047_cataloging_holdingsless_exclusion_match.sql':
                 return CatalogingReportMigrationRecognitionService::holdingslessReportAppearsComplete($db);
+            case '072_shared_record_check.sql': return CatalogingReportMigrationRecognitionService::sharedRecordReportAppearsComplete($db);
             case '048_quarterly_open_orders_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsOpenOrdersReportAppearsComplete($db);
             case '049_acquisitions_invoice_status_report.sql': return CatalogingReportMigrationRecognitionService::acquisitionsInvoiceStatusReportAppearsComplete($db);
             case '050_orders_missing_acquisitions_unit.sql': return CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);

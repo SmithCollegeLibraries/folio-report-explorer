@@ -3,6 +3,7 @@
 namespace app\services;
 
 require_once __DIR__ . '/CatalogingHoldingslessReportService.php';
+require_once __DIR__ . '/CatalogingSharedRecordReportService.php';
 require_once __DIR__ . '/AcquisitionsOpenOrdersReportService.php';
 require_once __DIR__ . '/AcquisitionsMissingUnitReportService.php';
 require_once __DIR__ . '/AcquisitionsInvoiceStatusReportService.php';
@@ -17,6 +18,11 @@ final class CatalogingReportMigrationRecognitionService
     public static function holdingslessReportAppearsComplete($db): bool
     {
         return self::canonicalReportAppearsComplete($db, CatalogingHoldingslessReportService::class);
+    }
+
+    public static function sharedRecordReportAppearsComplete($db): bool
+    {
+        return self::canonicalReportAppearsComplete($db, CatalogingSharedRecordReportService::class);
     }
 
     public static function acquisitionsOpenOrdersReportAppearsComplete($db): bool
@@ -59,6 +65,7 @@ final class CatalogingReportMigrationRecognitionService
     public static function reportsAppearComplete($db): bool
     {
         return self::holdingslessReportAppearsComplete($db)
+            && self::sharedRecordReportAppearsComplete($db)
             && self::acquisitionsInvoiceStatusReportAppearsComplete($db)
             && self::acquisitionsFeedbackReportsAppearComplete($db)
             && self::budgetYearExpenseClassReportAppearsComplete($db);
@@ -86,6 +93,7 @@ final class CatalogingReportMigrationRecognitionService
             '068_marc_field_combination_finder.sql' => 'marcCombinationFinder068ReportAppearsComplete',
             '069_marc_combination_finder_record_scopes.sql' => 'marcCombinationFinderReportAppearsComplete',
             '070_gift_reports.sql' => 'giftReportsAppearComplete',
+            '072_shared_record_check.sql' => 'sharedRecordReportAppearsComplete',
         ];
     }
 

@@ -34,6 +34,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                 'check' => 'veaGateZonesAppearComplete',
                 'error' => 'Migration 071 did not install vea_gate_zones with its required schema.',
             ],
+            '072_shared_record_check.sql' => [
+                'check' => 'sharedRecordReportAppearsComplete',
+                'error' => 'Migration 072 did not install the canonical shared record report.',
+            ],
         ];
     }
 
@@ -150,6 +154,11 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             'zone_id' => ['varchar', 'NO', 64, 'utf8mb4', null, null, ''],
             'sort_order' => ['int', 'NO', null, null, null, null, ''],
         ]) && self::indexAppearsComplete($db, 'vea_gate_zones', 'PRIMARY', ['zone_id'], true);
+    }
+
+    private static function sharedRecordReportAppearsComplete($db): bool
+    {
+        return CatalogingReportMigrationRecognitionService::sharedRecordReportAppearsComplete($db);
     }
 
     private static function tableShapeAppearsComplete($db, string $table, array $expected): bool
@@ -326,6 +335,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             '069_marc_combination_finder_record_scopes.sql' => true,
             '070_gift_reports.sql' => true,
             '071_vea_gate_zones.sql' => true,
+            '072_shared_record_check.sql' => true,
         ];
         foreach ($files as $file) {
             $filename = $file['filename'];

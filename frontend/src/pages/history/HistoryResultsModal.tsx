@@ -42,6 +42,9 @@ export default function HistoryResultsModal({
   const resultsRef = useRef<HistoryResultsContentHandle>(null);
   const isMarcCombinationFinder = item.name?.startsWith('MARC Field Combination Finder')
     || (job?.sql ?? item.sql).includes('"Condition 1 result"');
+  const isSharedRecordReport = item.name?.startsWith('Shared Record Check')
+    || (job?.sql ?? item.sql).includes('"Holding colleges"');
+  const hasReportExportWarnings = isMarcCombinationFinder || isSharedRecordReport;
 
   const { copiedId, copy } = useCopyToClipboard();
 
@@ -203,7 +206,7 @@ export default function HistoryResultsModal({
           </aside>
         )}
 
-        {isMarcCombinationFinder && job?.truncated && (
+        {hasReportExportWarnings && job?.truncated && (
           <aside role="alert" className="border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-900">
             This report reached its 100,000-row cap.
           </aside>

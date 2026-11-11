@@ -129,7 +129,11 @@ describe('MarcCombinationFinderParameters', () => {
 
     expect(screen.getByRole('radio', { name: 'Items at selected locations' })).toBeChecked();
     expect(screen.getByLabelText('Locations')).toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: /Location basis/ }).querySelectorAll('option')).toHaveLength(3);
+    const locationBasis = screen.getByRole('combobox', { name: /Location basis/ });
+    expect(Array.from(locationBasis.querySelectorAll('option')).map((option) => option.value)).toEqual([
+      'effective_item',
+      'permanent_item',
+    ]);
 
     await user.click(screen.getByRole('radio', { name: 'Holdings with no items (Smith)' }));
     expect(screen.queryByLabelText('Locations')).not.toBeInTheDocument();

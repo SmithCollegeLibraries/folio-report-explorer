@@ -269,7 +269,7 @@ function acrlMigrationEnginePrepareCurrentSchema(PDO $admin, string $adminDsn, s
         'created_by' => 'manual',
     ])->execute();
     $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/068_marc_field_combination_finder.sql');
-    $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/069_marc_combination_finder_record_scopes.sql');
+    $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/069_marc_combination_finder_record_scopes.sql'); $executeSqlFile->invoke(null, $adminDb, $migrationDir . '/072_shared_record_check.sql');
     if (!acrlMigrationEngineDatabaseAppearsCurrent($adminDb)) {
         throw new RuntimeException('Setup check failed: databaseAppearsCurrent() must not require migration 070 gift reports.');
     }
