@@ -77,7 +77,7 @@ describe('History deep links', () => {
 
     await waitFor(() => expect(fetchHistoryItem).toHaveBeenCalledWith('collapsed-member'));
     expect(await screen.findByText('Original query')).toBeInTheDocument();
-    expect(screen.getByText('synthetic')).toBeInTheDocument();
+    expect(await screen.findByText('synthetic')).toBeInTheDocument();
   });
 
   it('disables save and pin in a deep-linked results modal with the report reason', async () => {
