@@ -440,7 +440,9 @@ describe('ACRL entry page', () => {
     getEntry.mockResolvedValue(response);
     renderPage();
 
-    await screen.findByText('Assigned to: Alex Editor');
+    const sectionAssignees = await screen.findByRole('group', { name: 'Assigned to: Alex Editor' });
+    expect(within(sectionAssignees).getByText('Assigned to:', { exact: true })).toBeInTheDocument();
+    expect(within(sectionAssignees).getByText('Alex Editor', { exact: true })).toBeInTheDocument();
     const yourSections = screen.queryByRole('region', { name: 'Your assignments' });
     const failures: string[] = [];
     if (screen.queryByRole('heading', { name: 'Assignments' }) !== null) failures.push('the administrator Assignments panel stays hidden from editors');
@@ -448,7 +450,7 @@ describe('ACRL entry page', () => {
       if (within(yourSections).queryByRole('link', { name: /Circulation.*3\/8.*Open/ }) === null) failures.push('the section link remains in Your assignments');
       if (within(yourSections).queryByRole('link', { name: /Services/ }) !== null) failures.push('unassigned sections stay out of Your assignments');
     } else failures.push('the navigation region is named Your assignments');
-    if (screen.queryByText('Assigned to: Alex Editor') === null) failures.push('the existing section assignee card remains visible');
+    if (screen.queryByRole('group', { name: 'Assigned to: Alex Editor' }) === null) failures.push('the existing section assignee card remains visible');
     const navigation = screen.queryByRole('navigation', { name: 'Survey sections' });
     if (!navigation || within(navigation).queryByRole('link', { name: /Circulation.*Your section/ }) === null) failures.push('the section tab keeps its Your section ownership marker');
     if (screen.queryByRole('region', { name: 'Your assignments' }) === null) failures.push('the navigation region is named Your assignments');
@@ -484,7 +486,12 @@ describe('ACRL entry page', () => {
     const questionLink = screen.queryByRole('link', { name: /Q60 · A/ });
     check(questionLink?.getAttribute('href') === '#acrl-q-survey-60-A', 'question navigation uses the stable full-tuple anchor');
     check(document.getElementById('acrl-q-survey-60-A') !== null, 'the question card exposes the stable full-tuple anchor');
-    check(screen.queryByText('Assigned: Alex Editor') !== null, 'question card shows its direct assignee names');
+    const questionAssignees = screen.queryByRole('group', { name: 'Assigned: Alex Editor' });
+    check(questionAssignees !== null, 'question card exposes the labelled direct assignee names');
+    if (questionAssignees) {
+      check(within(questionAssignees).queryByText('Assigned:', { exact: true }) !== null, 'question assignment has a visible label');
+      check(within(questionAssignees).queryByText('Alex Editor', { exact: true }) !== null, 'question assignment has a visible assignee badge');
+    }
     check(screen.queryByText('Yours') !== null, 'question card shows the direct ownership badge');
     check(screen.queryByRole('link', { name: /Your questions \(1\)/ }) !== null, 'section navigation shows the question ownership count');
     check(screen.queryByRole('region', { name: 'Your assignments' }) !== null, 'the navigation region is named Your assignments');
@@ -559,11 +566,14 @@ describe('ACRL entry page', () => {
     renderPage();
 
     expect(await screen.findByText('3 of 8 parts filled')).toBeInTheDocument();
+    expect(screen.getAllByText('No users assigned to this section.')).toHaveLength(2);
     expect(screen.getByText('Approved linked values summed')).toBeInTheDocument();
     expect(screen.getAllByLabelText('Change 100%')).toHaveLength(2);
     expect(screen.getAllByText(/Add a note explaining the change/)).toHaveLength(2);
-    expect(screen.getByText('Previous value: New (was 0)')).toBeInTheDocument();
-    expect(screen.getByText('Previous value: No previous value')).toBeInTheDocument();
+    const newPreviousValue = screen.getByRole('group', { name: 'Previous value: New (was 0)' });
+    expect(within(newPreviousValue).getByText('Previous value', { exact: true })).toBeInTheDocument();
+    expect(within(newPreviousValue).getByText('New (was 0)', { exact: true })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Previous value: No previous value' })).toBeInTheDocument();
     expect(screen.getByText(/Entered value differs \(advisory\)/)).toBeInTheDocument();
 
     const filledRow = screen.getByRole('heading', { name: 'Physical circulation' }).closest('article') as HTMLElement;
