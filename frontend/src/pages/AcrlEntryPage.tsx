@@ -79,11 +79,17 @@ function AcrlAnswerRow({ year, question, locked, isAdmin, acceptingSuggestion, o
           </span>}
         </div>
       </div>
-      {question.questionAssignees.length > 0 && <p className="text-xs text-gray-600">Assigned: {question.questionAssignees.map((assignee) => assignee.displayName).join(', ')}</p>}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
+      {question.questionAssignees.length > 0 && <div role="group" aria-label={`Assigned: ${question.questionAssignees.map((assignee) => assignee.displayName).join(', ')}`} className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+        <span aria-hidden="true" className="text-xs font-semibold text-gray-900">Assigned:</span>
+        {question.questionAssignees.map((assignee) => <span key={assignee.id} aria-hidden="true" className="max-w-full break-words rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-900">{assignee.displayName}</span>)}
+      </div>}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-600">
         {question.sheet === 'survey' && <>
-          <span>Previous value: {question.previous.label}</span>
-          {question.previous.isSum && <span className="text-xs text-gray-500">Approved linked values summed</span>}
+          <div role="group" aria-label={`Previous value: ${question.previous.label}`} className="flex min-w-0 max-w-full flex-wrap items-baseline gap-x-2 rounded border border-gray-200 bg-gray-50 px-3 py-2">
+            <span aria-hidden="true" className="text-sm font-semibold text-gray-900">Previous value</span>
+            <span aria-hidden="true" className="break-words text-base font-semibold text-gray-900">{question.previous.label}</span>
+          </div>
+          {question.previous.isSum && <span className="text-xs text-gray-700">Approved linked values summed</span>}
         </>}
         {question.comparison.highlighted && <span className="font-medium text-amber-900">Change meets the highlight threshold. Add a note explaining the change.</span>}
       </div>
@@ -176,7 +182,10 @@ function SectionCard({ year, section, isAdmin, id, onChanged, onShowDetails }: {
         <div>
           <h2 className="text-lg font-semibold text-gray-900">{section.name}</h2>
           <p className="text-sm text-gray-600">{section.filled} of {section.total} parts filled</p>
-          <p className="text-xs text-gray-600">{section.assignees.length ? `Assigned to: ${section.assignees.map((assignee) => assignee.displayName).join(', ')}` : 'No users assigned to this section.'}</p>
+          {section.assignees.length > 0 ? <div role="group" aria-label={`Assigned to: ${section.assignees.map((assignee) => assignee.displayName).join(', ')}`} className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5">
+            <span aria-hidden="true" className="text-sm font-semibold text-gray-900">Assigned to:</span>
+            {section.assignees.map((assignee) => <span key={assignee.id} aria-hidden="true" className="max-w-full break-words rounded-full bg-blue-100 px-2.5 py-1 text-sm font-medium text-blue-900">{assignee.displayName}</span>)}
+          </div> : <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">No users assigned to this section.</p>}
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm text-gray-700">
