@@ -96,6 +96,7 @@ namespace {
             'parameters' => $values[6],
             'data_source' => $values[7],
             'execution_config' => $values[8],
+            'composite_config' => null,
             'default_limit' => (int) $values[9],
             'is_active' => (int) $values[10],
             'created_by' => $values[11],

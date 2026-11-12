@@ -2,6 +2,8 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/CanonicalSeedJsonService.php';
+
 /** Recognizes both canonical report rows seeded by migration 070. */
 final class GiftReportsMigrationRecognitionService
 {
@@ -40,29 +42,8 @@ final class GiftReportsMigrationRecognitionService
             return false;
         }
 
-        $parameters = $definition['parameters'] ?? null;
-        if (is_string($parameters)) {
-            $parameters = json_decode($parameters, true);
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                return false;
-            }
-        }
-        return is_array($parameters) && self::normalizeJson($parameters) === self::normalizeJson($expected['parameters']);
-    }
-
-    private static function normalizeJson($value)
-    {
-        if (!is_array($value)) {
-            return $value;
-        }
-        $isList = !$value || array_keys($value) === range(0, count($value) - 1);
-        if (!$isList) {
-            ksort($value, SORT_STRING);
-        }
-        foreach ($value as $key => $item) {
-            $value[$key] = self::normalizeJson($item);
-        }
-        return $value;
+        return CanonicalSeedJsonService::normalize($definition['parameters'] ?? null)
+            === CanonicalSeedJsonService::normalize($expected['parameters']);
     }
 
     private static function definitions(): array
