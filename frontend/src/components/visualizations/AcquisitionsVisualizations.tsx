@@ -4,6 +4,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { errorMessage } from '../../utils/errorMessage';
 import { PurchaseCharts } from './PurchaseCharts';
 import { BudgetCharts } from './BudgetCharts';
+import { SpendingBudgetChart } from './SpendingBudgetChart';
 import { HistoryDialog } from './HistoryDialog';
 
 export function AcquisitionsVisualizations() {
@@ -51,6 +52,7 @@ export function AcquisitionsVisualizations() {
         materialError={state.materialError} materialAvailable={state.materialAvailable}
         onMaterialYear={state.setMaterialYear} />
       <div className="min-w-0 lg:col-span-2"><BudgetCharts data={data} /></div>
+      <div className="min-w-0 lg:col-span-2"><SpendingBudgetChart data={data} /></div>
     </div>}
     {isAdmin && data && historyOpen && <HistoryDialog key={data.unit.code} unitCode={data.unit.code}
       currentYear={data.currentFiscalYearEnd} triggerRef={historyButtonRef} onClose={closeHistory} />}
