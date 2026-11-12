@@ -6,6 +6,7 @@ use app\models\ReportTemplate;
 
 require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/ReportExecutionContractService.php';
+require_once __DIR__ . '/CanonicalSeedJsonService.php';
 
 /** Fixed instance review: ownership must never depend on holdings or items. */
 final class CatalogingHoldingslessReportService
@@ -33,34 +34,15 @@ final class CatalogingHoldingslessReportService
             }
         }
         $sql = $definition['sql_template'] ?? null;
-        $parameters = self::normalizedJson($definition['parameters'] ?? null);
-        $config = self::normalizedJson($definition['execution_config'] ?? null);
+        $parameters = CanonicalSeedJsonService::normalize($definition['parameters'] ?? null);
+        $config = CanonicalSeedJsonService::normalize($definition['execution_config'] ?? null);
         return is_string($sql) && hash_equals(self::SQL_SHA256, hash('sha256', $sql))
             && is_array($parameters)
             && hash_equals(self::PARAMETERS_SHA256, hash('sha256', json_encode($parameters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)))
-            && $config === self::normalizeJson([
+            && $config === CanonicalSeedJsonService::normalize([
                 'public_row_cap' => 100000, 'fetch_row_limit' => 100001, 'preserve_export_order' => true,
                 'identifier_export' => ['source_column' => 'Instance UUID', 'header' => 'UUID'],
             ]);
-    }
-
-    private static function normalizedJson($value)
-    {
-        if (is_string($value)) {
-            $value = json_decode($value, true);
-        }
-        return is_array($value) ? self::normalizeJson($value) : null;
-    }
-
-    private static function normalizeJson($value)
-    {
-        if (!is_array($value)) {
-            return $value;
-        }
-        if ($value !== [] && array_keys($value) !== range(0, count($value) - 1)) {
-            ksort($value, SORT_STRING);
-        }
-        return array_map([self::class, 'normalizeJson'], $value);
     }
 
     public static function build(ReportTemplate $report, array $inputs, $folioDb): array

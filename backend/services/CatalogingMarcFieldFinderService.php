@@ -9,6 +9,7 @@ require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/SqlSelectStructureService.php';
 require_once __DIR__ . '/CatalogingMarcLocationScopeService.php';
 require_once __DIR__ . '/CatalogingMarcConditionValidator.php';
+require_once __DIR__ . '/CanonicalSeedJsonService.php';
 
 final class CatalogingMarcFieldFinderService
 {
@@ -308,26 +309,12 @@ final class CatalogingMarcFieldFinderService
 
     private static function hasCanonicalParameters($parameters): bool
     {
-        if (!is_string($parameters)) {
-            return false;
-        }
-        $decoded = json_decode($parameters, true);
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return false;
-        }
-        $canonical = json_encode(self::normalizeJsonForFingerprint($decoded), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        return is_string($canonical)
-            && hash_equals(self::CANONICAL_PARAMETERS_SHA256, hash('sha256', $canonical));
+        return CanonicalSeedJsonService::matchesFingerprint($parameters, self::CANONICAL_PARAMETERS_SHA256);
     }
 
     private static function hasCanonicalExecutionConfig($executionConfig): bool
     {
-        if (!is_string($executionConfig)) {
-            return false;
-        }
-        $decoded = json_decode($executionConfig, true);
-        return json_last_error() === JSON_ERROR_NONE
-            && self::normalizeJsonForFingerprint($decoded) === self::normalizeJsonForFingerprint([
+        return CanonicalSeedJsonService::normalize($executionConfig) === CanonicalSeedJsonService::normalize([
                 'public_row_cap' => self::PUBLIC_ROW_CAP,
                 'fetch_row_limit' => self::FETCH_ROW_LIMIT,
                 'preserve_export_order' => true,
@@ -343,28 +330,4 @@ final class CatalogingMarcFieldFinderService
             && (string) $definition[$field] === $expected;
     }
 
-    private static function normalizeJsonForFingerprint($value)
-    {
-        if (!is_array($value)) {
-            return $value;
-        }
-        if (!self::isJsonList($value)) {
-            ksort($value, SORT_STRING);
-        }
-        foreach ($value as $key => $item) {
-            $value[$key] = self::normalizeJsonForFingerprint($item);
-        }
-        return $value;
-    }
-
-    private static function isJsonList(array $value): bool
-    {
-        $expectedIndex = 0;
-        foreach ($value as $key => $_) {
-            if ($key !== $expectedIndex++) {
-                return false;
-            }
-        }
-        return true;
-    }
 }

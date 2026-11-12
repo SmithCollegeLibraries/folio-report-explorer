@@ -60,12 +60,41 @@ $canonicalRows['gift-items-one-time']['composite_config'] = null;
 $canonicalRows['gift-ongoing']['composite_config'] = null;
 $canonicalDb = new GiftRecognitionDatabase($canonicalRows);
 giftRecognitionAssert($recognize->invoke(null, $canonicalDb, $filename), 'Recognize migration 070 only when both canonical rows exist.');
-foreach ($canonicalRows as $slug => $definition) {
-    $definition['parameters'] = json_decode($definition['parameters'], true);
-    $canonicalRows[$slug] = $definition;
+foreach (['string', 'decoded-array', 'double-encoded'] as $form) {
+    $represented = $canonicalRows;
+    foreach ($represented as $slug => $definition) {
+        if ($form === 'decoded-array') {
+            $definition['parameters'] = json_decode($definition['parameters'], true);
+        } elseif ($form === 'double-encoded') {
+            $definition['parameters'] = json_encode($definition['parameters']);
+        }
+        $represented[$slug] = $definition;
+    }
+    giftRecognitionAssert(
+        $recognize->invoke(null, new GiftRecognitionDatabase($represented), $filename),
+        'Accept canonical parameters in ' . $form . ' form.'
+    );
+
+    $changed = $represented;
+    foreach ($changed as $slug => $definition) {
+        $parameters = $definition['parameters'];
+        if ($form === 'string') {
+            $parameters = json_decode($parameters, true);
+        } elseif ($form === 'double-encoded') {
+            $parameters = json_decode(json_decode($parameters, true), true);
+        }
+        $parameters[0]['default'] = 'changed';
+        $encoded = json_encode($parameters);
+        $definition['parameters'] = $form === 'decoded-array'
+            ? $parameters
+            : ($form === 'double-encoded' ? json_encode($encoded) : $encoded);
+        $changed[$slug] = $definition;
+    }
+    giftRecognitionAssert(
+        !$recognize->invoke(null, new GiftRecognitionDatabase($changed), $filename),
+        'Reject changed parameters in ' . $form . ' form.'
+    );
 }
-$decodedDb = new GiftRecognitionDatabase($canonicalRows);
-giftRecognitionAssert($recognize->invoke(null, $decodedDb, $filename), 'Accept canonical parameters returned as decoded JSON arrays.');
 
 foreach ([
     'name' => 'Changed name',

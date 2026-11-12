@@ -8,6 +8,7 @@ use app\models\ReportTemplate;
 require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/ExpenseClassScopeService.php';
 require_once __DIR__ . '/ReportExecutionContractService.php';
+require_once __DIR__ . '/CanonicalSeedJsonService.php';
 
 /** Compiles the reviewed budget-year expense-class report with unit, year, date, and fund validation. */
 final class BudgetYearExpenseClassReportService
@@ -50,9 +51,8 @@ final class BudgetYearExpenseClassReportService
         }
 
         $sql = $definition['sql_template'] ?? null;
-        $parameters = self::normalizedJson($definition['parameters'] ?? null);
-        $executionConfig = self::normalizedJson($definition['execution_config'] ?? null);
-        $compositeConfig = self::normalizedJson($definition['composite_config'] ?? null);
+        $parameters = CanonicalSeedJsonService::normalize($definition['parameters'] ?? null);
+        $compositeConfig = CanonicalSeedJsonService::normalize($definition['composite_config'] ?? null);
         return is_string($sql)
             && hash_equals(self::SQL_SHA256, hash('sha256', $sql))
             && is_array($parameters)
@@ -60,7 +60,8 @@ final class BudgetYearExpenseClassReportService
                 self::PARAMETERS_SHA256,
                 hash('sha256', json_encode($parameters, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES))
             )
-            && $executionConfig === null
+            && array_key_exists('execution_config', $definition)
+            && $definition['execution_config'] === null
             && is_array($compositeConfig)
             && hash_equals(
                 self::COMPOSITE_SHA256,
@@ -213,22 +214,4 @@ final class BudgetYearExpenseClassReportService
         return $ids;
     }
 
-    private static function normalizedJson($value)
-    {
-        if (is_string($value)) {
-            $value = json_decode($value, true);
-        }
-        return is_array($value) ? self::normalizeJson($value) : null;
-    }
-
-    private static function normalizeJson($value)
-    {
-        if (!is_array($value)) {
-            return $value;
-        }
-        if ($value !== [] && array_keys($value) !== range(0, count($value) - 1)) {
-            ksort($value, SORT_STRING);
-        }
-        return array_map([self::class, 'normalizeJson'], $value);
-    }
 }

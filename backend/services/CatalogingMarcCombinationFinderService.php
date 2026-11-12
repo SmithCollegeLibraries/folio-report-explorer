@@ -8,6 +8,7 @@ use app\models\ReportTemplate;
 require_once __DIR__ . '/../exceptions/ReportParameterValidationException.php';
 require_once __DIR__ . '/CatalogingMarcLocationScopeService.php';
 require_once __DIR__ . '/CatalogingMarcConditionValidator.php';
+require_once __DIR__ . '/CanonicalSeedJsonService.php';
 
 /** Compiles the reviewed multi-condition MARC report without binding inactive slots. */
 final class CatalogingMarcCombinationFinderService
@@ -137,7 +138,8 @@ final class CatalogingMarcCombinationFinderService
             && self::exact($definition, 'default_limit', '100000')
             && self::exact($definition, 'is_active', '1')
             && self::exact($definition, 'created_by', 'manual')
-            && (!array_key_exists('composite_config', $definition) || $definition['composite_config'] === null)
+            && array_key_exists('composite_config', $definition)
+            && $definition['composite_config'] === null
             && self::canonicalJson($definition['parameters'] ?? null, $parametersHash)
             && self::canonicalJson($definition['execution_config'] ?? null, self::EXECUTION_HASH)
             && is_string($definition['sql_template'] ?? null)
@@ -279,7 +281,8 @@ final class CatalogingMarcCombinationFinderService
             'slug' => $report->slug, 'name' => $report->name, 'description' => $report->description,
             'help_text' => $report->help_text, 'category' => $report->category, 'sql_template' => $report->sql_template,
             'parameters' => $report->parameters, 'data_source' => $report->data_source,
-            'execution_config' => $report->execution_config, 'default_limit' => $report->default_limit,
+            'execution_config' => $report->execution_config, 'composite_config' => $report->composite_config,
+            'default_limit' => $report->default_limit,
             'is_active' => $report->is_active, 'created_by' => $report->created_by,
         ];
     }
@@ -292,22 +295,7 @@ final class CatalogingMarcCombinationFinderService
 
     private static function canonicalJson($value, string $hash): bool
     {
-        if (is_string($value)) {
-            $value = json_decode($value, true);
-            if (json_last_error() !== JSON_ERROR_NONE) return false;
-        }
-        if (!is_array($value)) return false;
-        $encoded = json_encode(self::normalizeJson($value), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        return is_string($encoded) && hash_equals($hash, hash('sha256', $encoded));
-    }
-
-    private static function normalizeJson($value)
-    {
-        if (!is_array($value)) return $value;
-        $isList = !$value || array_keys($value) === range(0, count($value) - 1);
-        if (!$isList) ksort($value, SORT_STRING);
-        foreach ($value as $key => $item) $value[$key] = self::normalizeJson($item);
-        return $value;
+        return CanonicalSeedJsonService::matchesFingerprint($value, $hash);
     }
 
     private static function assertTokenCount(string $template, string $token): void
