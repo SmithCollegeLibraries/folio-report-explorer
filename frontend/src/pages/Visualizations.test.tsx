@@ -8,6 +8,7 @@ import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VisualizationData, VisualizationHistoryRow, VisualizationOptions } from '../api/visualizations';
 import { PurchaseCharts } from '../components/visualizations/PurchaseCharts';
+import { SpendingBudgetChart } from '../components/visualizations/SpendingBudgetChart';
 import Visualizations from './Visualizations';
 
 const api = vi.hoisted(() => ({
@@ -599,6 +600,39 @@ describe('Visualizations RPT-022 new behavior', () => {
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(document.activeElement).toBe(enlarge);
+  });
+
+  it('includes zero on the spending dollar axis when all values are positive', async () => {
+    const data: VisualizationData = {
+      ...figures,
+      purchasesByCategory: [],
+      budget: [
+        { fiscalYearEnd: 2026, allocated: 500, changePct: null, source: 'folio' },
+        { fiscalYearEnd: 2027, allocated: 1000, changePct: null, source: 'folio' },
+      ],
+    };
+    const { container } = render(<SpendingBudgetChart data={data} />);
+    await waitFor(() => expect(container.querySelectorAll('.recharts-line-dots circle')).toHaveLength(2));
+    const zeroY = Number(container.querySelector('.recharts-reference-line-line')?.getAttribute('y1'));
+    const firstAllocationY = Number(container.querySelector('.recharts-line-dots circle')?.getAttribute('cy'));
+    expect(firstAllocationY).toBeLessThan(zeroY);
+  });
+
+  it('renders negative purchase categories below the zero baseline', async () => {
+    const data: VisualizationData = {
+      ...figures,
+      purchasesByCategory: [{ fiscalYearEnd: 2026, electronic: 20, physical: 10, other: -50, total: -20,
+        electronicPct: -100, physicalPct: -50, otherPct: 250, source: 'folio' }],
+      budget: [{ fiscalYearEnd: 2026, allocated: 100, changePct: null, source: 'folio' }],
+    };
+    const { container } = render(<SpendingBudgetChart data={data} />);
+    await waitFor(() => expect(container.querySelector('.recharts-reference-line-line')).not.toBeNull());
+    const zeroY = Number(container.querySelector('.recharts-reference-line-line')?.getAttribute('y1'));
+    const negativeBar = container.querySelector('.recharts-rectangle[name="Other"]');
+    const negativeY = Number(negativeBar?.getAttribute('y'));
+    const negativeHeight = Number(negativeBar?.getAttribute('height'));
+    expect(negativeY).toBeGreaterThan(zeroY);
+    expect(negativeY + negativeHeight).toBeCloseTo(zeroY, 3);
   });
 
   it('shows one dollar-axis budget chart with the API change label on each bar', async () => {

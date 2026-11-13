@@ -1,5 +1,5 @@
 import { useId } from 'react';
-import { Bar, CartesianGrid, Cell, ComposedChart, Line, XAxis, YAxis } from 'recharts';
+import { Bar, CartesianGrid, Cell, ComposedChart, Line, ReferenceLine, XAxis, YAxis } from 'recharts';
 import type { VisualizationData } from '../../api/visualizations';
 import { ChartContainer, type ChartConfig } from '../ui/chart';
 import { ChartTooltip } from '../ui/chart-tooltip';
@@ -61,7 +61,7 @@ function SpendingBudgetPlot({ rows }: { rows: SpendingBudgetRow[] }) {
   const patternId = useId().replace(/:/g, '');
   return <div className="h-80 min-w-0 w-full" aria-label="Paid purchases and allocated budget by fiscal year">
     <ChartContainer config={config} className="h-full min-w-0 w-full">
-      <ComposedChart data={rows} margin={{ top: 8, right: 12, bottom: 8, left: 8 }} barCategoryGap={2} barGap={2}>
+      <ComposedChart data={rows} margin={{ top: 8, right: 12, bottom: 8, left: 8 }} barCategoryGap={2} barGap={2} stackOffset="sign">
         <defs>{categories.map((category) => <pattern key={category.key} id={`${patternId}-${category.key}`}
           width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
           <rect width="6" height="6" fill="#f8fafc" />
@@ -69,8 +69,10 @@ function SpendingBudgetPlot({ rows }: { rows: SpendingBudgetRow[] }) {
         </pattern>)}</defs>
         <CartesianGrid stroke="#e5e7eb" strokeDasharray="3 3" vertical={false} />
         <XAxis dataKey="fiscalYearEnd" tickLine={false} axisLine={false} tick={{ fontSize: labelSize }} />
-        <YAxis width={76} domain={['dataMin', 'dataMax']} tickFormatter={(value) => compactCurrency.format(Number(value))}
+        <YAxis width={76} domain={[(min) => Math.min(0, Number(min)), (max) => Math.max(0, Number(max))]}
+          tickFormatter={(value) => compactCurrency.format(Number(value))}
           tickLine={false} axisLine={false} tick={{ fontSize: labelSize }} />
+        <ReferenceLine y={0} stroke="#64748b" strokeDasharray="3 3" ifOverflow="discard" />
         <ChartTooltip content={({ active, payload }) => {
           if (!active || !payload?.length) return null;
           const row = payload[0].payload as SpendingBudgetRow;
