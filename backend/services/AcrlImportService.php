@@ -14,24 +14,31 @@ class AcrlImportService
         $this->values = $values ?: new AcrlAnswerValueService();
     }
 
-    public function preview(int $year, $rows, $sourceLabel, bool $overwrite = false): array
+    public function preview(int $year, $rows, $sourceLabel, bool $overwrite, string $institutionCode): array
     {
-        $prepared = $this->prepare($year, $rows, $sourceLabel, $overwrite);
+        $prepared = $this->prepare($year, $rows, $sourceLabel, $overwrite, $institutionCode);
         return $prepared['response'];
     }
 
-    public function confirm(int $year, $rows, $sourceLabel, bool $overwrite, string $userId): array
+    public function confirm(int $year, $rows, $sourceLabel, bool $overwrite, string $userId, string $institutionCode): array
     {
-        $prepared = $this->prepare($year, $rows, $sourceLabel, $overwrite);
+        return $this->repository->withSharedYearLock($year, function () use ($year, $rows, $sourceLabel, $overwrite, $userId, $institutionCode) {
+            return $this->confirmLocked($year, $rows, $sourceLabel, $overwrite, $userId, $institutionCode);
+        });
+    }
+
+    private function confirmLocked(int $year, $rows, $sourceLabel, bool $overwrite, string $userId, string $institutionCode): array
+    {
+        $prepared = $this->prepare($year, $rows, $sourceLabel, $overwrite, $institutionCode);
         $preview = $prepared['response'];
         if ($preview['unknownCount'] > 0 || $preview['typeErrorCount'] > 0) {
             throw new \InvalidArgumentException('Resolve unknown IDs and type errors before confirming this import.');
         }
-        $import = $this->repository->importAnswers($prepared['items'], $userId, trim($sourceLabel), $overwrite);
+        $import = $this->repository->importAnswers($prepared['items'], $userId, trim($sourceLabel), $overwrite, $institutionCode);
         return ['preview' => $preview, 'result' => $import];
     }
 
-    private function prepare(int $year, $rows, $sourceLabel, bool $overwrite): array
+    private function prepare(int $year, $rows, $sourceLabel, bool $overwrite, string $institutionCode): array
     {
         $yearRow = $this->repository->year($year);
         if (!$yearRow || $yearRow['status'] !== 'published') {
@@ -51,7 +58,7 @@ class AcrlImportService
                 $key = $this->key($sheet, $question['question_id'], $question['part']);
                 $catalogue[$key] = $question;
             }
-            foreach ($this->repository->answers($year, $sheet) as $answer) {
+            foreach ($this->repository->answers($year, $sheet, $institutionCode) as $answer) {
                 $existing[$this->key($sheet, $answer['question_id'], $answer['part'])] = $answer;
             }
         }

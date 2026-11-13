@@ -14,14 +14,21 @@ class AcrlQuestionNotesService
         $this->catalogue = $catalogue ?: ($repository ?: new AcrlAnswerRepository());
     }
 
-    public function previewImport(int $year, $rows): array
+    public function previewImport(int $year, $rows, string $institutionCode): array
     {
-        return $this->prepareImport($year, $rows)['response'];
+        return $this->prepareImport($year, $rows, $institutionCode)['response'];
     }
 
-    public function confirmImport(int $year, $rows, string $userId): array
+    public function confirmImport(int $year, $rows, string $userId, string $institutionCode): array
     {
-        $prepared = $this->prepareImport($year, $rows);
+        return $this->repository->withSharedYearLock($year, function () use ($year, $rows, $userId, $institutionCode) {
+            return $this->confirmImportLocked($year, $rows, $userId, $institutionCode);
+        });
+    }
+
+    private function confirmImportLocked(int $year, $rows, string $userId, string $institutionCode): array
+    {
+        $prepared = $this->prepareImport($year, $rows, $institutionCode);
         $preview = $prepared['response'];
         if ($preview['unknownCount'] > 0 || $preview['invalidCount'] > 0) {
             throw new \InvalidArgumentException('Resolve unknown question keys and invalid rows before confirming this import.');
@@ -32,6 +39,7 @@ class AcrlQuestionNotesService
         foreach ($prepared['items'] as $item) {
             if ($item['status'] === 'unchanged' || $this->repository->hasQuestionNote(
                 $year,
+                $institutionCode,
                 $item['sheet'],
                 $item['question_id'],
                 $item['part'],
@@ -44,6 +52,7 @@ class AcrlQuestionNotesService
             }
             $this->repository->createQuestionNote([
                 'survey_year' => $year,
+                'institution_code' => $institutionCode,
                 'sheet' => $item['sheet'],
                 'question_id' => $item['question_id'],
                 'part' => $item['part'],
@@ -58,37 +67,43 @@ class AcrlQuestionNotesService
         return ['preview' => $preview, 'result' => ['imported' => $imported, 'unchanged' => $unchanged, 'skipped' => 0]];
     }
 
-    public function addNote(int $year, string $sheet, string $questionId, string $part, $note, $source, $originYear, string $userId): array
+    public function addNote(int $year, string $sheet, string $questionId, string $part, $note, $source, $originYear, string $userId, string $institutionCode): array
     {
-        $this->requireQuestion($year, $sheet, $questionId, $part);
-        $values = $this->normalizeNote($note, $source, $originYear, $year);
-        $row = $this->repository->createQuestionNote(array_merge([
-            'survey_year' => $year,
-            'sheet' => $sheet,
-            'question_id' => $questionId,
-            'part' => $part,
-            'created_by' => $userId,
-        ], $values));
-        return $this->publicNote($row);
+        return $this->repository->withSharedYearLock($year, function () use ($year, $sheet, $questionId, $part, $note, $source, $originYear, $userId, $institutionCode) {
+            $this->requireQuestion($year, $sheet, $questionId, $part);
+            $values = $this->normalizeNote($note, $source, $originYear, $year);
+            $row = $this->repository->createQuestionNote(array_merge([
+                'institution_code' => $institutionCode,
+                'survey_year' => $year,
+                'sheet' => $sheet,
+                'question_id' => $questionId,
+                'part' => $part,
+                'created_by' => $userId,
+            ], $values));
+            return $this->publicNote($row);
+        });
     }
 
     public function editNote(int $id, $note, $source, $originYear, string $userId): array
     {
-        $current = $this->repository->findQuestionNote($id);
-        if (!$current) throw new \DomainException('The collection note no longer exists.');
-        $changes = $this->normalizeNote($note, $source, $originYear, (int)$current['origin_year']);
-        $updated = $this->repository->updateQuestionNote($id, $changes, $userId);
-        if (!$updated) throw new \DomainException('The collection note no longer exists.');
-        return $this->publicNote($updated);
+        return $this->repository->withQuestionNoteYearLock($id, function ($current) use ($id, $note, $source, $originYear, $userId) {
+            if (!$current || (string)$current['institution_code'] !== 'SC') throw new \DomainException('The collection note no longer exists.');
+            $changes = $this->normalizeNote($note, $source, $originYear, (int)$current['origin_year']);
+            $updated = $this->repository->updateQuestionNote($id, $changes, $userId, 'SC');
+            if (!$updated) throw new \DomainException('The collection note no longer exists.');
+            return $this->publicNote($updated);
+        });
     }
 
     public function deleteNote(int $id): bool
     {
-        if (!$this->repository->findQuestionNote($id)) return false;
-        return $this->repository->deleteQuestionNote($id);
+        return $this->repository->withQuestionNoteYearLock($id, function ($current) use ($id) {
+            if (!$current || (string)$current['institution_code'] !== 'SC') return false;
+            return $this->repository->deleteQuestionNote($id, 'SC');
+        });
     }
 
-    public function notesForQuestion(int $year, string $sheet, string $questionId, string $part): array
+    public function notesForQuestion(int $year, string $sheet, string $questionId, string $part, string $institutionCode): array
     {
         $this->requireQuestion($year, $sheet, $questionId, $part);
         $queue = [['year' => $year, 'sheet' => $sheet, 'question_id' => $questionId, 'part' => $part]];
@@ -99,7 +114,7 @@ class AcrlQuestionNotesService
             $key = $this->stateKey($current['year'], $current['sheet'], $current['question_id'], $current['part']);
             if (isset($seen[$key])) continue;
             $seen[$key] = true;
-            foreach ($this->repository->questionNotesForKey($current['year'], $current['sheet'], $current['question_id'], $current['part']) as $note) {
+            foreach ($this->repository->questionNotesForKey($current['year'], $institutionCode, $current['sheet'], $current['question_id'], $current['part']) as $note) {
                 $notes[(int)$note['id']] = $note;
             }
             foreach ($this->repository->approvedPreviousQuestions($current['year'], $current['sheet'], $current['question_id'], $current['part']) as $previous) {
@@ -119,9 +134,9 @@ class AcrlQuestionNotesService
         return array_map([$this, 'publicNote'], $notes);
     }
 
-    public function questionKeysWithNotes(int $year): array
+    public function questionKeysWithNotes(int $year, string $institutionCode): array
     {
-        $data = $this->repository->questionNoteKeysAndLinksThroughYear($year);
+        $data = $this->repository->questionNoteKeysAndLinksThroughYear($year, $institutionCode);
         $linksBySource = [];
         foreach ($data['links'] as $link) {
             $sourceKey = $this->stateKey((int)$link['previous_year'], $link['sheet'], $link['previous_question_id'], $link['previous_part']);
@@ -160,7 +175,7 @@ class AcrlQuestionNotesService
         return $result;
     }
 
-    private function prepareImport(int $year, $rows): array
+    private function prepareImport(int $year, $rows, string $institutionCode): array
     {
         if (!$this->catalogue->year($year)) throw new \DomainException('The selected ACRL year does not exist.');
         if (!is_array($rows) || empty($rows) || count($rows) > 5000) {
@@ -202,7 +217,7 @@ class AcrlQuestionNotesService
                 $response['items'][] = ['line' => $line, 'questionId' => $questionId, 'part' => $part, 'status' => 'unknown', 'error' => 'No matching question part exists in this survey year.'];
                 continue;
             }
-            $unchanged = $this->repository->hasQuestionNote($year, $sheet, $questionId, $part, $note, $source, $originYear);
+            $unchanged = $this->repository->hasQuestionNote($year, $institutionCode, $sheet, $questionId, $part, $note, $source, $originYear);
             $response['matchedCount'] += 1;
             $response['items'][] = [
                 'line' => $line,
@@ -258,6 +273,7 @@ class AcrlQuestionNotesService
     {
         return [
             'id' => (int)$note['id'],
+            'institution' => $note['institution_code'],
             'note' => $note['note'],
             'source' => $note['source'],
             'origin_year' => (int)$note['origin_year'],

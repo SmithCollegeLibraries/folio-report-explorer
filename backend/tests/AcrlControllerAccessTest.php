@@ -43,6 +43,22 @@ namespace {
         public static $app;
     }
 
+    class AcrlControllerAccessRequest
+    {
+        public $bodyParams;
+        public $queryParams;
+        private $queryString;
+
+        public function __construct(array $bodyParams, string $queryString, array $queryParams)
+        {
+            $this->bodyParams = $bodyParams;
+            $this->queryString = $queryString;
+            $this->queryParams = $queryParams;
+        }
+
+        public function getQueryString(): string { return $this->queryString; }
+    }
+
     final class AcrlControllerAccessUserQuery
     {
         private $conditions = [];
@@ -80,6 +96,7 @@ namespace {
     {
         public $mode = 'success';
         public $arguments = [];
+        public $runCalls = 0;
         public function methods()
         {
             return [[
@@ -95,6 +112,7 @@ namespace {
         }
         public function run($year, $sheet, $questionId, $part, $weekStart = null)
         {
+            $this->runCalls++;
             $this->arguments = [$year, $sheet, $questionId, $part, $weekStart];
             if ($this->mode === 'invalid') throw new \InvalidArgumentException('Bad year.');
             if ($this->mode === 'missing') throw new \DomainException('No auto-fill query is defined for this question.');
@@ -132,11 +150,11 @@ namespace {
         }
     }
 
-    function acrlAccessAppUser($guest, $identity, $bodyParams = []): void
+    function acrlAccessAppUser($guest, $identity, $bodyParams = [], string $queryString = 'institution=SC', array $queryParams = ['institution' => 'SC']): void
     {
         Yii::$app = (object)[
             'user' => (object)['isGuest' => $guest, 'identity' => $identity],
-            'request' => (object)['bodyParams' => $bodyParams],
+            'request' => new AcrlControllerAccessRequest($bodyParams, $queryString, $queryParams),
             'response' => (object)['statusCode' => 200, 'data' => null, 'format' => null],
         ];
     }
@@ -354,6 +372,40 @@ namespace {
     }
     acrlAccessAssert($methodsDb->calls === 0, 'The methods route must not make any FOLIO database calls.');
     $autofillController->autofillService = new AcrlControllerAccessAutofillService();
+    acrlAccessAppUser(false, new \app\models\User(), [], 'institution=HC', ['institution' => 'HC']);
+    \app\models\User::$approvedExists = true;
+    \app\models\User::$adminExists = false;
+    $disabledAutofill = $autofillController->actionAutofill(2025, 'survey', '81', '');
+    acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($disabledAutofill['reason'] ?? null) === 'institution_not_enabled', 'Non-admin autofill for a disabled college is denied before the service call.');
+    acrlAccessAssert($autofillController->autofillService->runCalls === 0, 'Disabled non-admin autofill does not call FOLIO or Vea services.');
+    acrlAccessAppUser(false, new \app\models\User(), [], 'institution=HC', ['institution' => 'HC']);
+    \app\models\User::$approvedExists = true;
+    \app\models\User::$adminExists = true;
+    $adminAutofill = $autofillController->actionAutofill(2025, 'survey', '81', '');
+    acrlAccessAssert(Yii::$app->response->statusCode === 409 && ($adminAutofill['error'] ?? null) === 'autofill_not_configured', 'Admin autofill for a disabled college returns the configured 409 response.');
+    acrlAccessAssert($autofillController->autofillService->runCalls === 0, 'Disabled admin autofill does not call FOLIO or Vea services.');
+    acrlAccessAppUser(false, new \app\models\User());
+    \app\models\User::$approvedExists = true;
+    \app\models\User::$adminExists = false;
+    foreach ([
+        ['', []],
+        ['institution=SC&institution=SC', ['institution' => 'SC']],
+        ['institution=XX', ['institution' => 'XX']],
+        ['institution=SC', ['institution' => ['SC']]],
+    ] as $badInstitution) {
+        acrlAccessAppUser(false, new \app\models\User(), [], $badInstitution[0], $badInstitution[1]);
+        $invalidInstitutionResponse = $controller->actionEntry();
+        acrlAccessAssert(Yii::$app->response->statusCode === 400 && isset($invalidInstitutionResponse['error']), 'Missing, repeated, unknown, or array institution values must return 400 before entry access.');
+    }
+    acrlAccessAppUser(false, new \app\models\User(), ['institution' => 'SC'], '', []);
+    $bodyInstitutionResponse = $controller->actionEntry();
+    acrlAccessAssert(Yii::$app->response->statusCode === 400 && isset($bodyInstitutionResponse['error']), 'A body institution value cannot replace the required query parameter.');
+    acrlAccessAppUser(true, null, [], 'institution=HC', ['institution' => 'HC']);
+    $guestDisabledResponse = $controller->actionEntry();
+    acrlAccessAssert(Yii::$app->response->statusCode === 401 && ($guestDisabledResponse['error'] ?? null) === 'Unauthorized', 'Authentication is checked before the disabled-institution response.');
+    acrlAccessAppUser(false, new \app\models\User(), [], 'institution=AC', ['institution' => 'AC']);
+    $disabledInstitutionResponse = $controller->actionEntry();
+    acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($disabledInstitutionResponse['reason'] ?? null) === 'institution_not_enabled', 'A supported but disabled college returns the stable 403 reason before entry access.');
     acrlAccessAppUser(false, new \app\models\User());
     \app\models\User::$approvedExists = true;
     \app\models\User::$adminExists = false;

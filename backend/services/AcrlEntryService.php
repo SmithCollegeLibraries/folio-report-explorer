@@ -2,6 +2,9 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/AcrlEntryAssemblerService.php';
+require_once __DIR__ . '/AcrlEntryDataMapper.php';
+
 /** Composes published survey rows with answer history, comparisons, and section state. */
 class AcrlEntryService
 {
@@ -15,6 +18,7 @@ class AcrlEntryService
     private $questionAssignments;
     private $questionNotes;
     private $structuredAnswers;
+    private $assembler;
 
     public function __construct($repository = null, $rules = null, $values = null, $thresholds = null, $calculations = null, $history = null, $assignments = null, $questionNotes = null, $structuredAnswers = null, $questionAssignments = null)
     {
@@ -30,6 +34,10 @@ class AcrlEntryService
             ? new AcrlQuestionNotesService($repository, $repository)
             : new AcrlQuestionNotesService());
         $this->structuredAnswers = $structuredAnswers ?: new AcrlStructuredAnswerService();
+        $this->assembler = new AcrlEntryAssemblerService(
+            $this->repository, $this->rules, $this->values, $this->thresholds, $this->calculations,
+            $this->history, $this->assignments, $this->questionNotes, $this->structuredAnswers, $this->questionAssignments
+        );
     }
 
     public function latestYear(): int
@@ -41,131 +49,19 @@ class AcrlEntryService
         return (int)$years[0];
     }
 
-    public function entry(?int $year = null, ?string $userId = null): array
+    public function entry(?int $year, ?string $userId, string $institutionCode): array
     {
-        $year = $year ?: $this->latestYear();
-        $yearRow = $this->repository->year($year);
-        if (!$yearRow || $yearRow['status'] !== 'published') {
-            throw new \DomainException('The selected ACRL year is not published.');
-        }
-
-        $questions = array_merge(
-            $this->repository->questions($year, 'survey'),
-            $this->repository->questions($year, 'trends')
-        );
-        $answerRows = array_merge(
-            $this->repository->answers($year, 'survey'),
-            $this->repository->answers($year, 'trends')
-        );
-        $answers = $this->answerMap($answerRows);
-        $calculationResults = $this->calculations->evaluate($questions, $answerRows);
-        $questionHistory = $this->history->forQuestions($year, $questions);
-        $questionNoteKeys = $this->questionNotes->questionKeysWithNotes($year);
-        $statuses = [];
-        foreach ($this->repository->sectionStatuses($year) as $status) {
-            $statuses[$status['section']] = $status;
-        }
-        $sectionAssignments = $this->assignments->forEntry($year, $userId);
-        $questionAssignments = $this->questionAssignments
-            ? $this->questionAssignments->forEntry($year, $userId)
-            : [];
-        $threshold = $this->thresholds->get();
-        $sections = [];
-
-        foreach ($questions as $question) {
-            $key = $this->questionKey($question['sheet'], $question['question_id'], $question['part']);
-            $answer = $answers[$key] ?? $this->emptyAnswer();
-            $history = $questionHistory[$key] ?? [];
-            if (!empty($question['answer_options'])) {
-                foreach ($history as &$historyItem) {
-                    $historyItem['label'] = $this->structuredAnswers->displayValue($question['answer_options'], $historyItem['value'] ?? null);
-                }
-                unset($historyItem);
-            }
-            $previous = $this->previousFromHistory($history[0] ?? null);
-            $calculation = $calculationResults[$this->calculationKey($question['sheet'], $question['question_id'], $question['part'])] ?? null;
-            $currentValue = $answer['value_number'] ?? $answer['value_text'];
-            $comparison = $this->rules->compare(
-                $currentValue,
-                $previous['value'],
-                $threshold,
-                !empty($previous['linkedValues']),
-                $question['sheet']
-            );
-            $computed = $calculation ? [
-                'supported' => $calculation['supported'],
-                'raw' => $calculation['supported'] ? null : $question['calculated_from'],
-                'value' => $calculation['value'],
-                'mismatch' => $this->rules->calculatedStatus($answer['value_number'] ?? null, $calculation['value'])['mismatch'],
-                'waitingFor' => $calculation['waitingFor'],
-            ] : null;
-            $questionAssignment = $questionAssignments[$this->assignmentQuestionKey($question['sheet'], $question['question_id'], $question['part'])]
-                ?? $questionAssignments[$this->questionKey($question['sheet'], $question['question_id'], $question['part'])]
-                ?? [];
-            $questionAssignees = $questionAssignment['assignees'] ?? [];
-            $sectionAssignment = $sectionAssignments[$question['section']] ?? [];
-            $sectionAssignees = $sectionAssignment['assignees'] ?? [];
-            $questionAssignedToCurrentUser = !empty($questionAssignment['assignedToCurrentUser']);
-            $row = [
-                'questionId' => $question['question_id'],
-                'sheet' => $question['sheet'],
-                'part' => $question['part'],
-                'section' => $question['section'],
-                'prompt' => $question['prompt'],
-                'answerType' => $question['answer_type'],
-                'answerOptions' => $this->structuredAnswers->decodeOptions($question['answer_options'] ?? null),
-                'required' => $question['required_status'],
-                'calculatedFrom' => $question['calculated_from'],
-                'surveyOrder' => (int)$question['survey_order'],
-                'answer' => $answer,
-                'answerDisplay' => $this->structuredAnswers->displayValue($question['answer_options'] ?? null, $answer['value_text'] ?? null),
-                'previous' => $previous,
-                'history' => $history,
-                'suggestion' => $this->suggestion($question, $answer, $history),
-                'comparison' => $comparison,
-                'calculated' => $computed,
-                'hasDetailsNotes' => !empty($questionNoteKeys[$key]),
-                'questionAssignees' => $questionAssignees,
-                'assignees' => $this->assigneeUnion($sectionAssignees, $questionAssignees),
-                'assignedToCurrentUser' => !empty($sectionAssignment['assignedToCurrentUser']) || $questionAssignedToCurrentUser,
-                'questionAssignedToCurrentUser' => $questionAssignedToCurrentUser,
-            ];
-            if (!isset($sections[$question['section']])) {
-                $status = $statuses[$question['section']] ?? null;
-                $assignment = $sectionAssignments[$question['section']] ?? [];
-                $sections[$question['section']] = [
-                    'name' => $question['section'],
-                    'status' => $status['status'] ?? 'open',
-                    'setAt' => $status['set_at'] ?? null,
-                    'reopenedAt' => $status['reopened_at'] ?? null,
-                    'filled' => 0,
-                    'total' => 0,
-                    'assignees' => $assignment['assignees'] ?? [],
-                    'assignedToCurrentUser' => $assignment['assignedToCurrentUser'] ?? false,
-                    'questionsAssignedToCurrentUser' => 0,
-                    'questions' => [],
-                ];
-            }
-            $sections[$question['section']]['total'] += 1;
-            if (!$this->values->isEmpty($answer)) {
-                $sections[$question['section']]['filled'] += 1;
-            }
-            $sections[$question['section']]['questions'][] = $row;
-            if ($questionAssignedToCurrentUser && empty($sectionAssignment['assignedToCurrentUser'])) {
-                $sections[$question['section']]['questionsAssignedToCurrentUser'] += 1;
-            }
-        }
-
-        return [
-            'selectedYear' => $year,
-            'previousYear' => $year - 1,
-            'years' => array_map('intval', $this->repository->publishedYears()),
-            'thresholdPercent' => $threshold,
-            'sections' => array_values($sections),
-        ];
+        return $this->assembler->entry($year, $userId, $institutionCode);
     }
 
-    public function saveAnswer(int $year, string $sheet, string $questionId, string $part, $value, $note, ?string $expectedUpdatedAt, string $userId, bool $isAdmin): array
+    public function saveAnswer(int $year, string $sheet, string $questionId, string $part, $value, $note, ?string $expectedUpdatedAt, string $userId, bool $isAdmin, string $institutionCode): array
+    {
+        return $this->repository->withSharedYearLock($year, function () use ($year, $sheet, $questionId, $part, $value, $note, $expectedUpdatedAt, $userId, $isAdmin, $institutionCode) {
+            return $this->saveAnswerLocked($year, $sheet, $questionId, $part, $value, $note, $expectedUpdatedAt, $userId, $isAdmin, $institutionCode);
+        });
+    }
+
+    private function saveAnswerLocked(int $year, string $sheet, string $questionId, string $part, $value, $note, ?string $expectedUpdatedAt, string $userId, bool $isAdmin, string $institutionCode): array
     {
         if (!in_array($sheet, ['survey', 'trends'], true)) {
             throw new \InvalidArgumentException('Sheet must be survey or trends.');
@@ -174,7 +70,7 @@ class AcrlEntryService
         if (is_string($question['calculated_from'] ?? null) && trim($question['calculated_from']) !== '') {
             throw new \InvalidArgumentException('This total is calculated.');
         }
-        $status = $this->repository->sectionStatus($year, $question['section']);
+        $status = $this->repository->sectionStatus($year, $question['section'], $institutionCode);
         if ($status && $status['status'] === 'ready' && !$isAdmin) {
             throw new \DomainException('This section is ready for review and is read-only.');
         }
@@ -188,8 +84,8 @@ class AcrlEntryService
             $this->repository->questions($year, 'trends')
         );
         $answerRows = array_merge(
-            $this->repository->answers($year, 'survey'),
-            $this->repository->answers($year, 'trends')
+            $this->repository->answers($year, 'survey', $institutionCode),
+            $this->repository->answers($year, 'trends', $institutionCode)
         );
         $answerRows = array_values(array_filter($answerRows, function ($answer) use ($question) {
             return !($answer['sheet'] === $question['sheet']
@@ -201,7 +97,7 @@ class AcrlEntryService
         $dependentCalculations = $this->calculations->dependentCalculations($allQuestions, $question);
         $calculatedChanges = [];
         foreach ($allQuestions as $calculatedQuestion) {
-            $calculatedKey = $this->calculationKey($calculatedQuestion['sheet'], $calculatedQuestion['question_id'], $calculatedQuestion['part']);
+            $calculatedKey = AcrlEntryDataMapper::calculationKey($calculatedQuestion['sheet'], $calculatedQuestion['question_id'], $calculatedQuestion['part']);
             $calculation = $calculationResults[$calculatedKey] ?? null;
             if (!isset($dependentCalculations[$calculatedKey]) || !$calculation || !$calculation['supported']) {
                 continue;
@@ -212,14 +108,21 @@ class AcrlEntryService
                 'values' => ['value_text' => $valueNumber, 'value_number' => $valueNumber],
             ];
         }
-        $result = $this->repository->saveAnswer($question, $normalized, $note, $userId, $expectedUpdatedAt, 'manual', null, $calculatedChanges);
+        $result = $this->repository->saveAnswer($question, $normalized, $note, $userId, $expectedUpdatedAt, 'manual', null, $calculatedChanges, $institutionCode);
         if ($result['conflict']) {
             return ['conflict' => true, 'current' => $result['current']];
         }
         return ['conflict' => false, 'answer' => $result['current']];
     }
 
-    public function acceptSuggestions(int $year, string $section, array $items, string $userId, bool $isAdmin): array
+    public function acceptSuggestions(int $year, string $section, array $items, string $userId, bool $isAdmin, string $institutionCode): array
+    {
+        return $this->repository->withSharedYearLock($year, function () use ($year, $section, $items, $userId, $isAdmin, $institutionCode) {
+            return $this->acceptSuggestionsLocked($year, $section, $items, $userId, $isAdmin, $institutionCode);
+        });
+    }
+
+    private function acceptSuggestionsLocked(int $year, string $section, array $items, string $userId, bool $isAdmin, string $institutionCode): array
     {
         $yearRow = $this->repository->year($year);
         if (!$yearRow || $yearRow['status'] !== 'published') {
@@ -231,9 +134,9 @@ class AcrlEntryService
 
         $questions = [];
         foreach ($this->repository->questions($year, 'survey') as $question) {
-            $questions[$this->questionKey('survey', $question['question_id'], $question['part'])] = $question;
+            $questions[AcrlEntryDataMapper::questionKey('survey', $question['question_id'], $question['part'])] = $question;
         }
-        $answerMap = $this->answerMap($this->repository->answers($year, 'survey'));
+        $answerMap = AcrlEntryDataMapper::answerMap($this->repository->answers($year, 'survey', $institutionCode));
         $selected = [];
         foreach ($items as $item) {
             if (!is_array($item) || !isset($item['question_id']) || !is_scalar($item['question_id'])) {
@@ -244,7 +147,7 @@ class AcrlEntryService
             if (isset($item['sheet']) && $item['sheet'] !== 'survey') {
                 throw new \InvalidArgumentException('Suggestions are only available for Survey questions.');
             }
-            $key = $this->questionKey('survey', $questionId, $part);
+            $key = AcrlEntryDataMapper::questionKey('survey', $questionId, $part);
             if (isset($selected[$key])) {
                 throw new \InvalidArgumentException('A suggestion can only be selected once.');
             }
@@ -255,18 +158,18 @@ class AcrlEntryService
             if (!in_array($question['answer_type'], ['yes/no', 'choice'], true)) {
                 throw new \InvalidArgumentException('Only yes/no and choice answers can use suggestions.');
             }
-            if (!$this->values->isEmpty($answerMap[$key] ?? $this->emptyAnswer())) {
+            if (!$this->values->isEmpty($answerMap[$key] ?? AcrlEntryDataMapper::emptyAnswer())) {
                 throw new \DomainException('The selected suggestion is no longer available.');
             }
             $selected[$key] = $question;
         }
 
-        $status = $this->repository->sectionStatus($year, $section);
+        $status = $this->repository->sectionStatus($year, $section, $institutionCode);
         if ($status && $status['status'] === 'ready' && !$isAdmin) {
             throw new \DomainException('This section is ready for review and is read-only.');
         }
 
-        $history = $this->history->forQuestions($year, array_values($selected));
+        $history = $this->history->forQuestions($year, array_values($selected), $institutionCode);
         $suggestions = [];
         foreach ($selected as $key => $question) {
             $prior = $history[$key][0]['value'] ?? null;
@@ -279,10 +182,10 @@ class AcrlEntryService
                 'note' => $answerMap[$key]['note'] ?? null,
             ];
         }
-        return $this->repository->saveSuggestions($suggestions, $userId);
+        return $this->repository->saveSuggestions($suggestions, $userId, $institutionCode);
     }
 
-    public function setSectionStatus(int $year, string $section, string $status, string $userId, bool $isAdmin): array
+    public function setSectionStatus(int $year, string $section, string $status, string $userId, bool $isAdmin, string $institutionCode): array
     {
         $yearRow = $this->repository->year($year);
         if (!$yearRow || $yearRow['status'] !== 'published') {
@@ -303,7 +206,7 @@ class AcrlEntryService
         if ($status === 'open' && !$isAdmin) {
             throw new \DomainException('Only an administrator can reopen a ready section.');
         }
-        return $this->repository->setSectionStatus($year, $section, $status, $userId) ?: [];
+        return $this->repository->setSectionStatus($year, $section, $status, $userId, $institutionCode) ?: [];
     }
 
     public function answerValueService(): AcrlAnswerValueService
@@ -322,79 +225,6 @@ class AcrlEntryService
             throw new \DomainException('The selected ACRL question does not exist.');
         }
         return $question;
-    }
-
-    private function answerMap(array $rows): array
-    {
-        $map = [];
-        foreach ($rows as $row) {
-            $map[$this->questionKey($row['sheet'], $row['question_id'], $row['part'])] = $row;
-        }
-        return $map;
-    }
-
-    private function previousFromHistory(?array $history): array
-    {
-        if (!$history || $history['value'] === null || $history['value'] === '') {
-            return ['value' => null, 'label' => 'No previous value', 'isSum' => !empty($history['isSum']), 'linkedValues' => $history['linkedValues'] ?? []];
-        }
-        return [
-            'value' => $history['value'],
-            'label' => $history['label'],
-            'isSum' => $history['isSum'],
-            'linkedValues' => $history['linkedValues'],
-        ];
-    }
-
-    private function suggestion(array $question, array $answer, array $history): ?array
-    {
-        if (!$this->values->isEmpty($answer)
-            || !in_array($question['answer_type'], ['yes/no', 'choice'], true)
-            || empty($history)
-            || $history[0]['value'] === null
-            || $history[0]['value'] === '') {
-            return null;
-        }
-        $value = (string)$history[0]['value'];
-        $label = in_array(strtolower($value), ['yes', 'no'], true) ? ucfirst(strtolower($value)) : $value;
-        return ['value' => $value, 'label' => $label, 'year' => $history[0]['year']];
-    }
-
-    private function questionKey(string $sheet, string $questionId, string $part): string
-    {
-        return $sheet . ':' . $questionId . ':' . $part;
-    }
-
-    private function calculationKey(string $sheet, string $questionId, string $part): string
-    {
-        return $sheet . '|' . $questionId . '|' . $part;
-    }
-
-    private function assignmentQuestionKey(string $sheet, string $questionId, string $part): string
-    {
-        return serialize([$sheet, $questionId, $part]);
-    }
-
-    private function assigneeUnion(array $sectionAssignees, array $questionAssignees): array
-    {
-        $result = [];
-        foreach (array_merge($sectionAssignees, $questionAssignees) as $assignee) {
-            $result[(int)$assignee['id']] = $assignee;
-        }
-        return array_values($result);
-    }
-
-    private function emptyAnswer(): array
-    {
-        return [
-            'value_text' => null,
-            'value_number' => null,
-            'note' => null,
-            'source' => null,
-            'source_label' => null,
-            'updated_by' => null,
-            'updated_at' => null,
-        ];
     }
 
 }

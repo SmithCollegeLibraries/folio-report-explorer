@@ -2,6 +2,7 @@
 
 $migrationServicePath = __DIR__ . '/../services/MigrationService.php';
 $recognitionPath = __DIR__ . '/../services/AcrlQuestionAssignmentMigrationRecognitionService.php';
+$recognitionTraitPath = __DIR__ . '/../services/AcrlInstitutionAwareMigrationRecognitionTrait.php';
 $failures = [];
 
 function acrlInviteRecognitionCheck($condition, string $message): void
@@ -11,7 +12,8 @@ function acrlInviteRecognitionCheck($condition, string $message): void
 }
 
 $migrationSource = (string)file_get_contents($migrationServicePath);
-$recognitionSource = (string)file_get_contents($recognitionPath);
+$recognitionSource = (string)file_get_contents($recognitionPath)
+    . (string)file_get_contents($recognitionTraitPath);
 $baselineStart = strpos($recognitionSource, 'function baselineCurrentSchema');
 $baselineSource = $baselineStart === false ? '' : substr($recognitionSource, $baselineStart);
 $executeStart = strpos($migrationSource, 'function executeMigrationFile');

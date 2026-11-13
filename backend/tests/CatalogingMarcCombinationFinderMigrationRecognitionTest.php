@@ -23,6 +23,7 @@ final class MarcCombinationRecognitionDb
             private $params;
             public function __construct($db, array $params) { $this->db = $db; $this->params = $params; }
             public function queryOne() { return ($this->params[':slug'] ?? null) === 'marc-field-combination-finder' ? $this->db->definition : null; }
+            public function queryScalar() { return 0; }
         };
     }
 }

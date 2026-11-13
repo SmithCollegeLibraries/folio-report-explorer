@@ -12,15 +12,15 @@ class AcrlInvitePresentationService
         $this->db = $db;
     }
 
-    public function listInvites(int $year): array
+    public function listInvites(int $year, string $institutionCode): array
     {
         $rows = $this->db->createCommand(
-            'SELECT i.id, i.email, i.survey_year, i.invited_by, i.link_origin, i.status, i.send_count, i.created_at, '
+            'SELECT i.id, i.institution_code, i.email, i.survey_year, i.invited_by, i.link_origin, i.status, i.send_count, i.created_at, '
                 . 'i.expires_at, i.last_sent_at, i.accepted_user_id, i.accepted_at, i.revoked_at, '
                 . 'u.id AS inviter_id, u.username AS inviter_username, u.first_name AS inviter_first_name, '
                 . 'u.last_name AS inviter_last_name FROM acrl_invites i LEFT JOIN users u ON u.id = i.invited_by '
-                . 'WHERE i.survey_year = :year ORDER BY i.id DESC',
-            [':year' => $year]
+                . 'WHERE i.institution_code = :institution AND i.survey_year = :year ORDER BY i.id DESC',
+            [':institution' => $institutionCode, ':year' => $year]
         )->queryAll();
         $invites = [];
         $pendingCount = 0;
@@ -47,7 +47,7 @@ class AcrlInvitePresentationService
     public function loadInviteRow(int $inviteId): ?array
     {
         $row = $this->db->createCommand(
-            'SELECT i.id, i.email, i.survey_year, i.invited_by, i.link_origin, i.status, i.send_count, i.created_at, '
+            'SELECT i.id, i.institution_code, i.email, i.survey_year, i.invited_by, i.link_origin, i.status, i.send_count, i.created_at, '
                 . 'i.expires_at, i.last_sent_at, i.accepted_user_id, i.accepted_at, i.revoked_at, '
                 . 'u.id AS inviter_id, u.username AS inviter_username, u.first_name AS inviter_first_name, '
                 . 'u.last_name AS inviter_last_name FROM acrl_invites i LEFT JOIN users u ON u.id = i.invited_by WHERE i.id = :id',
@@ -68,7 +68,7 @@ class AcrlInvitePresentationService
             $invitedBy = ['id' => (int)$row['inviter_id'], 'displayName' => $name !== '' ? $name : (string)$row['inviter_username']];
         }
         return [
-            'id' => (int)$row['id'], 'email' => (string)$row['email'], 'surveyYear' => (int)$row['survey_year'],
+            'id' => (int)$row['id'], 'institution' => (string)$row['institution_code'], 'email' => (string)$row['email'], 'surveyYear' => (int)$row['survey_year'],
             'status' => $status, 'targets' => $this->formatTargets((int)$row['id']), 'invitedBy' => $invitedBy,
             'createdAt' => $row['created_at'], 'expiresAt' => $row['expires_at'], 'lastSentAt' => $row['last_sent_at'] ?: '',
             'sendCount' => (int)$row['send_count'], 'acceptedAt' => $row['accepted_at'] ?: '',

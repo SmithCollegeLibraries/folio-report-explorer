@@ -60,12 +60,12 @@ class AcrlDetailsRepository
         )->queryAll();
     }
 
-    public function hasQuestionNote(int $year, string $sheet, string $questionId, string $part, string $note, string $source, int $originYear): bool
+    public function hasQuestionNote(int $year, string $institutionCode, string $sheet, string $questionId, string $part, string $note, string $source, int $originYear): bool
     {
         return (bool)$this->db->createCommand(
-            'SELECT 1 FROM acrl_question_notes WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id '
+            'SELECT 1 FROM acrl_question_notes WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :question_id '
             . 'AND part = :part AND note = :note AND source = :source AND origin_year = :origin_year LIMIT 1',
-            [':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part, ':note' => $note, ':source' => $source, ':origin_year' => $originYear]
+            [':institution' => $institutionCode, ':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part, ':note' => $note, ':source' => $source, ':origin_year' => $originYear]
         )->queryScalar() !== false;
     }
 
@@ -78,33 +78,33 @@ class AcrlDetailsRepository
     public function findQuestionNote(int $id): ?array
     {
         $row = $this->db->createCommand(
-            'SELECT id, survey_year, sheet, question_id, part, note, source, origin_year, created_by, created_at, edited_by, edited_at '
+            'SELECT id, institution_code, survey_year, sheet, question_id, part, note, source, origin_year, created_by, created_at, edited_by, edited_at '
             . 'FROM acrl_question_notes WHERE id = :id',
             [':id' => $id]
         )->queryOne();
         return $row ?: null;
     }
 
-    public function updateQuestionNote(int $id, array $changes, string $userId): ?array
+    public function updateQuestionNote(int $id, array $changes, string $userId, string $institutionCode): ?array
     {
         $changes['edited_by'] = $userId;
         $changes['edited_at'] = date('Y-m-d H:i:s');
-        $this->db->createCommand()->update('acrl_question_notes', $changes, ['id' => $id])->execute();
+        $this->db->createCommand()->update('acrl_question_notes', $changes, ['id' => $id, 'institution_code' => $institutionCode])->execute();
         return $this->findQuestionNote($id);
     }
 
-    public function deleteQuestionNote(int $id): bool
+    public function deleteQuestionNote(int $id, string $institutionCode): bool
     {
-        return $this->db->createCommand()->delete('acrl_question_notes', ['id' => $id])->execute() > 0;
+        return $this->db->createCommand()->delete('acrl_question_notes', ['id' => $id, 'institution_code' => $institutionCode])->execute() > 0;
     }
 
-    public function questionNotesForKey(int $year, string $sheet, string $questionId, string $part): array
+    public function questionNotesForKey(int $year, string $institutionCode, string $sheet, string $questionId, string $part): array
     {
         return $this->db->createCommand(
-            'SELECT id, survey_year, sheet, question_id, part, note, source, origin_year, created_by, created_at, edited_by, edited_at '
-            . 'FROM acrl_question_notes WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part '
+            'SELECT id, institution_code, survey_year, sheet, question_id, part, note, source, origin_year, created_by, created_at, edited_by, edited_at '
+            . 'FROM acrl_question_notes WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part '
             . 'ORDER BY created_at DESC, id DESC',
-            [':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part]
+            [':institution' => $institutionCode, ':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part]
         )->queryAll();
     }
 
@@ -117,11 +117,11 @@ class AcrlDetailsRepository
         )->queryAll();
     }
 
-    public function questionNoteKeysAndLinksThroughYear(int $year): array
+    public function questionNoteKeysAndLinksThroughYear(int $year, string $institutionCode): array
     {
         $notes = $this->db->createCommand(
-            'SELECT DISTINCT survey_year, sheet, question_id, part FROM acrl_question_notes WHERE survey_year <= :year',
-            [':year' => $year]
+            'SELECT DISTINCT survey_year, sheet, question_id, part FROM acrl_question_notes WHERE institution_code = :institution AND survey_year <= :year',
+            [':institution' => $institutionCode, ':year' => $year]
         )->queryAll();
         $links = $this->db->createCommand(
             "SELECT previous_year, current_year, sheet, previous_question_id, previous_part, current_question_id, current_part "
@@ -129,5 +129,53 @@ class AcrlDetailsRepository
             [':year' => $year]
         )->queryAll();
         return ['notes' => $notes, 'links' => $links];
+    }
+
+    public function withSharedYearLock(int $year, callable $callback)
+    {
+        $transaction = $this->db->beginTransaction();
+        try {
+            $sql = 'SELECT survey_year FROM acrl_survey_years WHERE survey_year = :year';
+            if ($this->db->driverName !== 'sqlite') {
+                $sql .= ' LOCK IN SHARE MODE';
+            }
+            $this->db->createCommand($sql, [':year' => $year])->queryOne();
+            $result = call_user_func($callback);
+            $transaction->commit();
+            return $result;
+        } catch (\Throwable $exception) {
+            if ($transaction->isActive) {
+                $transaction->rollBack();
+            }
+            throw $exception;
+        }
+    }
+
+    public function withQuestionNoteYearLock(int $id, callable $callback)
+    {
+        $transaction = $this->db->beginTransaction();
+        try {
+            $year = $this->db->createCommand(
+                'SELECT survey_year FROM acrl_question_notes WHERE id = :id',
+                [':id' => $id]
+            )->queryScalar();
+            if ($year === false || $year === null) {
+                $result = call_user_func($callback, null);
+            } else {
+                $sql = 'SELECT survey_year FROM acrl_survey_years WHERE survey_year = :year';
+                if ($this->db->driverName !== 'sqlite') {
+                    $sql .= ' LOCK IN SHARE MODE';
+                }
+                $this->db->createCommand($sql, [':year' => (int)$year])->queryOne();
+                $result = call_user_func($callback, $this->findQuestionNote($id));
+            }
+            $transaction->commit();
+            return $result;
+        } catch (\Throwable $exception) {
+            if ($transaction->isActive) {
+                $transaction->rollBack();
+            }
+            throw $exception;
+        }
     }
 }

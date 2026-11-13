@@ -38,19 +38,20 @@ class AcrlInviteService
         return AcrlInviteRequestService::inviteFromAddress($linkOrigin);
     }
 
-    public function createInvite(int $year, string $email, array $targets, User $admin, string $linkOrigin)
+    public function createInvite(int $year, string $email, array $targets, User $admin, string $linkOrigin, string $institutionCode)
     {
+        $this->requireSmithInstitution($institutionCode);
         $email = $this->validateCreateBasics($email, $targets, $admin);
-        $inviteId = $this->transactionWithYearLock($year, function () use ($year, $email, $targets, $admin, $linkOrigin) {
+        $inviteId = $this->transactionWithYearLock($year, function () use ($year, $email, $targets, $admin, $linkOrigin, $institutionCode) {
             if (!$this->sectionAssignments->isPublishedYear($year)) {
                 throw new \InvalidArgumentException('The survey year must be published before inviting someone.');
             }
             $this->requests->assertNoMatchingAccount($email);
             $normalizedTargets = $this->requests->normalizeTargets($year, $targets);
             $existing = $this->db->createCommand(
-                "SELECT id FROM acrl_invites WHERE email = :email AND survey_year = :year"
+                "SELECT id FROM acrl_invites WHERE institution_code = :institution AND email = :email AND survey_year = :year"
                     . " AND status = 'pending' AND expires_at > :now ORDER BY id DESC LIMIT 1",
-                [':email' => $email, ':year' => $year, ':now' => $this->now()]
+                [':institution' => $institutionCode, ':email' => $email, ':year' => $year, ':now' => $this->now()]
             )->queryScalar();
             $expires = date('Y-m-d H:i:s', time() + (90 * 86400));
             if ($existing) {
@@ -58,6 +59,7 @@ class AcrlInviteService
                 $this->db->createCommand()->update('acrl_invites', ['expires_at' => $expires], ['id' => $id])->execute();
             } else {
                 $this->db->createCommand()->insert('acrl_invites', [
+                    'institution_code' => $institutionCode,
                     'email' => $email,
                     'survey_year' => $year,
                     'invited_by' => (int)$admin->id,
@@ -81,9 +83,10 @@ class AcrlInviteService
         return $this->requests->validateBasics($email, $targets, $admin);
     }
 
-    public function listInvites(int $year): array
+    public function listInvites(int $year, string $institutionCode): array
     {
-        return $this->presenter->listInvites($year);
+        $this->requireSmithInstitution($institutionCode);
+        return $this->presenter->listInvites($year, $institutionCode);
     }
 
     public function resendInvite(int $inviteId, User $admin)
@@ -115,7 +118,7 @@ class AcrlInviteService
             return false;
         }
         $candidates = $this->db->createCommand(
-            'SELECT id, email, survey_year FROM acrl_invites ORDER BY survey_year, id'
+            "SELECT id, institution_code, email, survey_year FROM acrl_invites WHERE institution_code = 'SC' ORDER BY survey_year, id"
         )->queryAll();
         $matched = [];
         foreach ($candidates as $candidate) {
@@ -160,10 +163,10 @@ class AcrlInviteService
                 $assignedBy = $invite['invited_by'] === null ? null : (int)$invite['invited_by'];
                 foreach ($usable as $target) {
                     if ($target['kind'] === 'section') {
-                        $this->sectionAssignments->addSectionAssignment($year, $target['section'], (int)$user->id, $assignedBy);
+                        $this->sectionAssignments->addSectionAssignment($year, $target['section'], (int)$user->id, $assignedBy, (string)$invite['institution_code']);
                     } else {
                         $this->questionAssignments->addQuestionAssignment(
-                            $year, $target['sheet'], $target['question_id'], $target['part'], (int)$user->id, $assignedBy
+                            $year, $target['sheet'], $target['question_id'], $target['part'], (int)$user->id, $assignedBy, (string)$invite['institution_code']
                         );
                     }
                 }
@@ -203,9 +206,12 @@ class AcrlInviteService
             }
             $this->lockYears([(int)$year]);
             $row = $this->db->createCommand(
-                $this->forUpdate('SELECT id, email, survey_year, invited_by, link_origin, status, send_count, created_at, expires_at, last_sent_at, accepted_user_id, accepted_at, revoked_at FROM acrl_invites WHERE id = :id'),
+                $this->forUpdate('SELECT id, institution_code, email, survey_year, invited_by, link_origin, status, send_count, created_at, expires_at, last_sent_at, accepted_user_id, accepted_at, revoked_at FROM acrl_invites WHERE id = :id'),
                 [':id' => $inviteId]
             )->queryOne();
+            if ($row && (string)$row['institution_code'] !== 'SC') {
+                throw new \DomainException('The invite was not found.');
+            }
             if (!$row || $row['status'] !== 'pending' || strtotime((string)$row['expires_at']) <= time()) {
                 throw new AcrlInviteConflictException('This invite is no longer pending.');
             }
@@ -253,6 +259,13 @@ class AcrlInviteService
         ];
     }
 
+    private function requireSmithInstitution(string $institutionCode): void
+    {
+        if ($institutionCode !== 'SC') {
+            throw new \DomainException('institution_not_enabled', 403);
+        }
+    }
+
     private function matchesSignIn(string $inviteEmail, string $eppn, string $uid): bool
     {
         $inviteEmail = strtolower(trim($inviteEmail));
@@ -292,7 +305,7 @@ class AcrlInviteService
             $placeholders[] = $key;
             $params[$key] = (int)$id;
         }
-        $sql = 'SELECT id, email, survey_year, invited_by, status, expires_at FROM acrl_invites WHERE id IN ('
+        $sql = 'SELECT id, institution_code, email, survey_year, invited_by, status, expires_at FROM acrl_invites WHERE id IN ('
             . implode(', ', $placeholders) . ') ORDER BY survey_year, id';
         return $this->db->createCommand($this->forUpdate($sql), $params)->queryAll();
     }

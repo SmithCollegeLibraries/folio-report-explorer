@@ -8,17 +8,20 @@ use yii\filters\auth\HttpBearerAuth;
 use yii\filters\AccessControl;
 use app\controllers\traits\AcrlApiBehaviorTrait;
 use app\controllers\traits\PersistedAdminAccessTrait;
+use app\controllers\traits\AcrlInstitutionRequestTrait;
 use app\services\AcrlSectionAssignmentService;
 use app\services\AcrlQuestionAssignmentService;
 
 require_once __DIR__ . '/traits/AcrlApiBehaviorTrait.php';
 require_once __DIR__ . '/traits/PersistedAdminAccessTrait.php';
+require_once __DIR__ . '/traits/AcrlInstitutionRequestTrait.php';
 
 /** Admin-only API for ACRL section assignments and approved-user search. */
 class AcrlAssignmentController extends Controller
 {
     use AcrlApiBehaviorTrait;
     use PersistedAdminAccessTrait;
+    use AcrlInstitutionRequestTrait;
 
     public $enableCsrfValidation = false;
 
@@ -61,11 +64,12 @@ class AcrlAssignmentController extends Controller
         if (($forbidden = $this->requireAdministrator()) !== null) {
             return $forbidden;
         }
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         try {
-            $assignments = (new AcrlSectionAssignmentService())->listForYear((int)$year);
-            $questions = (new AcrlQuestionAssignmentService())->listForYear((int)$year);
+            $assignments = (new AcrlSectionAssignmentService())->listForYear((int)$year, $institution);
+            $questions = (new AcrlQuestionAssignmentService())->listForYear((int)$year, $institution);
             $assignments['questions'] = $questions['questions'];
-            return $assignments;
+            return $this->withAcrlInstitution($assignments, $institution);
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
         }
@@ -76,17 +80,19 @@ class AcrlAssignmentController extends Controller
         if (($forbidden = $this->requireAdministrator()) !== null) {
             return $forbidden;
         }
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         $body = Yii::$app->request->bodyParams;
         if (!isset($body['userIds']) || !is_array($body['userIds'])) {
             return $this->errorResponse(422, 'Select zero or more approved users.');
         }
         try {
-            return (new AcrlSectionAssignmentService())->saveSection(
+            return $this->withAcrlInstitution((new AcrlSectionAssignmentService())->saveSection(
                 (int)$year,
                 rawurldecode((string)$section),
                 $body['userIds'],
-                (string)(Yii::$app->user->id ?? '')
-            );
+                (string)(Yii::$app->user->id ?? ''),
+                $institution
+            ), $institution);
         } catch (\InvalidArgumentException $exception) {
             return $this->errorResponse(422, $exception->getMessage());
         } catch (\DomainException $exception) {
@@ -99,6 +105,7 @@ class AcrlAssignmentController extends Controller
         if (($forbidden = $this->requireAdministrator()) !== null) {
             return $forbidden;
         }
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         $body = Yii::$app->request->bodyParams;
         foreach (['sheet', 'questionId', 'part'] as $field) {
             if (!array_key_exists($field, $body) || !is_string($body[$field])) {
@@ -115,14 +122,15 @@ class AcrlAssignmentController extends Controller
             return $this->errorResponse(422, 'Select zero or more approved users.');
         }
         try {
-            return (new AcrlQuestionAssignmentService())->saveQuestion(
+            return $this->withAcrlInstitution((new AcrlQuestionAssignmentService())->saveQuestion(
                 (int)$year,
                 $body['sheet'],
                 $body['questionId'],
                 $body['part'],
                 $body['userIds'],
-                (string)(Yii::$app->user->id ?? '')
-            );
+                (string)(Yii::$app->user->id ?? ''),
+                $institution
+            ), $institution);
         } catch (\InvalidArgumentException $exception) {
             return $this->errorResponse(422, $exception->getMessage());
         } catch (\DomainException $exception) {
@@ -135,8 +143,9 @@ class AcrlAssignmentController extends Controller
         if (($forbidden = $this->requireAdministrator()) !== null) {
             return $forbidden;
         }
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         try {
-            return (new AcrlSectionAssignmentService())->copyFromPrevious((int)$year, (string)(Yii::$app->user->id ?? ''));
+            return $this->withAcrlInstitution((new AcrlSectionAssignmentService())->copyFromPrevious((int)$year, (string)(Yii::$app->user->id ?? ''), $institution), $institution);
         } catch (\DomainException $exception) {
             return $this->errorResponse(409, $exception->getMessage());
         } catch (\InvalidArgumentException $exception) {

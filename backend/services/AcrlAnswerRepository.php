@@ -49,21 +49,21 @@ class AcrlAnswerRepository
         return $row ?: null;
     }
 
-    public function answers(int $year, string $sheet = 'survey'): array
+    public function answers(int $year, string $sheet, string $institutionCode): array
     {
         return $this->db->createCommand(
             'SELECT survey_year, sheet, question_id, part, value_text, value_number, note, source, source_label, updated_by, updated_at '
-            . 'FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet',
-            [':year' => $year, ':sheet' => $sheet]
+            . 'FROM acrl_answers WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet',
+            [':institution' => $institutionCode, ':year' => $year, ':sheet' => $sheet]
         )->queryAll();
     }
 
-    public function answer(int $year, string $sheet, string $questionId, string $part): ?array
+    public function answer(int $year, string $sheet, string $questionId, string $part, string $institutionCode): ?array
     {
         $row = $this->db->createCommand(
             'SELECT survey_year, sheet, question_id, part, value_text, value_number, note, source, source_label, updated_by, updated_at '
-            . 'FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part',
-            [':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part]
+            . 'FROM acrl_answers WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part',
+            [':institution' => $institutionCode, ':year' => $year, ':sheet' => $sheet, ':question_id' => $questionId, ':part' => $part]
         )->queryOne();
         return $row ?: null;
     }
@@ -77,26 +77,27 @@ class AcrlAnswerRepository
         )->queryAll();
     }
 
-    public function sectionStatuses(int $year): array
+    public function sectionStatuses(int $year, string $institutionCode): array
     {
         return $this->db->createCommand(
-            'SELECT section, status, set_by, set_at, reopened_by, reopened_at FROM acrl_section_status WHERE survey_year = :year',
-            [':year' => $year]
+            'SELECT section, status, set_by, set_at, reopened_by, reopened_at FROM acrl_section_status WHERE institution_code = :institution AND survey_year = :year',
+            [':institution' => $institutionCode, ':year' => $year]
         )->queryAll();
     }
 
-    public function sectionStatus(int $year, string $section): ?array
+    public function sectionStatus(int $year, string $section, string $institutionCode): ?array
     {
         $row = $this->db->createCommand(
-            'SELECT section, status, set_by, set_at, reopened_by, reopened_at FROM acrl_section_status WHERE survey_year = :year AND section = :section',
-            [':year' => $year, ':section' => $section]
+            'SELECT section, status, set_by, set_at, reopened_by, reopened_at FROM acrl_section_status WHERE institution_code = :institution AND survey_year = :year AND section = :section',
+            [':institution' => $institutionCode, ':year' => $year, ':section' => $section]
         )->queryOne();
         return $row ?: null;
     }
 
-    public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null, array $calculatedChanges = []): array
+    public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source, ?string $sourceLabel, array $calculatedChanges, string $institutionCode): array
     {
         $key = [
+            'institution_code' => $institutionCode,
             'survey_year' => (int)$question['survey_year'],
             'sheet' => $question['sheet'],
             'question_id' => $question['question_id'],
@@ -105,8 +106,8 @@ class AcrlAnswerRepository
         $transaction = $this->db->beginTransaction();
         try {
             $old = $this->db->createCommand(
-                'SELECT * FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
-                [':year' => $key['survey_year'], ':sheet' => $key['sheet'], ':question_id' => $key['question_id'], ':part' => $key['part']]
+                'SELECT * FROM acrl_answers WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
+                [':institution' => $institutionCode, ':year' => $key['survey_year'], ':sheet' => $key['sheet'], ':question_id' => $key['question_id'], ':part' => $key['part']]
             )->queryOne();
             if ($old === false) {
                 $old = null;
@@ -136,21 +137,22 @@ class AcrlAnswerRepository
                         throw $exception;
                     }
                     $transaction->rollBack();
-                    return ['conflict' => true, 'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part'])];
+                    return ['conflict' => true, 'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part'], $institutionCode)];
                 }
             }
             $this->appendHistory($key, $old, $new, $userId);
             foreach ($calculatedChanges as $change) {
                 $calculatedQuestion = $change['question'];
                 $calculatedKey = [
+                    'institution_code' => $institutionCode,
                     'survey_year' => (int)$calculatedQuestion['survey_year'],
                     'sheet' => $calculatedQuestion['sheet'],
                     'question_id' => $calculatedQuestion['question_id'],
                     'part' => $calculatedQuestion['part'],
                 ];
                 $oldCalculated = $this->db->createCommand(
-                    'SELECT * FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
-                    [':year' => $calculatedKey['survey_year'], ':sheet' => $calculatedKey['sheet'], ':question_id' => $calculatedKey['question_id'], ':part' => $calculatedKey['part']]
+                    'SELECT * FROM acrl_answers WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
+                    [':institution' => $institutionCode, ':year' => $calculatedKey['survey_year'], ':sheet' => $calculatedKey['sheet'], ':question_id' => $calculatedKey['question_id'], ':part' => $calculatedKey['part']]
                 )->queryOne();
                 if ($oldCalculated === false) {
                     $oldCalculated = null;
@@ -180,24 +182,25 @@ class AcrlAnswerRepository
             throw $exception;
         }
 
-        return ['conflict' => false, 'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part'])];
+        return ['conflict' => false, 'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part'], $institutionCode)];
     }
 
-    public function saveSuggestions(array $suggestions, string $userId): array
+    public function saveSuggestions(array $suggestions, string $userId, string $institutionCode): array
     {
         $transaction = $this->db->beginTransaction();
         try {
             foreach ($suggestions as $suggestion) {
                 $question = $suggestion['question'];
                 $key = [
+                    'institution_code' => $institutionCode,
                     'survey_year' => (int)$question['survey_year'],
                     'sheet' => $question['sheet'],
                     'question_id' => $question['question_id'],
                     'part' => $question['part'],
                 ];
                 $old = $this->db->createCommand(
-                    'SELECT * FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
-                    [':year' => $key['survey_year'], ':sheet' => $key['sheet'], ':question_id' => $key['question_id'], ':part' => $key['part']]
+                    'SELECT * FROM acrl_answers WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
+                    [':institution' => $institutionCode, ':year' => $key['survey_year'], ':sheet' => $key['sheet'], ':question_id' => $key['question_id'], ':part' => $key['part']]
                 )->queryOne();
                 if ($old === false) {
                     $old = null;
@@ -227,7 +230,7 @@ class AcrlAnswerRepository
                         return [
                             'conflict' => true,
                             'accepted' => 0,
-                            'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part']),
+                            'current' => $this->answer($key['survey_year'], $key['sheet'], $key['question_id'], $key['part'], $institutionCode),
                         ];
                     }
                 }
@@ -243,21 +246,22 @@ class AcrlAnswerRepository
         return ['conflict' => false, 'accepted' => count($suggestions)];
     }
 
-    public function importAnswers(array $items, string $userId, string $sourceLabel, bool $overwrite): array
+    public function importAnswers(array $items, string $userId, string $sourceLabel, bool $overwrite, string $institutionCode): array
     {
         $transaction = $this->db->beginTransaction();
         $counts = ['imported' => 0, 'unchanged' => 0, 'skipped' => 0];
         try {
             foreach ($items as $item) {
                 $key = [
+                    'institution_code' => $institutionCode,
                     'survey_year' => (int)$item['survey_year'],
                     'sheet' => $item['sheet'],
                     'question_id' => $item['question_id'],
                     'part' => $item['part'],
                 ];
                 $old = $this->db->createCommand(
-                    'SELECT * FROM acrl_answers WHERE survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
-                    [':year' => $key['survey_year'], ':sheet' => $key['sheet'], ':question_id' => $key['question_id'], ':part' => $key['part']]
+                    'SELECT * FROM acrl_answers WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :question_id AND part = :part FOR UPDATE',
+                    [':institution' => $institutionCode, ':year' => $key['survey_year'], ':sheet' => $key['sheet'], ':question_id' => $key['question_id'], ':part' => $key['part']]
                 )->queryOne();
                 if ($old === false) {
                     $old = null;
@@ -296,17 +300,37 @@ class AcrlAnswerRepository
         return $counts;
     }
 
-    public function setSectionStatus(int $year, string $section, string $status, string $userId): ?array
+    public function setSectionStatus(int $year, string $section, string $status, string $userId, string $institutionCode): ?array
     {
         if ($status === 'ready') {
-            $sql = "INSERT INTO acrl_section_status (survey_year, section, status, set_by, set_at) VALUES (:year, :section, 'ready', :user, CURRENT_TIMESTAMP(6)) "
+            $sql = "INSERT INTO acrl_section_status (institution_code, survey_year, section, status, set_by, set_at) VALUES (:institution, :year, :section, 'ready', :user, CURRENT_TIMESTAMP(6)) "
                 . "ON DUPLICATE KEY UPDATE status = 'ready', set_by = VALUES(set_by), set_at = VALUES(set_at), reopened_by = NULL, reopened_at = NULL";
         } else {
-            $sql = "INSERT INTO acrl_section_status (survey_year, section, status, reopened_by, reopened_at) VALUES (:year, :section, 'open', :user, CURRENT_TIMESTAMP(6)) "
+            $sql = "INSERT INTO acrl_section_status (institution_code, survey_year, section, status, reopened_by, reopened_at) VALUES (:institution, :year, :section, 'open', :user, CURRENT_TIMESTAMP(6)) "
                 . "ON DUPLICATE KEY UPDATE status = 'open', reopened_by = VALUES(reopened_by), reopened_at = VALUES(reopened_at)";
         }
-        $this->db->createCommand($sql, [':year' => $year, ':section' => $section, ':user' => $userId])->execute();
-        return $this->sectionStatus($year, $section);
+        $this->db->createCommand($sql, [':institution' => $institutionCode, ':year' => $year, ':section' => $section, ':user' => $userId])->execute();
+        return $this->sectionStatus($year, $section, $institutionCode);
+    }
+
+    public function withSharedYearLock(int $year, callable $callback)
+    {
+        $transaction = $this->db->beginTransaction();
+        try {
+            $sql = 'SELECT survey_year FROM acrl_survey_years WHERE survey_year = :year';
+            if ($this->db->driverName !== 'sqlite') {
+                $sql .= ' LOCK IN SHARE MODE';
+            }
+            $this->db->createCommand($sql, [':year' => $year])->queryOne();
+            $result = call_user_func($callback);
+            $transaction->commit();
+            return $result;
+        } catch (\Throwable $exception) {
+            if ($transaction->isActive) {
+                $transaction->rollBack();
+            }
+            throw $exception;
+        }
     }
 
     private function appendHistory(array $key, ?array $old, array $new, string $userId): void

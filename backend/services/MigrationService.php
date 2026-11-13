@@ -435,7 +435,7 @@ class MigrationService
             case '050_orders_missing_acquisitions_unit.sql': return CatalogingReportMigrationRecognitionService::ordersMissingAcqUnitReportAppearsComplete($db);
             case '051_budget_year_expense_class_report.sql': case '053_acquisitions_feedback_report_filters.sql': case '056_open_order_report_expansion.sql': case '068_marc_field_combination_finder.sql': case '069_marc_combination_finder_record_scopes.sql': case '070_gift_reports.sql': return CatalogingReportMigrationRecognitionService::migrationDefinitionAppearsComplete($db, $filename);
             case '061_retire_acrl_statistics.sql': return AcrlRetirementMigrationRecognitionService::retirementAppearsComplete($db); case '064_visualization_history.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryAppearsComplete($db); case '065_visualization_history_version.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryVersionAppearsComplete($db);
-            case '066_acrl_question_assignments.sql': case '067_acrl_invites.sql': case '071_vea_gate_zones.sql':
+            case '066_acrl_question_assignments.sql': case '067_acrl_invites.sql': case '071_vea_gate_zones.sql': case '073_acrl_institutions.sql':
                 return AcrlQuestionAssignmentMigrationRecognitionService::migrationSchemaAppearsComplete($db, $filename);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [

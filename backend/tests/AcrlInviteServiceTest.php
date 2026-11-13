@@ -47,22 +47,22 @@ $db->createCommand('CREATE TABLE acrl_questions (
     PRIMARY KEY (survey_year, sheet, question_id, part)
 )')->execute();
 $db->createCommand('CREATE TABLE acrl_section_assignments (
-    survey_year INTEGER NOT NULL, section TEXT NOT NULL, user_id INTEGER NOT NULL, assigned_by INTEGER NULL,
-    UNIQUE (survey_year, section, user_id),
+    institution_code TEXT NOT NULL, survey_year INTEGER NOT NULL, section TEXT NOT NULL, user_id INTEGER NOT NULL, assigned_by INTEGER NULL,
+    UNIQUE (institution_code, survey_year, section, user_id),
     FOREIGN KEY (survey_year) REFERENCES acrl_survey_years (survey_year) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     FOREIGN KEY (assigned_by) REFERENCES users (id) ON DELETE SET NULL
 )')->execute();
 $db->createCommand('CREATE TABLE acrl_question_assignments (
-    survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\',
+    institution_code TEXT NOT NULL, survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\',
     user_id INTEGER NOT NULL, assigned_by INTEGER NULL, assigned_at TEXT,
-    UNIQUE (survey_year, sheet, question_id, part, user_id),
+    UNIQUE (institution_code, survey_year, sheet, question_id, part, user_id),
     FOREIGN KEY (survey_year) REFERENCES acrl_survey_years (survey_year) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
     FOREIGN KEY (assigned_by) REFERENCES users (id) ON DELETE SET NULL
 )')->execute();
 $db->createCommand('CREATE TABLE acrl_invites (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, survey_year INTEGER NOT NULL, invited_by INTEGER NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT, institution_code TEXT NOT NULL, email TEXT NOT NULL, survey_year INTEGER NOT NULL, invited_by INTEGER NULL,
     link_origin TEXT NOT NULL, status TEXT NOT NULL DEFAULT \'pending\', send_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_sent_at TEXT NULL, accepted_user_id INTEGER NULL,
     accepted_at TEXT NULL, revoked_at TEXT NULL,
@@ -164,11 +164,11 @@ function acrlInviteServiceAdmin(int $id = 1): User
     return User::findOne($id);
 }
 
-function acrlInviteServiceInsertInvite(int $id, string $email, string $status = 'pending', ?int $invitedBy = 1, ?string $expiresAt = null): void
+function acrlInviteServiceInsertInvite(int $id, string $email, string $status = 'pending', ?int $invitedBy = 1, ?string $expiresAt = null, string $institutionCode = 'SC'): void
 {
     global $db;
     $db->createCommand()->insert('acrl_invites', [
-        'id' => $id, 'email' => strtolower($email), 'survey_year' => 2026, 'invited_by' => $invitedBy,
+        'id' => $id, 'institution_code' => $institutionCode, 'email' => strtolower($email), 'survey_year' => 2026, 'invited_by' => $invitedBy,
         'link_origin' => 'https://reports.example.test', 'status' => $status, 'send_count' => 0,
         'created_at' => date('Y-m-d H:i:s'), 'expires_at' => $expiresAt ?: date('Y-m-d H:i:s', time() + 86400),
     ])->execute();
@@ -192,42 +192,43 @@ $service = acrlInviteServiceNew(function ($recipient, $subject, $body, $from, $r
 
 acrlInviteServiceScenario('invite request validation', function () use ($service) {
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'reader@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(2), 'https://reports.example.test');
+        $service->createInvite(2026, 'reader@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(2), 'https://reports.example.test', 'SC');
     }, 'no Smith email on file', 'admin without a stored email');
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'reader@other.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2026, 'reader@other.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'domain', 'address outside the inviting admin domain');
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2030, 'reader@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2030, 'reader@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'published', 'unpublished survey year');
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'reader@smith.example', [], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2026, 'reader@smith.example', [], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'target', 'empty invite targets');
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'not-an-email', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2026, 'not-an-email', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'email', 'invalid email address');
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'reader@smith.example', [['kind' => 'section', 'section' => 'Not a section']], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2026, 'reader@smith.example', [['kind' => 'section', 'section' => 'Not a section']], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'target', 'unknown section target');
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'reader@smith.example', [['kind' => 'question', 'sheet' => 'survey', 'questionId' => '60', 'part' => '']], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2026, 'reader@smith.example', [['kind' => 'question', 'sheet' => 'survey', 'questionId' => '60', 'part' => '']], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'target', 'question target whose full tuple is not in the catalogue');
 });
 
 acrlInviteServiceScenario('existing matching accounts return ordered 409 conflicts', function () use ($service) {
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'known@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2026, 'known@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'Already in the app - assign them directly.', 'approved matching account');
     acrlInviteServiceExpectError(function () use ($service) {
-        $service->createInvite(2026, 'waiting@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test');
+        $service->createInvite(2026, 'waiting@smith.example', [['kind' => 'section', 'section' => 'Circulation']], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC');
     }, 'Waiting for approval - approve them on the Users page.', 'unapproved username@domain account');
 });
 
 acrlInviteServiceScenario('repeat create deduplicates targets, resets expiry, and sends only after commit', function () use ($service, &$senderState, $db, $appBasePath) {
     $first = acrlInviteServiceCall(function () use ($service) { return $service->createInvite(2026, 'READER@SMITH.EXAMPLE', [
         ['kind' => 'section', 'section' => 'Circulation'],
-    ], acrlInviteServiceAdmin(), 'https://reports.example.test'); }, 'First valid create');
-    acrlInviteServiceCheck(is_array($first) && isset($first['invite']['id'], $first['invite']['email'], $first['invite']['surveyYear'], $first['invite']['status'], $first['invite']['targets'], $first['invite']['invitedBy'], $first['invite']['createdAt'], $first['invite']['expiresAt'], $first['invite']['lastSentAt'], $first['invite']['sendCount'], $first['invite']['acceptedAt'], $first['inviteText']['subject'], $first['inviteText']['body'], $first['emailSent']), 'Create returns the full invite shape, send outcome, and copy text.');
+    ], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC'); }, 'First valid create');
+    acrlInviteServiceCheck(is_array($first) && isset($first['invite']['id'], $first['invite']['institution'], $first['invite']['email'], $first['invite']['surveyYear'], $first['invite']['status'], $first['invite']['targets'], $first['invite']['invitedBy'], $first['invite']['createdAt'], $first['invite']['expiresAt'], $first['invite']['lastSentAt'], $first['invite']['sendCount'], $first['invite']['acceptedAt'], $first['inviteText']['subject'], $first['inviteText']['body'], $first['emailSent']), 'Create returns the institution-scoped invite shape, send outcome, and copy text.');
+    acrlInviteServiceCheck(($first['invite']['institution'] ?? null) === 'SC', 'Create response exposes the selected institution.');
     acrlInviteServiceCheck(($first['inviteText']['subject'] ?? null) === "[FOLIO Report Explorer] You're invited to help with the ACRL survey FY 2026", 'Invite subject follows the exact ACRL FY template.');
     $body = (string)($first['inviteText']['body'] ?? '');
     acrlInviteServiceCheck(strpos($body, 'Synthetic Admin') !== false && strpos($body, 'Circulation') !== false, 'Invite body includes inviter name and target label.');
@@ -243,7 +244,7 @@ acrlInviteServiceScenario('repeat create deduplicates targets, resets expiry, an
     $second = acrlInviteServiceCall(function () use ($service) { return $service->createInvite(2026, 'reader@smith.example', [
         ['kind' => 'section', 'section' => 'Circulation'],
         ['kind' => 'question', 'sheet' => 'survey', 'questionId' => '60', 'part' => 'A'],
-    ], acrlInviteServiceAdmin(), 'https://reports.example.test'); }, 'Repeated valid create');
+    ], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC'); }, 'Repeated valid create');
     $row = $db->createCommand('SELECT * FROM acrl_invites WHERE id = :id', [':id' => $inviteId])->queryOne();
     $targetCount = (int)$db->createCommand('SELECT COUNT(*) FROM acrl_invite_targets WHERE invite_id = :id', [':id' => $inviteId])->queryScalar();
     acrlInviteServiceCheck(is_array($second) && (int)($second['invite']['id'] ?? 0) === $inviteId, 'Repeat invite reuses the active pending invite.');
@@ -263,7 +264,7 @@ acrlInviteServiceScenario('failed sender leaves counters unchanged and expired i
     $senderState['result'] = false;
     $result = acrlInviteServiceCall(function () use ($service) { return $service->createInvite(2026, 'mail-fails@smith.example', [
         ['kind' => 'question', 'sheet' => 'survey', 'questionId' => '61', 'part' => ''],
-    ], acrlInviteServiceAdmin(), 'https://reports.example.test'); }, 'Create with failing sender');
+    ], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC'); }, 'Create with failing sender');
     acrlInviteServiceCheck(is_array($result) && ($result['emailSent'] ?? true) === false, 'Mail failure returns emailSent=false and copy text.');
     $id = (int)($result['invite']['id'] ?? 0);
     $row = $id ? $db->createCommand('SELECT send_count, last_sent_at FROM acrl_invites WHERE id = :id', [':id' => $id])->queryOne() : [];
@@ -272,7 +273,7 @@ acrlInviteServiceScenario('failed sender leaves counters unchanged and expired i
     $senderState['result'] = true;
     $replacement = acrlInviteServiceCall(function () use ($service) { return $service->createInvite(2026, 'mail-fails@smith.example', [
         ['kind' => 'question', 'sheet' => 'survey', 'questionId' => '61', 'part' => ''],
-    ], acrlInviteServiceAdmin(), 'https://reports.example.test'); }, 'Create after expired invite');
+    ], acrlInviteServiceAdmin(), 'https://reports.example.test', 'SC'); }, 'Create after expired invite');
     acrlInviteServiceCheck((int)($replacement['invite']['id'] ?? 0) !== $id, 'A new invite after expiry creates a fresh history row.');
     $historyCount = (int)$db->createCommand('SELECT COUNT(*) FROM acrl_invites WHERE email = :email AND survey_year = 2026', [':email' => 'mail-fails@smith.example'])->queryScalar();
     acrlInviteServiceCheck($historyCount === 2, 'Expired invitation history is retained.');
@@ -285,7 +286,7 @@ acrlInviteServiceScenario('list, resend, and revoke preserve pending-only states
     acrlInviteServiceInsertInvite(101, 'expired-list@smith.example', 'pending', 1, date('Y-m-d H:i:s', time() - 10));
     acrlInviteServiceInsertInvite(102, 'revoked-list@smith.example', 'revoked');
     acrlInviteServiceInsertInvite(103, 'accepted-list@smith.example', 'accepted');
-    $listed = acrlInviteServiceCall(function () use ($service) { return $service->listInvites(2026); }, 'List invites');
+    $listed = acrlInviteServiceCall(function () use ($service) { return $service->listInvites(2026, 'SC'); }, 'List invites');
     acrlInviteServiceCheck(is_array($listed) && isset($listed['invites'], $listed['pendingCount']), 'List returns invites and pendingCount.');
     acrlInviteServiceCheck(($listed['pendingCount'] ?? null) === 1, 'Only unexpired pending invites contribute to pendingCount.');
     $statuses = is_array($listed['invites'] ?? null) ? array_column($listed['invites'], 'status') : [];
@@ -297,9 +298,20 @@ acrlInviteServiceScenario('list, resend, and revoke preserve pending-only states
     $pendingItem = null;
     foreach (($listed['invites'] ?? []) as $item) if ((int)($item['id'] ?? 0) === 100) $pendingItem = $item;
     acrlInviteServiceCheck(is_array($pendingItem) && isset($pendingItem['inviteText']['subject'], $pendingItem['inviteText']['body']), 'Pending list items include copyable invite text without sending.');
-    acrlInviteServiceCheck(is_array($pendingItem) && isset($pendingItem['id'], $pendingItem['email'], $pendingItem['surveyYear'], $pendingItem['status'], $pendingItem['targets'], $pendingItem['invitedBy'], $pendingItem['createdAt'], $pendingItem['expiresAt'], $pendingItem['lastSentAt'], $pendingItem['sendCount'], $pendingItem['acceptedAt']), 'List invite item contains all documented invite response fields.');
+    acrlInviteServiceCheck(is_array($pendingItem) && isset($pendingItem['id'], $pendingItem['institution'], $pendingItem['email'], $pendingItem['surveyYear'], $pendingItem['status'], $pendingItem['targets'], $pendingItem['invitedBy'], $pendingItem['createdAt'], $pendingItem['expiresAt'], $pendingItem['lastSentAt'], $pendingItem['sendCount'], $pendingItem['acceptedAt']), 'List invite item contains all documented invite response fields.');
     $questionLabel = $pendingItem['targets'][0]['label'] ?? null;
     acrlInviteServiceCheck($questionLabel === 'Q60 · A', 'Invite target labels use the full question tuple.');
+    acrlInviteServiceCheck(($pendingItem['institution'] ?? null) === 'SC', 'List response exposes each invite institution.');
+    acrlInviteServiceInsertInvite(104, 'other-institution@smith.example', 'pending', 1, null, 'HC');
+    foreach (['resendInvite', 'revokeInvite'] as $operation) {
+        $error = null;
+        try {
+            $service->$operation(104, acrlInviteServiceAdmin());
+        } catch (DomainException $caught) {
+            $error = $caught;
+        }
+        acrlInviteServiceCheck($error !== null, $operation . ' cannot act on an invite owned by another institution.');
+    }
     $resend = acrlInviteServiceCall(function () use ($service) { return $service->resendInvite(100, acrlInviteServiceAdmin()); }, 'Resend pending invite');
     acrlInviteServiceCheck(is_array($resend) && isset($resend['invite'], $resend['emailSent'], $resend['inviteText']), 'Resend returns the updated invite, send outcome, and invite text.');
     $revoked = acrlInviteServiceCall(function () use ($service) { return $service->revokeInvite(100, acrlInviteServiceAdmin()); }, 'Revoke pending invite');
@@ -383,12 +395,12 @@ acrlInviteServiceScenario('accept preserves preassigned targets across overlappi
     acrlInviteServiceInsertTarget(213, 'section', 'Circulation');
     acrlInviteServiceInsertTarget(213, 'question', 'Circulation', 'survey', '60', 'A');
     acrlInviteServiceInsertTarget(213, 'section', 'Library services');
-    $db->createCommand()->insert('acrl_section_assignments', ['survey_year' => 2026, 'section' => 'Circulation', 'user_id' => 6, 'assigned_by' => 1])->execute();
-    $db->createCommand()->insert('acrl_question_assignments', ['survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 6, 'assigned_by' => 1])->execute();
+    $db->createCommand()->insert('acrl_section_assignments', ['institution_code' => 'SC', 'survey_year' => 2026, 'section' => 'Circulation', 'user_id' => 6, 'assigned_by' => 1])->execute();
+    $db->createCommand()->insert('acrl_question_assignments', ['institution_code' => 'SC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 6, 'assigned_by' => 1])->execute();
     $invitee = new User(['smith_id' => 'synthetic-additive-user', 'username' => 'additive', 'role' => 'user', 'is_approved' => 0]);
     $invitee->save(false);
-    $db->createCommand()->insert('acrl_section_assignments', ['survey_year' => 2026, 'section' => 'Circulation', 'user_id' => $invitee->id, 'assigned_by' => 1])->execute();
-    $db->createCommand()->insert('acrl_question_assignments', ['survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => $invitee->id, 'assigned_by' => 1])->execute();
+    $db->createCommand()->insert('acrl_section_assignments', ['institution_code' => 'SC', 'survey_year' => 2026, 'section' => 'Circulation', 'user_id' => $invitee->id, 'assigned_by' => 1])->execute();
+    $db->createCommand()->insert('acrl_question_assignments', ['institution_code' => 'SC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => $invitee->id, 'assigned_by' => 1])->execute();
     $before = $db->createCommand(
         'SELECT section, user_id, assigned_by FROM acrl_section_assignments WHERE survey_year = 2026 AND section = :section'
             . ' AND user_id IN (6, :invitee) ORDER BY section, user_id',

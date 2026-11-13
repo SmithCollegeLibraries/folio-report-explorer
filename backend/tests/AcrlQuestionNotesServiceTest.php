@@ -22,6 +22,20 @@ class AcrlQuestionNotesFakeRepository
     public $notes = [];
     public $predecessors = [];
     public $nextId = 1;
+    public $lockedYears = [];
+    public $noteLocks = [];
+
+    public function withSharedYearLock(int $year, callable $callback)
+    {
+        $this->lockedYears[] = $year;
+        return call_user_func($callback);
+    }
+
+    public function withQuestionNoteYearLock(int $id, callable $callback)
+    {
+        $this->noteLocks[] = $id;
+        return call_user_func($callback, $this->findQuestionNote($id));
+    }
 
     public function year(int $year): ?array { return $this->years[$year] ?? null; }
 
@@ -30,10 +44,10 @@ class AcrlQuestionNotesFakeRepository
         return $this->questions[$this->key($year, $sheet, $questionId, $part)] ?? null;
     }
 
-    public function hasQuestionNote(int $year, string $sheet, string $questionId, string $part, string $note, string $source, int $originYear): bool
+    public function hasQuestionNote(int $year, string $institutionCode, string $sheet, string $questionId, string $part, string $note, string $source, int $originYear): bool
     {
         foreach ($this->notes as $item) {
-            if ($item['survey_year'] === $year && $item['sheet'] === $sheet && $item['question_id'] === $questionId
+            if (($item['institution_code'] ?? '') === $institutionCode && $item['survey_year'] === $year && $item['sheet'] === $sheet && $item['question_id'] === $questionId
                 && $item['part'] === $part && $item['note'] === $note && $item['source'] === $source && $item['origin_year'] === $originYear) return true;
         }
         return false;
@@ -51,24 +65,24 @@ class AcrlQuestionNotesFakeRepository
 
     public function findQuestionNote(int $id): ?array { return $this->notes[$id] ?? null; }
 
-    public function updateQuestionNote(int $id, array $changes, string $userId): ?array
+    public function updateQuestionNote(int $id, array $changes, string $userId, string $institutionCode): ?array
     {
-        if (!isset($this->notes[$id])) return null;
+        if (!isset($this->notes[$id]) || ($this->notes[$id]['institution_code'] ?? '') !== $institutionCode) return null;
         $this->notes[$id] = array_merge($this->notes[$id], $changes, ['edited_by' => $userId, 'edited_at' => '2026-10-27 13:00:00']);
         return $this->notes[$id];
     }
 
-    public function deleteQuestionNote(int $id): bool
+    public function deleteQuestionNote(int $id, string $institutionCode): bool
     {
-        if (!isset($this->notes[$id])) return false;
+        if (!isset($this->notes[$id]) || ($this->notes[$id]['institution_code'] ?? '') !== $institutionCode) return false;
         unset($this->notes[$id]);
         return true;
     }
 
-    public function questionNotesForKey(int $year, string $sheet, string $questionId, string $part): array
+    public function questionNotesForKey(int $year, string $institutionCode, string $sheet, string $questionId, string $part): array
     {
-        return array_values(array_filter($this->notes, function ($item) use ($year, $sheet, $questionId, $part) {
-            return $item['survey_year'] === $year && $item['sheet'] === $sheet && $item['question_id'] === $questionId && $item['part'] === $part;
+        return array_values(array_filter($this->notes, function ($item) use ($year, $institutionCode, $sheet, $questionId, $part) {
+            return ($item['institution_code'] ?? '') === $institutionCode && $item['survey_year'] === $year && $item['sheet'] === $sheet && $item['question_id'] === $questionId && $item['part'] === $part;
         }));
     }
 
@@ -77,11 +91,11 @@ class AcrlQuestionNotesFakeRepository
         return $this->predecessors[$this->key($year, $sheet, $questionId, $part)] ?? [];
     }
 
-    public function questionNoteKeysAndLinksThroughYear(int $year): array
+    public function questionNoteKeysAndLinksThroughYear(int $year, string $institutionCode): array
     {
         $notes = [];
         foreach ($this->notes as $item) {
-            if ((int)$item['survey_year'] <= $year) $notes[] = ['survey_year' => $item['survey_year'], 'sheet' => $item['sheet'], 'question_id' => $item['question_id'], 'part' => $item['part']];
+            if (($item['institution_code'] ?? '') === $institutionCode && (int)$item['survey_year'] <= $year) $notes[] = ['survey_year' => $item['survey_year'], 'sheet' => $item['sheet'], 'question_id' => $item['question_id'], 'part' => $item['part']];
         }
         $links = [];
         foreach ($this->predecessors as $state => $previousItems) {
@@ -117,29 +131,39 @@ $rows = [
     ['question_id' => '40', 'part' => '', 'note' => 'Checked titles against the catalogue, and sampled records.', 'source' => '2025 worksheet', 'origin_year' => 2025],
     ['question_id' => '41', 'part' => 'B', 'note' => 'Verified supplier holdings.', 'source' => 'FY2024 worksheet', 'origin_year' => 2024],
 ];
-$preview = $service->previewImport(2026, $rows);
+$preview = $service->previewImport(2026, $rows, 'SC');
 acrlQuestionNotesAssert($preview['matchedCount'] === 2 && $preview['unknownCount'] === 0 && $preview['invalidCount'] === 0, 'CSV preview must match both valid question notes.');
-$confirmed = $service->confirmImport(2026, $rows, 'admin-1');
+$confirmed = $service->confirmImport(2026, $rows, 'admin-1', 'SC');
 acrlQuestionNotesAssert($confirmed['result']['imported'] === 2, 'CSV confirmation must import each matched note.');
-$again = $service->confirmImport(2026, $rows, 'admin-1');
+$again = $service->confirmImport(2026, $rows, 'admin-1', 'SC');
 acrlQuestionNotesAssert($again['result']['unchanged'] === 2, 'A repeated import must leave identical notes unchanged.');
 
 $badRows = array_merge($rows, [$rows[0], ['question_id' => '999', 'part' => '', 'note' => 'Unknown key', 'source' => '2026', 'origin_year' => 2026]]);
-$badPreview = $service->previewImport(2026, $badRows);
+$badPreview = $service->previewImport(2026, $badRows, 'SC');
 acrlQuestionNotesAssert($badPreview['unknownCount'] === 1 && $badPreview['invalidCount'] === 1, 'Preview must flag unknown question keys and duplicate rows.');
 
-$added = $service->addNote(2026, 'survey', '40', '', 'How I verified the holdings.', 'How I collected this', 2026, 'user-2');
-acrlQuestionNotesAssert($repository->notes[$added['id']]['created_by'] === 'user-2' && $added['origin_year'] === 2026, 'New notes must keep the signed-in actor and original year.');
+$added = $service->addNote(2026, 'survey', '40', '', 'How I verified the holdings.', 'How I collected this', 2026, 'user-2', 'SC');
+acrlQuestionNotesAssert($repository->notes[$added['id']]['created_by'] === 'user-2' && $repository->notes[$added['id']]['institution_code'] === 'SC' && $added['origin_year'] === 2026, 'New notes must keep the signed-in actor, institution, and original year.');
 $edited = $service->editNote((int)$added['id'], 'Checked a second sample.', 'How I collected this', 2026, 'admin-1');
 acrlQuestionNotesAssert($edited['note'] === 'Checked a second sample.' && $repository->notes[$added['id']]['edited_by'] === 'admin-1', 'Administrator edits must record their actor.');
 acrlQuestionNotesAssert($service->deleteNote((int)$added['id']), 'Administrators must be able to remove a note.');
+$repository->notes[93] = ['id' => 93, 'institution_code' => 'HC', 'survey_year' => 2024, 'origin_year' => 2024, 'note' => 'Another college note', 'source' => 'Synthetic', 'sheet' => 'survey', 'question_id' => '40', 'part' => ''];
+try {
+    $service->editNote(93, 'Changed', 'Synthetic', 2024, 'admin-1');
+    acrlQuestionNotesAssert(false, 'ID-only note edits must not expose another institution note.');
+} catch (\DomainException $exception) {
+    acrlQuestionNotesAssert($exception->getCode() === 0, 'Another institution note is reported as not found.');
+}
+acrlQuestionNotesAssert(!$service->deleteNote(93), 'ID-only note deletion must not remove another institution note.');
 
-$repository->notes[90] = ['id' => 90, 'survey_year' => 2024, 'sheet' => 'survey', 'question_id' => '40', 'part' => '', 'note' => 'Original 2024 note', 'source' => '2024 worksheet', 'origin_year' => 2024, 'created_at' => '2024-01-01 00:00:00'];
-$repository->notes[91] = ['id' => 91, 'survey_year' => 2025, 'sheet' => 'survey', 'question_id' => '41', 'part' => '', 'note' => 'More recent 2025 note', 'source' => '2025 worksheet', 'origin_year' => 2025, 'created_at' => '2025-01-01 00:00:00'];
-$forwarded = $service->notesForQuestion(2026, 'survey', '42', '');
+$repository->notes[90] = ['id' => 90, 'institution_code' => 'SC', 'survey_year' => 2024, 'sheet' => 'survey', 'question_id' => '40', 'part' => '', 'note' => 'Original 2024 note', 'source' => '2024 worksheet', 'origin_year' => 2024, 'created_at' => '2024-01-01 00:00:00'];
+$repository->notes[91] = ['id' => 91, 'institution_code' => 'SC', 'survey_year' => 2025, 'sheet' => 'survey', 'question_id' => '41', 'part' => '', 'note' => 'More recent 2025 note', 'source' => '2025 worksheet', 'origin_year' => 2025, 'created_at' => '2025-01-01 00:00:00'];
+$forwarded = $service->notesForQuestion(2026, 'survey', '42', '', 'SC');
 acrlQuestionNotesAssert(count($forwarded) === 2, 'Notes must follow only approved links from prior years.');
 acrlQuestionNotesAssert($forwarded[0]['origin_year'] === 2025 && $forwarded[0]['note'] === 'More recent 2025 note', 'Forwarded notes must remain newest-first and retain their origin year.');
-$noteKeys = $service->questionKeysWithNotes(2026);
+$noteKeys = $service->questionKeysWithNotes(2026, 'SC');
 acrlQuestionNotesAssert(isset($noteKeys['survey:42:']), 'The entry response must mark questions reached through approved note links.');
+acrlQuestionNotesAssert($repository->lockedYears === [2026, 2026, 2026], 'Note import and add operations hold a shared year lock.');
+acrlQuestionNotesAssert($repository->noteLocks === [3, 3, 93, 93], 'ID-only note edits and deletes check the institution row under a year lock.');
 
 echo "PASS: ACRL question notes import, edits, and approved-link history\n";

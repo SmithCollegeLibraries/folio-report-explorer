@@ -125,7 +125,7 @@ class AcrlCatalogueReviewService
             'published_at' => date('Y-m-d H:i:s'),
         ], ['survey_year' => $year])->execute();
         try {
-            $assignmentCopy = $this->assignmentService->copyOnPublish($year, $userId);
+            $assignmentCopy = $this->assignmentService->copyOnPublish($year, $userId, 'SC');
         } catch (\Throwable $exception) {
             Yii::error([
                 'message' => 'ACRL assignments could not be copied after publishing.',

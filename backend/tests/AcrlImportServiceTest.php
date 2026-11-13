@@ -9,6 +9,14 @@ class AcrlImportTestRepository
 {
     public $importCalls = [];
     public $historyRows = [];
+    public $answerInstitutions = [];
+    public $lockedYears = [];
+
+    public function withSharedYearLock(int $year, callable $callback)
+    {
+        $this->lockedYears[] = $year;
+        return call_user_func($callback);
+    }
 
     public function year(int $year): ?array
     {
@@ -26,16 +34,17 @@ class AcrlImportTestRepository
         ];
     }
 
-    public function answers(int $year, string $sheet = 'survey'): array
+    public function answers(int $year, string $sheet, string $institutionCode): array
     {
+        $this->answerInstitutions[] = $institutionCode;
         return $year === 2025 && $sheet === 'survey' ? [[
             'question_id' => '60', 'part' => 'A', 'value_text' => '100', 'value_number' => '100.00', 'note' => null,
         ]] : [];
     }
 
-    public function importAnswers(array $items, string $userId, string $sourceLabel, bool $overwrite): array
+    public function importAnswers(array $items, string $userId, string $sourceLabel, bool $overwrite, string $institutionCode): array
     {
-        $this->importCalls[] = compact('items', 'userId', 'sourceLabel', 'overwrite');
+        $this->importCalls[] = compact('items', 'userId', 'sourceLabel', 'overwrite', 'institutionCode');
         foreach ($items as $item) {
             if ($item['question_id'] === '60' && !$overwrite) {
                 $this->historyRows[] = 'inserted';
@@ -72,23 +81,25 @@ $rows = [
     ['question_id' => '999', 'part' => '', 'value' => '5'],
     ['question_id' => '61', 'part' => '', 'value' => 'maybe'],
 ];
-$preview = $service->preview(2025, $rows, 'FY2025 worksheet', false);
+$preview = $service->preview(2025, $rows, 'FY2025 worksheet', false, 'SC');
 acrlImportAssert($preview['matchedCount'] === 1, 'Preview should count valid catalogue rows.');
 acrlImportAssert($preview['unknownCount'] === 1 && $preview['typeErrorCount'] === 1, 'Preview should report unknown IDs and answer type errors separately.');
 acrlImportAssert($preview['existingChanges'] === 1, 'Preview should count existing values that would change.');
 acrlImportRejects(function () use ($service, $rows) {
-    $service->confirm(2025, $rows, 'FY2025 worksheet', false, 'user-1');
+    $service->confirm(2025, $rows, 'FY2025 worksheet', false, 'user-1', 'SC');
 }, 'Confirm must stop while unknown IDs or type errors remain.');
 
 $clean = [
     ['sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'value' => '150', 'note' => 'reviewed'],
     ['question_id' => '61', 'part' => '', 'value' => 'yes'],
 ];
-$default = $service->confirm(2025, $clean, 'FY2025 worksheet', false, 'user-1');
+$default = $service->confirm(2025, $clean, 'FY2025 worksheet', false, 'user-1', 'SC');
 acrlImportAssert($default['preview']['items'][0]['status'] === 'will_skip_existing', 'Existing non-empty answers are protected by default.');
 acrlImportAssert($repository->importCalls[0]['overwrite'] === false, 'Default import must not overwrite existing values.');
-$service->confirm(2025, $clean, 'FY2025 worksheet', true, 'user-1');
+$service->confirm(2025, $clean, 'FY2025 worksheet', true, 'user-1', 'SC');
 acrlImportAssert($repository->importCalls[1]['overwrite'] === true, 'The explicit overwrite option should reach the persistence layer.');
 acrlImportAssert(count($repository->historyRows) === 4, 'Both confirmed imports should hand every matched row to history-writing persistence.');
+acrlImportAssert($repository->answerInstitutions === array_fill(0, 8, 'SC'), 'Preview and confirm reads stay scoped to SC.');
+acrlImportAssert($repository->importCalls[0]['institutionCode'] === 'SC' && $repository->lockedYears === [2025, 2025, 2025], 'Confirm holds the shared year lock through institution-scoped import writes.');
 
 echo "PASS: ACRL import preview, validation, overwrite policy, and confirmation audit handoff\n";

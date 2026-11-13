@@ -32,19 +32,20 @@ trait AcrlDetailsActionsTrait
     public function actionQuestionDetails($year)
     {
         if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         $params = Yii::$app->request->queryParams;
         $sheet = (string)($params['sheet'] ?? 'survey');
         $questionId = (string)($params['question_id'] ?? '');
         $part = (string)($params['part'] ?? '');
         try {
             $instructions = (new AcrlInstructionsService())->forQuestion((int)$year, $sheet, $questionId, $part);
-            $notes = (new AcrlQuestionNotesService())->notesForQuestion((int)$year, $sheet, $questionId, $part);
-            return [
+            $notes = (new AcrlQuestionNotesService())->notesForQuestion((int)$year, $sheet, $questionId, $part, $institution);
+            return $this->withAcrlInstitution([
                 'instructions' => $instructions,
                 'notes' => $notes,
                 'canAddNote' => true,
                 'canManageNotes' => $this->isPersistedAdministrator(),
-            ];
+            ], $institution);
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
         }
@@ -53,6 +54,7 @@ trait AcrlDetailsActionsTrait
     public function actionAddQuestionNote($year)
     {
         if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         $body = Yii::$app->request->bodyParams;
         try {
             return (new AcrlQuestionNotesService())->addNote(
@@ -63,7 +65,8 @@ trait AcrlDetailsActionsTrait
                 $body['note'] ?? null,
                 $body['source'] ?? 'How I collected this',
                 $body['origin_year'] ?? (int)$year,
-                (string)(Yii::$app->user->id ?? '')
+                (string)(Yii::$app->user->id ?? ''),
+                $institution
             );
         } catch (\InvalidArgumentException $exception) {
             return $this->errorResponse(422, $exception->getMessage());
@@ -97,15 +100,16 @@ trait AcrlDetailsActionsTrait
         if (!(new AcrlQuestionNotesService())->deleteNote((int)$id)) {
             return $this->errorResponse(404, 'The collection note no longer exists.');
         }
-        return ['deleted' => true];
+        return ['deleted' => true, 'institution' => 'SC'];
     }
 
     public function actionNotesImportPreview($year)
     {
         if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         $body = Yii::$app->request->bodyParams;
         try {
-            return (new AcrlQuestionNotesService())->previewImport((int)$year, $body['rows'] ?? null);
+            return $this->withAcrlInstitution((new AcrlQuestionNotesService())->previewImport((int)$year, $body['rows'] ?? null, $institution), $institution);
         } catch (\InvalidArgumentException $exception) {
             return $this->errorResponse(422, $exception->getMessage());
         } catch (\DomainException $exception) {
@@ -116,9 +120,10 @@ trait AcrlDetailsActionsTrait
     public function actionNotesImportConfirm($year)
     {
         if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         $body = Yii::$app->request->bodyParams;
         try {
-            return (new AcrlQuestionNotesService())->confirmImport((int)$year, $body['rows'] ?? null, (string)(Yii::$app->user->id ?? ''));
+            return $this->withAcrlInstitution((new AcrlQuestionNotesService())->confirmImport((int)$year, $body['rows'] ?? null, (string)(Yii::$app->user->id ?? ''), $institution), $institution);
         } catch (\InvalidArgumentException $exception) {
             return $this->errorResponse(422, $exception->getMessage());
         } catch (\DomainException $exception) {

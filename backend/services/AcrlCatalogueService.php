@@ -31,11 +31,6 @@ class AcrlCatalogueService
     {
         $items = $this->validator->validateUpload($year, $fileName, $sha256, $items);
         $year = (int)$year;
-        $existing = $this->reviewService->yearRow($year);
-        if ($existing && $existing['status'] === 'published' && !$replacePublished) {
-            throw new \DomainException('This year is published. Choose replace draft before uploading a replacement.');
-        }
-
         $counts = ['survey' => ['prompts' => [], 'items' => 0], 'trends' => ['prompts' => [], 'items' => 0]];
         foreach ($items as $item) {
             $counts[$item['sheet']]['prompts'][$item['question_id']] = true;
@@ -44,6 +39,55 @@ class AcrlCatalogueService
 
         $transaction = $this->db->beginTransaction();
         try {
+            $lockSql = 'SELECT survey_year FROM acrl_survey_years WHERE survey_year = :year';
+            if ($this->db->driverName !== 'sqlite') {
+                $lockSql .= ' FOR UPDATE';
+            }
+            $this->db->createCommand($lockSql, [':year' => $year])->queryOne();
+            $existing = $this->reviewService->yearRow($year);
+            if ($existing && $existing['status'] === 'published' && !$replacePublished) {
+                throw new \DomainException('This year is published. Choose replace draft before uploading a replacement.');
+            }
+            $existingQuestions = $this->reviewService->questionRows($year);
+            $keep = [];
+            foreach ($items as $item) {
+                $keep[$this->reviewService->questionKey($item)] = true;
+            }
+            $dependencies = [];
+            foreach ($existingQuestions as $question) {
+                if (isset($keep[$this->reviewService->questionKey($question)])) {
+                    continue;
+                }
+                $params = [
+                    ':year' => $year,
+                    ':sheet' => $question['sheet'],
+                    ':question' => $question['question_id'],
+                    ':part' => $question['part'],
+                ];
+                foreach (['acrl_answers' => 'answer', 'acrl_question_notes' => 'note'] as $table => $kind) {
+                    $rows = $this->db->createCommand(
+                        'SELECT institution_code FROM ' . $table
+                        . ' WHERE survey_year = :year AND sheet = :sheet AND question_id = :question AND part = :part',
+                        $params
+                    )->queryAll();
+                    foreach ($rows as $row) {
+                        $dependencies[] = sprintf(
+                            '%s %s %s/%s%s',
+                            (string)$row['institution_code'],
+                            $kind,
+                            (string)$question['sheet'],
+                            (string)$question['question_id'],
+                            $question['part'] === '' ? '' : '/' . $question['part']
+                        );
+                    }
+                }
+            }
+            if (!empty($dependencies)) {
+                throw new \DomainException(
+                    'Questions with answers or collection notes cannot be removed: ' . implode('; ', $dependencies),
+                    409
+                );
+            }
             if (!$existing) {
                 $this->db->createCommand()->insert('acrl_survey_years', [
                     'survey_year' => $year,
@@ -70,11 +114,7 @@ class AcrlCatalogueService
                 ], ['survey_year' => $year])->execute();
             }
 
-            $existingQuestions = $this->reviewService->questionRows($year);
-            $keep = [];
             foreach ($items as $item) {
-                $key = $this->reviewService->questionKey($item);
-                $keep[$key] = true;
                 $values = $item;
                 $values['survey_year'] = $year;
                 $values['answer_options'] = $item['answer_options'] === null

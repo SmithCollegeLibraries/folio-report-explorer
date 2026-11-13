@@ -17,7 +17,7 @@ class AcrlEntryTestThreshold
 
 class AcrlEntryTestAssignments
 {
-    public function forEntry(int $year, ?string $userId): array
+    public function forEntry(int $year, ?string $userId, string $institutionCode): array
     {
         return [
             'Circulation' => [
@@ -32,7 +32,7 @@ class AcrlEntryTestQuestionAssignments
 {
     public $assignments = [];
 
-    public function forEntry(int $year, ?string $userId): array
+    public function forEntry(int $year, ?string $userId, string $institutionCode): array
     {
         return $this->assignments;
     }
@@ -42,7 +42,7 @@ class AcrlEntryTestSectionAssignments
 {
     public $assignments = [];
 
-    public function forEntry(int $year, ?string $userId): array
+    public function forEntry(int $year, ?string $userId, string $institutionCode): array
     {
         return $this->assignments;
     }
@@ -56,6 +56,13 @@ class AcrlEntryTestRepository
     public $savedCalculations = [];
     public $suggestionWrites = [];
     public $answerWrites = [];
+    public $lockedYears = [];
+
+    public function withSharedYearLock(int $year, callable $callback)
+    {
+        $this->lockedYears[] = $year;
+        return call_user_func($callback);
+    }
 
     public function publishedYears(): array { return [2026, 2025]; }
     public function year(int $year): ?array { return in_array($year, [2025, 2026], true) ? ['survey_year' => $year, 'status' => 'published'] : null; }
@@ -142,9 +149,9 @@ class AcrlEntryTestRepository
         }
         return [];
     }
-    public function sectionStatuses(int $year): array { return []; }
+    public function sectionStatuses(int $year, string $institutionCode): array { return []; }
     public function questionNoteKeysAndLinksThroughYear(int $year): array { return ['notes' => [], 'links' => []]; }
-    public function sectionStatus(int $year, string $section): ?array { return $this->status; }
+    public function sectionStatus(int $year, string $section, string $institutionCode): ?array { return $this->status; }
     public function saveAnswer(array $question, array $values, ?string $note, string $userId, ?string $expectedUpdatedAt, string $source = 'manual', ?string $sourceLabel = null, array $calculatedChanges = []): array
     {
         $this->savedCalculations = $calculatedChanges;
@@ -156,7 +163,7 @@ class AcrlEntryTestRepository
         $this->suggestionWrites[] = [$suggestions, $userId];
         return ['conflict' => false, 'accepted' => count($suggestions)];
     }
-    public function setSectionStatus(int $year, string $section, string $status, string $userId): ?array
+    public function setSectionStatus(int $year, string $section, string $status, string $userId, string $institutionCode): ?array
     {
         $this->statusWrites[] = [$year, $section, $status, $userId];
         return ['section' => $section, 'status' => $status];
@@ -173,11 +180,12 @@ function acrlEntryServiceAssert($condition, string $message): void
 
 $repository = new AcrlEntryTestRepository();
 $service = new AcrlEntryService($repository, null, null, new AcrlEntryTestThreshold(), null, null, new AcrlEntryTestAssignments());
-$entry = $service->entry(2026, '7');
+$entry = $service->entry(2026, '7', 'SC');
 $row = $entry['sections'][0]['questions'][0];
 acrlEntryServiceAssert($row['previous']['value'] === 150.0 && $row['previous']['isSum'], 'Approved merged links should display the sum of previous values.');
 acrlEntryServiceAssert($row['comparison']['changePercent'] === 33.33 && $row['comparison']['highlighted'], 'The entry response should include threshold-based advisory comparisons.');
 acrlEntryServiceAssert($entry['sections'][0]['status'] === 'open' && $entry['sections'][0]['filled'] === 2, 'Entry sections report status and do not count unaccepted suggestions as filled.');
+acrlEntryServiceAssert($entry['institution'] === 'SC', 'Entry responses identify their institution.');
 acrlEntryServiceAssert($entry['sections'][0]['assignees'] === [['id' => 8, 'displayName' => 'Assigned Editor']] && !$entry['sections'][0]['assignedToCurrentUser'], 'Entry responses expose section assignees and whether the signed-in user is assigned.');
 $questionsById = [];
 foreach ($entry['sections'][0]['questions'] as $entryQuestion) {
@@ -192,49 +200,50 @@ acrlEntryServiceAssert($trend['answerOptions']['kind'] === 'radio' && $trend['an
 acrlEntryServiceAssert($trend['answerDisplay'] === 'No', 'Structured answers expose readable text alongside their stored JSON.');
 
 try {
-    $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false);
+    $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false, 'SC');
     acrlEntryServiceAssert(false, 'Non-admins cannot edit a ready section.');
 } catch (DomainException $exception) {
     acrlEntryServiceAssert(strpos($exception->getMessage(), 'read-only') !== false, 'Ready sections report the lock to non-admins.');
 }
 $repository->status = ['section' => 'Trends', 'status' => 'open'];
 try {
-    $service->saveAnswer(2026, 'trends', 'T1', '', '{"value":"Maybe"}', null, null, 'user-1', false);
+    $service->saveAnswer(2026, 'trends', 'T1', '', '{"value":"Maybe"}', null, null, 'user-1', false, 'SC');
     acrlEntryServiceAssert(false, 'A submitted radio value outside the stored options must be rejected.');
 } catch (InvalidArgumentException $exception) {
     acrlEntryServiceAssert(count($repository->answerWrites) === 0, 'Invalid structured answers must not reach repository persistence.');
 }
-$service->saveAnswer(2026, 'trends', 'T1', '', '{"value":"Yes"}', null, null, 'user-1', false);
+$service->saveAnswer(2026, 'trends', 'T1', '', '{"value":"Yes"}', null, null, 'user-1', false, 'SC');
 acrlEntryServiceAssert($repository->answerWrites[0]['values']['value_text'] === '{"value":"Yes"}', 'A valid structured answer is stored as JSON text after server-side option validation.');
 $repository->status = ['section' => 'Circulation', 'status' => 'open'];
-$conflict = $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false);
+$conflict = $service->saveAnswer(2026, 'survey', '60', 'A', '180', null, '2026-02-01 00:00:00.000001', 'user-1', false, 'SC');
 acrlEntryServiceAssert($conflict['conflict'] && $conflict['current']['value_text'] === '175', 'An unassigned signed-in user can still save an answer and receives the normal optimistic-lock conflict.');
 acrlEntryServiceAssert($repository->savedCalculations[0]['question']['question_id'] === '63'
     && $repository->savedCalculations[0]['values']['value_number'] === '180.00', 'Saving an input should recompute derived values before repository persistence.');
-$accepted = $service->acceptSuggestions(2026, 'Circulation', [['question_id' => '0A', 'part' => '']], 'user-1', false);
+$accepted = $service->acceptSuggestions(2026, 'Circulation', [['question_id' => '0A', 'part' => '']], 'user-1', false, 'SC');
 acrlEntryServiceAssert(!$accepted['conflict'] && $accepted['accepted'] === 1, 'A valid prior yes/no suggestion can be accepted as one manual save.');
 acrlEntryServiceAssert($repository->suggestionWrites[0][0][0]['values'] === ['value_text' => 'no', 'value_number' => null]
     && $repository->suggestionWrites[0][1] === 'user-1', 'Suggestion acceptance must send the normalized prior value and signed-in editor to persistence.');
 try {
-    $service->acceptSuggestions(2026, 'Circulation', [['question_id' => '1A', 'part' => '']], 'user-1', false);
+    $service->acceptSuggestions(2026, 'Circulation', [['question_id' => '1A', 'part' => '']], 'user-1', false, 'SC');
     acrlEntryServiceAssert(false, 'Numeric answers cannot be accepted as suggestions.');
 } catch (InvalidArgumentException $exception) {
 }
 try {
-    $service->saveAnswer(2026, 'survey', '63', '', '99', null, null, 'user-1', false);
+    $service->saveAnswer(2026, 'survey', '63', '', '99', null, null, 'user-1', false, 'SC');
     acrlEntryServiceAssert(false, 'Calculated totals must reject direct saves.');
 } catch (InvalidArgumentException $exception) {
     acrlEntryServiceAssert($exception->getMessage() === 'This total is calculated.', 'Direct total edits return the exact validation message.');
 }
 
-$service->setSectionStatus(2026, 'Circulation', 'ready', 'user-1', false);
+$service->setSectionStatus(2026, 'Circulation', 'ready', 'user-1', false, 'SC');
 try {
-    $service->setSectionStatus(2026, 'Circulation', 'open', 'user-1', false);
+    $service->setSectionStatus(2026, 'Circulation', 'open', 'user-1', false, 'SC');
     acrlEntryServiceAssert(false, 'Only administrators can reopen sections.');
 } catch (DomainException $exception) {
 }
-$service->setSectionStatus(2026, 'Circulation', 'open', 'admin-1', true);
+$service->setSectionStatus(2026, 'Circulation', 'open', 'admin-1', true, 'SC');
 acrlEntryServiceAssert(count($repository->statusWrites) === 2, 'Any signed-in editor can set ready and administrators can reopen.');
+acrlEntryServiceAssert(count($repository->lockedYears) === 7 && array_unique($repository->lockedYears) === [2026], 'Answer and suggestion writes take the shared year lock.');
 
 $questionAssignmentFailures = [];
 function acrlEntryQuestionAssignmentCheck($condition, string $message): void
@@ -261,7 +270,7 @@ function acrlEntryQuestionAssignmentEntry(array $sectionRows, array $questionRow
         null,
         $questionAssignments
     );
-    return $service->entry(2026, '7');
+    return $service->entry(2026, '7', 'SC');
 }
 
 $sectionOnly = acrlEntryQuestionAssignmentEntry(

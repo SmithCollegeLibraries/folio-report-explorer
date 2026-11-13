@@ -23,7 +23,7 @@ function section(name: string, questions: AcrlEntryQuestion[]): AcrlEntrySection
 }
 
 function entry(sections: AcrlEntrySection[], previousYear = 2025): AcrlEntryResponse {
-  return { selectedYear: 2026, previousYear, years: [2026, 2025], thresholdPercent: 10, sections };
+  return { institution: 'SC', selectedYear: 2026, previousYear, years: [2026, 2025], thresholdPercent: 10, sections };
 }
 
 describe('buildAcrlBenchmarkRows', () => {
