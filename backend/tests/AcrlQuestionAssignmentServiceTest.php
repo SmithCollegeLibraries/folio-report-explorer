@@ -71,10 +71,10 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             return null;
         }
 
-        public function assignments(int $year): array
+        public function assignments(int $year, string $institutionCode): array
         {
-            return array_values(array_filter($this->rows, function ($row) use ($year) {
-                return (int)$row['survey_year'] === $year;
+            return array_values(array_filter($this->rows, function ($row) use ($year, $institutionCode) {
+                return (int)$row['survey_year'] === $year && ($row['institution_code'] ?? 'SC') === $institutionCode;
             }));
         }
 
@@ -92,7 +92,7 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             return $links;
         }
 
-        public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy, ?callable $validateBeforeReplace = null): void
+        public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy, string $institutionCode, ?callable $validateBeforeReplace = null): void
         {
             if ($this->changeBeforeReplace === 'unpublish') {
                 unset($this->publishedYears[$year]);
@@ -106,23 +106,24 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             if ($validateBeforeReplace !== null) {
                 $validateBeforeReplace();
             }
-            $this->writes[] = [$year, $sheet, $questionId, $part, $userIds, $assignedBy];
-            $this->rows = array_values(array_filter($this->rows, function ($row) use ($year, $sheet, $questionId, $part) {
-                return !((int)$row['survey_year'] === $year && $row['sheet'] === $sheet
+            $this->writes[] = [$year, $sheet, $questionId, $part, $userIds, $assignedBy, $institutionCode];
+            $this->rows = array_values(array_filter($this->rows, function ($row) use ($year, $sheet, $questionId, $part, $institutionCode) {
+                return !((int)$row['survey_year'] === $year && ($row['institution_code'] ?? 'SC') === $institutionCode && $row['sheet'] === $sheet
                     && $row['question_id'] === $questionId && $row['part'] === $part);
             }));
             foreach ($userIds as $userId) {
                 $this->rows[] = [
-                    'survey_year' => $year, 'sheet' => $sheet, 'question_id' => $questionId,
+                    'institution_code' => $institutionCode, 'survey_year' => $year, 'sheet' => $sheet, 'question_id' => $questionId,
                     'part' => $part, 'user_id' => $userId, 'assigned_by' => $assignedBy,
                 ];
             }
         }
 
-        public function insertQuestionAssignments(array $rows): void
+        public function insertQuestionAssignments(array $rows, string $institutionCode): void
         {
             $this->writes[] = ['insert', $rows];
             foreach ($rows as $row) {
+                $row['institution_code'] = $institutionCode;
                 $this->rows[] = $row;
             }
         }
@@ -170,20 +171,23 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
         ];
         $repository->rows = [[
             'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'B', 'user_id' => 1,
+        ], [
+            'institution_code' => 'HC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 1,
         ]];
         $service = acrlQuestionAssignmentService($repository);
 
-        $saved = $service->saveQuestion(2026, 'survey', '60', 'A', [2, '2'], '9');
+        $saved = $service->saveQuestion(2026, 'survey', '60', 'A', [2, '2'], '9', 'SC');
         acrlQuestionAssignmentSame(['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'section' => 'Circulation', 'assignees' => [['id' => 2, 'displayName' => 'Casey Editor']]], $saved, 'Saving replaces one question tuple and returns question-level approved assignees.');
-        acrlQuestionAssignmentSame([2026, 'survey', '60', 'A', [2], 9], $repository->writes[0] ?? null, 'Saving deduplicates IDs and writes the exact tuple and administrator ID.');
-        acrlQuestionAssignmentSame(2, count($repository->assignments(2026)), 'Saving one question adds its assignment without removing the adjacent part.');
-        acrlQuestionAssignmentCheck(in_array('B', array_column(array_values(array_filter($repository->assignments(2026), function ($row) {
+        acrlQuestionAssignmentSame([2026, 'survey', '60', 'A', [2], 9, 'SC'], $repository->writes[0] ?? null, 'Saving deduplicates IDs and writes the institution, exact tuple, and administrator ID.');
+        acrlQuestionAssignmentSame(2, count($repository->assignments(2026, 'SC')), 'Saving one question adds its assignment without removing the adjacent part.');
+        acrlQuestionAssignmentSame(1, count($repository->assignments(2026, 'HC')), 'Saving a question does not replace the same tuple at another institution.');
+        acrlQuestionAssignmentCheck(in_array('B', array_column(array_values(array_filter($repository->assignments(2026, 'SC'), function ($row) {
             return $row['question_id'] === '60';
         })), 'part'), true), 'Saving 60/A preserves the existing 60/B assignment.');
 
-        $cleared = $service->saveQuestion(2026, 'survey', '60', 'A', [], '9');
+        $cleared = $service->saveQuestion(2026, 'survey', '60', 'A', [], '9', 'SC');
         acrlQuestionAssignmentSame([], $cleared['assignees'] ?? null, 'An empty user list clears question-level assignees.');
-        acrlQuestionAssignmentSame('B', $repository->assignments(2026)[0]['part'] ?? null, 'Clearing one tuple leaves another part assigned.');
+        acrlQuestionAssignmentSame('B', $repository->assignments(2026, 'SC')[0]['part'] ?? null, 'Clearing one tuple leaves another part assigned.');
     });
 
     acrlQuestionAssignmentScenario('empty part, case, and leading zeros remain distinct', function () {
@@ -195,13 +199,13 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             acrlQuestionAssignmentQuestion(2026, 'survey', 'qx', '', 'Circulation', 4),
         ];
         $service = acrlQuestionAssignmentService($repository);
-        $service->saveQuestion(2026, 'survey', '01', '', [1], '9');
-        $service->saveQuestion(2026, 'survey', '1', '', [2], '9');
-        $service->saveQuestion(2026, 'survey', 'Qx', '', [1], '9');
-        $service->saveQuestion(2026, 'survey', 'qx', '', [2], '9');
+        $service->saveQuestion(2026, 'survey', '01', '', [1], '9', 'SC');
+        $service->saveQuestion(2026, 'survey', '1', '', [2], '9', 'SC');
+        $service->saveQuestion(2026, 'survey', 'Qx', '', [1], '9', 'SC');
+        $service->saveQuestion(2026, 'survey', 'qx', '', [2], '9', 'SC');
         acrlQuestionAssignmentSame([
             ['01', 1], ['1', 2], ['Qx', 1], ['qx', 2],
-        ], array_map(function ($row) { return [$row['question_id'], $row['user_id']]; }, $repository->assignments(2026)), 'Question IDs preserve leading zeros and ASCII case, and the empty part remains a real tuple value.');
+        ], array_map(function ($row) { return [$row['question_id'], $row['user_id']]; }, $repository->assignments(2026, 'SC')), 'Question IDs preserve leading zeros and ASCII case, and the empty part remains a real tuple value.');
     });
 
     acrlQuestionAssignmentScenario('save rejects unknown tuples, unpublished years, unapproved users, and invalid IDs', function () {
@@ -218,7 +222,7 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
         foreach ($cases as $case) {
             $caught = null;
             try {
-                $service->saveQuestion($case[0], $case[1], $case[2], $case[3], $case[4], '9');
+                $service->saveQuestion($case[0], $case[1], $case[2], $case[3], $case[4], '9', 'SC');
             } catch (Throwable $error) {
                 $caught = $error;
             }
@@ -232,12 +236,12 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
         $repository->changeBeforeReplace = 'unpublish';
         $error = null;
         try {
-            acrlQuestionAssignmentService($repository)->saveQuestion(2026, 'survey', '60', 'A', [1], '9');
+            acrlQuestionAssignmentService($repository)->saveQuestion(2026, 'survey', '60', 'A', [1], '9', 'SC');
         } catch (Throwable $caught) {
             $error = $caught;
         }
         acrlQuestionAssignmentSame('The selected ACRL year is not published.', $error ? $error->getMessage() : null, 'A year unpublished before the replacement lock returns the established 404 message.');
-        acrlQuestionAssignmentSame([], $repository->assignments(2026), 'A question assignment is not written after the year becomes unpublished.');
+        acrlQuestionAssignmentSame([], $repository->assignments(2026, 'SC'), 'A question assignment is not written after the year becomes unpublished.');
         acrlQuestionAssignmentSame([], $repository->writes, 'The repository replacement does not run after the publication recheck fails.');
     });
 
@@ -247,12 +251,12 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
         $repository->changeBeforeReplace = 'remove-question';
         $error = null;
         try {
-            acrlQuestionAssignmentService($repository)->saveQuestion(2026, 'survey', '60', 'A', [1], '9');
+            acrlQuestionAssignmentService($repository)->saveQuestion(2026, 'survey', '60', 'A', [1], '9', 'SC');
         } catch (Throwable $caught) {
             $error = $caught;
         }
         acrlQuestionAssignmentSame('The selected ACRL question is not available.', $error ? $error->getMessage() : null, 'A question removed before the replacement lock returns the established 404 message.');
-        acrlQuestionAssignmentSame([], $repository->assignments(2026), 'A question assignment is not written after the catalogue tuple disappears.');
+        acrlQuestionAssignmentSame([], $repository->assignments(2026, 'SC'), 'A question assignment is not written after the catalogue tuple disappears.');
         acrlQuestionAssignmentSame([], $repository->writes, 'The repository replacement does not run after the tuple recheck fails.');
     });
 
@@ -268,13 +272,14 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             ['survey_year' => 2026, 'sheet' => 'survey', 'question_id' => 'removed', 'part' => '', 'user_id' => 1],
         ];
         $service = acrlQuestionAssignmentService($repository);
-        $first = $service->listForYear(2026);
+        $repository->rows[] = ['institution_code' => 'HC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 2];
+        $first = $service->listForYear(2026, 'SC');
         acrlQuestionAssignmentSame([
             ['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'section' => 'Circulation', 'assignees' => [['id' => 1, 'displayName' => 'Alex Editor']]],
         ], $first['questions'] ?? null, 'The question list is in survey order and excludes stale questions and questions with only revoked users.');
 
         $repository->catalogue[] = acrlQuestionAssignmentQuestion(2026, 'survey', 'removed', '', 'Services', 3);
-        $readded = $service->listForYear(2026);
+        $readded = $service->listForYear(2026, 'SC');
         acrlQuestionAssignmentCheck(isset($readded['questions'][1]) && $readded['questions'][1]['questionId'] === 'removed', 'A stale tuple becomes effective again if the catalogue re-adds the same question.');
         acrlQuestionAssignmentSame([['id' => 1, 'displayName' => 'Alex Editor']], $readded['questions'][1]['assignees'] ?? null, 'Re-added tuples retain their stored assignment.');
     });
@@ -321,7 +326,8 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             ['previous_year' => 2025, 'current_year' => 2026, 'sheet' => 'trends', 'previous_question_id' => 'T1', 'previous_part' => '', 'current_question_id' => 'T0', 'current_part' => '', 'decision' => 'approved'],
         ];
         $service = acrlQuestionAssignmentService($repository);
-        $result = $service->copyFromPrevious(2026, '9');
+        $repository->rows[] = ['institution_code' => 'HC', 'survey_year' => 2025, 'sheet' => 'survey', 'question_id' => '01', 'part' => '', 'user_id' => 3];
+        $result = $service->copyFromPrevious(2026, '9', 'SC');
         acrlQuestionAssignmentSame([
             ['sheet' => 'survey', 'questionId' => '1', 'part' => '', 'label' => 'Q1'],
             ['sheet' => 'survey', 'questionId' => 'S2', 'part' => 'A', 'label' => 'QS2 · A'],
@@ -336,7 +342,7 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             ['sheet' => 'survey', 'questionId' => 'R1', 'part' => '', 'label' => 'QR1'],
             ['sheet' => 'trends', 'questionId' => 'T2', 'part' => '', 'label' => 'QT2'],
         ], $result['unmatchedQuestions'] ?? null, 'Same-ID reuse, rejected links, and unlinked Trends questions remain unmatched.');
-        $mergeRows = array_values(array_filter($repository->assignments(2026), function ($row) {
+        $mergeRows = array_values(array_filter($repository->assignments(2026, 'SC'), function ($row) {
             return $row['question_id'] === 'M3';
         }));
         acrlQuestionAssignmentSame([1, 2], array_column($mergeRows, 'user_id'), 'Approved source users from a merge are unioned on the target question.');
@@ -360,12 +366,12 @@ if (!$serviceAvailable || !class_exists('app\\services\\AcrlQuestionAssignmentSe
             'previous_question_id' => '60', 'previous_part' => 'A', 'current_question_id' => '60', 'current_part' => 'A',
             'decision' => 'approved',
         ]];
-        $result = acrlQuestionAssignmentService($repository)->copyOnPublish(2026, '9');
+        $result = acrlQuestionAssignmentService($repository)->copyOnPublish(2026, '9', 'SC');
         acrlQuestionAssignmentSame(false, $result['questionsAlreadyAssigned'] ?? null, 'Existing section assignments and inactive question rows do not block question copy on publish.');
         acrlQuestionAssignmentSame([['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'label' => 'Q60 · A']], $result['copiedQuestions'] ?? null, 'Question copy remains independent from the section-copy guard.');
 
         $repository->rows[] = ['survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 2];
-        $guarded = acrlQuestionAssignmentService($repository)->copyOnPublish(2026, '9');
+        $guarded = acrlQuestionAssignmentService($repository)->copyOnPublish(2026, '9', 'SC');
         acrlQuestionAssignmentSame(true, $guarded['questionsAlreadyAssigned'] ?? null, 'A current target tuple with an approved assignee activates the independent question-copy guard.');
         acrlQuestionAssignmentSame([], $guarded['copiedQuestions'] ?? null, 'The publish guard does not overwrite an assigned question.');
     });
@@ -381,7 +387,7 @@ acrlQuestionAssignmentScenario('publish copy reports empty question results when
     ];
     unset($repository->publishedYears[2025]);
 
-    $result = acrlQuestionAssignmentService($repository)->copyOnPublish(2026, '9');
+    $result = acrlQuestionAssignmentService($repository)->copyOnPublish(2026, '9', 'SC');
     acrlQuestionAssignmentSame([], $result['copiedQuestions'] ?? null, 'An unpublished previous year contributes no copied question assignments.');
     acrlQuestionAssignmentSame([], $result['skippedQuestions'] ?? null, 'An unpublished previous year contributes no skipped question assignments.');
     acrlQuestionAssignmentSame([], $result['unmatchedQuestions'] ?? null, 'An unpublished previous year contributes no unmatched question assignments.');

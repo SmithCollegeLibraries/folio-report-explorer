@@ -84,7 +84,7 @@ function makeQuestion(overrides: Partial<AcrlEntryQuestion> = {}): AcrlEntryQues
 
 function entry(status: 'open' | 'ready' = 'open'): AcrlEntryResponse {
   const fixture = {
-    selectedYear: 2026, previousYear: 2025, years: [2026, 2025, 2024, 2023], thresholdPercent: 10,
+    institution: 'SC', selectedYear: 2026, previousYear: 2025, years: [2026, 2025, 2024, 2023], thresholdPercent: 10,
     sections: [{ name: 'Circulation', status, setAt: null, reopenedAt: null, filled: 3, total: 8, assignees: [], assignedToCurrentUser: false, questionsAssignedToCurrentUser: 0, questions: [
       makeQuestion({
         previous: { value: 10, label: 'Sum of linked values: 10', isSum: true, linkedValues: [{ questionId: '59', part: '', value: 10 }] },

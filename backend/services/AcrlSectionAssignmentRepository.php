@@ -30,26 +30,27 @@ class AcrlSectionAssignmentRepository
         )->queryColumn();
     }
 
-    public function assignments(int $year): array
+    public function assignments(int $year, string $institutionCode): array
     {
         return $this->db->createCommand(
-            'SELECT section, user_id FROM acrl_section_assignments WHERE survey_year = :year ORDER BY section, user_id',
-            [':year' => $year]
+            'SELECT section, user_id FROM acrl_section_assignments WHERE institution_code = :institution AND survey_year = :year ORDER BY section, user_id',
+            [':institution' => $institutionCode, ':year' => $year]
         )->queryAll();
     }
 
     /** Add one assignment inside the caller's locked-year transaction. */
-    public function addSectionAssignment(int $year, string $section, int $userId, ?int $assignedBy): void
+    public function addSectionAssignment(int $year, string $section, int $userId, ?int $assignedBy, string $institutionCode): void
     {
         $exists = $this->db->createCommand(
             'SELECT COUNT(*) FROM acrl_section_assignments'
-                . ' WHERE survey_year = :year AND section = :section AND user_id = :userId',
-            [':year' => $year, ':section' => $section, ':userId' => $userId]
+                . ' WHERE institution_code = :institution AND survey_year = :year AND section = :section AND user_id = :userId',
+            [':institution' => $institutionCode, ':year' => $year, ':section' => $section, ':userId' => $userId]
         )->queryScalar();
         if ((int)$exists > 0) {
             return;
         }
         $this->db->createCommand()->insert('acrl_section_assignments', [
+            'institution_code' => $institutionCode,
             'survey_year' => $year,
             'section' => $section,
             'user_id' => $userId,
@@ -57,16 +58,18 @@ class AcrlSectionAssignmentRepository
         ])->execute();
     }
 
-    public function replaceSections(int $year, array $assignmentsBySection, int $assignedBy): void
+    public function replaceSections(int $year, array $assignmentsBySection, int $assignedBy, string $institutionCode): void
     {
-        $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy) {
+        $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $institutionCode) {
             foreach ($assignmentsBySection as $section => $userIds) {
                 $this->db->createCommand()->delete('acrl_section_assignments', [
+                    'institution_code' => $institutionCode,
                     'survey_year' => $year,
                     'section' => $section,
                 ])->execute();
                 foreach ($userIds as $userId) {
                     $this->db->createCommand()->insert('acrl_section_assignments', [
+                        'institution_code' => $institutionCode,
                         'survey_year' => $year,
                         'section' => $section,
                         'user_id' => $userId,
@@ -93,10 +96,10 @@ class AcrlSectionAssignmentRepository
         }
     }
 
-    public function fillUnassignedSections(int $year, array $assignmentsBySection, int $assignedBy, ?callable $afterCopy = null): array
+    public function fillUnassignedSections(int $year, array $assignmentsBySection, int $assignedBy, string $institutionCode, ?callable $afterCopy = null): array
     {
-        return $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $afterCopy) {
-            $assignedSections = $this->assignedSections($year);
+        return $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $institutionCode, $afterCopy) {
+            $assignedSections = $this->assignedSections($year, $institutionCode);
             $copiedSections = [];
             $skippedSections = [];
             foreach ($assignmentsBySection as $section => $userIds) {
@@ -104,7 +107,7 @@ class AcrlSectionAssignmentRepository
                     $skippedSections[] = $section;
                     continue;
                 }
-                $this->insertAssignments($year, $section, $userIds, $assignedBy);
+                $this->insertAssignments($year, $section, $userIds, $assignedBy, $institutionCode);
                 $copiedSections[] = $section;
             }
             if ($afterCopy !== null) {
@@ -118,10 +121,10 @@ class AcrlSectionAssignmentRepository
         });
     }
 
-    public function copySectionsIfYearEmpty(int $year, array $assignmentsBySection, int $assignedBy, ?callable $afterCopy = null): array
+    public function copySectionsIfYearEmpty(int $year, array $assignmentsBySection, int $assignedBy, string $institutionCode, ?callable $afterCopy = null): array
     {
-        return $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $afterCopy) {
-            $assignedSections = $this->assignedSections($year);
+        return $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $institutionCode, $afterCopy) {
+            $assignedSections = $this->assignedSections($year, $institutionCode);
             if (!empty($assignedSections)) {
                 if ($afterCopy !== null) {
                     $afterCopy();
@@ -137,7 +140,7 @@ class AcrlSectionAssignmentRepository
                 if (empty($userIds)) {
                     continue;
                 }
-                $this->insertAssignments($year, $section, $userIds, $assignedBy);
+                $this->insertAssignments($year, $section, $userIds, $assignedBy, $institutionCode);
                 $copiedSections[] = $section;
             }
             if ($afterCopy !== null) {
@@ -159,19 +162,20 @@ class AcrlSectionAssignmentRepository
         )->queryOne();
     }
 
-    private function assignedSections(int $year): array
+    private function assignedSections(int $year, string $institutionCode): array
     {
         $sections = [];
-        foreach ($this->assignments($year) as $row) {
+        foreach ($this->assignments($year, $institutionCode) as $row) {
             $sections[$row['section']] = true;
         }
         return $sections;
     }
 
-    private function insertAssignments(int $year, string $section, array $userIds, int $assignedBy): void
+    private function insertAssignments(int $year, string $section, array $userIds, int $assignedBy, string $institutionCode): void
     {
         foreach ($userIds as $userId) {
             $this->db->createCommand()->insert('acrl_section_assignments', [
+                'institution_code' => $institutionCode,
                 'survey_year' => $year,
                 'section' => $section,
                 'user_id' => $userId,

@@ -14,13 +14,13 @@ class AcrlHistoryService
         $this->rules = $rules ?: new AcrlEntryRulesService();
     }
 
-    public function forQuestions(int $year, array $questions): array
+    public function forQuestions(int $year, array $questions, string $institutionCode): array
     {
         $answersByYear = [];
         $linksByYear = [];
         for ($offset = 1; $offset <= 3; $offset += 1) {
             $priorYear = $year - $offset;
-            $answersByYear[$priorYear] = $this->answerMap($this->repository->answers($priorYear, 'survey'));
+            $answersByYear[$priorYear] = $this->answerMap($this->repository->answers($priorYear, 'survey', $institutionCode));
             if ($offset < 4) {
                 $linksByYear[$priorYear + 1] = $this->linksByCurrentKey($this->repository->approvedLinks($priorYear + 1));
             }

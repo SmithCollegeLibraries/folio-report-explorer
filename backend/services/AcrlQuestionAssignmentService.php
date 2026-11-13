@@ -16,7 +16,7 @@ class AcrlQuestionAssignmentService
         $this->users = $users ?: new AcrlApprovedUserDirectoryService();
     }
 
-    public function saveQuestion(int $year, string $sheet, string $questionId, string $part, array $userIds, string $assignedBy): array
+    public function saveQuestion(int $year, string $sheet, string $questionId, string $part, array $userIds, string $assignedBy, string $institutionCode): array
     {
         $this->requirePublishedYear($year);
         if (!in_array($sheet, ['survey', 'trends'], true) || $part === '_') {
@@ -29,7 +29,7 @@ class AcrlQuestionAssignmentService
         $userIds = AcrlSectionAssignmentService::normalizeUserIds($userIds);
         AcrlSectionAssignmentService::requireApprovedUsers($this->users, $userIds);
         $actorId = AcrlSectionAssignmentService::actorId($assignedBy);
-        $this->repository->replaceQuestionAssignments($year, $sheet, $questionId, $part, $userIds, $actorId, function () use ($year, $sheet, $questionId, $part, &$question) {
+        $this->repository->replaceQuestionAssignments($year, $sheet, $questionId, $part, $userIds, $actorId, $institutionCode, function () use ($year, $sheet, $questionId, $part, $institutionCode, &$question) {
             $this->requirePublishedYear($year);
             $lockedQuestion = $this->repository->question($year, $sheet, $questionId, $part);
             if (!$lockedQuestion) {
@@ -37,7 +37,7 @@ class AcrlQuestionAssignmentService
             }
             $question = $lockedQuestion;
         });
-        $assignees = $this->approvedAssigneesForQuestion($year, $sheet, $questionId, $part);
+        $assignees = $this->approvedAssigneesForQuestion($year, $sheet, $questionId, $part, $institutionCode);
         return [
             'sheet' => $sheet,
             'questionId' => $questionId,
@@ -47,11 +47,11 @@ class AcrlQuestionAssignmentService
         ];
     }
 
-    public function listForYear(int $year): array
+    public function listForYear(int $year, string $institutionCode): array
     {
         $this->requirePublishedYear($year);
         $questions = $this->repository->questions($year);
-        $assigneesByQuestion = $this->approvedUsersByQuestion($questions, $this->repository->assignments($year));
+        $assigneesByQuestion = $this->approvedUsersByQuestion($questions, $this->repository->assignments($year, $institutionCode));
         $result = [];
         foreach ($questions as $question) {
             $key = $this->questionKey($question['sheet'], $question['question_id'], $question['part']);
@@ -69,11 +69,11 @@ class AcrlQuestionAssignmentService
         return ['surveyYear' => $year, 'questions' => $result];
     }
 
-    public function forEntry(int $year, ?string $userId): array
+    public function forEntry(int $year, ?string $userId, string $institutionCode): array
     {
         $currentUserId = (int)$userId;
         $result = [];
-        foreach ($this->listForYear($year)['questions'] as $question) {
+        foreach ($this->listForYear($year, $institutionCode)['questions'] as $question) {
             $assigned = false;
             foreach ($question['assignees'] as $assignee) {
                 if ((int)$assignee['id'] === $currentUserId) {
@@ -89,25 +89,25 @@ class AcrlQuestionAssignmentService
         return $result;
     }
 
-    public function copyFromPrevious(int $year, string $assignedBy): array
+    public function copyFromPrevious(int $year, string $assignedBy, string $institutionCode): array
     {
         $this->requirePublishedYear($year);
         $previousYear = $year - 1;
         $this->requirePublishedYear($previousYear, 'The previous ACRL year is not published.');
-        return $this->copyWithYearLock($year, function () use ($year, $previousYear, $assignedBy) {
-            return $this->copyQuestionAssignments($year, $previousYear, $assignedBy, false);
+        return $this->copyWithYearLock($year, function () use ($year, $previousYear, $assignedBy, $institutionCode) {
+            return $this->copyQuestionAssignments($year, $previousYear, $assignedBy, false, $institutionCode);
         });
     }
 
-    public function copyOnPublish(int $year, string $assignedBy): array
+    public function copyOnPublish(int $year, string $assignedBy, string $institutionCode): array
     {
         $this->requirePublishedYear($year);
         $previousYear = $year - 1;
         if (!$this->repository->isPublishedYear($previousYear)) {
             return $this->emptyCopyResult($year, $previousYear);
         }
-        return $this->copyWithYearLock($year, function () use ($year, $previousYear, $assignedBy) {
-            return $this->copyQuestionAssignments($year, $previousYear, $assignedBy, true);
+        return $this->copyWithYearLock($year, function () use ($year, $previousYear, $assignedBy, $institutionCode) {
+            return $this->copyQuestionAssignments($year, $previousYear, $assignedBy, true, $institutionCode);
         });
     }
 
@@ -119,16 +119,16 @@ class AcrlQuestionAssignmentService
         return $copy();
     }
 
-    private function copyQuestionAssignments(int $year, int $previousYear, string $assignedBy, bool $onlyIfYearEmpty): array
+    private function copyQuestionAssignments(int $year, int $previousYear, string $assignedBy, bool $onlyIfYearEmpty, string $institutionCode): array
     {
         $currentQuestions = $this->repository->questions($year);
         $previousQuestions = $this->repository->questions($previousYear);
         $currentByKey = $this->questionsByKey($currentQuestions);
         $previousByKey = $this->questionsByKey($previousQuestions);
-        $currentAssignees = $this->approvedUsersByQuestion($currentQuestions, $this->repository->assignments($year));
+        $currentAssignees = $this->approvedUsersByQuestion($currentQuestions, $this->repository->assignments($year, $institutionCode));
         $hasCurrentAssignments = !empty($currentAssignees);
 
-        $sourceAssignees = $this->approvedUsersByQuestion($previousQuestions, $this->repository->assignments($previousYear));
+        $sourceAssignees = $this->approvedUsersByQuestion($previousQuestions, $this->repository->assignments($previousYear, $institutionCode));
         $targetsBySource = [];
         foreach ($this->repository->approvedLinks($previousYear, $year) as $link) {
             if ((int)$link['previous_year'] !== $previousYear
@@ -201,9 +201,10 @@ class AcrlQuestionAssignmentService
                 $row['assigned_by'] = $actorId;
             }
             unset($row);
-            $this->repository->insertQuestionAssignments($rowsToInsert);
+            $this->repository->insertQuestionAssignments($rowsToInsert, $institutionCode);
         }
         return [
+            'institution' => $institutionCode,
             'surveyYear' => $year,
             'sourceYear' => $previousYear,
             'copiedQuestions' => $copiedQuestions,
@@ -213,14 +214,14 @@ class AcrlQuestionAssignmentService
         ];
     }
 
-    private function approvedAssigneesForQuestion(int $year, string $sheet, string $questionId, string $part): array
+    private function approvedAssigneesForQuestion(int $year, string $sheet, string $questionId, string $part, string $institutionCode): array
     {
         $question = $this->repository->question($year, $sheet, $questionId, $part);
         if (!$question) {
             return [];
         }
         $key = $this->questionKey($sheet, $questionId, $part);
-        $approved = $this->approvedUsersByQuestion([$question], $this->repository->assignments($year));
+        $approved = $this->approvedUsersByQuestion([$question], $this->repository->assignments($year, $institutionCode));
         return $approved[$key] ?? [];
     }
 

@@ -7,7 +7,7 @@ use app\services\AcrlHistoryService;
 
 class AcrlHistoryTestRepository
 {
-    public function answers(int $year, string $sheet = 'survey'): array
+    public function answers(int $year, string $sheet = 'survey', string $institutionCode = 'SC'): array
     {
         if ($sheet !== 'survey') {
             return [];
@@ -70,7 +70,7 @@ $questions = [
     ['sheet' => 'survey', 'question_id' => '99', 'part' => ''],
     ['sheet' => 'trends', 'question_id' => 'T1', 'part' => ''],
 ];
-$history = $service->forQuestions(2026, $questions);
+$history = $service->forQuestions(2026, $questions, 'SC');
 $numbers = $history['survey:40:B'];
 acrlHistoryAssert(array_column($numbers, 'year') === [2025, 2024, 2023], 'History must include the three prior fiscal years in order.');
 acrlHistoryAssert(array_column($numbers, 'value') === [300.0, 200.0, 100.0], 'Merged links must be summed independently at each year in the approved chain.');

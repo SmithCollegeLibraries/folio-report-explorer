@@ -77,6 +77,7 @@ class AcrlRaceTestCommand
                 return 1;
             }
             $this->db->answer = [
+                'institution_code' => $this->columns['institution_code'],
                 'survey_year' => 2026,
                 'sheet' => 'survey',
                 'question_id' => '6C',
@@ -114,7 +115,11 @@ try {
         ['value_text' => 'second writer', 'value_number' => '5000000.00'],
         null,
         'writer-2',
-        null
+        null,
+        'manual',
+        null,
+        [],
+        'SC'
     );
 } catch (\yii\db\IntegrityException $exception) {
     fwrite(STDERR, "FAIL: a duplicate-key first save must return a conflict instead of throwing\n");
@@ -135,10 +140,15 @@ $normalResult = $normalRepository->saveAnswer(
     ['value_text' => '100000', 'value_number' => '100000.00'],
     null,
     'writer-1',
-    null
+    null,
+    'manual',
+    null,
+    [],
+    'SC'
 );
 acrlAnswerRaceAssert($normalResult['conflict'] === false, 'A normal first save must not be reported as a conflict.');
 acrlAnswerRaceAssert($normalResult['current']['value_text'] === '100000', 'A normal first save must return the inserted answer.');
+acrlAnswerRaceAssert($normalResult['current']['institution_code'] === 'SC', 'A normal first save writes and returns the institution key.');
 acrlAnswerRaceAssert($normalDb->historyWrites === 1, 'A successful first save must append one history row.');
 
 echo "PASS: normal first saves append history; concurrent first saves return conflict data without history\n";

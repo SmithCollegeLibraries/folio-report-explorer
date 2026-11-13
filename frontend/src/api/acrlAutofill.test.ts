@@ -21,7 +21,7 @@ describe('runAcrlAutofill', () => {
     post.mockResolvedValue({ data: response });
 
     await expect(runAcrlAutofill(2026, 'survey', '60', '')).resolves.toEqual(response);
-    expect(post).toHaveBeenCalledWith('/acrl/years/2026/autofill/survey/60/_');
+    expect(post).toHaveBeenCalledWith('/acrl/years/2026/autofill/survey/60/_', undefined, { params: { institution: 'SC' } });
   });
 
   it('sends the optional week start in the body for a weekly fill', async () => {
@@ -29,7 +29,7 @@ describe('runAcrlAutofill', () => {
 
     await runAcrlAutofill(2025, 'survey', '79c', '', '2025-02-09');
 
-    expect(post).toHaveBeenCalledWith('/acrl/years/2025/autofill/survey/79c/_', { weekStart: '2025-02-09' });
+    expect(post).toHaveBeenCalledWith('/acrl/years/2025/autofill/survey/79c/_', { weekStart: '2025-02-09' }, { params: { institution: 'SC' } });
   });
 });
 

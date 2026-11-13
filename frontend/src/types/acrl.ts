@@ -80,6 +80,7 @@ export interface AcrlInstructionParseResult {
 
 export interface AcrlQuestionNote {
   id: number;
+  institution: string;
   note: string;
   source: string;
   origin_year: number;
@@ -88,6 +89,7 @@ export interface AcrlQuestionNote {
 }
 
 export interface AcrlQuestionDetails {
+  institution: string;
   instructions: AcrlInstructionBlock[];
   notes: AcrlQuestionNote[];
   canAddNote: boolean;
@@ -102,6 +104,7 @@ export interface AcrlInstructionsSaveResult {
 }
 
 export interface AcrlNotesImportPreview {
+  institution: string;
   surveyYear: number;
   matchedCount: number;
   unknownCount: number;
@@ -155,7 +158,7 @@ export interface AcrlReviewResponse {
   previousQuestions: AcrlQuestionPart[];
   unresolvedCount: number;
   canPublish: boolean;
-  assignmentCopy?: AcrlAssignmentCopyResponse;
+  assignmentCopy?: AcrlAssignmentCopyResult;
 }
 
 export interface AcrlUploadResponse {
@@ -256,6 +259,7 @@ export interface AcrlQuestionAssignmentInput {
 }
 
 export interface AcrlSectionAssignmentsResponse {
+  institution: string;
   surveyYear: number;
   sections: AcrlSectionAssignment[];
   questions: AcrlQuestionAssignment[];
@@ -283,6 +287,7 @@ export interface AcrlInviteText {
 
 export interface AcrlInvite {
   id: number;
+  institution: string;
   email: string;
   surveyYear: number;
   status: AcrlInviteStatus;
@@ -300,11 +305,13 @@ export interface AcrlInviteListItem extends AcrlInvite {
 }
 
 export interface AcrlInvitesResponse {
+  institution: string;
   invites: AcrlInviteListItem[];
   pendingCount: number;
 }
 
 export interface AcrlInviteActionResponse {
+  institution: string;
   invite: AcrlInvite;
   emailSent?: boolean;
   inviteText?: AcrlInviteText;
@@ -315,7 +322,7 @@ export interface AcrlInviteCreateInput {
   targets: AcrlInviteTargetInput[];
 }
 
-export interface AcrlAssignmentCopyResponse {
+export interface AcrlAssignmentCopyResult {
   surveyYear: number;
   sourceYear: number;
   copiedSections: string[];
@@ -329,7 +336,10 @@ export interface AcrlAssignmentCopyResponse {
   failed: boolean;
 }
 
+export type AcrlAssignmentCopyResponse = AcrlAssignmentCopyResult & { institution: string };
+
 export interface AcrlEntryResponse {
+  institution: string;
   selectedYear: number;
   previousYear: number;
   years: number[];
@@ -338,6 +348,7 @@ export interface AcrlEntryResponse {
 }
 
 export interface AcrlAutofillResponse {
+  institution: string;
   value: number;
   queryId: string;
   queryVersion: number;
@@ -369,6 +380,7 @@ export interface AcrlAutofillMethodsResponse {
 }
 
 export interface AcrlImportPreview {
+  institution: string;
   surveyYear: number;
   sourceLabel: string;
   overwrite: boolean;

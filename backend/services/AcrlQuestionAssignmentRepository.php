@@ -44,28 +44,29 @@ class AcrlQuestionAssignmentRepository
         return $row ?: null;
     }
 
-    public function assignments(int $year): array
+    public function assignments(int $year, string $institutionCode): array
     {
         return $this->db->createCommand(
             'SELECT survey_year, sheet, question_id, part, user_id FROM acrl_question_assignments'
-                . ' WHERE survey_year = :year ORDER BY sheet, question_id, part, user_id',
-            [':year' => $year]
+                . ' WHERE institution_code = :institution AND survey_year = :year ORDER BY sheet, question_id, part, user_id',
+            [':institution' => $institutionCode, ':year' => $year]
         )->queryAll();
     }
 
     /** Add one assignment inside the caller's locked-year transaction. */
-    public function addQuestionAssignment(int $year, string $sheet, string $questionId, string $part, int $userId, ?int $assignedBy): void
+    public function addQuestionAssignment(int $year, string $sheet, string $questionId, string $part, int $userId, ?int $assignedBy, string $institutionCode): void
     {
         $exists = $this->db->createCommand(
             'SELECT COUNT(*) FROM acrl_question_assignments'
-                . ' WHERE survey_year = :year AND sheet = :sheet AND question_id = :questionId'
+                . ' WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :questionId'
                 . ' AND part = :part AND user_id = :userId',
-            [':year' => $year, ':sheet' => $sheet, ':questionId' => $questionId, ':part' => $part, ':userId' => $userId]
+            [':institution' => $institutionCode, ':year' => $year, ':sheet' => $sheet, ':questionId' => $questionId, ':part' => $part, ':userId' => $userId]
         )->queryScalar();
         if ((int)$exists > 0) {
             return;
         }
         $this->db->createCommand()->insert('acrl_question_assignments', [
+            'institution_code' => $institutionCode,
             'survey_year' => $year,
             'sheet' => $sheet,
             'question_id' => $questionId,
@@ -85,13 +86,14 @@ class AcrlQuestionAssignmentRepository
         )->queryAll();
     }
 
-    public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy, ?callable $validateBeforeReplace = null): void
+    public function replaceQuestionAssignments(int $year, string $sheet, string $questionId, string $part, array $userIds, int $assignedBy, string $institutionCode, ?callable $validateBeforeReplace = null): void
     {
-        $this->withLockedYear($year, function () use ($year, $sheet, $questionId, $part, $userIds, $assignedBy, $validateBeforeReplace) {
+        $this->withLockedYear($year, function () use ($year, $sheet, $questionId, $part, $userIds, $assignedBy, $institutionCode, $validateBeforeReplace) {
             if ($validateBeforeReplace !== null) {
                 $validateBeforeReplace();
             }
             $this->db->createCommand()->delete('acrl_question_assignments', [
+                'institution_code' => $institutionCode,
                 'survey_year' => $year,
                 'sheet' => $sheet,
                 'question_id' => $questionId,
@@ -101,6 +103,7 @@ class AcrlQuestionAssignmentRepository
             foreach ($userIds as $userId) {
                 $rows[] = [
                     'survey_year' => $year,
+                    'institution_code' => $institutionCode,
                     'sheet' => $sheet,
                     'question_id' => $questionId,
                     'part' => $part,
@@ -108,18 +111,19 @@ class AcrlQuestionAssignmentRepository
                     'assigned_by' => $assignedBy,
                 ];
             }
-            $this->insertQuestionAssignments($rows);
+            $this->insertQuestionAssignments($rows, $institutionCode);
         });
     }
 
-    public function insertQuestionAssignments(array $rows): void
+    public function insertQuestionAssignments(array $rows, string $institutionCode): void
     {
         if (empty($rows)) {
             return;
         }
         $year = (int)$rows[0]['survey_year'];
-        $this->withLockedYear($year, function () use ($rows) {
+        $this->withLockedYear($year, function () use ($rows, $institutionCode) {
             foreach ($rows as $row) {
+                $row['institution_code'] = $institutionCode;
                 $this->db->createCommand()->insert('acrl_question_assignments', $row)->execute();
             }
         });

@@ -53,8 +53,11 @@ $migrationDir = __DIR__ . '/../../mysql/migrations';
 $temporaryMigrationDir = sys_get_temp_dir() . '/acrl029-migrations-' . bin2hex(random_bytes(8));
 $allMigrationFiles = array_map('basename', glob(rtrim($migrationDir, '/') . '/*.sql') ?: []);
 sort($allMigrationFiles, SORT_STRING);
-$migrationFilesExcept066And067 = array_values(array_filter($allMigrationFiles, function ($filename) {
-    return $filename !== '066_acrl_question_assignments.sql' && $filename !== '067_acrl_invites.sql';
+$migrationFilesExcept066And067And073 = array_values(array_filter($allMigrationFiles, function ($filename) {
+    return !in_array($filename, ['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql'], true);
+}));
+$migrationFilesExcept073 = array_values(array_filter($allMigrationFiles, function ($filename) {
+    return $filename !== '073_acrl_institutions.sql';
 }));
 
 function acrlMigrationEngineCheck($condition, string $message): void
@@ -322,21 +325,23 @@ try {
         $dryRunA = MigrationService::run($appDbA, $migrationDir, true);
         acrlMigrationEngineCheck(in_array('066_acrl_question_assignments.sql', $dryRunA['applied'], true), 'Scenario (a) dry run must list missing 066 as to-apply.');
         acrlMigrationEngineCheck(in_array('067_acrl_invites.sql', $dryRunA['applied'], true), 'Scenario (a) dry run must list missing 067 as to-apply.');
+        acrlMigrationEngineCheck(in_array('073_acrl_institutions.sql', $dryRunA['applied'], true), 'Scenario (a) dry run must list missing 073 as to-apply.');
         acrlMigrationEngineCheck(!in_array('066_acrl_question_assignments.sql', $dryRunA['baselined'], true), 'Scenario (a) must not baseline missing 066.');
         acrlMigrationEngineCheck(!in_array('067_acrl_invites.sql', $dryRunA['baselined'], true), 'Scenario (a) must not baseline missing 067.');
         $dryBaselinedA = $dryRunA['baselined'];
         sort($dryBaselinedA, SORT_STRING);
-        acrlMigrationEngineSame($migrationFilesExcept066And067, $dryBaselinedA, 'Scenario (a) dry run must baseline every existing migration other than the missing 066 and 067.');
+        acrlMigrationEngineSame($migrationFilesExcept066And067And073, $dryBaselinedA, 'Scenario (a) dry run must baseline every existing migration other than the missing 066, 067, and 073.');
         $resultA = MigrationService::run($appDbA, $migrationDir, false);
         acrlMigrationEngineCheck(in_array('066_acrl_question_assignments.sql', $resultA['applied'], true), 'Scenario (a) must execute and record missing 066.');
         acrlMigrationEngineCheck(in_array('067_acrl_invites.sql', $resultA['applied'], true), 'Scenario (a) must execute and record missing 067.');
+        acrlMigrationEngineCheck(in_array('073_acrl_institutions.sql', $resultA['applied'], true), 'Scenario (a) must execute and record missing 073.');
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbA, '067_acrl_invites.sql'), 'Scenario (a) must re-recognize both 067 tables, columns, defaults, and target uniqueness after executing the migration.');
         $appliedA = $resultA['applied'];
         sort($appliedA, SORT_STRING);
-        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql'], $appliedA, 'Scenario (a) must execute only 066 and 067 instead of replaying any previously applied migration.');
+        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql'], $appliedA, 'Scenario (a) must execute only 066, 067, and 073 instead of replaying any previously applied migration.');
         $baselinedA = $resultA['baselined'];
         sort($baselinedA, SORT_STRING);
-        acrlMigrationEngineSame($migrationFilesExcept066And067, $baselinedA, 'Scenario (a) must baseline every previously applied migration except the missing 066 and 067.');
+        acrlMigrationEngineSame($migrationFilesExcept066And067And073, $baselinedA, 'Scenario (a) must baseline every previously applied migration except the missing 066, 067, and 073.');
         $questionCountA = (int)$appDbA->createCommand("SELECT COUNT(*) FROM acrl_questions WHERE survey_year = 2025 AND sheet = 'survey' AND question_id = '60' AND part = 'A'")->queryScalar();
         acrlMigrationEngineSame(0, $questionCountA, 'Scenario (a) must keep the deliberately deleted seed question deleted.');
     } catch (Throwable $error) {
@@ -358,14 +363,16 @@ try {
         $dryRunB = MigrationService::run($appDbB, $migrationDir, true);
         acrlMigrationEngineCheck(in_array('066_acrl_question_assignments.sql', $dryRunB['baselined'], true), 'Scenario (b) must baseline complete 066 from an empty ledger.');
         acrlMigrationEngineCheck(in_array('067_acrl_invites.sql', $dryRunB['baselined'], true), 'Scenario (b) must baseline complete 067 from an empty ledger.');
+        acrlMigrationEngineCheck(in_array('073_acrl_institutions.sql', $dryRunB['applied'], true), 'Scenario (b) must apply missing 073 after recognizing legacy 066 and 067 schemas.');
         acrlMigrationEngineCheck(!in_array('066_acrl_question_assignments.sql', $dryRunB['applied'], true), 'Scenario (b) must not rerun a complete 066 table.');
         acrlMigrationEngineCheck(!in_array('067_acrl_invites.sql', $dryRunB['applied'], true), 'Scenario (b) must not rerun complete 067 tables.');
         $resultB = MigrationService::run($appDbB, $migrationDir, false);
         acrlMigrationEngineCheck(in_array('066_acrl_question_assignments.sql', $resultB['baselined'], true), 'Scenario (b) must record 066 as baselined.');
+        acrlMigrationEngineCheck(in_array('073_acrl_institutions.sql', $resultB['applied'], true), 'Scenario (b) must apply missing 073.');
         $baselinedB = $resultB['baselined'];
         sort($baselinedB, SORT_STRING);
-        acrlMigrationEngineSame($allMigrationFiles, $baselinedB, 'Scenario (b) must baseline every migration when both complete ACRL schemas are present.');
-        acrlMigrationEngineSame([], $resultB['applied'], 'Scenario (b) must execute no migration when both ACRL schemas are already complete.');
+        acrlMigrationEngineSame($migrationFilesExcept073, $baselinedB, 'Scenario (b) must baseline every migration except incomplete 073 when legacy ACRL schemas are present.');
+        acrlMigrationEngineSame(['073_acrl_institutions.sql'], $resultB['applied'], 'Scenario (b) must apply only the missing institution schema.');
         $questionCountB = (int)$appDbB->createCommand("SELECT COUNT(*) FROM acrl_questions WHERE survey_year = 2025 AND sheet = 'survey' AND question_id = '60' AND part = 'A'")->queryScalar();
         acrlMigrationEngineSame(0, $questionCountB, 'Scenario (b) must keep the deleted seed question deleted.');
 
@@ -406,7 +413,7 @@ try {
         $appDbD = acrlMigrationEngineConnection($dsnD, $runtimeUser, $runtimePassword);
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbD, '067_acrl_invites.sql'), 'Scenario (d) must recognize complete 067 independently of missing 066.');
         $resultD = MigrationService::run($appDbD, $migrationDir, false);
-        acrlMigrationEngineSame(['066_acrl_question_assignments.sql'], $resultD['applied'], 'Scenario (d) must apply missing 066 while keeping complete 067 baselined.');
+        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '073_acrl_institutions.sql'], $resultD['applied'], 'Scenario (d) must apply missing 066 and 073 while keeping complete legacy 067 baselined.');
         acrlMigrationEngineCheck(in_array('067_acrl_invites.sql', $resultD['baselined'], true), 'Scenario (d) must baseline complete 067 in the empty-ledger path.');
         $appliedD = (int)$appDbD->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '067_acrl_invites.sql'")->queryScalar();
         acrlMigrationEngineSame(1, $appliedD, 'Scenario (d) must record exactly one baseline ledger row for 067.');
@@ -474,8 +481,9 @@ try {
         list($adminDbC, $dsnC) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioC, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
         $appDbC = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
         $firstRunC = MigrationService::run($appDbC, $migrationDir, false);
-        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql'], $firstRunC['applied'], 'Scenario (c) must run only 066 and 067 once after a normal ledger through 065.');
+        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql'], $firstRunC['applied'], 'Scenario (c) must run 066, 067, then new migration 073 once after a normal ledger through 065.');
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbC, '067_acrl_invites.sql'), 'Scenario (c) must re-recognize complete 067 after applying it on the normal-ledger path.');
+        acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbC, '073_acrl_institutions.sql'), 'Scenario (c) must recognize 073 after applying it following 067.');
         $secondRunC = MigrationService::run($appDbC, $migrationDir, false);
         acrlMigrationEngineSame([], $secondRunC['applied'], 'Scenario (c) rerun must be a no-op for applied migrations.');
         $ledgerCountC = (int)$appDbC->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '066_acrl_question_assignments.sql'")->queryScalar();
@@ -507,10 +515,10 @@ try {
             'match_kind' => 'same', 'score' => 1, 'decision' => 'approved', 'decided_by' => 'ACR-028 test',
         ])->execute();
         $adminDbC->createCommand()->insert('acrl_section_assignments', [
-            'survey_year' => 2025, 'section' => 'ACR-028 test section', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
+            'institution_code' => 'SC', 'survey_year' => 2025, 'section' => 'ACR-028 test section', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
         ])->execute();
         $adminDbC->createCommand()->insert('acrl_question_assignments', [
-            'survey_year' => 2025, 'sheet' => 'survey', 'question_id' => 'ACR28', 'part' => '', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
+            'institution_code' => 'SC', 'survey_year' => 2025, 'sheet' => 'survey', 'question_id' => 'ACR28', 'part' => '', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
         ])->execute();
 
         $users = new class($nextUserId, $actorId) {
@@ -536,9 +544,9 @@ try {
 
         $adminDbC->createCommand("UPDATE acrl_survey_years SET status = 'draft' WHERE survey_year = 2025")->execute();
         $adminDbC->createCommand()->insert('acrl_section_assignments', [
-            'survey_year' => 2026, 'section' => 'ACR-028 test section', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
+            'institution_code' => 'SC', 'survey_year' => 2026, 'section' => 'ACR-028 test section', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
         ])->execute();
-        $copyWithUnpublishedSource = $sectionService->copyOnPublish(2026, (string)$actorId);
+        $copyWithUnpublishedSource = $sectionService->copyOnPublish(2026, (string)$actorId, 'SC');
         acrlMigrationEngineSame(true, $copyWithUnpublishedSource['alreadyAssigned'] ?? null, 'Existing section assignments retain their success result when the previous year is unpublished.');
         acrlMigrationEngineSame(false, $copyWithUnpublishedSource['failed'] ?? null, 'Existing section assignments preserve the nonfatal success result when the previous year is unpublished.');
         acrlMigrationEngineSame([], $copyWithUnpublishedSource['copiedSections'] ?? null, 'An existing section assignment is not overwritten when the previous year is unpublished.');
@@ -549,9 +557,9 @@ try {
         $adminDbC->createCommand("UPDATE acrl_survey_years SET status = 'published' WHERE survey_year = 2025")->execute();
 
         $adminDbC->createCommand()->insert('acrl_section_assignments', [
-            'survey_year' => 2026, 'section' => 'ACR-028 test section', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
+            'institution_code' => 'SC', 'survey_year' => 2026, 'section' => 'ACR-028 test section', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
         ])->execute();
-        $copyWithSectionGuard = $sectionService->copyOnPublish(2026, (string)$actorId);
+        $copyWithSectionGuard = $sectionService->copyOnPublish(2026, (string)$actorId, 'SC');
         acrlMigrationEngineSame(true, $copyWithSectionGuard['alreadyAssigned'] ?? null, 'A target section assignment keeps the existing alreadyAssigned meaning.');
         acrlMigrationEngineSame([], $copyWithSectionGuard['copiedSections'] ?? null, 'A section guard may skip sections while the question copy remains independent.');
         acrlMigrationEngineSame([['sheet' => 'survey', 'questionId' => 'ACR28', 'part' => '', 'label' => 'QACR28']], $copyWithSectionGuard['copiedQuestions'] ?? null, 'A section guard does not stop eligible question copying.');
@@ -566,7 +574,7 @@ try {
         )->execute();
         $copyFailure = null;
         try {
-            $sectionService->copyOnPublish(2026, (string)$actorId);
+            $sectionService->copyOnPublish(2026, (string)$actorId, 'SC');
         } catch (Throwable $error) {
             $copyFailure = $error;
         }
@@ -578,9 +586,9 @@ try {
         $adminDbC->createCommand()->setRawSql('DROP TRIGGER `' . $triggerName . '`')->execute();
 
         $adminDbC->createCommand()->insert('acrl_question_assignments', [
-            'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => 'ACR28', 'part' => '', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
+            'institution_code' => 'SC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => 'ACR28', 'part' => '', 'user_id' => $nextUserId, 'assigned_by' => $actorId,
         ])->execute();
-        $copyWithQuestionGuard = $sectionService->copyOnPublish(2026, (string)$actorId);
+        $copyWithQuestionGuard = $sectionService->copyOnPublish(2026, (string)$actorId, 'SC');
         acrlMigrationEngineSame(false, $copyWithQuestionGuard['alreadyAssigned'] ?? null, 'Existing question rows do not change the section alreadyAssigned field.');
         acrlMigrationEngineSame(['ACR-028 test section'], $copyWithQuestionGuard['copiedSections'] ?? null, 'A question guard does not stop eligible section copying.');
         acrlMigrationEngineSame(true, $copyWithQuestionGuard['questionsAlreadyAssigned'] ?? null, 'Question assignments use their independent publish guard.');
@@ -618,6 +626,29 @@ try {
     }
 
     try {
+        $scenarioJ = $prefix . '_j';
+        list($adminDbJ, $dsnJ) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioJ, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
+        acrlMigrationEngineRaw($adminDbJ, rtrim(trim((string)file_get_contents($migrationDir . '/066_acrl_question_assignments.sql')), ';'));
+        acrlMigrationEngineCreateInviteTables($adminDbJ, $migrationDir);
+        $step = 0;
+        foreach (MigrationService::splitSqlStatements((string)file_get_contents($migrationDir . '/073_acrl_institutions.sql')) as $statement) {
+            acrlMigrationEngineRaw($adminDbJ, $statement);
+            if (preg_match('/^EXECUTE\s+acrl073_stmt$/i', trim($statement)) === 1 && ++$step === 1) break;
+        }
+        acrlMigrationEngineSame(1, $step, 'Scenario (j) must stop after the first guarded 073 DDL step.');
+        $adminDbJ->createCommand('DELETE FROM schema_migrations')->execute();
+        $appDbJ = acrlMigrationEngineConnection($dsnJ, $runtimeUser, $runtimePassword);
+        acrlMigrationEngineCheck(acrlMigrationEngineDatabaseAppearsCurrent($appDbJ), 'Scenario (j) partial 073 must leave databaseAppearsCurrent unchanged for empty-ledger recovery.');
+        acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbJ, '066_acrl_question_assignments.sql'), 'Scenario (j) 066 must recognize the first partial 073 column.');
+        acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbJ, '067_acrl_invites.sql'), 'Scenario (j) 067 must recognize the first partial 073 column.');
+        $resumedJ = MigrationService::run($appDbJ, $migrationDir, false);
+        acrlMigrationEngineSame(['073_acrl_institutions.sql'], $resumedJ['applied'], 'Scenario (j) empty-ledger full-directory run resumes partial 073 and applies no earlier migration.');
+        acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbJ, '073_acrl_institutions.sql'), 'Scenario (j) must recognize 073 after empty-ledger recovery.');
+    } catch (Throwable $error) {
+        acrlMigrationEngineCheck(false, 'Scenario (j) partial-073 empty-ledger recovery failed: ' . get_class($error) . ': ' . $error->getMessage());
+    }
+
+    try {
         $yiiApp = new Application([
             'id' => 'acrl-invite-migration-engine-test',
             'basePath' => dirname(__DIR__),
@@ -649,7 +680,7 @@ try {
         ])->execute();
 
         $appDbC->createCommand()->insert('acrl_invites', [
-            'email' => 'acrl029-rollback@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
+            'institution_code' => 'SC', 'email' => 'acrl029-rollback@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
             'link_origin' => 'https://reports.example.test', 'status' => 'pending', 'send_count' => 0,
             'expires_at' => date('Y-m-d H:i:s', time() + 86400),
         ])->execute();
@@ -671,7 +702,7 @@ try {
             try {
                 $inviteService->createInvite(2026, 'acrl029-padded-create@smith.example', [
                     ['kind' => 'question', 'sheet' => 'survey', 'questionId' => 'ACR28 ', 'part' => ''],
-                ], User::findOne($actorId), 'https://reports.example.test');
+                ], User::findOne($actorId), 'https://reports.example.test', 'SC');
             } catch (Throwable $error) {
                 $paddedCreateError = $error;
             }
@@ -696,7 +727,7 @@ try {
                 'email' => null, 'role' => 'user', 'is_approved' => 0,
             ])->execute();
             $appDbC->createCommand()->insert('acrl_invites', [
-                'email' => 'acrl029-padded-accept@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
+                'institution_code' => 'SC', 'email' => 'acrl029-padded-accept@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
                 'link_origin' => 'https://reports.example.test', 'status' => 'pending', 'send_count' => 0,
                 'expires_at' => date('Y-m-d H:i:s', time() + 86400),
             ])->execute();
@@ -746,7 +777,7 @@ try {
 
     try {
         $raceInviteId = $appDbC->createCommand()->insert('acrl_invites', [
-            'email' => 'acrl029-race-revoke@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
+            'institution_code' => 'SC', 'email' => 'acrl029-race-revoke@smith.example', 'survey_year' => 2026, 'invited_by' => $actorId,
             'link_origin' => 'https://reports.example.test', 'status' => 'pending', 'send_count' => 0,
             'expires_at' => date('Y-m-d H:i:s', time() + 86400),
         ])->execute();
@@ -888,7 +919,8 @@ try {
                 'acrl029-race-create@smith.example',
                 $createTarget,
                 $createAdminB,
-                'https://reports.example.test'
+                'https://reports.example.test',
+                'SC'
             );
         } catch (Throwable $error) {
             $createTimeoutError = $error;
@@ -914,6 +946,7 @@ try {
         )->queryScalar(), 'A timed-out create leaves no target rows.');
 
         $createLockDbA->createCommand()->insert('acrl_invites', [
+            'institution_code' => 'SC',
             'email' => 'acrl029-race-create@smith.example',
             'survey_year' => 2026,
             'invited_by' => $actorId,
@@ -941,7 +974,8 @@ try {
                 'acrl029-race-create@smith.example',
                 $createTarget,
                 $createAdminB,
-                'https://reports.example.test'
+                'https://reports.example.test',
+                'SC'
             );
         } catch (Throwable $error) {
             $createRetryError = $error;

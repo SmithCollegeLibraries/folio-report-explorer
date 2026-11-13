@@ -9,7 +9,7 @@ import AcrlFileStatus from '../components/AcrlFileStatus';
 import { getAcrlReview, listAcrlCatalogueYears, publishAcrlYear, saveAcrlLinks, uploadAcrlWorksheet } from '../api/acrl';
 import { parseWorksheetFile, sha256ForFile } from '../services/acrlWorksheetParser';
 import { errorMessage } from '../utils/errorMessage';
-import type { AcrlAssignmentCopyResponse, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
+import type { AcrlAssignmentCopyResult, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
 
 export default function AcrlPage() {
   const queryClient = useQueryClient();
@@ -21,7 +21,7 @@ export default function AcrlPage() {
   const [uploadPhase, setUploadPhase] = useState<'idle' | 'reading' | 'checking' | 'saving'>('idle');
   const [readMessage, setReadMessage] = useState('');
   const [reviewYear, setReviewYear] = useState<number | null>(null);
-  const [assignmentCopyResult, setAssignmentCopyResult] = useState<AcrlAssignmentCopyResponse | null>(null);
+  const [assignmentCopyResult, setAssignmentCopyResult] = useState<AcrlAssignmentCopyResult | null>(null);
   const [reviewOpenSequence, setReviewOpenSequence] = useState(0);
   const worksheetInputRef = useRef<HTMLInputElement>(null);
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);

@@ -27,8 +27,8 @@ $db = $app->db;
 $db->createCommand('CREATE TABLE users (id INTEGER PRIMARY KEY, smith_id TEXT, username TEXT, first_name TEXT, last_name TEXT, role TEXT, is_approved INTEGER)')->execute();
 $db->createCommand('CREATE TABLE acrl_survey_years (survey_year INTEGER PRIMARY KEY, status TEXT NOT NULL)')->execute();
 $db->createCommand('CREATE TABLE acrl_questions (survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\', section TEXT NOT NULL, prompt TEXT NOT NULL, survey_order INTEGER NOT NULL, PRIMARY KEY (survey_year, sheet, question_id, part))')->execute();
-$db->createCommand('CREATE TABLE acrl_section_assignments (survey_year INTEGER NOT NULL, section TEXT NOT NULL, user_id INTEGER NOT NULL, assigned_by INTEGER NULL)')->execute();
-$db->createCommand('CREATE TABLE acrl_question_assignments (survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\', user_id INTEGER NOT NULL, assigned_by INTEGER NULL, assigned_at TEXT)')->execute();
+$db->createCommand('CREATE TABLE acrl_section_assignments (institution_code TEXT NOT NULL, survey_year INTEGER NOT NULL, section TEXT NOT NULL, user_id INTEGER NOT NULL, assigned_by INTEGER NULL)')->execute();
+$db->createCommand('CREATE TABLE acrl_question_assignments (institution_code TEXT NOT NULL, survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\', user_id INTEGER NOT NULL, assigned_by INTEGER NULL, assigned_at TEXT)')->execute();
 $db->createCommand()->insert('users', ['id' => 9, 'smith_id' => 'acrl028-admin', 'username' => 'acrl028-admin', 'first_name' => 'Synthetic', 'last_name' => 'Admin', 'role' => 'admin', 'is_approved' => 1])->execute();
 $db->createCommand()->insert('users', ['id' => 10, 'smith_id' => 'acrl028-editor', 'username' => 'acrl028-editor', 'first_name' => 'Synthetic', 'last_name' => 'Editor', 'role' => 'user', 'is_approved' => 1])->execute();
 $db->createCommand()->insert('users', ['id' => 11, 'smith_id' => 'acrl028-unapproved', 'username' => 'acrl028-unapproved', 'first_name' => 'Synthetic', 'last_name' => 'Unapproved', 'role' => 'user', 'is_approved' => 0])->execute();
@@ -38,16 +38,16 @@ $db->createCommand()->insert('acrl_questions', [
     'section' => 'Circulation', 'prompt' => 'Synthetic question', 'survey_order' => 1,
 ])->execute();
 $db->createCommand()->insert('acrl_section_assignments', [
-    'survey_year' => 2026, 'section' => 'Circulation', 'user_id' => 10, 'assigned_by' => 9,
+    'institution_code' => 'SC', 'survey_year' => 2026, 'section' => 'Circulation', 'user_id' => 10, 'assigned_by' => 9,
 ])->execute();
 $db->createCommand()->insert('acrl_question_assignments', [
-    'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 10, 'assigned_by' => 9,
+    'institution_code' => 'SC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 10, 'assigned_by' => 9,
 ])->execute();
 $db->createCommand()->insert('acrl_question_assignments', [
-    'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 11, 'assigned_by' => 9,
+    'institution_code' => 'SC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A', 'user_id' => 11, 'assigned_by' => 9,
 ])->execute();
 $db->createCommand()->insert('acrl_question_assignments', [
-    'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => 'removed', 'part' => '', 'user_id' => 10, 'assigned_by' => 9,
+    'institution_code' => 'SC', 'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => 'removed', 'part' => '', 'user_id' => 10, 'assigned_by' => 9,
 ])->execute();
 
 $controller = new AcrlAssignmentController('acrl-assignment', $app);
@@ -65,6 +65,8 @@ function acrlQuestionAssignmentControllerCall($controller, int $year, array $bod
         return;
     }
     Yii::$app->request->bodyParams = $body;
+    $_SERVER['QUERY_STRING'] = 'institution=SC';
+    Yii::$app->request->setQueryParams(['institution' => 'SC']);
     Yii::$app->response->statusCode = 200;
     try {
         $response = $controller->actionSaveQuestionAssignments($year);
@@ -102,6 +104,8 @@ foreach ($cases as $case) {
 }
 
 $app->user->setIdentity(User::findOne(9));
+$_SERVER['QUERY_STRING'] = 'institution=SC';
+Yii::$app->request->setQueryParams(['institution' => 'SC']);
 try {
     $assignmentList = $controller->actionListAssignments(2026);
     $expectedSections = [[
@@ -109,6 +113,7 @@ try {
         'assignees' => [['id' => 10, 'displayName' => 'Synthetic Editor']],
     ]];
     acrlQuestionAssignmentControllerCheck(($assignmentList['surveyYear'] ?? null) === 2026, 'GET acrl/years/<year>/assignments keeps surveyYear unchanged.');
+    acrlQuestionAssignmentControllerCheck(($assignmentList['institution'] ?? null) === 'SC', 'GET acrl/years/<year>/assignments exposes the selected institution.');
     acrlQuestionAssignmentControllerCheck(($assignmentList['sections'] ?? null) === $expectedSections, 'GET acrl/years/<year>/assignments keeps the existing sections payload byte-for-byte.');
     acrlQuestionAssignmentControllerCheck(($assignmentList['questions'] ?? null) === [[
         'sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'section' => 'Circulation',

@@ -79,6 +79,8 @@ foreach ($actions as $route) {
 }
 
 Yii::$app->request->hostInfo = 'https://reports.example.test';
+$_SERVER['QUERY_STRING'] = 'institution=SC';
+Yii::$app->request->setQueryParams(['institution' => 'SC']);
 $db->createCommand('CREATE TABLE acrl_survey_years (survey_year INTEGER PRIMARY KEY, status TEXT NOT NULL)')->execute();
 $db->createCommand()->batchInsert('acrl_survey_years', ['survey_year', 'status'], [
     [2026, 'published'], [2030, 'draft'],

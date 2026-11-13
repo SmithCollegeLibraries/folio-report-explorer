@@ -3,10 +3,14 @@
 namespace app\services;
 
 require_once __DIR__ . '/CatalogingReportMigrationRecognitionService.php';
+require_once __DIR__ . '/AcrlInstitutionMigrationRecognitionService.php';
+require_once __DIR__ . '/AcrlInstitutionAwareMigrationRecognitionTrait.php';
 
 /** Recognizes migrations used by current-schema baselining. */
 class AcrlQuestionAssignmentMigrationRecognitionService
 {
+    use AcrlInstitutionAwareMigrationRecognitionTrait;
+
     private static function migrationDefinitions(): array
     {
         return [
@@ -37,6 +41,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             '072_shared_record_check.sql' => [
                 'check' => 'sharedRecordReportAppearsComplete',
                 'error' => 'Migration 072 did not install the canonical shared record report.',
+            ],
+            '073_acrl_institutions.sql' => [
+                'check' => 'acrlInstitutionsAppearComplete',
+                'error' => 'Migration 073 left the ACRL institution schema incomplete.',
             ],
         ];
     }
@@ -69,68 +77,9 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         self::assertMigrationSchemaAppearsComplete($db, '066_acrl_question_assignments.sql');
     }
 
-    public static function acrlQuestionAssignmentsAppearComplete($db): bool
+    private static function acrlInstitutionsAppearComplete($db): bool
     {
-        $expected = [
-            'survey_year' => ['smallint', 'NO', null, null, null, null],
-            'sheet' => ['varchar', 'NO', 8, 'ascii', 'ascii_bin', null],
-            'question_id' => ['varchar', 'NO', 32, 'ascii', 'ascii_bin', null],
-            'part' => ['varchar', 'NO', 1, 'ascii', 'ascii_bin', ''],
-            'user_id' => ['int', 'NO', null, null, null, null],
-            'assigned_by' => ['int', 'YES', null, null, null, null],
-            'assigned_at' => ['datetime', 'NO', null, null, null, 'CURRENT_TIMESTAMP(6)'],
-        ];
-        return self::tableShapeAppearsComplete($db, 'acrl_question_assignments', $expected)
-            && self::indexAppearsComplete($db, 'acrl_question_assignments', 'uq_acrl_question_assignment',
-                ['survey_year', 'sheet', 'question_id', 'part', 'user_id'], true)
-            && self::foreignKeysAppearComplete($db, 'acrl_question_assignments', [
-                'survey_year' => ['acrl_survey_years', 'survey_year', 'CASCADE'],
-                'user_id' => ['users', 'id', 'CASCADE'],
-                'assigned_by' => ['users', 'id', 'SET NULL'],
-            ]);
-    }
-
-    public static function acrlInvitesAppearComplete($db): bool
-    {
-        $invites = [
-            'id' => ['int', 'NO', null, null, null, null],
-            'email' => ['varchar', 'NO', 191, 'utf8mb4', null, null],
-            'survey_year' => ['smallint', 'NO', null, null, null, null],
-            'invited_by' => ['int', 'YES', null, null, null, null],
-            'link_origin' => ['varchar', 'NO', 255, 'utf8mb4', null, null],
-            'status' => ['varchar', 'NO', 10, 'utf8mb4', null, 'pending'],
-            'send_count' => ['int', 'NO', null, null, null, 0],
-            'created_at' => ['datetime', 'NO', null, null, null, 'CURRENT_TIMESTAMP(6)'],
-            'expires_at' => ['datetime', 'NO', null, null, null, null],
-            'last_sent_at' => ['datetime', 'YES', null, null, null, null],
-            'accepted_user_id' => ['int', 'YES', null, null, null, null],
-            'accepted_at' => ['datetime', 'YES', null, null, null, null],
-            'revoked_at' => ['datetime', 'YES', null, null, null, null],
-        ];
-        $targets = [
-            'invite_id' => ['int', 'NO', null, null, null, null],
-            'kind' => ['varchar', 'NO', 8, 'utf8mb4', null, null],
-            'section' => ['varchar', 'NO', 120, 'utf8mb4', null, ''],
-            'sheet' => ['varchar', 'NO', 8, 'ascii', 'ascii_bin', ''],
-            'question_id' => ['varchar', 'NO', 32, 'ascii', 'ascii_bin', ''],
-            'part' => ['varchar', 'NO', 1, 'ascii', 'ascii_bin', ''],
-        ];
-
-        return self::tableShapeAppearsComplete($db, 'acrl_invites', $invites)
-            && self::tableShapeAppearsComplete($db, 'acrl_invite_targets', $targets)
-            && self::indexAppearsComplete($db, 'acrl_invites', 'PRIMARY', ['id'], true)
-            && self::indexAppearsComplete($db, 'acrl_invites', 'idx_acrl_invites_email_status', ['email', 'status'], false)
-            && self::indexAppearsComplete($db, 'acrl_invites', 'idx_acrl_invites_survey_year', ['survey_year'], false)
-            && self::indexAppearsComplete($db, 'acrl_invite_targets', 'uq_acrl_invite_target',
-                ['invite_id', 'kind', 'section', 'sheet', 'question_id', 'part'], true)
-            && self::foreignKeysAppearComplete($db, 'acrl_invites', [
-                'survey_year' => ['acrl_survey_years', 'survey_year', 'CASCADE'],
-                'invited_by' => ['users', 'id', 'SET NULL'],
-                'accepted_user_id' => ['users', 'id', 'SET NULL'],
-            ])
-            && self::foreignKeysAppearComplete($db, 'acrl_invite_targets', [
-                'invite_id' => ['acrl_invites', 'id', 'CASCADE'],
-            ]);
+        return AcrlInstitutionMigrationRecognitionService::migrationAppearsComplete($db);
     }
 
     private static function marcCombinationFinderDefinitionAppearsComplete($db): bool
@@ -161,7 +110,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         return CatalogingReportMigrationRecognitionService::sharedRecordReportAppearsComplete($db);
     }
 
-    private static function tableShapeAppearsComplete($db, string $table, array $expected): bool
+    private static function tableShapeAppearsComplete($db, string $table, array $expected, bool $allowInstitution = false): bool
     {
         try {
             $isMariaDb = stripos((string)$db->createCommand('SELECT VERSION()')->queryScalar(), 'MariaDB') !== false;
@@ -181,6 +130,16 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     . ' WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table',
                 [':table' => $table]
             )->queryAll();
+            $hasInstitution = false;
+            if ($allowInstitution && count($columns) === count($expected) + 1) {
+                $hasInstitution = AcrlInstitutionMigrationRecognitionService::institutionColumnIsPartialOrComplete($db, $table);
+                if (!$hasInstitution) {
+                    return false;
+                }
+                $columns = array_values(array_filter($columns, function ($column) {
+                    return strtolower((string)$column['COLUMN_NAME']) !== 'institution_code';
+                }));
+            }
             if (count($columns) !== count($expected)) {
                 return false;
             }
@@ -253,7 +212,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         return (string)$actual === (string)$expected;
     }
 
-    private static function foreignKeysAppearComplete($db, string $table, array $expected): bool
+    private static function foreignKeysAppearComplete($db, string $table, array $expected, bool $allowInstitution = false): bool
     {
         try {
             $rows = $db->createCommand(
@@ -266,7 +225,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     . ' AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.COLUMN_NAME',
                 [':table' => $table]
             )->queryAll();
-            if (count($rows) !== count($expected)) {
+            if (count($rows) < count($expected) || count($rows) > count($expected) + ($allowInstitution ? 1 : 0)) {
                 return false;
             }
             $database = strtolower((string)$db->createCommand('SELECT DATABASE()')->queryScalar());
@@ -290,6 +249,13 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     strtolower($shape[1]),
                     strtoupper($shape[2]),
                 ]) {
+                    return false;
+                }
+            }
+            if (isset($actual['institution_code'])) {
+                $institutionForeignKey = $actual['institution_code'];
+                if (array_slice($institutionForeignKey, 0, 3) !== [$database, 'acrl_institutions', 'code']
+                    || !in_array($institutionForeignKey[3], ['RESTRICT', 'NO ACTION'], true)) {
                     return false;
                 }
             }
@@ -336,6 +302,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             '070_gift_reports.sql' => true,
             '071_vea_gate_zones.sql' => true,
             '072_shared_record_check.sql' => true,
+            '073_acrl_institutions.sql' => true,
         ];
         foreach ($files as $file) {
             $filename = $file['filename'];
