@@ -85,4 +85,15 @@ describe('SpendingPaceChart', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry spending pace' }));
     expect(retry).toHaveBeenCalledOnce();
   });
+
+  it('formats large y-axis ticks as compact currency', () => {
+    const largeValues: SpendingPaceData = {
+      ...pace,
+      months: pace.months.map((month) => ({ ...month, currentCumulative: 0, previousCumulative: 4000000 })),
+    };
+    const { container } = render(<SpendingPaceChart data={largeValues} isPending={false} onRetry={vi.fn()} />);
+    const chart = container.querySelector<HTMLDivElement>('div[role="img"]');
+    expect(chart).not.toBeNull();
+    expect(within(chart as HTMLDivElement).getByText('$4M')).toBeInTheDocument();
+  });
 });

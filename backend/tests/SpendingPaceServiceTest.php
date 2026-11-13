@@ -101,7 +101,7 @@ visualizationCase('spending pace follows payment dates, carries signed month tot
 visualizationCase('spending pace handles unavailable units, null bounds, history allocation, and an absent prior year', function () {
     $f = new VisualizationFixture();
     $f->history(2027, 'budget', 0, null, null, 'HX');
-    $noSeries = new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13')->get('h');
+    $noSeries = (new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13'))->get('h');
     paceSame(false, $noSeries['available'], 'A unit without a series has an unavailable response.');
     paceSame('no_series', $noSeries['reason'], 'Use the no-series reason.');
     paceSame(2027, $noSeries['allocated']['fiscalYearEnd'], 'No-series allocation uses the July-to-June anchor year.');
@@ -113,7 +113,7 @@ visualizationCase('spending pace handles unavailable units, null bounds, history
     $f->db->createCommand()->update('finance.fiscal_year__t', [
         'period_start' => '2026-11-01', 'period_end' => '2026-12-31',
     ], ['id' => 'NF2027'])->execute();
-    $noFunds = new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13')->get('n');
+    $noFunds = (new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13'))->get('n');
     paceSame('no_funds', $noFunds['reason'], 'A series without unit funds is unavailable.');
     paceSame(['amount' => 0.0, 'source' => 'history', 'fiscalYearEnd' => 2027], $noFunds['allocated'], 'No-funds allocation uses the July-to-June anchor year even when FOLIO has an unusual period end.');
     paceSame(2, count($f->folio->queries), 'No-funds stops after the context and fund-scope query.');
@@ -122,7 +122,7 @@ visualizationCase('spending pace handles unavailable units, null bounds, history
     $f->db->createCommand()->update('finance.fiscal_year__t', ['period_start' => '2099-01-01'], ['series' => 'SCFY'])->execute();
     $f->db->createCommand()->update('finance.fiscal_year__t', ['period_start' => null], ['id' => 'SC2027'])->execute();
     $f->budget(2027, 45.67);
-    $noCurrent = new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13')->get('s');
+    $noCurrent = (new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13'))->get('s');
     paceSame('no_current_fy', $noCurrent['reason'], 'A null start bound cannot cover today.');
     paceSame(null, $noCurrent['currentFiscalYearEnd'], 'Unavailable responses do not invent a current year.');
     paceSame(45.67, $noCurrent['allocated']['amount'], 'The anchor year may still use FOLIO allocation.');
@@ -134,13 +134,13 @@ visualizationCase('spending pace handles unavailable units, null bounds, history
     $f = new VisualizationFixture();
     $f->db->createCommand()->update('finance.fiscal_year__t', ['period_start' => '2099-01-01'], ['series' => 'SCFY'])->execute();
     $f->db->createCommand()->update('finance.fiscal_year__t', ['period_end' => null], ['id' => 'SC2027'])->execute();
-    $missingEnd = new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13')->get('s');
+    $missingEnd = (new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13'))->get('s');
     paceSame('no_current_fy', $missingEnd['reason'], 'A series with a null end bound does not cover today.');
     paceSame(null, $missingEnd['allocated']['amount'], 'A null end bound cannot select an anchor-year FOLIO allocation.');
 
     $f = new VisualizationFixture();
     $f->payment(0, 'amount', 0, 'Book', 'fund-a', 2027, 'Paid', true, null, 'AC', '2026-07-01');
-    $noPrevious = new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13')->get('a');
+    $noPrevious = (new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-11-13'))->get('a');
     paceSame(null, $noPrevious['previousFiscalYearEnd'], 'Do not substitute an older series year.');
     paceSame(null, paceMonth($noPrevious, 1)['previousCumulative'], 'An absent previous year has null comparison values.');
     paceSame(0.0, paceMonth($noPrevious, 1)['currentCumulative'], 'An elapsed month with a real zero is numeric zero.');
@@ -150,7 +150,7 @@ visualizationCase('spending pace accumulates raw monthly values before rounding 
     $f = new VisualizationFixture();
     $f->payment(0.004, 'amount', 0, 'Book', 'fund-s', 2021, 'Paid', true, null, 'SC', '2026-07-15');
     $f->payment(0.004, 'amount', 0, 'Book', 'fund-s', 2021, 'Paid', true, null, 'SC', '2026-08-15');
-    $pace = new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-08-20')->get('s');
+    $pace = (new SpendingPaceService($f->folio, $f->db, $f->cache, $f->validator, '2026-08-20'))->get('s');
     paceSame(0.0, paceMonth($pace, 1)['currentCumulative'], 'A real elapsed sub-cent value is represented as zero, not null.');
     paceSame(0.01, paceMonth($pace, 2)['currentCumulative'], 'Two unrounded monthly values accumulate before display rounding.');
 });

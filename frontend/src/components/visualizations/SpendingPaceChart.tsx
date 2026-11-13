@@ -4,6 +4,9 @@ import { errorMessage } from '../../utils/errorMessage';
 import { amount, ChartCard } from './ChartCard';
 
 const PAYMENT_DATE_NOTE = 'Counts payments by the date they were paid, so totals can differ from the purchases charts, which count by invoice year.';
+const compactCurrency = new Intl.NumberFormat('en-US', {
+  style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1,
+});
 const reasons = {
   no_current_fy: 'No fiscal year in FOLIO covers today',
   no_series: 'No fiscal year series in FOLIO',
@@ -64,7 +67,7 @@ export function SpendingPaceChart({ data, isPending, error, onRetry }: {
           <LineChart data={data.months} margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="label" tick={{ fontSize: 12 }} />
-            <YAxis tickFormatter={(value: number) => `$${value}`} width={68} />
+            <YAxis tickFormatter={(value: number) => compactCurrency.format(value)} width={88} />
             <Tooltip formatter={(value: number | string | undefined) => value === undefined ? '' : `$${amount(Number(value))}`} />
             <Line type="monotone" dataKey="currentCumulative" name={currentLabel} stroke="#135f82"
               strokeWidth={2.5} dot={{ r: 3, strokeWidth: 2 }} activeDot={{ r: 5 }} connectNulls={false} />
