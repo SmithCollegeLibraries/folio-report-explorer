@@ -143,15 +143,18 @@ class AcrlInstitutionMigrationRecognitionService
     private static function institutionForeignKeyAppearsComplete($db, string $table, string $constraint): bool
     {
         $rows = $db->createCommand(
-            'SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME '
-                . 'FROM information_schema.KEY_COLUMN_USAGE k WHERE k.CONSTRAINT_SCHEMA = DATABASE() '
+            'SELECT k.COLUMN_NAME, k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE '
+                . 'FROM information_schema.KEY_COLUMN_USAGE k INNER JOIN information_schema.REFERENTIAL_CONSTRAINTS r '
+                . 'ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.TABLE_NAME = k.TABLE_NAME AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME '
+                . 'WHERE k.CONSTRAINT_SCHEMA = DATABASE() '
                 . 'AND k.TABLE_NAME = :table AND k.CONSTRAINT_NAME = :constraint AND k.REFERENCED_TABLE_NAME IS NOT NULL',
             [':table' => $table, ':constraint' => $constraint]
         )->queryAll();
         return count($rows) === 1 && strtolower((string)$rows[0]['COLUMN_NAME']) === 'institution_code'
             && strtolower((string)$rows[0]['REFERENCED_TABLE_SCHEMA']) === strtolower((string)$db->createCommand('SELECT DATABASE()')->queryScalar())
             && strtolower((string)$rows[0]['REFERENCED_TABLE_NAME']) === 'acrl_institutions'
-            && strtolower((string)$rows[0]['REFERENCED_COLUMN_NAME']) === 'code';
+            && strtolower((string)$rows[0]['REFERENCED_COLUMN_NAME']) === 'code'
+            && in_array(strtoupper((string)$rows[0]['DELETE_RULE']), ['RESTRICT', 'NO ACTION'], true);
     }
 
     private static function indexAppearsComplete($db, string $table, string $index, array $columns, bool $unique): bool

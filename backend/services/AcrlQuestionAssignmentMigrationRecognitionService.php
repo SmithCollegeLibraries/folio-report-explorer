@@ -252,10 +252,12 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                     return false;
                 }
             }
-            if (isset($actual['institution_code']) && $actual['institution_code'] !== [
-                $database, 'acrl_institutions', 'code', 'RESTRICT',
-            ]) {
-                return false;
+            if (isset($actual['institution_code'])) {
+                $institutionForeignKey = $actual['institution_code'];
+                if (array_slice($institutionForeignKey, 0, 3) !== [$database, 'acrl_institutions', 'code']
+                    || !in_array($institutionForeignKey[3], ['RESTRICT', 'NO ACTION'], true)) {
+                    return false;
+                }
             }
             return true;
         } catch (\Throwable $error) {

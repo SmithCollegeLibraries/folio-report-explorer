@@ -481,8 +481,9 @@ try {
         list($adminDbC, $dsnC) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioC, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
         $appDbC = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
         $firstRunC = MigrationService::run($appDbC, $migrationDir, false);
-        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql'], $firstRunC['applied'], 'Scenario (c) must run only 066 and 067 once after a normal ledger through 065.');
+        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql'], $firstRunC['applied'], 'Scenario (c) must run 066, 067, then new migration 073 once after a normal ledger through 065.');
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbC, '067_acrl_invites.sql'), 'Scenario (c) must re-recognize complete 067 after applying it on the normal-ledger path.');
+        acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbC, '073_acrl_institutions.sql'), 'Scenario (c) must recognize 073 after applying it following 067.');
         $secondRunC = MigrationService::run($appDbC, $migrationDir, false);
         acrlMigrationEngineSame([], $secondRunC['applied'], 'Scenario (c) rerun must be a no-op for applied migrations.');
         $ledgerCountC = (int)$appDbC->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '066_acrl_question_assignments.sql'")->queryScalar();
