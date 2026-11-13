@@ -8,6 +8,7 @@ import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { VisualizationData, VisualizationHistoryRow, VisualizationOptions } from '../api/visualizations';
 import { PurchaseCharts } from '../components/visualizations/PurchaseCharts';
+import { SpendingBudgetChart } from '../components/visualizations/SpendingBudgetChart';
 import Visualizations from './Visualizations';
 
 const api = vi.hoisted(() => ({
@@ -515,6 +516,123 @@ describe('Visualizations RPT-022 new behavior', () => {
     expect.soft(colorFor2027).not.toBeNull();
     expect.soft(colorFor2026).not.toBeNull();
     expect.soft(colorFor2026).toBe(colorFor2027);
+  });
+
+  it('renders sparse spending and allocation values with separate provenance and readable small purchases', async () => {
+    const purchases: VisualizationData['purchasesByCategory'] = [
+      { fiscalYearEnd: 2024, electronic: 100, physical: 0, other: -10, total: 90,
+        electronicPct: 111.1, physicalPct: 0, otherPct: -11.1, source: 'history' },
+      { fiscalYearEnd: 2026, electronic: 10, physical: 0, other: 0, total: 10,
+        electronicPct: 100, physicalPct: 0, otherPct: 0, source: 'folio' },
+      { fiscalYearEnd: 2030, electronic: 100, physical: 0, other: 0, total: 100,
+        electronicPct: 100, physicalPct: 0, otherPct: 0, source: 'history' },
+    ];
+    const budget: VisualizationData['budget'] = [
+      { fiscalYearEnd: 2025, allocated: 0, changePct: null, source: 'history' },
+      { fiscalYearEnd: 2027, allocated: -50, changePct: null, source: 'folio' },
+      { fiscalYearEnd: 2029, allocated: 100, changePct: null, source: 'history' },
+      { fiscalYearEnd: 2030, allocated: 1_000_000, changePct: null, source: 'folio' },
+    ];
+    await renderWithData({ purchasesByCategory: purchases, budget });
+
+    const region = await chart('Spending vs budget');
+    await waitFor(() => expect(region.querySelectorAll('.recharts-line-dots circle')).toHaveLength(4));
+    const allocationDots = Array.from(region.querySelectorAll('.recharts-line-dots circle'));
+    expect((region.querySelector('.recharts-line-curve')?.getAttribute('d')?.match(/M/g) ?? []).length).toBeGreaterThan(1);
+    expect(allocationDots[0]?.getAttribute('fill')).toBe('white');
+    expect(allocationDots[1]?.getAttribute('fill')).toBe('#334155');
+    expect(allocationDots[2]?.getAttribute('fill')).toBe('white');
+    const bars = Array.from(region.querySelectorAll('.recharts-bar-rectangle .recharts-rectangle'));
+    expect(bars.length).toBeGreaterThan(0);
+    expect(bars.some((bar) => (bar.getAttribute('fill') ?? '').startsWith('url(#'))).toBe(true);
+    expect(region.querySelectorAll('.recharts-yAxis')).toHaveLength(1);
+    expect(region).toHaveTextContent('Hollow dot: stored history allocation');
+
+    const showDataButton = within(region).getByRole('button', { name: 'Show data' });
+    showDataButton.focus();
+    await userEvent.keyboard('{Enter}');
+    const table = within(region).getByRole('table');
+    const row = (year: number) => Array.from(table.querySelectorAll('tbody tr'))
+      .find((candidate) => candidate.querySelector('th')?.textContent === String(year));
+    const mixedSource = row(2030);
+    expect(table.querySelector('caption')).toHaveTextContent('Spending vs budget');
+    expect(Array.from(table.querySelectorAll('thead th')).map((cell) => cell.textContent)).toEqual([
+      'Fiscal year', 'Electronic', 'Physical', 'Other', 'Total paid', 'Allocated',
+      'Paid as % of allocated', 'Purchases source', 'Allocation source',
+    ]);
+    expect(row(2024)).toHaveTextContent('0.00');
+    expect(row(2024)).toHaveTextContent('-10.00');
+    expect(row(2024)?.children[5]).toHaveTextContent('n/a');
+    expect(row(2024)?.children[6]).toHaveTextContent('n/a');
+    expect(row(2025)?.children[1]).toHaveTextContent('n/a');
+    expect(row(2025)?.children[5]).toHaveTextContent('0.00');
+    expect(row(2025)?.children[6]).toHaveTextContent('n/a');
+    expect(row(2027)?.children[5]).toHaveTextContent('-50.00');
+    expect(row(2027)?.children[6]).toHaveTextContent('n/a');
+    expect(row(2029)?.children[6]).toHaveTextContent('n/a');
+    expect(mixedSource?.children[4]).toHaveTextContent('100.00');
+    expect(mixedSource?.children[5]).toHaveTextContent('1,000,000.00');
+    expect(mixedSource?.children[6]).toHaveTextContent('0.0%');
+    expect(mixedSource?.children[7]).toHaveTextContent('Stored history');
+    expect(mixedSource?.children[8]).toHaveTextContent('FOLIO');
+
+    const chartWrapper = region.querySelector('.recharts-wrapper');
+    const lastDot = region.querySelector('.recharts-line-dots circle:last-child');
+    if (chartWrapper && lastDot) {
+      Object.defineProperties(chartWrapper, {
+        offsetWidth: { configurable: true, value: 800 },
+        offsetHeight: { configurable: true, value: 320 },
+      });
+      fireEvent.mouseMove(chartWrapper, {
+        clientX: Number(lastDot.getAttribute('cx')), clientY: 100,
+      });
+    }
+    expect(await within(region).findByText('Purchases source: Stored history')).toBeInTheDocument();
+    expect(region).toHaveTextContent('Electronic: 100.00');
+    expect(region).toHaveTextContent('Allocated: 1,000,000.00');
+    expect(region).toHaveTextContent('Allocation source: FOLIO');
+
+    const enlarge = within(region).getByRole('button', { name: 'Enlarge' });
+    await userEvent.click(enlarge);
+    const dialog = await screen.findByRole('dialog', { name: 'Spending vs budget' });
+    expect(dialog).toHaveTextContent('Hollow dot: stored history allocation');
+    expect(dialog).toHaveTextContent('Use the tooltip or table for small values.');
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(enlarge);
+  });
+
+  it('includes zero on the spending dollar axis when all values are positive', async () => {
+    const data: VisualizationData = {
+      ...figures,
+      purchasesByCategory: [],
+      budget: [
+        { fiscalYearEnd: 2026, allocated: 500, changePct: null, source: 'folio' },
+        { fiscalYearEnd: 2027, allocated: 1000, changePct: null, source: 'folio' },
+      ],
+    };
+    const { container } = render(<SpendingBudgetChart data={data} />);
+    await waitFor(() => expect(container.querySelectorAll('.recharts-line-dots circle')).toHaveLength(2));
+    const zeroY = Number(container.querySelector('.recharts-reference-line-line')?.getAttribute('y1'));
+    const firstAllocationY = Number(container.querySelector('.recharts-line-dots circle')?.getAttribute('cy'));
+    expect(firstAllocationY).toBeLessThan(zeroY);
+  });
+
+  it('renders negative purchase categories below the zero baseline', async () => {
+    const data: VisualizationData = {
+      ...figures,
+      purchasesByCategory: [{ fiscalYearEnd: 2026, electronic: 20, physical: 10, other: -50, total: -20,
+        electronicPct: -100, physicalPct: -50, otherPct: 250, source: 'folio' }],
+      budget: [{ fiscalYearEnd: 2026, allocated: 100, changePct: null, source: 'folio' }],
+    };
+    const { container } = render(<SpendingBudgetChart data={data} />);
+    await waitFor(() => expect(container.querySelector('.recharts-reference-line-line')).not.toBeNull());
+    const zeroY = Number(container.querySelector('.recharts-reference-line-line')?.getAttribute('y1'));
+    const negativeBar = container.querySelector('.recharts-rectangle[name="Other"]');
+    const negativeY = Number(negativeBar?.getAttribute('y'));
+    const negativeHeight = Number(negativeBar?.getAttribute('height'));
+    expect(negativeY).toBeGreaterThan(zeroY);
+    expect(negativeY + negativeHeight).toBeCloseTo(zeroY, 3);
   });
 
   it('shows one dollar-axis budget chart with the API change label on each bar', async () => {
