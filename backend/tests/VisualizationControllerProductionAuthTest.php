@@ -34,7 +34,7 @@ function visualizationRegisterGateCountService(&$requests)
 
 // Production regression guards: these cases are expected to pass before the dev-mode fix.
 visualizationCase('production: every visualization route returns 401 without a token', function () {
-    foreach (['options', 'index', 'gate-counts', 'history', 'history-upsert', 'history-delete'] as $action) {
+    foreach (['options', 'index', 'spending-pace', 'gate-counts', 'history', 'history-upsert', 'history-delete'] as $action) {
         list($f, $controller) = visualizationControllerFixture();
         $veaRequests = [];
         if ($action === 'gate-counts') {

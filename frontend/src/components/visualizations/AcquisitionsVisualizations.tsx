@@ -5,10 +5,13 @@ import { errorMessage } from '../../utils/errorMessage';
 import { PurchaseCharts } from './PurchaseCharts';
 import { BudgetCharts } from './BudgetCharts';
 import { SpendingBudgetChart } from './SpendingBudgetChart';
+import { SpendingPaceChart } from './SpendingPaceChart';
 import { HistoryDialog } from './HistoryDialog';
+import { useSpendingPace } from '../../hooks/useSpendingPace';
 
-export function AcquisitionsVisualizations() {
+export function AcquisitionsVisualizations({ active = true }: { active?: boolean }) {
   const state = useVisualizations();
+  const pace = useSpendingPace(state.unitId, active);
   const { isAdmin } = useAuth();
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyButtonRef = useRef<HTMLButtonElement>(null);
@@ -54,6 +57,7 @@ export function AcquisitionsVisualizations() {
       <div className="min-w-0 lg:col-span-2"><BudgetCharts data={data} /></div>
       <div className="min-w-0 lg:col-span-2"><SpendingBudgetChart data={data} /></div>
     </div>}
+    <div className="mt-6"><SpendingPaceChart data={pace.data} isPending={pace.isPending} error={pace.error} onRetry={pace.retry} /></div>
     {isAdmin && data && historyOpen && <HistoryDialog key={data.unit.code} unitCode={data.unit.code}
       currentYear={data.currentFiscalYearEnd} triggerRef={historyButtonRef} onClose={closeHistory} />}
   </>;

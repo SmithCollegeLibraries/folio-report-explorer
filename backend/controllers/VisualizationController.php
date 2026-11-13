@@ -11,6 +11,7 @@ use app\controllers\traits\PersistedAdminAccessTrait;
 use app\models\User;
 use app\services\DevIdentityProvider;
 use app\services\GateCountVisualizationService;
+use app\services\SpendingPaceService;
 use app\services\VisualizationDataService;
 use app\services\VisualizationHistoryService;
 
@@ -77,6 +78,20 @@ final class VisualizationController extends Controller
         }
     }
 
+    public function actionSpendingPace(): array
+    {
+        if (($denied = $this->requireApprovedUser()) !== null) return $denied;
+        $unitId = Yii::$app->request->get('acqUnitId', '');
+        if (!is_string($unitId) || preg_match('/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i', $unitId) !== 1) {
+            return $this->error(400, 'Choose a valid acquisitions unit id.');
+        }
+        try {
+            return $this->spendingPaceService()->get($unitId);
+        } catch (\InvalidArgumentException $error) {
+            return $this->error(400, $error->getMessage());
+        }
+    }
+
     public function actionGateCounts(): array
     {
         if (($denied = $this->requireApprovedUser()) !== null) return $denied;
@@ -130,6 +145,11 @@ final class VisualizationController extends Controller
     private function historyService(array $unitCodes): VisualizationHistoryService
     {
         return new VisualizationHistoryService(Yii::$app->db, Yii::$app->cache, $unitCodes);
+    }
+
+    private function spendingPaceService(): SpendingPaceService
+    {
+        return new SpendingPaceService(Yii::$app->folioDb, Yii::$app->db, Yii::$app->cache);
     }
 
     private function isPersistedApprovedUser(): bool
