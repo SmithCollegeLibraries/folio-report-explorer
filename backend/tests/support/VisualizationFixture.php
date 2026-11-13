@@ -115,8 +115,11 @@ final class VisualizationSqliteFolioDb
         $this->events[] = 'query';
         if ($this->failAt === count($this->queries)) throw new RuntimeException('synthetic query failure');
         // Translate expression spelling only; retain joins, filters, aggregation and bound values.
-        $sqlite = preg_replace('/::(?:date|timestamp|integer|int|numeric|decimal|text)\b/i', '', $sql);
-        $sqlite = preg_replace('/EXTRACT\s*\(\s*YEAR\s+FROM\s+([\w.]+)\s*\)/i', "CAST(strftime('%Y', $1) AS INTEGER)", $sqlite);
+        $sqlite = preg_replace("/\\s+AT TIME ZONE\\s+'[^']+'/i", '', $sql);
+        $sqlite = preg_replace('/::(?:date|timestamp|integer|int|numeric|decimal|text)\b/i', '', $sqlite);
+        $sqlite = preg_replace('/CAST\((:[A-Za-z][A-Za-z0-9_]*) AS date\)/i', '$1', $sqlite);
+        $sqlite = preg_replace('/EXTRACT\s*\(\s*YEAR\s+FROM\s+\(?([\w.]+)\)?\s*\)/i', "CAST(strftime('%Y', $1) AS INTEGER)", $sqlite);
+        $sqlite = preg_replace('/EXTRACT\s*\(\s*MONTH\s+FROM\s+\(?([\w.]+)\)?\s*\)/i', "CAST(strftime('%m', $1) AS INTEGER)", $sqlite);
         $sqlite = preg_replace('/\bCURRENT_DATE\b/i', "date('now')", $sqlite);
         $command = $this->db->createCommand($sqlite, $params);
         return $command->$method();
@@ -199,6 +202,7 @@ final class VisualizationFixture
             'finance.fund__t (id TEXT PRIMARY KEY, code TEXT, name TEXT)',
             'finance.fund__t__acq_unit_ids (id TEXT, acq_unit_ids TEXT)',
             'finance.budget__t (id TEXT PRIMARY KEY, fund_id TEXT, fiscal_year_id TEXT, allocated NUMERIC)',
+            'finance.transaction__t (id TEXT PRIMARY KEY, fiscal_year_id TEXT, from_fund_id TEXT, transaction_type TEXT, encumbrance__status TEXT, encumbrance__initial_amount_encumbered NUMERIC, encumbrance__amount_expended NUMERIC, encumbrance__amount_awaiting_payment NUMERIC)',
             'invoice.invoices__t (id TEXT PRIMARY KEY, fiscal_year_id TEXT, payment_date TEXT)',
             'invoice.invoice_lines__t__fund_distributions (id TEXT, invoice_id TEXT, po_line_id TEXT, invoice_line_status TEXT, fund_distributions__fund_id TEXT, fund_distributions__distribution_type TEXT, fund_distributions__value NUMERIC, total NUMERIC)',
             'inventory.material_type__t (id TEXT PRIMARY KEY, name TEXT)',
@@ -227,10 +231,10 @@ final class VisualizationFixture
     {
         $this->insert('finance.fiscal_year__t', ['id' => $code . $end, 'series' => $code . 'FY', 'name' => 'FY' . $end, 'period_start' => ($end - 1) . '-07-01', 'period_end' => $end . '-06-30']);
     }
-    public function payment($value, $type = 'amount', $total = 100, $material = 'Book', $fund = 'fund-s', $year = 2027, $status = 'Paid', $withPo = true, $physical = null, $series = 'SC')
+    public function payment($value, $type = 'amount', $total = 100, $material = 'Book', $fund = 'fund-s', $year = 2027, $status = 'Paid', $withPo = true, $physical = null, $series = 'SC', $paymentDate = '1999-01-01')
     {
         $id = 'payment-' . ++$this->nextPayment;
-        $this->insert('invoice.invoices__t', ['id' => $id, 'fiscal_year_id' => $series . $year, 'payment_date' => '1999-01-01']);
+        $this->insert('invoice.invoices__t', ['id' => $id, 'fiscal_year_id' => $series . $year, 'payment_date' => $paymentDate]);
         foreach ([$material, $physical] as $name) {
             if ($name !== null) $this->db->createCommand('INSERT OR IGNORE INTO inventory.material_type__t VALUES (:id, :name)', [':id' => $name, ':name' => $name])->execute();
         }

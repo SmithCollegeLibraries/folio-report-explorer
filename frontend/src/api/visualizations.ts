@@ -45,6 +45,25 @@ export interface VisualizationData {
   }[];
 }
 
+export interface SpendingPaceMonth {
+  fiscalMonth: number;
+  label: string;
+  currentCumulative: number | null;
+  previousCumulative: number | null;
+}
+
+export interface SpendingPaceData {
+  available: boolean;
+  reason: 'no_current_fy' | 'no_series' | 'no_funds' | null;
+  unit: VisualizationUnit;
+  currentFiscalYearEnd: number | null;
+  previousFiscalYearEnd: number | null;
+  asOf: string;
+  months: SpendingPaceMonth[];
+  openEncumbrances: number | null;
+  allocated: { amount: number | null; source: 'history' | 'folio' | null; fiscalYearEnd: number | null };
+}
+
 export interface VisualizationHistoryInput {
   acqUnitCode: string;
   kind: 'purchases' | 'budget';
@@ -68,6 +87,11 @@ export async function fetchVisualizationOptions(): Promise<VisualizationOptions>
 
 export async function fetchVisualizations(filters: VisualizationFilters): Promise<VisualizationData> {
   const { data } = await api.get('/visualizations', { params: filters });
+  return data;
+}
+
+export async function fetchSpendingPace(acqUnitId: string): Promise<SpendingPaceData> {
+  const { data } = await api.get('/visualizations/spending-pace', { params: { acqUnitId } });
   return data;
 }
 

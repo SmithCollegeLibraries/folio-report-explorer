@@ -9,6 +9,7 @@ visualizationCase('visualization API registers every documented verb and route',
     foreach ([
         'GET visualizations/options' => 'visualization/options',
         'GET visualizations' => 'visualization/index',
+        'GET visualizations/spending-pace' => 'visualization/spending-pace',
         'GET visualizations/gate-counts' => 'visualization/gate-counts',
         'GET visualizations/history' => 'visualization/history',
         'PUT visualizations/history' => 'visualization/history-upsert',
@@ -19,12 +20,12 @@ visualizationCase('visualization API registers every documented verb and route',
 });
 
 visualizationCase('access rejects guest and persisted-unapproved users on every route including warm caches', function () {
-    foreach (['options', 'index', 'gate-counts', 'history', 'history-upsert', 'history-delete'] as $action) {
+    foreach (['options', 'index', 'spending-pace', 'gate-counts', 'history', 'history-upsert', 'history-delete'] as $action) {
         foreach (['guest', 'unapproved'] as $identity) {
             foreach (['cold', 'warm'] as $temperature) {
                 list($f, $controller) = visualizationControllerFixture();
                 if ($temperature === 'warm') {
-                    list($warmStatus) = visualizationInvoke($controller, 'index');
+                    list($warmStatus) = visualizationInvoke($controller, $action === 'spending-pace' ? 'spending-pace' : 'index');
                     visualizationSame(200, $warmStatus, 'Warm the actual chart cache through the approved API.');
                     visualizationAssert($f->cache->writes !== [], 'The warm-cache access test needs actual cached chart results.');
                 }
@@ -59,7 +60,7 @@ visualizationCase('admin-only history read/write/delete enforce the persisted-ad
 
 visualizationCase('approved plain user can read charts/options but cannot read the historical editor', function () {
     list($f, $controller) = visualizationControllerFixture('user');
-    foreach (['Options', 'Index'] as $action) {
+    foreach (['Options', 'Index', 'SpendingPace'] as $action) {
         list($status, $body) = visualizationInvoke($controller, $action, [], true);
         visualizationSame(200, $status, 'Approved users can use ' . $action . '.');
         visualizationAssert(is_array($body), 'Read routes return a JSON object.');
@@ -104,6 +105,22 @@ visualizationCase('API rejects malformed unit UUIDs before executing a FOLIO que
         visualizationSame(400, $status, 'A unit id must be a UUID string.');
         visualizationSame('Choose a valid acquisitions unit id.', $body['error'], 'Malformed IDs receive the UUID validation error.');
         visualizationSame([], $f->folio->queries, 'Malformed ids must be rejected before PostgreSQL sees them.');
+    }
+});
+
+visualizationCase('spending pace API rejects missing, malformed, array-valued, and unknown unit IDs', function () {
+    foreach ([
+        [[], 'Choose a valid acquisitions unit id.', 0],
+        [['acqUnitId' => 'not-a-uuid'], 'Choose a valid acquisitions unit id.', 0],
+        [['acqUnitId' => ['123e4567-e89b-12d3-a456-426614174000']], 'Choose a valid acquisitions unit id.', 0],
+        [['acqUnitId' => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'], 'Unknown acquisitions unit.', 1],
+    ] as $case) {
+        list($f, $controller) = visualizationControllerFixture();
+        Yii::$app->request->setQueryParams($case[0]);
+        list($status, $body) = visualizationInvoke($controller, 'spending-pace');
+        visualizationSame(400, $status, 'Invalid pace unit IDs return HTTP 400.');
+        visualizationSame($case[1], $body['error'], 'Return the expected fixed unit validation message.');
+        visualizationSame($case[2], count($f->folio->queries), 'Only an unknown but well-formed UUID reaches the context query.');
     }
 });
 

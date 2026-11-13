@@ -6,7 +6,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, useLocation, useNavigationType } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { VisualizationData, VisualizationHistoryRow, VisualizationOptions } from '../api/visualizations';
+import type { SpendingPaceData, VisualizationData, VisualizationHistoryRow, VisualizationOptions } from '../api/visualizations';
 import { PurchaseCharts } from '../components/visualizations/PurchaseCharts';
 import { SpendingBudgetChart } from '../components/visualizations/SpendingBudgetChart';
 import Visualizations from './Visualizations';
@@ -14,6 +14,7 @@ import Visualizations from './Visualizations';
 const api = vi.hoisted(() => ({
   fetchVisualizationOptions: vi.fn(),
   fetchVisualizations: vi.fn(),
+  fetchSpendingPace: vi.fn(),
   fetchVisualizationHistory: vi.fn(),
   saveVisualizationHistory: vi.fn(),
   deleteVisualizationHistory: vi.fn(),
@@ -76,6 +77,17 @@ const figures: VisualizationData = {
     { fiscalYearEnd: 2026, allocated: 10000, changePct: -20, source: 'history' },
     { fiscalYearEnd: 2027, allocated: 11000, changePct: 10, source: 'folio' },
   ],
+};
+const spendingPace: SpendingPaceData = {
+  available: true, reason: null, unit: options.units[0], currentFiscalYearEnd: 2027,
+  previousFiscalYearEnd: 2026, asOf: '2026-11-13',
+  months: Array.from({ length: 12 }, (_, index) => ({
+    fiscalMonth: index + 1, label: ['Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'][index]
+      + (index === 4 ? ' (to date)' : ''),
+    currentCumulative: index < 5 ? 10 * (index + 1) : null,
+    previousCumulative: 20 * (index + 1),
+  })),
+  openEncumbrances: 40, allocated: { amount: 1000, source: 'folio', fiscalYearEnd: 2027 },
 };
 const historyRow: VisualizationHistoryRow = {
   id: 21, acqUnitCode: 'SC', kind: 'purchases', fiscalYearEnd: 2026,
@@ -150,6 +162,12 @@ function pendingFigures() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function pendingSpendingPace() {
+  let resolve!: (data: SpendingPaceData) => void;
+  const promise = new Promise<SpendingPaceData>((resolvePromise) => { resolve = resolvePromise; });
+  return { promise, resolve };
 }
 
 async function beginSelectionChange(selection: 'material year' | 'range') {
@@ -268,6 +286,7 @@ beforeEach(() => {
   auth.isAdmin = false;
   api.fetchVisualizationOptions.mockResolvedValue(options);
   api.fetchVisualizations.mockResolvedValue(figures);
+  api.fetchSpendingPace.mockResolvedValue(spendingPace);
   api.fetchVisualizationHistory.mockResolvedValue([historyRow]);
   api.saveVisualizationHistory.mockResolvedValue(historyRow);
   api.deleteVisualizationHistory.mockResolvedValue(undefined);
@@ -941,6 +960,7 @@ describe('Visualizations RPT-037 tabs and top days', () => {
     expect(gateCountsApi.fetchGateCounts).toHaveBeenCalledWith({ years: 3 });
     expect(api.fetchVisualizationOptions).not.toHaveBeenCalled();
     expect(api.fetchVisualizations).not.toHaveBeenCalled();
+    expect(api.fetchSpendingPace).not.toHaveBeenCalled();
 
     await userEvent.selectOptions(within(gateSection).getByLabelText('Gate count years'), '2');
     await waitFor(() => expect(gateCountsApi.fetchGateCounts).toHaveBeenLastCalledWith({ years: 2 }));
@@ -999,6 +1019,39 @@ afterEach(() => {
   window.removeEventListener('error', suppressStubError);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe('Visualizations RPT-019A2 spending pace', () => {
+  it('loads independently, stays idle on Gate counts, and never shows another unit while switching', async () => {
+    const acRequest = pendingSpendingPace();
+    api.fetchVisualizations.mockRejectedValue(new Error('Synthetic annual request failure'));
+    api.fetchSpendingPace.mockImplementation((unitId: string) => unitId === 'unit-ac'
+      ? acRequest.promise : Promise.resolve(spendingPace));
+    renderPage();
+
+    const card = await screen.findByRole('region', { name: 'Spending pace this year' });
+    expect(await within(card).findByText(/Paid so far/)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Synthetic annual request failure');
+    expect(api.fetchSpendingPace).toHaveBeenCalledWith('unit-sc');
+    await waitFor(() => expect(card.querySelector('svg.recharts-surface')).toBeInTheDocument());
+    expect(card.querySelector('[aria-label="Spending line labels"] line[stroke-dasharray="6 4"]')).toBeInTheDocument();
+    expect(card.querySelectorAll('[aria-label="Spending line labels"] circle').length).toBe(2);
+    const paceCalls = api.fetchSpendingPace.mock.calls.length;
+
+    await selectTab('Gate counts');
+    expect(await screen.findByRole('region', { name: 'Gate counts' })).toBeInTheDocument();
+    expect(api.fetchSpendingPace).toHaveBeenCalledTimes(paceCalls);
+    await selectTab('Acquisitions');
+    expect(api.fetchSpendingPace).toHaveBeenCalledTimes(paceCalls);
+
+    await userEvent.selectOptions(screen.getByLabelText('Acquisitions unit'), 'unit-ac');
+    await waitFor(() => expect(api.fetchSpendingPace).toHaveBeenLastCalledWith('unit-ac'));
+    expect(within(card).getByRole('status')).toHaveTextContent('Loading spending pace…');
+    expect(within(card).queryByText(/Paid so far/)).not.toBeInTheDocument();
+    const acPace = { ...spendingPace, unit: options.units[1], allocated: { amount: 77, source: 'history' as const, fiscalYearEnd: 2027 } };
+    await act(async () => { acRequest.resolve(acPace); await acRequest.promise; });
+    expect(await within(card).findByText(/Allocated \$77\.00 \(history\)/)).toBeInTheDocument();
+  });
 });
 
 describe('Visualizations RPT-018 behavior', () => {
@@ -1217,12 +1270,14 @@ describe('Visualizations RPT-018 behavior', () => {
       await userEvent.click(within(historyEditor()).getByRole('button', { name: /add/i }));
       await fillHistoryForm('2028', '1000', 'Added figure');
       const callsBeforeSave = api.fetchVisualizations.mock.calls.length;
+      const paceCallsBeforeSave = api.fetchSpendingPace.mock.calls.length;
       await userEvent.click(within(historyEditor()).getByRole('button', { name: /save/i }));
       await waitFor(() => expect(api.saveVisualizationHistory).toHaveBeenCalledWith({
         acqUnitCode: 'SC', kind: 'purchases', fiscalYearEnd: 2028, totalAmount: 1000,
         electronicAmount: 600, physicalAmount: 300, note: 'Added figure',
       }));
       await waitFor(() => expect(api.fetchVisualizations.mock.calls.length).toBeGreaterThan(callsBeforeSave));
+      await waitFor(() => expect(api.fetchSpendingPace.mock.calls.length).toBeGreaterThan(paceCallsBeforeSave));
       expect(await within(historyEditor()).findByText('Added figure')).toBeInTheDocument();
     }
     cleanup();

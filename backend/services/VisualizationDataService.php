@@ -17,18 +17,16 @@ final class VisualizationDataService
         'Thesis/Dissertation', 'Videocassette', 'Video Game',
     ];
     private const COLLECTION_SUPPORT_FUNDS = ['SCECS', 'SCPCS', 'SCILL'];
-    private $folioDb;
+    private $folioQueries;
     private $historyDb;
     private $cache;
-    private $validator;
     private $today;
 
     public function __construct($folioDb, $historyDb, $cache, $validator = null, ?string $today = null)
     {
-        $this->folioDb = $folioDb;
+        $this->folioQueries = new VisualizationFolioQueryService($folioDb, $validator);
         $this->historyDb = $historyDb;
         $this->cache = $cache;
-        $this->validator = $validator;
         $this->today = $today ?: date('Y-m-d');
     }
 
@@ -36,7 +34,7 @@ final class VisualizationDataService
     {
         $sql = 'SELECT id, TRIM(name) AS "code", TRIM(name) AS "name" FROM orders.acquisitions_unit__t'
             . ' WHERE NOT is_deleted AND :activeOnly IS TRUE ORDER BY TRIM(name)';
-        $rows = $this->readFolioQueries([[$sql, [':activeOnly' => true]]]);
+        $rows = $this->folioQueries->read([[$sql, [':activeOnly' => true]]]);
         $units = [];
         foreach ($rows[0] as $row) $units[] = ['id' => (string)$row['id'], 'code' => trim((string)$row['code']), 'name' => trim((string)$row['name'])];
         return ['units' => $units, 'years' => self::YEARS];
@@ -57,7 +55,7 @@ final class VisualizationDataService
         $cached = $this->cache->get($key);
         if (is_array($cached)) return $cached;
 
-        $raw = $this->readFolioQueries([[$this->contextSql(), [':unitId' => $acqUnitId]]]);
+        $raw = $this->folioQueries->read([[VisualizationFolioQueryService::contextSql(), [':unitId' => $acqUnitId]]]);
         if (empty($raw[0])) throw new \InvalidArgumentException('Unknown acquisitions unit.');
         $context = $this->contextFromRows($raw[0]);
         $lastYear = $context['currentFiscalYearEnd'];
@@ -68,7 +66,7 @@ final class VisualizationDataService
             [$this->materialsSql(), [':unitId' => $acqUnitId]],
             [$this->budgetSql(), [':unitId' => $acqUnitId, ':firstYear' => $baselineYear, ':lastYear' => $lastYear]],
         ];
-        $raw = array_merge($raw, $this->readFolioQueries($queries));
+        $raw = array_merge($raw, $this->folioQueries->read($queries));
         $history = (new VisualizationHistoryService($this->historyDb, $this->cache, []))->list($context['code']);
         $materialRows = [];
         $materialYears = [];
@@ -127,24 +125,13 @@ final class VisualizationDataService
         return 'visualizations:rpt-029-v2:' . hash('sha256', serialize([$acqUnitId, $years, $materialFiscalYearEnd, $historyVersion]));
     }
 
-    private function contextSql(): string
-    {
-        return <<<'SQL'
-SELECT au.id AS "id", TRIM(au.name) AS "code", TRIM(au.name) AS "name", fy.id AS "fiscalYearId",
-       fy.period_start::date AS "periodStart", fy.period_end::date AS "periodEnd", EXTRACT(YEAR FROM fy.period_end::date)::int AS "fiscalYearEnd"
-FROM orders.acquisitions_unit__t au LEFT JOIN finance.fiscal_year__t fy
-  ON fy.series = TRIM(au.name) || 'FY' AND fy.period_end IS NOT NULL
-WHERE au.id = :unitId AND NOT au.is_deleted ORDER BY fy.period_end
-SQL;
-    }
-
     private function paymentCtes(bool $withRange): string
     {
         $range = $withRange ? ' AND EXTRACT(YEAR FROM fy.period_end::date)::int BETWEEN :firstYear AND :lastYear' : '';
         return "WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND NOT is_deleted),\n"
             . "selected_years AS (SELECT fy.id, EXTRACT(YEAR FROM fy.period_end::date)::int AS fiscal_year_end FROM finance.fiscal_year__t fy JOIN selected_unit au ON fy.series = au.unit_code || 'FY' WHERE fy.period_end IS NOT NULL{$range}),\n"
-            . "unit_funds AS (SELECT DISTINCT fau.id AS fund_id, f.code AS fund_code FROM finance.fund__t__acq_unit_ids fau JOIN finance.fund__t f ON f.id = fau.id JOIN selected_unit au ON au.id = fau.acq_unit_ids),\n"
-            . "paid_lines AS (SELECT sy.fiscal_year_end, COALESCE(CASE WHEN LOWER(COALESCE(fd.fund_distributions__distribution_type, '')) = 'amount' THEN fd.fund_distributions__value ELSE COALESCE(fd.total, 0) * COALESCE(fd.fund_distributions__value, 0) / 100.0 END, 0) AS amount, COALESCE(ermt.name, pmt.name, 'No material type') AS material_type, COALESCE(uf.fund_code, '') AS fund_code\n"
+            . VisualizationFolioQueryService::unitFundsCte() . ",\n"
+            . "paid_lines AS (SELECT sy.fiscal_year_end, " . VisualizationFolioQueryService::paymentAmountExpression('fd') . " AS amount, COALESCE(ermt.name, pmt.name, 'No material type') AS material_type, COALESCE(uf.fund_code, '') AS fund_code\n"
             . "FROM invoice.invoice_lines__t__fund_distributions fd JOIN invoice.invoices__t inv ON inv.id = fd.invoice_id JOIN selected_years sy ON sy.id = inv.fiscal_year_id JOIN unit_funds uf ON uf.fund_id = fd.fund_distributions__fund_id\n"
             . "LEFT JOIN orders.po_line__t pol ON pol.id = fd.po_line_id LEFT JOIN inventory.material_type__t ermt ON ermt.id = pol.eresource__material_type LEFT JOIN inventory.material_type__t pmt ON pmt.id = pol.physical__material_type WHERE fd.invoice_line_status = 'Paid')\n";
     }
@@ -170,43 +157,14 @@ SQL;
 
     private function budgetSql(): string
     {
-        return <<<'SQL'
-WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND NOT is_deleted),
-selected_years AS (SELECT fy.id, EXTRACT(YEAR FROM fy.period_end::date)::int AS fiscal_year_end FROM finance.fiscal_year__t fy
- JOIN selected_unit au ON fy.series = au.unit_code || 'FY' WHERE fy.period_end IS NOT NULL
- AND EXTRACT(YEAR FROM fy.period_end::date)::int BETWEEN :firstYear AND :lastYear),
-unit_funds AS (SELECT DISTINCT fau.id AS fund_id FROM finance.fund__t__acq_unit_ids fau JOIN finance.fund__t f ON f.id = fau.id
- JOIN selected_unit au ON au.id = fau.acq_unit_ids)
-SELECT sy.fiscal_year_end AS "fiscalYearEnd", ROUND(SUM(COALESCE(b.allocated, 0)), 2) AS allocated FROM finance.budget__t b
-JOIN unit_funds uf ON uf.fund_id = b.fund_id JOIN selected_years sy ON sy.id = b.fiscal_year_id
-GROUP BY sy.fiscal_year_end ORDER BY sy.fiscal_year_end
-SQL;
-    }
-
-    private function readFolioQueries(array $queries): array
-    {
-        $transaction = $this->folioDb->beginTransaction();
-        try {
-            $this->folioDb->createCommand('SET TRANSACTION READ ONLY')->execute();
-            $this->folioDb->createCommand("SET LOCAL statement_timeout = '30s'")->execute();
-            $results = [];
-            foreach ($queries as $query) {
-                list($sql, $params) = $query;
-                if ($this->validator !== null) {
-                    $this->validator->validateSafety($sql);
-                    $this->validator->validateTablePolicy($sql);
-                } else {
-                    SqlBuilderService::validateSafety($sql);
-                    SqlBuilderService::validateTablePolicy($sql);
-                }
-                $results[] = $this->folioDb->createCommand($sql, $params)->queryAll();
-            }
-            $transaction->commit();
-            return $results;
-        } catch (\Throwable $error) {
-            if ($transaction->getIsActive()) $transaction->rollBack();
-            throw $error;
-        }
+        return "WITH selected_unit AS (SELECT id, TRIM(name) AS unit_code FROM orders.acquisitions_unit__t WHERE id = :unitId AND NOT is_deleted),\n"
+            . "selected_years AS (SELECT fy.id, EXTRACT(YEAR FROM fy.period_end::date)::int AS fiscal_year_end FROM finance.fiscal_year__t fy\n"
+            . " JOIN selected_unit au ON fy.series = au.unit_code || 'FY' WHERE fy.period_end IS NOT NULL\n"
+            . " AND EXTRACT(YEAR FROM fy.period_end::date)::int BETWEEN :firstYear AND :lastYear),\n"
+            . VisualizationFolioQueryService::unitFundsCte() . "\n"
+            . 'SELECT sy.fiscal_year_end AS "fiscalYearEnd", ROUND(SUM(COALESCE(b.allocated, 0)), 2) AS allocated FROM finance.budget__t b' . "\n"
+            . 'JOIN unit_funds uf ON uf.fund_id = b.fund_id JOIN selected_years sy ON sy.id = b.fiscal_year_id' . "\n"
+            . 'GROUP BY sy.fiscal_year_end ORDER BY sy.fiscal_year_end';
     }
 
     private function contextFromRows(array $rows): array

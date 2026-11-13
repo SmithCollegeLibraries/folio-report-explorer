@@ -15,6 +15,10 @@ visualizationCase('dev mode allows every visualization route without a bearer to
     visualizationSame(200, $status, 'GET visualizations succeeds without a token in dev.');
     visualizationAssert(isset($chart['purchasesByCategory']), 'The chart route returns visualization data.');
 
+    list($status, $pace) = visualizationInvoke($controller, 'spending-pace');
+    visualizationSame(200, $status, 'GET visualizations/spending-pace succeeds without a token in dev.');
+    visualizationAssert(array_key_exists('available', $pace), 'The pace route returns its availability state.');
+
     list($status, $history) = visualizationInvoke($controller, 'history');
     visualizationSame(200, $status, 'GET visualizations/history succeeds without a token in dev.');
     visualizationSame([], $history, 'The synthetic unit starts with no historical rows.');
