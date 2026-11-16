@@ -4,6 +4,8 @@ namespace app\services;
 
 use Yii;
 
+require_once __DIR__ . '/AcrlInstitutionMembershipService.php';
+
 /** Persists question-level assignments for published ACRL surveys. */
 class AcrlQuestionAssignmentRepository
 {
@@ -56,6 +58,9 @@ class AcrlQuestionAssignmentRepository
     /** Add one assignment inside the caller's locked-year transaction. */
     public function addQuestionAssignment(int $year, string $sheet, string $questionId, string $part, int $userId, ?int $assignedBy, string $institutionCode): void
     {
+        if (!(new AcrlInstitutionMembershipService($this->db))->lockAssignmentEligibility($userId, $institutionCode)) {
+            throw new \InvalidArgumentException('Only institution members and app administrators can be assigned.');
+        }
         $exists = $this->db->createCommand(
             'SELECT COUNT(*) FROM acrl_question_assignments'
                 . ' WHERE institution_code = :institution AND survey_year = :year AND sheet = :sheet AND question_id = :questionId'
@@ -92,6 +97,11 @@ class AcrlQuestionAssignmentRepository
             if ($validateBeforeReplace !== null) {
                 $validateBeforeReplace();
             }
+            foreach ($userIds as $userId) {
+                if (!(new AcrlInstitutionMembershipService($this->db))->lockAssignmentEligibility((int)$userId, $institutionCode)) {
+                    throw new \InvalidArgumentException('Only institution members and app administrators can be assigned.');
+                }
+            }
             $this->db->createCommand()->delete('acrl_question_assignments', [
                 'institution_code' => $institutionCode,
                 'survey_year' => $year,
@@ -115,17 +125,23 @@ class AcrlQuestionAssignmentRepository
         });
     }
 
-    public function insertQuestionAssignments(array $rows, string $institutionCode): void
+    public function insertQuestionAssignments(array $rows, string $institutionCode): array
     {
         if (empty($rows)) {
-            return;
+            return [];
         }
         $year = (int)$rows[0]['survey_year'];
-        $this->withLockedYear($year, function () use ($rows, $institutionCode) {
+        return $this->withLockedYear($year, function () use ($rows, $institutionCode) {
+            $skipped = [];
             foreach ($rows as $row) {
+                if (!(new AcrlInstitutionMembershipService($this->db))->lockAssignmentEligibility((int)$row['user_id'], $institutionCode)) {
+                    $skipped[] = (int)$row['user_id'];
+                    continue;
+                }
                 $row['institution_code'] = $institutionCode;
                 $this->db->createCommand()->insert('acrl_question_assignments', $row)->execute();
             }
+            return array_values(array_unique($skipped));
         });
     }
 

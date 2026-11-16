@@ -13,6 +13,7 @@ use app\services\AcrlInviteConflictException;
 use app\services\AcrlInviteMailer;
 use app\services\AcrlInviteService;
 use app\services\AcrlQuestionAssignmentRepository;
+use app\services\AcrlInstitutionMembershipService;
 use app\services\AcrlSectionAssignmentRepository;
 
 require_once __DIR__ . '/traits/AcrlApiBehaviorTrait.php';
@@ -43,9 +44,6 @@ class AcrlInviteController extends Controller
                 'rules' => [[
                     'allow' => true,
                     'roles' => ['@'],
-                    'matchCallback' => function ($rule, $action) {
-                        return $this->isPersistedAdministrator();
-                    },
                 ]],
             ];
         }
@@ -60,16 +58,15 @@ class AcrlInviteController extends Controller
 
     public function actionCreate($year)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         $email = isset($body['email']) && is_string($body['email']) ? $body['email'] : '';
         $targets = isset($body['targets']) && is_array($body['targets']) ? $body['targets'] : [];
         try {
             $service = $this->service();
-            $email = $service->validateCreateBasics($email, $targets, Yii::$app->user->identity);
+            $email = $service->validateCreateBasics($email, $targets, Yii::$app->user->identity, $institution);
             $hostInfo = Yii::$app->request->hostInfo;
             if (!is_string($hostInfo) || $hostInfo === '') {
                 throw new \InvalidArgumentException('Request host is invalid.');
@@ -92,10 +89,9 @@ class AcrlInviteController extends Controller
 
     public function actionList($year)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         try {
             return $this->withAcrlInstitution($this->service()->listInvites((int)$year, $institution), $institution);
         } catch (\DomainException $exception) {
@@ -107,11 +103,11 @@ class AcrlInviteController extends Controller
 
     public function actionResend($id)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
+        $institution = $this->idActionInstitution((int)$id);
+        if ($institution === null) return ['error' => 'The invite was not found.'];
         try {
-            return $this->withAcrlInstitution($this->service()->resendInvite((int)$id, Yii::$app->user->identity), 'SC');
+            return $this->withAcrlInstitution($this->service()->resendInvite((int)$id, Yii::$app->user->identity), $institution);
         } catch (AcrlInviteConflictException $exception) {
             return $this->errorResponse(409, $exception->getMessage());
         } catch (\DomainException $exception) {
@@ -123,11 +119,11 @@ class AcrlInviteController extends Controller
 
     public function actionRevoke($id)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
+        $institution = $this->idActionInstitution((int)$id);
+        if ($institution === null) return ['error' => 'The invite was not found.'];
         try {
-            return $this->withAcrlInstitution($this->service()->revokeInvite((int)$id, Yii::$app->user->identity), 'SC');
+            return $this->withAcrlInstitution($this->service()->revokeInvite((int)$id, Yii::$app->user->identity), $institution);
         } catch (AcrlInviteConflictException $exception) {
             return $this->errorResponse(409, $exception->getMessage());
         } catch (\DomainException $exception) {
@@ -146,6 +142,23 @@ class AcrlInviteController extends Controller
             new AcrlQuestionAssignmentRepository($db),
             new AcrlInviteMailer()
         );
+    }
+
+    private function idActionInstitution(int $id): ?string
+    {
+        $memberships = new AcrlInstitutionMembershipService(Yii::$app->db);
+        $userId = (int)Yii::$app->user->id;
+        if (!$memberships->canManageAny($userId)) {
+            Yii::$app->response->statusCode = 404;
+            return null;
+        }
+        $institution = $this->service()->institutionForInvite($id);
+        if (!in_array($institution, AcrlInstitutionMembershipService::ENABLED_INSTITUTIONS, true)
+            || !$memberships->canManage($userId, (string)$institution)) {
+            Yii::$app->response->statusCode = 404;
+            return null;
+        }
+        return $institution;
     }
 
     private function errorResponse(int $status, string $message): array

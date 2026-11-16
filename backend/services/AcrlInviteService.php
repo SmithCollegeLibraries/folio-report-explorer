@@ -7,6 +7,7 @@ use Yii;
 
 require_once __DIR__ . '/AcrlInviteRequestService.php';
 require_once __DIR__ . '/AcrlInvitePresentationService.php';
+require_once __DIR__ . '/AcrlInstitutionMembershipService.php';
 
 /** Persists, sends, lists, and accepts ACRL invitations. */
 class AcrlInviteService
@@ -41,7 +42,7 @@ class AcrlInviteService
     public function createInvite(int $year, string $email, array $targets, User $admin, string $linkOrigin, string $institutionCode)
     {
         $this->requireSmithInstitution($institutionCode);
-        $email = $this->validateCreateBasics($email, $targets, $admin);
+        $email = $this->validateCreateBasics($email, $targets, $admin, $institutionCode);
         $inviteId = $this->transactionWithYearLock($year, function () use ($year, $email, $targets, $admin, $linkOrigin, $institutionCode) {
             if (!$this->sectionAssignments->isPublishedYear($year)) {
                 throw new \InvalidArgumentException('The survey year must be published before inviting someone.');
@@ -78,9 +79,9 @@ class AcrlInviteService
         return $this->sendAndReturn((int)$inviteId);
     }
 
-    public function validateCreateBasics(string $email, array $targets, User $admin): string
+    public function validateCreateBasics(string $email, array $targets, User $admin, string $institutionCode = 'SC'): string
     {
-        return $this->requests->validateBasics($email, $targets, $admin);
+        return $this->requests->validateBasics($email, $targets, $admin, $institutionCode);
     }
 
     public function listInvites(int $year, string $institutionCode): array
@@ -110,11 +111,16 @@ class AcrlInviteService
         return ['invite' => $this->presenter->loadFormattedInvite($inviteId)];
     }
 
+    public function institutionForInvite(int $inviteId): ?string
+    {
+        $institution = $this->db->createCommand('SELECT institution_code FROM acrl_invites WHERE id = :id', [':id' => $inviteId])->queryScalar();
+        return $institution === false || $institution === null ? null : (string)$institution;
+    }
+
     public function acceptOnSignIn(User $user, ?string $eppn, ?string $uid): bool
     {
         $eppn = strtolower(trim((string)$eppn));
-        $uid = strtolower(trim((string)$uid));
-        if ($eppn === '' && $uid === '') {
+        if ($eppn === '') {
             return false;
         }
         $candidates = $this->db->createCommand(
@@ -122,7 +128,7 @@ class AcrlInviteService
         )->queryAll();
         $matched = [];
         foreach ($candidates as $candidate) {
-            if ($this->matchesSignIn((string)$candidate['email'], $eppn, $uid)) {
+            if ($this->matchesSignIn((string)$candidate['email'], $eppn)) {
                 $matched[(int)$candidate['id']] = $candidate;
             }
         }
@@ -133,17 +139,17 @@ class AcrlInviteService
         $years = array_values(array_unique(array_map(function ($row) { return (int)$row['survey_year']; }, $matched)));
         sort($years, SORT_NUMERIC);
 
-        return $this->inTransaction(function () use ($inviteIds, $years, $matched, $user, $eppn, $uid) {
+        return $this->inTransaction(function () use ($inviteIds, $years, $matched, $user, $eppn) {
             $yearRows = $this->lockYears($years);
             $published = [];
             foreach ($yearRows as $yearRow) {
                 $published[(int)$yearRow['survey_year']] = $yearRow['status'] === 'published';
             }
             $rows = $this->lockInvites($inviteIds);
-            $usableCount = 0;
+            $toAccept = [];
             foreach ($rows as $invite) {
                 $year = (int)$invite['survey_year'];
-                if (!$this->matchesSignIn((string)$invite['email'], $eppn, $uid)
+                if (!$this->matchesSignIn((string)$invite['email'], $eppn)
                     || $invite['status'] !== 'pending' || strtotime((string)$invite['expires_at']) <= time()) {
                     continue;
                 }
@@ -160,8 +166,25 @@ class AcrlInviteService
                 if (empty($usable)) {
                     continue;
                 }
+                $toAccept[] = ['invite' => $invite, 'targets' => $usable];
+            }
+            if (empty($toAccept)) return false;
+            $approval = $this->db->createCommand(
+                'SELECT is_approved FROM users WHERE id = :id' . ($this->db->driverName === 'sqlite' ? '' : ' FOR UPDATE'),
+                [':id' => (int)$user->id]
+            )->queryScalar();
+            if ($approval === false || $approval === null) return false;
+            if (!(int)$approval) {
+                $user->is_approved = 1;
+                if (!$user->save(false)) throw new \RuntimeException('Could not save invited user approval.');
+            }
+            foreach ($toAccept as $item) {
+                $invite = $item['invite'];
+                $year = (int)$invite['survey_year'];
+                $institution = (string)$invite['institution_code'];
+                $this->grantInviteMembership((int)$user->id, $institution);
                 $assignedBy = $invite['invited_by'] === null ? null : (int)$invite['invited_by'];
-                foreach ($usable as $target) {
+                foreach ($item['targets'] as $target) {
                     if ($target['kind'] === 'section') {
                         $this->sectionAssignments->addSectionAssignment($year, $target['section'], (int)$user->id, $assignedBy, (string)$invite['institution_code']);
                     } else {
@@ -174,16 +197,6 @@ class AcrlInviteService
                     'status' => 'accepted', 'accepted_user_id' => (int)$user->id,
                     'accepted_at' => $this->now(),
                 ], ['id' => (int)$invite['id'], 'status' => 'pending'])->execute();
-                $usableCount++;
-            }
-            if ($usableCount === 0) {
-                return false;
-            }
-            if (!(int)$user->is_approved) {
-                $user->is_approved = 1;
-                if (!$user->save(false)) {
-                    throw new \RuntimeException('Could not save invited user approval.');
-                }
             }
             return true;
         });
@@ -209,7 +222,7 @@ class AcrlInviteService
                 $this->forUpdate('SELECT id, institution_code, email, survey_year, invited_by, link_origin, status, send_count, created_at, expires_at, last_sent_at, accepted_user_id, accepted_at, revoked_at FROM acrl_invites WHERE id = :id'),
                 [':id' => $inviteId]
             )->queryOne();
-            if ($row && (string)$row['institution_code'] !== 'SC') {
+            if ($row && !in_array((string)$row['institution_code'], AcrlInstitutionMembershipService::ENABLED_INSTITUTIONS, true)) {
                 throw new \DomainException('The invite was not found.');
             }
             if (!$row || $row['status'] !== 'pending' || strtotime((string)$row['expires_at']) <= time()) {
@@ -259,24 +272,32 @@ class AcrlInviteService
         ];
     }
 
+    private function grantInviteMembership(int $userId, string $institution): void
+    {
+        if ($this->db->driverName === 'sqlite') {
+            $sql = "INSERT INTO acrl_institution_members (user_id, institution_code, role, granted_by, granted_at)"
+                . " SELECT :user, :institution, 'member', NULL, :grantedAt WHERE NOT EXISTS"
+                . ' (SELECT 1 FROM acrl_institution_members WHERE user_id = :user AND institution_code = :institution)';
+        } else {
+            $sql = "INSERT IGNORE INTO acrl_institution_members (user_id, institution_code, role, granted_by, granted_at)"
+                . " VALUES (:user, :institution, 'member', NULL, :grantedAt)";
+        }
+        $this->db->createCommand($sql, [
+            ':user' => $userId, ':institution' => $institution, ':grantedAt' => $this->now(),
+        ])->execute();
+    }
+
     private function requireSmithInstitution(string $institutionCode): void
     {
-        if ($institutionCode !== 'SC') {
+        if (!in_array($institutionCode, AcrlInstitutionMembershipService::ENABLED_INSTITUTIONS, true)) {
             throw new \DomainException('institution_not_enabled', 403);
         }
     }
 
-    private function matchesSignIn(string $inviteEmail, string $eppn, string $uid): bool
+    private function matchesSignIn(string $inviteEmail, string $eppn): bool
     {
         $inviteEmail = strtolower(trim($inviteEmail));
-        if ($eppn !== '' && $inviteEmail === $eppn) {
-            return true;
-        }
-        if ($uid === '') {
-            return false;
-        }
-        $at = strrpos($inviteEmail, '@');
-        return $at !== false && substr($inviteEmail, 0, $at) === $uid;
+        return $eppn !== '' && $inviteEmail === strtolower(trim($eppn));
     }
 
     private function lockYears(array $years): array

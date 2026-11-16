@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { copyAcrlAssignmentsFromPrevious, getAcrlSectionAssignments, saveAcrlQuestionAssignments, saveAcrlSectionAssignments, searchAcrlApprovedUsers } from '../api/acrl';
 import type { AcrlAssignmentCopyResponse, AcrlEntrySection, AcrlQuestionAssignment } from '../types/acrl';
 import { acrlQuestionAssignmentKey } from '../utils/acrlAssignments';
+import { useAuth } from '../hooks/useAuth';
+import { acrlQueryKey, ACRL_INSTITUTION } from '../services/acrlAccess';
 import AcrlInvitePanel from './AcrlInvitePanel';
 import AcrlQuestionAssignmentPicker from './AcrlQuestionAssignmentPicker';
 
@@ -14,13 +16,16 @@ type AcrlSectionAssignmentPanelProps = {
 
 export default function AcrlSectionAssignmentPanel({ year, sections, hasPreviousYear = true }: AcrlSectionAssignmentPanelProps) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [section, setSection] = useState(sections[0]?.name || '');
   const [questionKey, setQuestionKey] = useState('');
   const [search, setSearch] = useState('');
   const [drafts, setDrafts] = useState<Record<string, number[]>>({});
   const [copyResult, setCopyResult] = useState<AcrlAssignmentCopyResponse | null>(null);
-  const assignmentsQuery = useQuery({ queryKey: ['acrl-assignments', year], queryFn: () => getAcrlSectionAssignments(year) });
-  const usersQuery = useQuery({ queryKey: ['acrl-approved-users', search.trim()], queryFn: () => searchAcrlApprovedUsers(search.trim()), enabled: search.trim().length >= 2 });
+  const assignmentsKey = acrlQueryKey('acrl-assignments', user?.id, year);
+  const usersKey = acrlQueryKey('acrl-approved-users', user?.id, search.trim());
+  const assignmentsQuery = useQuery({ queryKey: assignmentsKey, queryFn: () => getAcrlSectionAssignments(year) });
+  const usersQuery = useQuery({ queryKey: usersKey, queryFn: () => searchAcrlApprovedUsers(search.trim(), ACRL_INSTITUTION), enabled: search.trim().length >= 2 });
   const selectedSection = sections.find((item) => item.name === section);
   const selectedQuestion = selectedSection?.questions.find((question) => acrlQuestionAssignmentKey(question.sheet, question.questionId, question.part) === questionKey);
   const savedAssignment = assignmentsQuery.data?.sections.find((item) => item.section === section);
@@ -30,8 +35,8 @@ export default function AcrlSectionAssignmentPanel({ year, sections, hasPrevious
     ? savedQuestion?.assignees.map((user) => user.id) ?? []
     : savedAssignment?.assignees.map((user) => user.id) ?? []);
   const refreshAssignments = () => Promise.all([
-    queryClient.invalidateQueries({ queryKey: ['acrl-assignments', year] }),
-    queryClient.invalidateQueries({ queryKey: ['acrl-entry', String(year)] }),
+    queryClient.invalidateQueries({ queryKey: assignmentsKey }),
+    queryClient.invalidateQueries({ queryKey: acrlQueryKey('acrl-entry', user?.id, String(year)) }),
   ]);
   const saveMutation = useMutation({
     mutationFn: (variables: { targetKey: string; targetSection: string; userIds: number[]; question?: AcrlQuestionAssignment }) => variables.question

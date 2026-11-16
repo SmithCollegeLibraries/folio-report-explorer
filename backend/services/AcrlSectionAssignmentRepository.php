@@ -4,6 +4,8 @@ namespace app\services;
 
 use Yii;
 
+require_once __DIR__ . '/AcrlInstitutionMembershipService.php';
+
 /** Persists annual ACRL section assignments. */
 class AcrlSectionAssignmentRepository
 {
@@ -41,6 +43,9 @@ class AcrlSectionAssignmentRepository
     /** Add one assignment inside the caller's locked-year transaction. */
     public function addSectionAssignment(int $year, string $section, int $userId, ?int $assignedBy, string $institutionCode): void
     {
+        if (!(new AcrlInstitutionMembershipService($this->db))->lockAssignmentEligibility($userId, $institutionCode)) {
+            throw new \DomainException('Only institution members and app administrators can be assigned.');
+        }
         $exists = $this->db->createCommand(
             'SELECT COUNT(*) FROM acrl_section_assignments'
                 . ' WHERE institution_code = :institution AND survey_year = :year AND section = :section AND user_id = :userId',
@@ -62,6 +67,11 @@ class AcrlSectionAssignmentRepository
     {
         $this->withLockedYear($year, function () use ($year, $assignmentsBySection, $assignedBy, $institutionCode) {
             foreach ($assignmentsBySection as $section => $userIds) {
+                foreach ($userIds as $userId) {
+                    if (!(new AcrlInstitutionMembershipService($this->db))->lockAssignmentEligibility((int)$userId, $institutionCode)) {
+                        throw new \InvalidArgumentException('Only institution members and app administrators can be assigned.');
+                    }
+                }
                 $this->db->createCommand()->delete('acrl_section_assignments', [
                     'institution_code' => $institutionCode,
                     'survey_year' => $year,
@@ -102,13 +112,16 @@ class AcrlSectionAssignmentRepository
             $assignedSections = $this->assignedSections($year, $institutionCode);
             $copiedSections = [];
             $skippedSections = [];
+            $skippedUsers = [];
             foreach ($assignmentsBySection as $section => $userIds) {
                 if (isset($assignedSections[$section]) || empty($userIds)) {
                     $skippedSections[] = $section;
                     continue;
                 }
-                $this->insertAssignments($year, $section, $userIds, $assignedBy, $institutionCode);
-                $copiedSections[] = $section;
+                $skipped = $this->insertAssignments($year, $section, $userIds, $assignedBy, $institutionCode);
+                $skippedUsers = array_merge($skippedUsers, $skipped);
+                if (count($skipped) < count($userIds)) $copiedSections[] = $section;
+                else $skippedSections[] = $section;
             }
             if ($afterCopy !== null) {
                 $afterCopy();
@@ -116,6 +129,7 @@ class AcrlSectionAssignmentRepository
             return [
                 'copiedSections' => $copiedSections,
                 'skippedSections' => $skippedSections,
+                'skippedUsers' => array_values(array_unique($skippedUsers)),
                 'alreadyAssigned' => false,
             ];
         });
@@ -132,16 +146,19 @@ class AcrlSectionAssignmentRepository
                 return [
                     'copiedSections' => [],
                     'skippedSections' => array_keys($assignedSections),
+                    'skippedUsers' => [],
                     'alreadyAssigned' => true,
                 ];
             }
             $copiedSections = [];
+            $skippedUsers = [];
             foreach ($assignmentsBySection as $section => $userIds) {
                 if (empty($userIds)) {
                     continue;
                 }
-                $this->insertAssignments($year, $section, $userIds, $assignedBy, $institutionCode);
-                $copiedSections[] = $section;
+                $skipped = $this->insertAssignments($year, $section, $userIds, $assignedBy, $institutionCode);
+                $skippedUsers = array_merge($skippedUsers, $skipped);
+                if (count($skipped) < count($userIds)) $copiedSections[] = $section;
             }
             if ($afterCopy !== null) {
                 $afterCopy();
@@ -149,6 +166,7 @@ class AcrlSectionAssignmentRepository
             return [
                 'copiedSections' => $copiedSections,
                 'skippedSections' => [],
+                'skippedUsers' => array_values(array_unique($skippedUsers)),
                 'alreadyAssigned' => false,
             ];
         });
@@ -171,9 +189,14 @@ class AcrlSectionAssignmentRepository
         return $sections;
     }
 
-    private function insertAssignments(int $year, string $section, array $userIds, int $assignedBy, string $institutionCode): void
+    private function insertAssignments(int $year, string $section, array $userIds, int $assignedBy, string $institutionCode): array
     {
+        $skipped = [];
         foreach ($userIds as $userId) {
+            if (!(new AcrlInstitutionMembershipService($this->db))->lockAssignmentEligibility((int)$userId, $institutionCode)) {
+                $skipped[] = (int)$userId;
+                continue;
+            }
             $this->db->createCommand()->insert('acrl_section_assignments', [
                 'institution_code' => $institutionCode,
                 'survey_year' => $year,
@@ -182,5 +205,6 @@ class AcrlSectionAssignmentRepository
                 'assigned_by' => $assignedBy,
             ])->execute();
         }
+        return $skipped;
     }
 }

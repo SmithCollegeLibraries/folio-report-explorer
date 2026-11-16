@@ -1,12 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { getAcrlAutofillMethods } from '../api/acrl';
 import type { AcrlAutofillMethod, AcrlSheet } from '../types/acrl';
-
-export const acrlAutofillMethodsQueryKey = ['acrl-autofill-methods'] as const;
+import { useAuth } from './useAuth';
+import { acrlQueryKey } from '../services/acrlAccess';
 
 export default function useAcrlAutofillMethods(sheet: AcrlSheet, questionId: string, part: string, enabled = true) {
+  const { user } = useAuth();
   const query = useQuery({
-    queryKey: acrlAutofillMethodsQueryKey,
+    queryKey: acrlQueryKey('acrl-autofill-methods', user?.id),
     queryFn: getAcrlAutofillMethods,
     staleTime: Infinity,
     gcTime: Infinity,

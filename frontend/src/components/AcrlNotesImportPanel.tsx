@@ -4,9 +4,12 @@ import { confirmAcrlNotesImport, getAcrlReview, previewAcrlNotesImport } from '.
 import AcrlFileStatus from './AcrlFileStatus';
 import { parseCsvRecords } from '../utils/csv';
 import type { AcrlSurveyYear } from '../types/acrl';
+import { useAuth } from '../hooks/useAuth';
+import { acrlQueryKey } from '../services/acrlAccess';
 
 export default function AcrlNotesImportPanel({ years }: { years: AcrlSurveyYear[] }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [year, setYear] = useState<number | ''>('');
   const [rows, setRows] = useState<Array<Record<string, string>>>([]);
   const [error, setError] = useState('');
@@ -15,7 +18,7 @@ export default function AcrlNotesImportPanel({ years }: { years: AcrlSurveyYear[
   useEffect(() => {
     if (year === '' && years.length) setYear(years.find((item) => item.surveyYear === 2026)?.surveyYear ?? years[0].surveyYear);
   }, [year, years]);
-  const review = useQuery({ queryKey: ['acrl', 'review', year], queryFn: () => getAcrlReview(Number(year)), enabled: year !== '' });
+  const review = useQuery({ queryKey: acrlQueryKey('acrl-review', user?.id, year), queryFn: () => getAcrlReview(Number(year)), enabled: year !== '' });
   const preview = useMutation({
     mutationFn: () => previewAcrlNotesImport(Number(year), rows),
     onSuccess: () => setResult(`Preview ready: ${rows.length} ${rows.length === 1 ? 'row' : 'rows'} checked.`),

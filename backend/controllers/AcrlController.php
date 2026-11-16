@@ -39,8 +39,8 @@ class AcrlController extends Controller
                 'class' => \yii\filters\auth\HttpBearerAuth::class,
                 'except' => ['options'],
             ];
-            $userActions = ['entry', 'autofill', 'autofill-methods', 'save-answer', 'section-status', 'accept-suggestions', 'question-details', 'add-question-note'];
-            $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'import-preview', 'import-confirm', 'save-instructions', 'notes-import-preview', 'notes-import-confirm', 'edit-question-note', 'delete-question-note'];
+            $userActions = ['entry', 'autofill', 'autofill-methods', 'save-answer', 'section-status', 'accept-suggestions', 'import-preview', 'import-confirm', 'question-details', 'add-question-note', 'notes-import-preview', 'notes-import-confirm', 'edit-question-note', 'delete-question-note'];
+            $actions = ['years', 'upload', 'review', 'save-links', 'publish', 'threshold', 'save-threshold', 'save-instructions'];
             $behaviors['access'] = [
                 'class' => \yii\filters\AccessControl::class,
                 'except' => ['options'],
@@ -155,7 +155,7 @@ class AcrlController extends Controller
 
     public function actionThreshold()
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
             return $forbidden;
         }
         return ['thresholdPercent' => (new AcrlThresholdService())->get()];
@@ -163,7 +163,7 @@ class AcrlController extends Controller
 
     public function actionSaveThreshold()
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) {
+        if (($forbidden = $this->requireAdministrator()) !== null) {
             return $forbidden;
         }
         $body = Yii::$app->request->bodyParams;
@@ -190,18 +190,6 @@ class AcrlController extends Controller
             return ['error' => 'Forbidden'];
         }
         return null;
-    }
-
-    private function requireAcrlAdministrator(): ?array
-    {
-        if (($forbidden = $this->requireAcrlUser()) !== null) {
-            return $forbidden;
-        }
-        if ($this->isPersistedAdministrator()) {
-            return null;
-        }
-        Yii::$app->response->statusCode = 403;
-        return ['error' => 'Forbidden'];
     }
 
     private function errorResponse(int $status, string $message): array

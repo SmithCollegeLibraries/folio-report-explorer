@@ -67,8 +67,8 @@ export async function getAcrlSectionAssignments(year: number): Promise<AcrlSecti
   return data;
 }
 
-export async function searchAcrlApprovedUsers(query: string): Promise<{ users: AcrlAssignmentUser[] }> {
-  const { data } = await api.get('/acrl/approved-users', { params: { q: query } });
+export async function searchAcrlApprovedUsers(query: string, institution = 'SC'): Promise<{ users: AcrlAssignmentUser[] }> {
+  const { data } = await api.get('/acrl/approved-users', { params: { q: query, institution } });
   return data;
 }
 

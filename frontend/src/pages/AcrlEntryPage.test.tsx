@@ -370,7 +370,7 @@ describe('ACRL entry page', () => {
     };
     getEntry.mockResolvedValueOnce(reorderedResponse);
     await act(async () => {
-      await client.invalidateQueries({ queryKey: ['acrl-entry', '2026'] });
+      await client.invalidateQueries({ queryKey: ['acrl-entry', 'anonymous', 'SC', '2026'] });
     });
     await waitFor(() => expect([...document.querySelectorAll('article h3')].slice(0, 2).map((heading) => heading.textContent)).toEqual(['Trends shared tuple', 'Survey shared tuple']));
 

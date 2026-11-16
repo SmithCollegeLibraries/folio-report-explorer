@@ -5310,16 +5310,12 @@ class FolioQueryController extends Controller
      */
     public function actionUserApprove($id)
     {
-        $user = User::findOne($id);
+        $body = Yii::$app->request->getBodyParams();
+        $user = (new \app\services\AcrlUserApprovalService())->setApproved((int)$id, !empty($body['approved']));
         if (!$user) {
             Yii::$app->response->statusCode = 404;
             return ['error' => 'User not found'];
         }
-
-        $body = Yii::$app->request->getBodyParams();
-        $user->is_approved = !empty($body['approved']) ? 1 : 0;
-        $user->save(false);
-
         return $user->toArray();
     }
 

@@ -116,7 +116,7 @@ class AcrlInvitePresentationService
             $body .= "\n\nAssigned to: " . implode(', ', $labels) . '.';
         }
         $body .= "\n\nOpen the survey: " . $link
-            . "\n\nSign in with your Smith login, then open this link again."
+            . "\n\nSign in with your college account, then open this link again."
             . "\n\nThis invite expires on " . date('Y-m-d', strtotime((string)$row['expires_at'])) . '.';
         return [
             'subject' => "[FOLIO Report Explorer] You're invited to help with the ACRL survey FY " . $year,

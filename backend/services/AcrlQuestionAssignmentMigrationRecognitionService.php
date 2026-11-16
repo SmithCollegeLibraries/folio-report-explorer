@@ -46,6 +46,10 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                 'check' => 'acrlInstitutionsAppearComplete',
                 'error' => 'Migration 073 left the ACRL institution schema incomplete.',
             ],
+            '074_acrl_institution_members.sql' => [
+                'check' => 'acrlInstitutionMembersAppearComplete',
+                'error' => 'Migration 074 left the ACRL institution membership schema incomplete.',
+            ],
         ];
     }
 
@@ -80,6 +84,39 @@ class AcrlQuestionAssignmentMigrationRecognitionService
     private static function acrlInstitutionsAppearComplete($db): bool
     {
         return AcrlInstitutionMigrationRecognitionService::migrationAppearsComplete($db);
+    }
+
+    private static function acrlInstitutionMembersAppearComplete($db): bool
+    {
+        return self::tableShapeAppearsComplete($db, 'acrl_institution_members', [
+            'user_id' => ['int', 'NO', null, null, null, null, ''],
+            'institution_code' => ['char', 'NO', 2, 'ascii', 'ascii_bin', null, ''],
+            'role' => ['enum_member_admin', 'NO', null, null, null, null, ''],
+            'granted_by' => ['varchar', 'YES', 100, 'utf8mb4', null, null, ''],
+            'granted_at' => ['datetime_plain', 'NO', null, null, null, null, ''],
+        ]) && self::tableShapeAppearsComplete($db, 'acrl_institution_member_backfills', [
+            'institution_code' => ['char', 'NO', 2, 'ascii', 'ascii_bin', null, ''],
+            'completed_at' => ['datetime_plain', 'NO', null, null, null, null, ''],
+        ]) && self::indexAppearsComplete($db, 'acrl_institution_members', 'PRIMARY', ['user_id', 'institution_code'], true)
+            && self::indexAppearsComplete($db, 'acrl_institution_members', 'idx_acrl_institution_members_institution_role', ['institution_code', 'role'], false)
+            && self::indexAppearsComplete($db, 'acrl_institution_member_backfills', 'PRIMARY', ['institution_code'], true)
+            && self::foreignKeysAppearComplete($db, 'acrl_institution_members', [
+                'user_id' => ['users', 'id', 'CASCADE'],
+                'institution_code' => ['acrl_institutions', 'code', 'RESTRICT'],
+            ]) && self::foreignKeysAppearComplete($db, 'acrl_institution_member_backfills', [
+                'institution_code' => ['acrl_institutions', 'code', 'RESTRICT'],
+            ]) && self::backfillMarkerAppearsComplete($db);
+    }
+
+    private static function backfillMarkerAppearsComplete($db): bool
+    {
+        try {
+            return (int)$db->createCommand(
+                "SELECT COUNT(*) FROM acrl_institution_member_backfills WHERE institution_code = 'SC'"
+            )->queryScalar() === 1;
+        } catch (\Throwable $error) {
+            return false;
+        }
     }
 
     private static function marcCombinationFinderDefinitionAppearsComplete($db): bool
@@ -178,7 +215,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
     {
         $dataType = strtolower((string)$column['DATA_TYPE']);
         $columnType = strtolower(preg_replace('/\s+/', '', (string)$column['COLUMN_TYPE']));
-        if ($dataType !== $expectedType) {
+        if (!in_array($expectedType, ['datetime_plain', 'enum_member_admin'], true) && $dataType !== $expectedType) {
             return false;
         }
         if ($expectedType === 'int' || $expectedType === 'smallint') {
@@ -186,6 +223,12 @@ class AcrlQuestionAssignmentMigrationRecognitionService
         }
         if ($expectedType === 'datetime') {
             return $columnType === 'datetime(6)';
+        }
+        if ($expectedType === 'datetime_plain') {
+            return $dataType === 'datetime' && $columnType === 'datetime';
+        }
+        if ($expectedType === 'enum_member_admin') {
+            return $dataType === 'enum' && $columnType === "enum('member','admin')";
         }
         return true;
     }
@@ -243,12 +286,21 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                 ];
             }
             foreach ($expected as $column => $shape) {
-                if (!isset($actual[$column]) || $actual[$column] !== [
+                if (!isset($actual[$column])) {
+                    return false;
+                }
+                $matchesExpected = $actual[$column] === [
                     $database,
                     strtolower($shape[0]),
                     strtolower($shape[1]),
                     strtoupper($shape[2]),
-                ]) {
+                ];
+                if ($column === 'institution_code') {
+                    // MySQL reports the default restrictive action as NO ACTION.
+                    $matchesExpected = array_slice($actual[$column], 0, 3) === [$database, 'acrl_institutions', 'code']
+                        && in_array($actual[$column][3], ['RESTRICT', 'NO ACTION'], true);
+                }
+                if (!$matchesExpected) {
                     return false;
                 }
             }
@@ -303,6 +355,7 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             '071_vea_gate_zones.sql' => true,
             '072_shared_record_check.sql' => true,
             '073_acrl_institutions.sql' => true,
+            '074_acrl_institution_members.sql' => true,
         ];
         foreach ($files as $file) {
             $filename = $file['filename'];

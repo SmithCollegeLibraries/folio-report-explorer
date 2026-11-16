@@ -5,12 +5,15 @@ import { getAcrlSectionAssignments } from '../api/acrl';
 import type { AcrlSurveyYear } from '../types/acrl';
 import { getPublishedAcrlYears } from '../utils/acrl';
 import { useAcrlInvites } from '../hooks/useAcrlInvites';
+import { useAuth } from '../hooks/useAuth';
+import { acrlQueryKey } from '../services/acrlAccess';
 
 export default function AcrlSectionAssignmentsCard({ years }: { years: AcrlSurveyYear[] }) {
+  const { user } = useAuth();
   const [year, setYear] = useState<number | ''>('');
   const publishedYears = getPublishedAcrlYears(years);
   const assignmentsQuery = useQuery({
-    queryKey: ['acrl-assignments', year],
+    queryKey: acrlQueryKey('acrl-assignments', user?.id, year),
     queryFn: () => getAcrlSectionAssignments(Number(year)),
     enabled: year !== '',
   });

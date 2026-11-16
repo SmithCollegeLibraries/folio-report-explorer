@@ -36,9 +36,6 @@ class AcrlAssignmentController extends Controller
                 'rules' => [[
                     'allow' => true,
                     'roles' => ['@'],
-                    'matchCallback' => function ($rule, $action) {
-                        return $this->isPersistedAdministrator();
-                    },
                 ]],
             ];
         }
@@ -53,18 +50,24 @@ class AcrlAssignmentController extends Controller
 
     public function actionSearchUsers()
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
+        if (($forbidden = $this->requireAssignmentUser()) !== null) return $forbidden;
+        $query = (string)Yii::$app->request->get('q', '');
+        $institution = Yii::$app->request->get('institution');
+        if ($institution !== null) {
+            if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+            if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
+        } elseif (!$this->isPersistedAdministrator()) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Forbidden'];
         }
-        return ['users' => (new AcrlSectionAssignmentService())->searchApprovedUsers((string)Yii::$app->request->get('q', ''))];
+        return ['users' => (new AcrlSectionAssignmentService())->searchApprovedUsers($query, $institution)];
     }
 
     public function actionListAssignments($year)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAssignmentUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         try {
             $assignments = (new AcrlSectionAssignmentService())->listForYear((int)$year, $institution);
             $questions = (new AcrlQuestionAssignmentService())->listForYear((int)$year, $institution);
@@ -77,10 +80,9 @@ class AcrlAssignmentController extends Controller
 
     public function actionSaveAssignments($year, $section)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAssignmentUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         if (!isset($body['userIds']) || !is_array($body['userIds'])) {
             return $this->errorResponse(422, 'Select zero or more approved users.');
@@ -102,10 +104,9 @@ class AcrlAssignmentController extends Controller
 
     public function actionSaveQuestionAssignments($year)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAssignmentUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         foreach (['sheet', 'questionId', 'part'] as $field) {
             if (!array_key_exists($field, $body) || !is_string($body[$field])) {
@@ -140,10 +141,9 @@ class AcrlAssignmentController extends Controller
 
     public function actionCopyFromPrevious($year)
     {
-        if (($forbidden = $this->requireAdministrator()) !== null) {
-            return $forbidden;
-        }
+        if (($forbidden = $this->requireAssignmentUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         try {
             return $this->withAcrlInstitution((new AcrlSectionAssignmentService())->copyFromPrevious((int)$year, (string)(Yii::$app->user->id ?? ''), $institution), $institution);
         } catch (\DomainException $exception) {
@@ -157,5 +157,14 @@ class AcrlAssignmentController extends Controller
     {
         Yii::$app->response->statusCode = $status;
         return ['error' => $message];
+    }
+
+    private function requireAssignmentUser(): ?array
+    {
+        if (Yii::$app->user->isGuest) {
+            Yii::$app->response->statusCode = 403;
+            return ['error' => 'Forbidden'];
+        }
+        return $this->requireAcrlUser();
     }
 }

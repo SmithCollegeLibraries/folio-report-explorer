@@ -148,13 +148,9 @@ $edited = $service->editNote((int)$added['id'], 'Checked a second sample.', 'How
 acrlQuestionNotesAssert($edited['note'] === 'Checked a second sample.' && $repository->notes[$added['id']]['edited_by'] === 'admin-1', 'Administrator edits must record their actor.');
 acrlQuestionNotesAssert($service->deleteNote((int)$added['id']), 'Administrators must be able to remove a note.');
 $repository->notes[93] = ['id' => 93, 'institution_code' => 'HC', 'survey_year' => 2024, 'origin_year' => 2024, 'note' => 'Another college note', 'source' => 'Synthetic', 'sheet' => 'survey', 'question_id' => '40', 'part' => ''];
-try {
-    $service->editNote(93, 'Changed', 'Synthetic', 2024, 'admin-1');
-    acrlQuestionNotesAssert(false, 'ID-only note edits must not expose another institution note.');
-} catch (\DomainException $exception) {
-    acrlQuestionNotesAssert($exception->getCode() === 0, 'Another institution note is reported as not found.');
-}
-acrlQuestionNotesAssert(!$service->deleteNote(93), 'ID-only note deletion must not remove another institution note.');
+$otherCollegeEdit = $service->editNote(93, 'Changed', 'Synthetic', 2024, 'admin-1');
+acrlQuestionNotesAssert($otherCollegeEdit['note'] === 'Changed' && $repository->notes[93]['institution_code'] === 'HC', 'An ID-only note service edit keeps the note in its stored college; controller authorization checks the caller role.');
+acrlQuestionNotesAssert($service->deleteNote(93), 'An ID-only note service delete scopes the row to its stored college.');
 
 $repository->notes[90] = ['id' => 90, 'institution_code' => 'SC', 'survey_year' => 2024, 'sheet' => 'survey', 'question_id' => '40', 'part' => '', 'note' => 'Original 2024 note', 'source' => '2024 worksheet', 'origin_year' => 2024, 'created_at' => '2024-01-01 00:00:00'];
 $repository->notes[91] = ['id' => 91, 'institution_code' => 'SC', 'survey_year' => 2025, 'sheet' => 'survey', 'question_id' => '41', 'part' => '', 'note' => 'More recent 2025 note', 'source' => '2025 worksheet', 'origin_year' => 2025, 'created_at' => '2025-01-01 00:00:00'];

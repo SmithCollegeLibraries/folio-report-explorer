@@ -8,6 +8,7 @@ use app\services\AcrlAutofillBusyException;
 use app\services\AcrlAutofillService;
 use app\services\AcrlImportService;
 use app\services\AcrlVeaAutofillService;
+use app\services\AcrlInstitutionMembershipService;
 
 /** Institution-scoped entry, answer, import, and autofill actions. */
 trait AcrlEntryActionsTrait
@@ -29,13 +30,10 @@ trait AcrlEntryActionsTrait
     public function actionAutofill($year, $sheet, $question, $part)
     {
         if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
-        if (($invalid = $this->requestAcrlInstitutionCode($institution)) !== null) return $invalid;
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         if ($institution !== 'SC') {
-            if (!$this->isPersistedAdministrator()) {
-                Yii::$app->response->statusCode = 403;
-                return ['reason' => 'institution_not_enabled'];
-            }
-            return $this->errorResponse(409, 'autofill_not_configured');
+            Yii::$app->response->statusCode = 403;
+            return ['reason' => 'institution_not_enabled'];
         }
         if ((string)$part === '_') $part = '';
         try {
@@ -89,7 +87,7 @@ trait AcrlEntryActionsTrait
                 $body['note'] ?? null,
                 isset($body['expected_updated_at']) && $body['expected_updated_at'] !== '' ? (string)$body['expected_updated_at'] : null,
                 (string)(Yii::$app->user->id ?? ''),
-                $this->isPersistedAdministrator(),
+                (new AcrlInstitutionMembershipService())->canManage((int)(Yii::$app->user->id ?? 0), $institution),
                 $institution
             );
             if ($result['conflict']) Yii::$app->response->statusCode = 409;
@@ -114,7 +112,7 @@ trait AcrlEntryActionsTrait
                 rawurldecode((string)$section),
                 $body['items'],
                 (string)(Yii::$app->user->id ?? ''),
-                $this->isPersistedAdministrator(),
+                (new AcrlInstitutionMembershipService())->canManage((int)(Yii::$app->user->id ?? 0), $institution),
                 $institution
             );
             if (!empty($result['conflict'])) Yii::$app->response->statusCode = 409;
@@ -129,17 +127,17 @@ trait AcrlEntryActionsTrait
     public function actionSectionStatus($year, $section)
     {
         if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
+        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
         $body = Yii::$app->request->bodyParams;
         $status = (string)($body['status'] ?? '');
-        if ($status === 'open' && ($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
-        if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if ($status === 'open' && ($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         try {
             return $this->withAcrlInstitution((new AcrlEntryService())->setSectionStatus(
                 (int)$year,
                 rawurldecode((string)$section),
                 $status,
                 (string)(Yii::$app->user->id ?? ''),
-                $this->isPersistedAdministrator(),
+                (new AcrlInstitutionMembershipService())->canManage((int)(Yii::$app->user->id ?? 0), $institution),
                 $institution
             ), $institution);
         } catch (\InvalidArgumentException $exception) {
@@ -152,8 +150,9 @@ trait AcrlEntryActionsTrait
 
     public function actionImportPreview($year)
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         try {
             return $this->withAcrlInstitution((new AcrlImportService())->preview(
@@ -168,8 +167,9 @@ trait AcrlEntryActionsTrait
 
     public function actionImportConfirm($year)
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         try {
             return $this->withAcrlInstitution((new AcrlImportService())->confirm(

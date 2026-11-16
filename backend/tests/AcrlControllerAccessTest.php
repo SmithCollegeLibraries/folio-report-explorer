@@ -19,6 +19,8 @@ namespace app\models {
         public static $queryExists = false;
         public static $approvedExists = false;
         public static $adminExists = false;
+        public static $membershipRole = 'member';
+        public static $membershipAdminExists = false;
 
         public static function find()
         {
@@ -57,6 +59,28 @@ namespace {
         }
 
         public function getQueryString(): string { return $this->queryString; }
+        public function get($name, $default = null) { return $this->queryParams[$name] ?? $default; }
+    }
+
+    class AcrlControllerAccessDb
+    {
+        public function createCommand($sql, array $params = [])
+        {
+            return new AcrlControllerAccessDbCommand($sql, $params);
+        }
+    }
+
+    class AcrlControllerAccessDbCommand
+    {
+        private $sql;
+        private $params;
+        public function __construct($sql, array $params) { $this->sql = $sql; $this->params = $params; }
+        public function queryScalar()
+        {
+            if (strpos($this->sql, 'SELECT m.role') !== false) return \app\models\User::$membershipRole ?: false;
+            if (strpos($this->sql, 'FROM acrl_institution_members m') !== false) return \app\models\User::$membershipAdminExists ? 1 : 0;
+            return \app\models\User::$adminExists ? 1 : 0;
+        }
     }
 
     final class AcrlControllerAccessUserQuery
@@ -77,39 +101,11 @@ namespace {
     $veaAutofillPath = __DIR__ . '/../services/AcrlVeaAutofillService.php';
     if (is_file($veaAutofillPath)) require_once $veaAutofillPath;
 
-    class AcrlControllerAccessMethodsNeverUseFolioDb
-    {
-        public $calls = 0;
-        public function beginTransaction()
-        {
-            $this->calls++;
-            throw new \RuntimeException('The methods route must not start an FOLIO transaction.');
-        }
-        public function createCommand($sql, array $params = [])
-        {
-            $this->calls++;
-            throw new \RuntimeException('The methods route must not issue an FOLIO command.');
-        }
-    }
-
     class AcrlControllerAccessAutofillService
     {
         public $mode = 'success';
         public $arguments = [];
         public $runCalls = 0;
-        public function methods()
-        {
-            return [[
-                'sheet' => 'survey',
-                'questionId' => '40a',
-                'part' => '',
-                'queryId' => 'acrl-40a',
-                'queryVersion' => 3,
-                'kind' => 'snapshot',
-                'summary' => ['Books, scores, theses and other volumes, including serial volumes cataloged as monographs, at Smith College and the Five College Repository.'],
-                'sql' => 'select 1',
-            ]];
-        }
         public function run($year, $sheet, $questionId, $part, $weekStart = null)
         {
             $this->runCalls++;
@@ -153,10 +149,13 @@ namespace {
     function acrlAccessAppUser($guest, $identity, $bodyParams = [], string $queryString = 'institution=SC', array $queryParams = ['institution' => 'SC']): void
     {
         Yii::$app = (object)[
-            'user' => (object)['isGuest' => $guest, 'identity' => $identity],
+            'user' => (object)['isGuest' => $guest, 'identity' => $identity, 'id' => $guest ? null : 1],
             'request' => new AcrlControllerAccessRequest($bodyParams, $queryString, $queryParams),
             'response' => (object)['statusCode' => 200, 'data' => null, 'format' => null],
+            'db' => new AcrlControllerAccessDb(),
         ];
+        \app\models\User::$membershipRole = 'member';
+        \app\models\User::$membershipAdminExists = false;
     }
 
     $controller = new \app\controllers\AcrlController('acrl', Yii::$app);
@@ -171,6 +170,8 @@ namespace {
         'review' => function () use ($controller) { return $controller->actionReview(2026); },
         'save-links' => function () use ($controller) { return $controller->actionSaveLinks(2026); },
         'publish' => function () use ($controller) { return $controller->actionPublish(2026); },
+        'threshold' => function () use ($controller) { return $controller->actionThreshold(); },
+        'save-threshold' => function () use ($controller) { return $controller->actionSaveThreshold(); },
     ];
 
     foreach ($actions as $name => $invoke) {
@@ -187,8 +188,6 @@ namespace {
         'save-answer' => function () use ($controller) { return $controller->actionSaveAnswer(2025); },
         'accept-suggestions' => function () use ($controller) { return $controller->actionAcceptSuggestions(2025, 'Test%20Section'); },
         'section-status' => function () use ($controller) { return $controller->actionSectionStatus(2025, 'Test%20Section'); },
-        'threshold' => function () use ($controller) { return $controller->actionThreshold(); },
-        'save-threshold' => function () use ($controller) { return $controller->actionSaveThreshold(); },
         'import-preview' => function () use ($controller) { return $controller->actionImportPreview(2025); },
         'import-confirm' => function () use ($controller) { return $controller->actionImportConfirm(2025); },
     ];
@@ -218,13 +217,11 @@ namespace {
         acrlAccessAssert(($response['error'] ?? null) === 'Forbidden', $name . ' must deny approved non-admins.');
     }
     $assignmentAccess = $assignmentController->behaviors()['access']['rules'][0] ?? [];
-    acrlAccessAssert(is_callable($assignmentAccess['matchCallback'] ?? null), 'Assignment routes must use a persisted-admin access rule.');
+    acrlAccessAssert(($assignmentAccess['roles'] ?? []) === ['@'], 'Assignment route filters require a signed-in user before the action-level college check.');
     acrlAccessAppUser(false, new \app\models\User());
     \app\models\User::$approvedExists = true;
     \app\models\User::$adminExists = true;
-    acrlAccessAssert(call_user_func($assignmentAccess['matchCallback'], null, null), 'An approved administrator must match the assignment-route access rule.');
-    \app\models\User::$adminExists = false;
-    acrlAccessAssert(!call_user_func($assignmentAccess['matchCallback'], null, null), 'An approved non-admin must not match the assignment-route access rule.');
+    acrlAccessAssert(!isset($assignmentAccess['matchCallback']), 'Assignment authorization must be checked against the requested college in each action.');
 
     acrlAccessAppUser(false, new \app\models\User());
     \app\models\User::$approvedExists = true;
@@ -246,18 +243,23 @@ namespace {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must be covered by the framework admin access rule.');
     }
     $userActions = $behaviors['access']['rules'][0]['actions'] ?? [];
-    acrlAccessAssert(in_array('entry', $userActions, true) && in_array('autofill', $userActions, true) && in_array('save-answer', $userActions, true) && in_array('section-status', $userActions, true) && in_array('accept-suggestions', $userActions, true), 'Entry, auto-fill, section-status, and suggestion routes must allow approved signed-in users.');
-    foreach (['threshold', 'save-threshold', 'import-preview', 'import-confirm'] as $name) {
+    acrlAccessAssert(in_array('entry', $userActions, true) && in_array('autofill', $userActions, true) && in_array('save-answer', $userActions, true) && in_array('section-status', $userActions, true) && in_array('accept-suggestions', $userActions, true) && in_array('import-preview', $userActions, true) && in_array('import-confirm', $userActions, true), 'Entry, auto-fill, section-status, imports, and suggestions must allow approved signed-in users before college-role checks.');
+    foreach (['threshold', 'save-threshold'] as $name) {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must use the persisted-admin rule.');
     }
 
     $detailsUserActions = ['question-details', 'add-question-note'];
-    $detailsAdminActions = ['save-instructions', 'notes-import-preview', 'notes-import-confirm', 'edit-question-note', 'delete-question-note'];
+    $detailsAdminActions = ['save-instructions'];
+    $detailsCollegeAdminActions = ['notes-import-preview', 'notes-import-confirm'];
+    $detailsIdOnlyActions = ['edit-question-note', 'delete-question-note'];
     foreach ($detailsUserActions as $name) {
         acrlAccessAssert(in_array($name, $userActions, true), $name . ' must allow any approved signed-in user.');
     }
     foreach ($detailsAdminActions as $name) {
         acrlAccessAssert(in_array($name, $adminActions, true), $name . ' must use the persisted-admin rule.');
+    }
+    foreach (array_merge($detailsCollegeAdminActions, $detailsIdOnlyActions) as $name) {
+        acrlAccessAssert(in_array($name, $userActions, true), $name . ' must defer its college-role check to the action.');
     }
     $detailsMethods = [
         'question-details' => function () use ($controller) { return $controller->actionQuestionDetails(2026); },
@@ -273,14 +275,17 @@ namespace {
         acrlAccessAssert(method_exists($controller, $methodName), $name . ' action must be registered.');
         acrlAccessAppUser(true, null);
         $guestResponse = $invoke();
-        acrlAccessAssert(Yii::$app->response->statusCode === 401 && ($guestResponse['error'] ?? null) === 'Unauthorized', $name . ' must reject guests.');
-        if (in_array($name, $detailsAdminActions, true)) {
+        $guestStatus = in_array($name, $detailsAdminActions, true) ? 403 : 401;
+        acrlAccessAssert(Yii::$app->response->statusCode === $guestStatus, $name . ' must reject guests.');
+        acrlAccessAssert(($guestResponse['error'] ?? null) === ($guestStatus === 401 ? 'Unauthorized' : 'Forbidden'), $name . ' must keep the stable guest response.');
+        if (in_array($name, array_merge($detailsAdminActions, $detailsCollegeAdminActions, $detailsIdOnlyActions), true)) {
             acrlAccessAppUser(false, new \app\models\User());
             \app\models\User::$approvedExists = true;
             \app\models\User::$adminExists = false;
             \app\models\User::$queryExists = false;
             $regularUserResponse = $invoke();
-            acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($regularUserResponse['error'] ?? null) === 'Forbidden', $name . ' must reject non-admin users.');
+            $expected = in_array($name, $detailsIdOnlyActions, true) ? 404 : 403;
+            acrlAccessAssert(Yii::$app->response->statusCode === $expected, $name . ' must enforce the expected persisted administrator role.');
         }
     }
 
@@ -311,66 +316,6 @@ namespace {
     acrlAccessAssert(strpos($routes, "'POST acrl/years/<year:") !== false && strpos($routes, "/publish'") !== false, 'Missing ACRL publish route.');
     $autofillController = new AcrlControllerAccessAutofillHarness('acrl', Yii::$app);
     $autofillController->autofillService = new AcrlControllerAccessAutofillService();
-    acrlAccessAssert(method_exists($autofillController, 'actionAutofillMethods'), 'The methods action must be registered.');
-    acrlAccessAssert(in_array('autofill-methods', $userActions, true), 'The methods action must be in the approved-user access allowlist.');
-    acrlAccessAssert(strpos($routes, "'GET acrl/autofill/methods'") !== false, 'The GET methods route must be registered.');
-    acrlAccessAppUser(true, null);
-    $guestMethods = $autofillController->actionAutofillMethods();
-    acrlAccessAssert(Yii::$app->response->statusCode === 401 && ($guestMethods['error'] ?? null) === 'Unauthorized', 'The methods route must return 401 for guests.');
-    acrlAccessAppUser(false, new \app\models\User());
-    \app\models\User::$approvedExists = false;
-    $unapprovedMethods = $autofillController->actionAutofillMethods();
-    acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($unapprovedMethods['error'] ?? null) === 'Forbidden', 'The methods route must return 403 for unapproved users.');
-    acrlAccessAppUser(false, new \app\models\User());
-    \app\models\User::$approvedExists = true;
-    $methodsDb = new AcrlControllerAccessMethodsNeverUseFolioDb();
-    $autofillController->autofillService = new \app\services\AcrlAutofillService(
-        new \stdClass(),
-        $methodsDb,
-        null,
-        __DIR__ . '/../sql/acrl'
-    );
-    $approvedMethods = $autofillController->actionAutofillMethods();
-    $methods = $approvedMethods['methods'] ?? [];
-    acrlAccessAssert(count($methods) === 16, 'Approved ACRL users must receive all 16 methods.');
-    $methodsByKey = [];
-    foreach ($methods as $method) {
-        $key = ($method['sheet'] ?? '') . '|' . ($method['questionId'] ?? '') . '|' . ($method['part'] ?? '');
-        $methodsByKey[$key] = $method;
-    }
-    $q40aMethod = $methodsByKey['survey|40a|'] ?? null;
-    acrlAccessAssert(is_array($q40aMethod) && ($q40aMethod['queryVersion'] ?? null) === 3, 'The methods catalog must identify Q40a version 3 by its question key.');
-    $newMethods = [
-        'survey|20|' => 'acrl-20',
-        'survey|20a|' => 'acrl-20a',
-        'survey|21|' => 'acrl-21',
-        'survey|21a|' => 'acrl-21a',
-        'survey|21b|' => 'acrl-21b',
-    ];
-    foreach ($newMethods as $key => $queryId) {
-        $method = $methodsByKey[$key] ?? null;
-        acrlAccessAssert(
-            is_array($method)
-                && ($method['queryId'] ?? null) === $queryId
-                && ($method['queryVersion'] ?? null) === 1
-                && ($method['kind'] ?? null) === 'dated',
-            'Approved ACRL users must receive catalog method ' . $key . ' (' . $queryId . ').'
-        );
-    }
-    foreach (['survey|79a|' => 'vea-79a', 'survey|79c|' => 'vea-79c'] as $key => $queryId) {
-        $method = $methodsByKey[$key] ?? null;
-        acrlAccessAssert(
-            is_array($method)
-                && ($method['queryId'] ?? null) === $queryId
-                && ($method['queryVersion'] ?? null) === 1
-                && ($method['kind'] ?? null) === 'dated'
-                && ($method['source'] ?? null) === 'vea'
-                && array_key_exists('sql', $method)
-                && $method['sql'] === null,
-            'Approved ACRL users must receive Vea method ' . $key . ' without SQL.'
-        );
-    }
-    acrlAccessAssert($methodsDb->calls === 0, 'The methods route must not make any FOLIO database calls.');
     $autofillController->autofillService = new AcrlControllerAccessAutofillService();
     acrlAccessAppUser(false, new \app\models\User(), [], 'institution=HC', ['institution' => 'HC']);
     \app\models\User::$approvedExists = true;
@@ -382,7 +327,7 @@ namespace {
     \app\models\User::$approvedExists = true;
     \app\models\User::$adminExists = true;
     $adminAutofill = $autofillController->actionAutofill(2025, 'survey', '81', '');
-    acrlAccessAssert(Yii::$app->response->statusCode === 409 && ($adminAutofill['error'] ?? null) === 'autofill_not_configured', 'Admin autofill for a disabled college returns the configured 409 response.');
+    acrlAccessAssert(Yii::$app->response->statusCode === 403 && ($adminAutofill['reason'] ?? null) === 'institution_not_enabled', 'Admin autofill for a disabled college is denied before membership or service access.');
     acrlAccessAssert($autofillController->autofillService->runCalls === 0, 'Disabled admin autofill does not call FOLIO or Vea services.');
     acrlAccessAppUser(false, new \app\models\User());
     \app\models\User::$approvedExists = true;

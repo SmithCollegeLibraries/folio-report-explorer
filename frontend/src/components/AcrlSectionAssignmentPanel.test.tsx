@@ -55,7 +55,7 @@ const sections: AcrlEntrySection[] = [
 function renderPanel(initialAssignments?: { surveyYear: number; sections: Array<{ section: string; assignees: Array<{ id: number; displayName: string }> }>; questions: Array<{ sheet: string; questionId: string; part: string; section: string; assignees: Array<{ id: number; displayName: string }> }> }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   if (initialAssignments) {
-    client.setQueryData(['acrl-assignments', 2026], initialAssignments);
+    client.setQueryData(['acrl-assignments', 'anonymous', 'SC', 2026], initialAssignments);
   }
   return render(<QueryClientProvider client={client}><AcrlSectionAssignmentPanel year={2026} sections={sections} /></QueryClientProvider>);
 }
@@ -85,6 +85,7 @@ describe('ACRL section assignment panel', () => {
 
     await userEvent.type(screen.getByRole('searchbox', { name: 'Search approved users' }), 'Alex');
     const userChoice = await screen.findByLabelText('Alex Editor');
+    await waitFor(() => expect(searchUsers).toHaveBeenCalledWith('Alex', 'SC'));
     await userEvent.click(userChoice);
     await userEvent.click(screen.getByRole('button', { name: 'Save section assignments' }));
 

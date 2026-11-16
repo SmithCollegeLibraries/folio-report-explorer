@@ -48,6 +48,7 @@ new \yii\web\Application($config);
 use app\models\User;
 use app\services\AcrlInviteMailer;
 use app\services\AcrlInviteService;
+use app\services\AcrlSignInIdentityService;
 use app\services\AcrlQuestionAssignmentRepository;
 use app\services\AcrlSectionAssignmentRepository;
 
@@ -69,7 +70,7 @@ if (!$username) {
     $username = isset($_SERVER['REMOTE_USER']) ? $_SERVER['REMOTE_USER'] : null;
 }
 
-// Must have at least a Smith ID or username
+// Must have at least an institutional ID or username
 if (!$smithId && !$username) {
     http_response_code(403);
     header('Content-Type: text/html; charset=utf-8');
@@ -81,66 +82,28 @@ if (!$smithId && !$username) {
     exit;
 }
 
-// Use username as fallback smith_id if not available
-if (!$smithId) {
-    $smithId = $username;
-}
-
 // ── Find or create user ───────────────────────────────────────────
-
-$user = User::findOne(['smith_id' => $smithId]);
-
-$isNewUser = false;
-if (!$user) {
-    $isNewUser = true;
-    $user = new User();
-    $user->smith_id = $smithId;
-    $user->username = $username ?: $smithId;
-    $user->first_name = $firstName;
-    $user->last_name = $lastName;
-    $user->affiliation = $affiliation;
-    $user->email = $email;
-
-    // First user ever → auto-approve as admin
-    $existingCount = User::find()->count();
-    if ($existingCount == 0) {
-        $user->role = 'admin';
-        $user->is_approved = 1;
-    }
-
-    if (!$user->save()) {
-        http_response_code(500);
-        header('Content-Type: text/html; charset=utf-8');
-        header('Content-Type: text/html; charset=utf-8');
-        echo '<!DOCTYPE html><html><body>';
-        echo '<h1>Account Creation Failed</h1>';
-        echo '<p>Could not create your account. Please contact the library systems team.</p>';
-        echo '<pre>' . htmlspecialchars(json_encode($user->errors)) . '</pre>';
-        echo '</body></html>';
-        exit;
-    }
-} else {
-    // Update attributes that may have changed
-    $changed = false;
-    if ($firstName && $user->first_name !== $firstName) {
-        $user->first_name = $firstName;
-        $changed = true;
-    }
-    if ($lastName && $user->last_name !== $lastName) {
-        $user->last_name = $lastName;
-        $changed = true;
-    }
-    if ($affiliation && $user->affiliation !== $affiliation) {
-        $user->affiliation = $affiliation;
-        $changed = true;
-    }
-    if ($email && $user->email !== $email) {
-        $user->email = $email;
-        $changed = true;
-    }
-    if ($changed) {
-        $user->save(false);
-    }
+$identity = (new AcrlSignInIdentityService())->findOrCreate($smithId, $username, $email, $firstName, $lastName, $affiliation);
+if ($identity === null) {
+    http_response_code(403);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html><body>';
+    echo '<h1>Authentication Failed</h1>';
+    echo '<p>Could not retrieve your identity from Shibboleth. Please contact the library systems team.</p>';
+    echo '</body></html>';
+    exit;
+}
+$user = $identity['user'];
+$isNewUser = $identity['isNewUser'];
+if (!$identity['saved']) {
+    http_response_code(500);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html><body>';
+    echo '<h1>Account Creation Failed</h1>';
+    echo '<p>Could not create your account. Please contact the library systems team.</p>';
+    echo '<pre>' . htmlspecialchars(json_encode($user->errors)) . '</pre>';
+    echo '</body></html>';
+    exit;
 }
 
 // ── Apply invite approval before notifying admins or issuing tokens ─
