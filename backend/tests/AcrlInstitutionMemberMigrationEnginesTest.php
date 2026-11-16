@@ -41,6 +41,7 @@ require_once __DIR__ . '/../services/AcrlInstitutionMembershipService.php';
 
 use app\services\MigrationService;
 use app\services\AcrlInstitutionMembershipService;
+use app\services\AcrlQuestionAssignmentMigrationRecognitionService;
 use yii\db\Connection;
 
 $failures = [];
@@ -75,57 +76,60 @@ function acrl074EngineCheckRemovalRace(string $label, array $config, string $sch
 {
     $admin = acrl074EngineConnection(acrl074EngineDsn((string)$config['dsn'], $schema), (string)$config['user'], (string)$config['password']);
     $writer = acrl074EngineConnection(acrl074EngineDsn((string)$config['dsn'], $schema), $restrictedUser, $password);
-    $admin->createCommand()->insert('acrl_institution_members', [
-        'user_id' => 1, 'institution_code' => 'SC', 'role' => 'member', 'granted_by' => null, 'granted_at' => date('Y-m-d H:i:s'),
-    ])->execute();
-    $writer->createCommand('SET SESSION innodb_lock_wait_timeout = 1')->execute();
-    $writerTx = $writer->beginTransaction();
-    $eligible = (new AcrlInstitutionMembershipService($writer))->lockAssignmentEligibility(1, 'SC');
-    acrl074EngineCheck($eligible, $label . ' assignment-first writer locks an eligible member.');
-    $writer->createCommand()->insert('acrl_section_assignments', ['institution_code' => 'SC', 'user_id' => 1])->execute();
-    $admin->createCommand('SET SESSION innodb_lock_wait_timeout = 1')->execute();
-    $removeTx = $admin->beginTransaction();
-    $removeWaited = false;
     try {
+        $admin->createCommand()->insert('acrl_institution_members', [
+            'user_id' => 1, 'institution_code' => 'SC', 'role' => 'member', 'granted_by' => null, 'granted_at' => date('Y-m-d H:i:s'),
+        ])->execute();
+        $writer->createCommand('SET SESSION innodb_lock_wait_timeout = 1')->execute();
+        $writerTx = $writer->beginTransaction();
+        $eligible = (new AcrlInstitutionMembershipService($writer))->lockAssignmentEligibility(1, 'SC');
+        acrl074EngineCheck($eligible, $label . ' assignment-first writer locks an eligible member.');
+        $writer->createCommand()->insert('acrl_section_assignments', ['institution_code' => 'SC', 'user_id' => 1])->execute();
+        $admin->createCommand('SET SESSION innodb_lock_wait_timeout = 1')->execute();
+        $removeTx = $admin->beginTransaction();
+        $removeWaited = false;
+        try {
+            $admin->createCommand("SELECT user_id FROM acrl_institution_members WHERE user_id = 1 AND institution_code = 'SC' FOR UPDATE")->queryOne();
+        } catch (Throwable $error) {
+            $removeWaited = stripos($error->getMessage(), 'lock wait timeout') !== false;
+        }
+        acrl074EngineCheck($removeWaited, $label . ' removal-first lock waits while the assignment writer holds the member row.');
+        if ($removeTx->isActive) $removeTx->rollBack();
+        $writerTx->commit();
+        $removeTx = $admin->beginTransaction();
         $admin->createCommand("SELECT user_id FROM acrl_institution_members WHERE user_id = 1 AND institution_code = 'SC' FOR UPDATE")->queryOne();
-    } catch (Throwable $error) {
-        $removeWaited = stripos($error->getMessage(), 'lock wait timeout') !== false;
-    }
-    acrl074EngineCheck($removeWaited, $label . ' removal-first lock waits while the assignment writer holds the member row.');
-    if ($removeTx->isActive) $removeTx->rollBack();
-    $writerTx->commit();
-    $removeTx = $admin->beginTransaction();
-    $admin->createCommand("SELECT user_id FROM acrl_institution_members WHERE user_id = 1 AND institution_code = 'SC' FOR UPDATE")->queryOne();
-    $admin->createCommand()->delete('acrl_institution_members', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
-    $admin->createCommand()->delete('acrl_section_assignments', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
-    $removeTx->commit();
-    acrl074EngineCheck((int)$admin->createCommand('SELECT COUNT(*) FROM acrl_section_assignments WHERE user_id = 1')->queryScalar() === 0,
-        $label . ' assignment-first removal deletes the committed assignment.');
+        $admin->createCommand()->delete('acrl_institution_members', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
+        $admin->createCommand()->delete('acrl_section_assignments', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
+        $removeTx->commit();
+        acrl074EngineCheck((int)$admin->createCommand('SELECT COUNT(*) FROM acrl_section_assignments WHERE user_id = 1')->queryScalar() === 0,
+            $label . ' assignment-first removal deletes the committed assignment.');
 
-    $admin->createCommand()->insert('acrl_institution_members', [
-        'user_id' => 1, 'institution_code' => 'SC', 'role' => 'member', 'granted_by' => null, 'granted_at' => date('Y-m-d H:i:s'),
-    ])->execute();
-    $removeTx = $admin->beginTransaction();
-    $admin->createCommand("SELECT user_id FROM acrl_institution_members WHERE user_id = 1 AND institution_code = 'SC' FOR UPDATE")->queryOne();
-    $admin->createCommand()->delete('acrl_institution_members', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
-    $writerTx = $writer->beginTransaction();
-    $writerWaited = false;
-    try {
-        (new AcrlInstitutionMembershipService($writer))->lockAssignmentEligibility(1, 'SC');
-    } catch (Throwable $error) {
-        $writerWaited = stripos($error->getMessage(), 'lock wait timeout') !== false;
+        $admin->createCommand()->insert('acrl_institution_members', [
+            'user_id' => 1, 'institution_code' => 'SC', 'role' => 'member', 'granted_by' => null, 'granted_at' => date('Y-m-d H:i:s'),
+        ])->execute();
+        $removeTx = $admin->beginTransaction();
+        $admin->createCommand("SELECT user_id FROM acrl_institution_members WHERE user_id = 1 AND institution_code = 'SC' FOR UPDATE")->queryOne();
+        $admin->createCommand()->delete('acrl_institution_members', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
+        $writerTx = $writer->beginTransaction();
+        $writerWaited = false;
+        try {
+            (new AcrlInstitutionMembershipService($writer))->lockAssignmentEligibility(1, 'SC');
+        } catch (Throwable $error) {
+            $writerWaited = stripos($error->getMessage(), 'lock wait timeout') !== false;
+        }
+        acrl074EngineCheck($writerWaited, $label . ' member-first removal blocks an assignment writer on the locked row.');
+        if ($writerTx->isActive) $writerTx->rollBack();
+        $admin->createCommand()->delete('acrl_section_assignments', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
+        $removeTx->commit();
+        $writerTx = $writer->beginTransaction();
+        $eligible = (new AcrlInstitutionMembershipService($writer))->lockAssignmentEligibility(1, 'SC');
+        $writerTx->commit();
+        acrl074EngineCheck(!$eligible && (int)$admin->createCommand('SELECT COUNT(*) FROM acrl_section_assignments WHERE user_id = 1')->queryScalar() === 0,
+            $label . ' removal-first retry sees no membership and writes no assignment.');
+    } finally {
+        $writer->close();
+        $admin->close();
     }
-    acrl074EngineCheck($writerWaited, $label . ' member-first removal blocks an assignment writer on the locked row.');
-    if ($writerTx->isActive) $writerTx->rollBack();
-    $admin->createCommand()->delete('acrl_section_assignments', ['user_id' => 1, 'institution_code' => 'SC'])->execute();
-    $removeTx->commit();
-    $writerTx = $writer->beginTransaction();
-    $eligible = (new AcrlInstitutionMembershipService($writer))->lockAssignmentEligibility(1, 'SC');
-    $writerTx->commit();
-    acrl074EngineCheck(!$eligible && (int)$admin->createCommand('SELECT COUNT(*) FROM acrl_section_assignments WHERE user_id = 1')->queryScalar() === 0,
-        $label . ' removal-first retry sees no membership and writes no assignment.');
-    $writer->close();
-    $admin->close();
 }
 
 foreach ($engines as $label => $config) {
@@ -139,7 +143,7 @@ foreach ($engines as $label => $config) {
         $admin->createCommand('CREATE DATABASE `' . $schema . '` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci')->execute();
         $schemaCreated = true;
         $db = acrl074EngineConnection(acrl074EngineDsn((string)$config['dsn'], $schema), (string)$config['user'], (string)$config['password']);
-        $db->createCommand('CREATE TABLE users (id INT NOT NULL PRIMARY KEY, email VARCHAR(255) NULL, is_approved TINYINT(1) NOT NULL, default_campus VARCHAR(50) NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4')->execute();
+        $db->createCommand("CREATE TABLE users (id INT NOT NULL PRIMARY KEY, email VARCHAR(255) NULL, role VARCHAR(50) NOT NULL DEFAULT 'user', is_approved TINYINT(1) NOT NULL, default_campus VARCHAR(50) NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4")->execute();
         $db->createCommand('CREATE TABLE acrl_institutions (code CHAR(2) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4')->execute();
         $db->createCommand()->insert('acrl_institutions', ['code' => 'SC'])->execute();
         $db->createCommand('CREATE TABLE acrl_section_assignments (institution_code CHAR(2) NOT NULL, user_id INT NOT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4')->execute();
@@ -183,7 +187,7 @@ foreach ($engines as $label => $config) {
         acrl074EngineCheck(array_map('intval', $eligible) === [1, 4, 5, 6], $label . ' backfill includes approved email, section, question, and accepted-invite users only.');
         acrl074EngineCheck((int)$restricted->createCommand("SELECT COUNT(*) FROM acrl_institution_member_backfills WHERE institution_code = 'SC'")->queryScalar() === 1,
             $label . ' records the SC completion marker.');
-        $restricted->createCommand("DELETE FROM acrl_institution_members WHERE institution_code = 'SC'")->execute();
+        $db->createCommand("DELETE FROM acrl_institution_members WHERE institution_code = 'SC'")->execute();
         acrl074EngineExecMigration($restricted);
         acrl074EngineCheck((int)$restricted->createCommand('SELECT COUNT(*) FROM acrl_institution_members')->queryScalar() === 0,
             $label . ' recognition and rerun do not regrant members after removal.');
@@ -212,6 +216,8 @@ foreach ($engines as $label => $config) {
     } catch (Throwable $error) {
         acrl074EngineCheck(false, $label . ' migration test failed: ' . get_class($error) . ': ' . $error->getMessage());
     } finally {
+        if (isset($restricted)) $restricted->close();
+        if (isset($db)) $db->close();
         if ($userCreated) {
             try { $admin->createCommand("DROP USER IF EXISTS '" . $user . "'@'%'")->execute(); } catch (Throwable $ignored) {}
         }

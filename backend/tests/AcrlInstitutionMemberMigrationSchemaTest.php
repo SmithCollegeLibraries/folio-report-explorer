@@ -30,17 +30,22 @@ if (!file_exists($migrationPath)) {
         'primary key (user_id, institution_code)',
         'key idx_acrl_institution_members_institution_role (institution_code, role)',
         'references users (id) on delete cascade',
-        'references acrl_institutions (code) on delete cascade',
+        'references acrl_institutions (code)',
     ] as $definition) {
         acrlInstitutionMemberMigrationCheck(strpos($normalized, $definition) !== false, 'Member schema includes ' . $definition . '.');
     }
     foreach ([
         'primary key (institution_code)',
         'completed_at datetime not null',
-        'references acrl_institutions (code) on delete cascade',
+        'references acrl_institutions (code)',
     ] as $definition) {
         acrlInstitutionMemberMigrationCheck(strpos($normalized, $definition) !== false, 'Backfill marker schema includes ' . $definition . '.');
     }
+    acrlInstitutionMemberMigrationCheck(
+        substr_count($normalized, 'references acrl_institutions (code)') === 2
+            && strpos($normalized, 'references acrl_institutions (code) on delete') === false,
+        'Both institution-code foreign keys use the default restrictive delete rule.'
+    );
     foreach ([
         'start transaction',
         'commit',

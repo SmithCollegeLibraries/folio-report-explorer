@@ -7,14 +7,14 @@ CREATE TABLE IF NOT EXISTS acrl_institution_members (
     PRIMARY KEY (user_id, institution_code),
     KEY idx_acrl_institution_members_institution_role (institution_code, role),
     CONSTRAINT fk_acrl_institution_members_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
-    CONSTRAINT fk_acrl_institution_members_institution FOREIGN KEY (institution_code) REFERENCES acrl_institutions (code) ON DELETE CASCADE
+    CONSTRAINT fk_acrl_institution_members_institution FOREIGN KEY (institution_code) REFERENCES acrl_institutions (code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS acrl_institution_member_backfills (
     institution_code CHAR(2) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     completed_at DATETIME NOT NULL,
     PRIMARY KEY (institution_code),
-    CONSTRAINT fk_acrl_institution_member_backfill_institution FOREIGN KEY (institution_code) REFERENCES acrl_institutions (code) ON DELETE CASCADE
+    CONSTRAINT fk_acrl_institution_member_backfill_institution FOREIGN KEY (institution_code) REFERENCES acrl_institutions (code)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 START TRANSACTION;

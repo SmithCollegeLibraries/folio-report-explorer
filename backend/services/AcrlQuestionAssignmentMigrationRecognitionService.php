@@ -102,9 +102,9 @@ class AcrlQuestionAssignmentMigrationRecognitionService
             && self::indexAppearsComplete($db, 'acrl_institution_member_backfills', 'PRIMARY', ['institution_code'], true)
             && self::foreignKeysAppearComplete($db, 'acrl_institution_members', [
                 'user_id' => ['users', 'id', 'CASCADE'],
-                'institution_code' => ['acrl_institutions', 'code', 'CASCADE'],
+                'institution_code' => ['acrl_institutions', 'code', 'RESTRICT'],
             ]) && self::foreignKeysAppearComplete($db, 'acrl_institution_member_backfills', [
-                'institution_code' => ['acrl_institutions', 'code', 'CASCADE'],
+                'institution_code' => ['acrl_institutions', 'code', 'RESTRICT'],
             ]) && self::backfillMarkerAppearsComplete($db);
     }
 
@@ -286,12 +286,21 @@ class AcrlQuestionAssignmentMigrationRecognitionService
                 ];
             }
             foreach ($expected as $column => $shape) {
-                if (!isset($actual[$column]) || $actual[$column] !== [
+                if (!isset($actual[$column])) {
+                    return false;
+                }
+                $matchesExpected = $actual[$column] === [
                     $database,
                     strtolower($shape[0]),
                     strtolower($shape[1]),
                     strtoupper($shape[2]),
-                ]) {
+                ];
+                if ($column === 'institution_code') {
+                    // MySQL reports the default restrictive action as NO ACTION.
+                    $matchesExpected = array_slice($actual[$column], 0, 3) === [$database, 'acrl_institutions', 'code']
+                        && in_array($actual[$column][3], ['RESTRICT', 'NO ACTION'], true);
+                }
+                if (!$matchesExpected) {
                     return false;
                 }
             }
