@@ -1,5 +1,7 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { AuthUser, JwtPayload } from '../types';
+import { clearAcrlQueries } from '../services/acrlAccess';
 
 interface AuthContextType {
   /** Current authenticated user (null if not logged in) */
@@ -85,9 +87,12 @@ function userFromToken(payload: JwtPayload): AuthUser | null {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const identity = String(user?.id ?? 'anonymous');
+  const previousIdentity = useRef(identity);
 
   // Auth is enabled in production (when VITE_AUTH_ENABLED is set)
   // In dev mode (Docker), auth is disabled by default
@@ -103,11 +108,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
+    clearAcrlQueries(queryClient);
     localStorage.removeItem(STORAGE_ACCESS_KEY);
     localStorage.removeItem(STORAGE_REFRESH_KEY);
     setAccessToken(null);
     setUser(null);
-  }, []);
+  }, [queryClient]);
+
+  useEffect(() => {
+    if (previousIdentity.current === identity) return;
+    clearAcrlQueries(queryClient, previousIdentity.current);
+    previousIdentity.current = identity;
+  }, [identity, queryClient]);
 
   // Initialize from localStorage on mount
   useEffect(() => {

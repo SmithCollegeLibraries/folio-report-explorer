@@ -7,13 +7,13 @@ use app\models\User;
 /** Looks up approved app users without exposing other user fields. */
 class AcrlApprovedUserDirectoryService
 {
-    public function search(string $query): array
+    public function search(string $query, ?string $institutionCode = null): array
     {
         $query = trim($query);
         if (strlen($query) < 2) {
             return [];
         }
-        $users = User::find()
+        $queryBuilder = User::find()
             ->select(['id', 'first_name', 'last_name', 'username'])
             ->where(['is_approved' => 1])
             ->andWhere(['or',
@@ -22,8 +22,15 @@ class AcrlApprovedUserDirectoryService
                 ['like', 'username', $query],
             ])
             ->orderBy(['last_name' => SORT_ASC, 'first_name' => SORT_ASC, 'username' => SORT_ASC])
-            ->limit(25)
-            ->all();
+            ->limit(25);
+        if ($institutionCode !== null) {
+            $queryBuilder->andWhere(['or',
+                ['exists', (new \yii\db\Query())->select(new \yii\db\Expression('1'))->from('acrl_institution_members m')
+                    ->where('m.user_id = users.id')->andWhere(['m.institution_code' => $institutionCode])],
+                ['role' => 'admin'],
+            ]);
+        }
+        $users = $queryBuilder->all();
         return $this->represent($users);
     }
 

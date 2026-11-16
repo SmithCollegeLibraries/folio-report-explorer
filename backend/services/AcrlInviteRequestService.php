@@ -4,6 +4,8 @@ namespace app\services;
 
 use app\models\User;
 
+require_once __DIR__ . '/AcrlInstitutionIdentityService.php';
+
 /** Validates invite input and resolves it to the current ACRL catalogue. */
 class AcrlInviteRequestService
 {
@@ -61,18 +63,19 @@ class AcrlInviteRequestService
         return 'noreply@' . $parts['host'];
     }
 
-    public function validateBasics(string $email, array $targets, User $admin): string
+    public function validateBasics(string $email, array $targets, User $admin, string $institutionCode = 'SC'): string
     {
         $email = strtolower(trim($email));
         $adminEmail = strtolower(trim((string)$admin->email));
         if ($adminEmail === '' || filter_var($adminEmail, FILTER_VALIDATE_EMAIL) === false) {
-            throw new \InvalidArgumentException('Your account has no Smith email on file; sign in again.');
+            throw new \InvalidArgumentException('Your account has no email on file; sign in again.');
         }
         if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
             throw new \InvalidArgumentException('Enter a valid email address.');
         }
-        if (strtolower(substr(strrchr($email, '@'), 1)) !== strtolower(substr(strrchr($adminEmail, '@'), 1))) {
-            throw new \InvalidArgumentException('Invite email must use the same domain as your Smith email.');
+        $domain = AcrlInstitutionIdentityService::domainForCollege($institutionCode);
+        if ($domain === null || strtolower(substr(strrchr($email, '@'), 1)) !== $domain) {
+            throw new \InvalidArgumentException('Invite email must use the college domain.');
         }
         if (empty($targets)) {
             throw new \InvalidArgumentException('Choose at least one invite target.');
@@ -82,25 +85,12 @@ class AcrlInviteRequestService
 
     public function assertNoMatchingAccount(string $email): void
     {
-        $at = strrpos($email, '@');
-        $username = substr($email, 0, $at);
-        $domain = substr($email, $at + 1);
         $byEmail = $this->db->createCommand(
             'SELECT id, username, email, first_name, last_name, is_approved FROM users WHERE LOWER(email) = :email',
             [':email' => $email]
         )->queryAll();
-        $byName = $this->db->createCommand(
-            'SELECT id, username, email, first_name, last_name, is_approved FROM users WHERE LOWER(username) = :username',
-            [':username' => $username]
-        )->queryAll();
         $matches = [];
-        foreach (array_merge($byEmail, $byName) as $row) {
-            $emailMatch = strtolower((string)$row['email']) === $email;
-            $usernameMatch = strtolower((string)$row['username']) === $username && $email === $username . '@' . $domain;
-            if ($emailMatch || $usernameMatch) {
-                $matches[(int)$row['id']] = $row;
-            }
-        }
+        foreach ($byEmail as $row) $matches[(int)$row['id']] = $row;
         if (empty($matches)) {
             return;
         }

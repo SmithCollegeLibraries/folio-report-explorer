@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { acceptAcrlSuggestions, getAcrlEntry, saveAcrlAnswer, setAcrlSectionStatus } from '../api/acrl';
@@ -11,6 +11,7 @@ import { acrlBenchmarkColumns, buildAcrlBenchmarkRows } from '../services/acrlBe
 import type { AcrlEntryQuestion, AcrlEntryResponse, AcrlEntrySection } from '../types/acrl';
 import { downloadCsv } from '../utils/csv';
 import { acrlQuestionAnchorId, acrlQuestionLabel } from '../utils/acrlAssignments';
+import { acrlAccessError, acrlQueryKey, clearAcrlQueries } from '../services/acrlAccess';
 
 function errorText(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'response' in error) {
@@ -216,24 +217,46 @@ export default function AcrlEntryPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { isAdmin } = useAuth();
+  const { isAdmin, user } = useAuth();
+  const identity = String(user?.id ?? 'anonymous');
+  const previousIdentity = useRef(identity);
   const [activeSection, setActiveSection] = useState(0);
   const [detailsQuestion, setDetailsQuestion] = useState<AcrlEntryQuestion | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState(false);
+  const [denial, setDenial] = useState<{ identity: string; reason?: string } | null>(null);
+  const entryKey = acrlQueryKey('acrl-entry', user?.id, yearParam || 'latest');
   const entryQuery = useQuery({
-    queryKey: ['acrl-entry', yearParam || 'latest'],
+    queryKey: entryKey,
     queryFn: () => getAcrlEntry(yearParam ? Number(yearParam) : undefined),
   });
+  const accessError = acrlAccessError(entryQuery.error);
+  const denied = Boolean(accessError) || denial?.identity === identity;
+  useEffect(() => {
+    if (previousIdentity.current === identity) return;
+    clearAcrlQueries(queryClient, previousIdentity.current);
+    previousIdentity.current = identity;
+    setDetailsQuestion(null);
+    setExportError(false);
+    setExporting(false);
+  }, [identity, queryClient]);
+  useEffect(() => {
+    if (!accessError) return;
+    setDetailsQuestion(null);
+    setExportError(false);
+    setDenial({ identity, reason: accessError.reason });
+    queryClient.setQueryData(entryKey, null);
+    clearAcrlQueries(queryClient, identity, entryKey);
+  }, [accessError?.reason, accessError?.status, identity, queryClient]);
   useEffect(() => {
     if (!yearParam && entryQuery.data) navigate(`/acrl/entry/${entryQuery.data.selectedYear}`, { replace: true });
   }, [entryQuery.data, navigate, yearParam]);
-  const entry = entryQuery.data as AcrlEntryResponse | undefined;
+  const entry = denied ? undefined : entryQuery.data as AcrlEntryResponse | undefined;
   useEffect(() => {
     if (!entry || !isAdmin || location.hash !== '#section-assignments') return;
     document.getElementById('section-assignments')?.scrollIntoView?.({ block: 'start', behavior: 'smooth' });
   }, [entry, isAdmin, location.hash]);
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ['acrl-entry', String(entry?.selectedYear)] });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: acrlQueryKey('acrl-entry', user?.id, String(entry?.selectedYear)) });
   const exportBenchmarkCsv = async () => {
     setExporting(true);
     setExportError(false);
@@ -284,7 +307,7 @@ export default function AcrlEntryPage() {
         <p className="max-w-3xl text-sm leading-6 text-gray-600">Enter and review survey values. Year-over-year changes are advisory and use approved question links.</p>
       </header>
       {entryQuery.isLoading && <p role="status" className="text-sm text-gray-500">Loading published survey…</p>}
-      {entryQuery.error && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">Could not load this published survey.</p>}
+      {denied && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">{(accessError?.reason ?? denial?.reason) === 'not_a_member' ? "You aren't assigned to a college for ACRL yet - ask your ACRL administrator" : 'Could not load this published survey.'}</p>}
       {entry && <>
         <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg border border-gray-200 bg-white p-4">
           <label className="text-sm font-medium text-gray-700">Survey year
@@ -300,7 +323,7 @@ export default function AcrlEntryPage() {
           </div>
         </div>
         {exportError && <p role="alert" className="rounded bg-rose-50 p-3 text-sm text-rose-800">Could not refresh the survey answers for export. Please try again.</p>}
-        {isAdmin && <AcrlSectionAssignmentPanel key={entry.selectedYear} year={entry.selectedYear} sections={entry.sections} hasPreviousYear={entry.years.includes(entry.selectedYear - 1)} />}
+        {isAdmin && <AcrlSectionAssignmentPanel key={`${identity}-${entry.selectedYear}`} year={entry.selectedYear} sections={entry.sections} hasPreviousYear={entry.years.includes(entry.selectedYear - 1)} />}
         <section aria-label="Your assignments" className="space-y-3 rounded-lg border border-folio-200 bg-folio-50/50 p-4">
           <div>
             <h2 className="font-semibold text-gray-900">Your assignments</h2>

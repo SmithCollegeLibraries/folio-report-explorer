@@ -5,9 +5,13 @@ import AcrlFileStatus from './AcrlFileStatus';
 import type { AcrlSurveyYear } from '../types/acrl';
 import { getPublishedAcrlYears } from '../utils/acrl';
 import { parseCsvRecords } from '../utils/csv';
+import { useAuth } from '../hooks/useAuth';
+import { acrlQueryKey } from '../services/acrlAccess';
 
 export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const thresholdKey = acrlQueryKey('acrl-threshold', user?.id);
   const publishedYears = getPublishedAcrlYears(years);
   const [year, setYear] = useState<number | ''>('');
   const [sourceLabel, setSourceLabel] = useState('');
@@ -18,7 +22,7 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
   const [fileError, setFileError] = useState('');
   const [importResult, setImportResult] = useState('');
   const [readingFile, setReadingFile] = useState(false);
-  const thresholdQuery = useQuery({ queryKey: ['acrl', 'threshold'], queryFn: getAcrlThreshold });
+  const thresholdQuery = useQuery({ queryKey: thresholdKey, queryFn: getAcrlThreshold });
   useEffect(() => {
     if (thresholdQuery.data) setThreshold(String(thresholdQuery.data.thresholdPercent));
   }, [thresholdQuery.data]);
@@ -26,7 +30,7 @@ export default function AcrlToolsPanel({ years }: { years: AcrlSurveyYear[] }) {
     mutationFn: () => saveAcrlThreshold(Number(threshold)),
     onSuccess: (result) => {
       setThreshold(String(result.thresholdPercent));
-      queryClient.setQueryData(['acrl', 'threshold'], result);
+      queryClient.setQueryData(thresholdKey, result);
     },
   });
   const previewMutation = useMutation({

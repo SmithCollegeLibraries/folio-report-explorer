@@ -165,6 +165,7 @@ class AcrlQuestionAssignmentService
         $copiedQuestions = [];
         $skippedQuestions = [];
         $rowsToInsert = [];
+        $userIdsByTarget = [];
         if ($questionsAlreadyAssigned) {
             foreach ($currentQuestions as $question) {
                 $key = $this->questionKey($question['sheet'], $question['question_id'], $question['part']);
@@ -184,6 +185,7 @@ class AcrlQuestionAssignmentService
                 }
                 $copiedQuestions[] = $this->questionLabel($question);
                 foreach (array_keys($usersByTarget[$key]) as $userId) {
+                    $userIdsByTarget[$key][] = (int)$userId;
                     $rowsToInsert[] = [
                         'survey_year' => $year,
                         'sheet' => $question['sheet'],
@@ -195,13 +197,27 @@ class AcrlQuestionAssignmentService
                 }
             }
         }
+        $skippedUsers = [];
         if (!empty($rowsToInsert)) {
             $actorId = AcrlSectionAssignmentService::actorId($assignedBy);
             foreach ($rowsToInsert as &$row) {
                 $row['assigned_by'] = $actorId;
             }
             unset($row);
-            $this->repository->insertQuestionAssignments($rowsToInsert, $institutionCode);
+            $skippedUsers = (array)$this->repository->insertQuestionAssignments($rowsToInsert, $institutionCode);
+            foreach ($currentQuestions as $question) {
+                $key = $this->questionKey($question['sheet'], $question['question_id'], $question['part']);
+                $targetIds = $userIdsByTarget[$key] ?? [];
+                if (empty($targetIds)) continue;
+                $inserted = array_diff($targetIds, $skippedUsers);
+                if (empty($inserted)) {
+                    $label = $this->questionLabel($question);
+                    $copiedQuestions = array_values(array_filter($copiedQuestions, function ($item) use ($label) {
+                        return $item['sheet'] !== $label['sheet'] || $item['questionId'] !== $label['questionId'] || $item['part'] !== $label['part'];
+                    }));
+                    $skippedQuestions[] = $label;
+                }
+            }
         }
         return [
             'institution' => $institutionCode,
@@ -209,6 +225,7 @@ class AcrlQuestionAssignmentService
             'sourceYear' => $previousYear,
             'copiedQuestions' => $copiedQuestions,
             'skippedQuestions' => $skippedQuestions,
+            'skippedUsers' => array_values(array_unique($skippedUsers)),
             'unmatchedQuestions' => $unmatchedQuestions,
             'questionsAlreadyAssigned' => $questionsAlreadyAssigned,
         ];
@@ -293,6 +310,7 @@ class AcrlQuestionAssignmentService
             'sourceYear' => $previousYear,
             'copiedQuestions' => [],
             'skippedQuestions' => [],
+            'skippedUsers' => [],
             'unmatchedQuestions' => [],
             'questionsAlreadyAssigned' => false,
         ];

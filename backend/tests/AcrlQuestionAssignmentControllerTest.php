@@ -24,14 +24,19 @@ $app = new Application([
 ]);
 $app->errorHandler->unregister();
 $db = $app->db;
-$db->createCommand('CREATE TABLE users (id INTEGER PRIMARY KEY, smith_id TEXT, username TEXT, first_name TEXT, last_name TEXT, role TEXT, is_approved INTEGER)')->execute();
+$db->createCommand('CREATE TABLE users (id INTEGER PRIMARY KEY, smith_id TEXT, username TEXT, first_name TEXT, last_name TEXT, email TEXT, role TEXT, is_approved INTEGER)')->execute();
+$db->createCommand('CREATE TABLE acrl_institution_members (user_id INTEGER NOT NULL, institution_code TEXT NOT NULL, role TEXT NOT NULL, granted_by INTEGER NULL, granted_at TEXT NOT NULL, PRIMARY KEY (user_id, institution_code))')->execute();
 $db->createCommand('CREATE TABLE acrl_survey_years (survey_year INTEGER PRIMARY KEY, status TEXT NOT NULL)')->execute();
 $db->createCommand('CREATE TABLE acrl_questions (survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\', section TEXT NOT NULL, prompt TEXT NOT NULL, survey_order INTEGER NOT NULL, PRIMARY KEY (survey_year, sheet, question_id, part))')->execute();
 $db->createCommand('CREATE TABLE acrl_section_assignments (institution_code TEXT NOT NULL, survey_year INTEGER NOT NULL, section TEXT NOT NULL, user_id INTEGER NOT NULL, assigned_by INTEGER NULL)')->execute();
 $db->createCommand('CREATE TABLE acrl_question_assignments (institution_code TEXT NOT NULL, survey_year INTEGER NOT NULL, sheet TEXT NOT NULL, question_id TEXT NOT NULL, part TEXT NOT NULL DEFAULT \'\', user_id INTEGER NOT NULL, assigned_by INTEGER NULL, assigned_at TEXT)')->execute();
-$db->createCommand()->insert('users', ['id' => 9, 'smith_id' => 'acrl028-admin', 'username' => 'acrl028-admin', 'first_name' => 'Synthetic', 'last_name' => 'Admin', 'role' => 'admin', 'is_approved' => 1])->execute();
-$db->createCommand()->insert('users', ['id' => 10, 'smith_id' => 'acrl028-editor', 'username' => 'acrl028-editor', 'first_name' => 'Synthetic', 'last_name' => 'Editor', 'role' => 'user', 'is_approved' => 1])->execute();
-$db->createCommand()->insert('users', ['id' => 11, 'smith_id' => 'acrl028-unapproved', 'username' => 'acrl028-unapproved', 'first_name' => 'Synthetic', 'last_name' => 'Unapproved', 'role' => 'user', 'is_approved' => 0])->execute();
+$db->createCommand()->insert('users', ['id' => 9, 'smith_id' => 'acrl028-admin', 'username' => 'acrl028-admin', 'first_name' => 'Synthetic', 'last_name' => 'Admin', 'email' => 'admin@smith.edu', 'role' => 'admin', 'is_approved' => 1])->execute();
+$db->createCommand()->insert('users', ['id' => 10, 'smith_id' => 'acrl028-editor', 'username' => 'acrl028-editor', 'first_name' => 'Synthetic', 'last_name' => 'Editor', 'email' => 'editor@smith.edu', 'role' => 'user', 'is_approved' => 1])->execute();
+$db->createCommand()->insert('users', ['id' => 11, 'smith_id' => 'acrl028-unapproved', 'username' => 'acrl028-unapproved', 'first_name' => 'Synthetic', 'last_name' => 'Unapproved', 'email' => 'unapproved@smith.edu', 'role' => 'user', 'is_approved' => 0])->execute();
+$db->createCommand()->insert('users', ['id' => 12, 'smith_id' => 'acrl028-nonmember', 'username' => 'acrl028-nonmember', 'first_name' => 'Synthetic', 'last_name' => 'Nonmember', 'email' => 'nonmember@smith.edu', 'role' => 'user', 'is_approved' => 1])->execute();
+$db->createCommand()->insert('users', ['id' => 13, 'smith_id' => 'acrl028-college-admin', 'username' => 'acrl028-college-admin', 'first_name' => 'Synthetic', 'last_name' => 'College Admin', 'email' => 'college-admin@smith.edu', 'role' => 'user', 'is_approved' => 1])->execute();
+$db->createCommand()->insert('acrl_institution_members', ['user_id' => 10, 'institution_code' => 'SC', 'role' => 'member', 'granted_by' => 9, 'granted_at' => '2026-11-13 12:00:00'])->execute();
+$db->createCommand()->insert('acrl_institution_members', ['user_id' => 13, 'institution_code' => 'SC', 'role' => 'admin', 'granted_by' => 9, 'granted_at' => '2026-11-13 12:00:00'])->execute();
 $db->createCommand()->insert('acrl_survey_years', ['survey_year' => 2026, 'status' => 'published'])->execute();
 $db->createCommand()->insert('acrl_questions', [
     'survey_year' => 2026, 'sheet' => 'survey', 'question_id' => '60', 'part' => 'A',
@@ -94,6 +99,7 @@ $cases = [
     ['unpublished year', 2030, ['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'userIds' => []], 404],
     ['unknown question', 2026, ['sheet' => 'survey', 'questionId' => '999', 'part' => '', 'userIds' => []], 404],
     ['unapproved user', 2026, ['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'userIds' => [11]], 422],
+    ['approved nonmember', 2026, ['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'userIds' => [12]], 422],
     ['non-positive user id', 2026, ['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'userIds' => [0]], 422],
 ];
 
@@ -122,6 +128,15 @@ try {
 } catch (Throwable $error) {
     acrlQuestionAssignmentControllerCheck(false, 'GET acrl/years/<year>/assignments threw ' . get_class($error) . ': ' . $error->getMessage());
 }
+
+$app->user->setIdentity(User::findOne(13));
+$app->response->statusCode = 200;
+Yii::$app->request->setQueryParams(['q' => 'Synthetic', 'institution' => 'SC']);
+$scopedUsers = $controller->actionSearchUsers();
+$scopedIds = array_map(function ($user) { return $user['id']; }, $scopedUsers['users'] ?? []);
+sort($scopedIds);
+acrlQuestionAssignmentControllerCheck(Yii::$app->response->statusCode === 200 && $scopedIds === [9, 10, 13],
+    'SC assignment search returns approved SC members and app admins, excluding approved nonmembers and unapproved users.');
 
 $app->user->setIdentity(User::findOne(10));
 acrlQuestionAssignmentControllerCall($controller, 2026, ['sheet' => 'survey', 'questionId' => '60', 'part' => 'A', 'userIds' => []], 403, 'approved non-admin', $failures);

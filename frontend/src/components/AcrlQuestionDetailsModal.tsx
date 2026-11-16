@@ -4,6 +4,8 @@ import { addAcrlQuestionNote, deleteAcrlQuestionNote, editAcrlQuestionNote, getA
 import useAcrlAutofillMethods from '../hooks/useAcrlAutofillMethods';
 import AcrlCountingMethod from './AcrlCountingMethod';
 import type { AcrlEntryQuestion, AcrlQuestionNote } from '../types/acrl';
+import { useAuth } from '../hooks/useAuth';
+import { acrlAccessError, acrlQueryKey, clearAcrlQueries } from '../services/acrlAccess';
 
 interface Props {
   year: number;
@@ -14,6 +16,7 @@ interface Props {
 
 export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onClose }: Props) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [tab, setTab] = useState<'instructions' | 'notes'>('instructions');
   const [noteText, setNoteText] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -23,15 +26,21 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
   const dialogRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const closeHandler = useRef(onClose);
-  const queryKey = ['acrl-question-details', year, question.sheet, question.questionId, question.part];
+  const queryKey = acrlQueryKey('acrl-question-details', user?.id, year, question.sheet, question.questionId, question.part);
   const countingSource = question.questionId === '79a' || question.questionId === '79c' ? 'Vea' : 'FOLIO';
   const detailsQuery = useQuery({
     queryKey,
     queryFn: () => getAcrlQuestionDetails(year, question.sheet, question.questionId, question.part),
   });
+  const detailsDenied = acrlAccessError(detailsQuery.error);
   const methodsQuery = useAcrlAutofillMethods(question.sheet, question.questionId, question.part);
 
   useEffect(() => { closeHandler.current = onClose; }, [onClose]);
+  useEffect(() => {
+    if (!detailsDenied) return;
+    clearAcrlQueries(queryClient, String(user?.id ?? 'anonymous'));
+    onClose();
+  }, [detailsDenied?.reason, detailsDenied?.status, onClose, queryClient, user?.id]);
   useEffect(() => {
     const priorFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
@@ -80,7 +89,7 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
 
   const refreshDetails = () => {
     queryClient.invalidateQueries({ queryKey });
-    queryClient.invalidateQueries({ queryKey: ['acrl-entry', String(year)] });
+    queryClient.invalidateQueries({ queryKey: acrlQueryKey('acrl-entry', user?.id, String(year)) });
   };
   const addMutation = useMutation({
     mutationFn: () => addAcrlQuestionNote(year, {
@@ -106,6 +115,8 @@ export default function AcrlQuestionDetailsModal({ year, question, isAdmin, onCl
   });
   const questionLabel = `Q${question.questionId}${question.part ? ` ${question.part}` : ''}`;
   const notes = detailsQuery.data?.notes || [];
+
+  if (detailsDenied) return null;
 
   const beginEdit = (item: AcrlQuestionNote) => {
     setEditingId(item.id);

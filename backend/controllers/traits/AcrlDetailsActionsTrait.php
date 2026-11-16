@@ -5,13 +5,15 @@ namespace app\controllers\traits;
 use Yii;
 use app\services\AcrlInstructionsService;
 use app\services\AcrlQuestionNotesService;
+use app\services\AcrlInstitutionMembershipService;
+use app\models\User;
 
 /** ACRL instruction and question-note actions shared by the catalogue controller. */
 trait AcrlDetailsActionsTrait
 {
     public function actionSaveInstructions($year)
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($forbidden = $this->requireAdministrator()) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         try {
             return (new AcrlInstructionsService())->replace(
@@ -44,7 +46,7 @@ trait AcrlDetailsActionsTrait
                 'instructions' => $instructions,
                 'notes' => $notes,
                 'canAddNote' => true,
-                'canManageNotes' => $this->isPersistedAdministrator(),
+                'canManageNotes' => (new AcrlInstitutionMembershipService())->canManage((int)(Yii::$app->user->id ?? 0), $institution),
             ], $institution);
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
@@ -77,7 +79,9 @@ trait AcrlDetailsActionsTrait
 
     public function actionEditQuestionNote($id)
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
+        $institution = $this->noteActionInstitution((int)$id);
+        if ($institution === null) return $this->errorResponse(404, 'The collection note no longer exists.');
         $body = Yii::$app->request->bodyParams;
         try {
             return (new AcrlQuestionNotesService())->editNote(
@@ -96,17 +100,20 @@ trait AcrlDetailsActionsTrait
 
     public function actionDeleteQuestionNote($id)
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
+        $institution = $this->noteActionInstitution((int)$id);
+        if ($institution === null) return $this->errorResponse(404, 'The collection note no longer exists.');
         if (!(new AcrlQuestionNotesService())->deleteNote((int)$id)) {
             return $this->errorResponse(404, 'The collection note no longer exists.');
         }
-        return ['deleted' => true, 'institution' => 'SC'];
+        return ['deleted' => true, 'institution' => $institution];
     }
 
     public function actionNotesImportPreview($year)
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         try {
             return $this->withAcrlInstitution((new AcrlQuestionNotesService())->previewImport((int)$year, $body['rows'] ?? null, $institution), $institution);
@@ -119,8 +126,9 @@ trait AcrlDetailsActionsTrait
 
     public function actionNotesImportConfirm($year)
     {
-        if (($forbidden = $this->requireAcrlAdministrator()) !== null) return $forbidden;
+        if (($forbidden = $this->requireAcrlUser()) !== null) return $forbidden;
         if (($invalid = $this->requestAcrlInstitution($institution)) !== null) return $invalid;
+        if (($forbidden = $this->requireInstitutionAdministrator($institution)) !== null) return $forbidden;
         $body = Yii::$app->request->bodyParams;
         try {
             return $this->withAcrlInstitution((new AcrlQuestionNotesService())->confirmImport((int)$year, $body['rows'] ?? null, (string)(Yii::$app->user->id ?? ''), $institution), $institution);
@@ -129,5 +137,22 @@ trait AcrlDetailsActionsTrait
         } catch (\DomainException $exception) {
             return $this->errorResponse(404, $exception->getMessage());
         }
+    }
+
+    private function noteActionInstitution(int $id): ?string
+    {
+        $memberships = new AcrlInstitutionMembershipService(Yii::$app->db);
+        $userId = (int)Yii::$app->user->id;
+        if (!$memberships->canManageAny($userId)) {
+            Yii::$app->response->statusCode = 404;
+            return null;
+        }
+        $institution = (new AcrlQuestionNotesService())->institutionForNote($id);
+        if (!in_array($institution, AcrlInstitutionMembershipService::ENABLED_INSTITUTIONS, true)
+            || !$memberships->canManage($userId, (string)$institution)) {
+            Yii::$app->response->statusCode = 404;
+            return null;
+        }
+        return $institution;
     }
 }

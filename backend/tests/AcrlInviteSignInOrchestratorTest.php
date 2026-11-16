@@ -30,7 +30,7 @@ function acrlInviteOrchestratorCheck($condition, string $message): void
     if (!$condition) $failures[] = $message;
 }
 
-function acrlInviteOrchestratorRun(int $userId, bool $isNewUser, $acceptResult, bool $throw, string $case, ?string $eppn = 'sign-in@smith.example', ?string $uid = 'sign-in'): array
+function acrlInviteOrchestratorRun(int $userId, bool $isNewUser, $acceptResult, bool $throw, string $case, ?string $eppn = 'sign-in@smith.edu', ?string $uid = 'sign-in'): array
 {
     global $db;
     if ($userId === 1) $db->createCommand()->update('users', ['is_approved' => 0], ['id' => 1])->execute();
@@ -49,7 +49,7 @@ function acrlInviteOrchestratorRun(int $userId, bool $isNewUser, $acceptResult, 
                 $events[] = ['accept', $passedUser->id, $eppn, $uid];
                 if ($throw) {
                     $passedUser->is_approved = 1;
-                    throw new RuntimeException('Synthetic database failure with private details jane.test@smith.example');
+                    throw new RuntimeException('Synthetic database failure with private details jane.test@smith.edu');
                 }
                 if (is_callable($acceptResult)) {
                     return call_user_func($acceptResult, $eppn, $uid);
@@ -109,13 +109,13 @@ acrlInviteOrchestratorCheck(array_column($approved['events'], 0) === ['accept', 
 acrlInviteOrchestratorCheck(($approved['result']['redirect'] ?? null) === '/', 'Approved user still reaches the home page.');
 
 $authorizeSource = (string)file_get_contents(__DIR__ . '/../../admin/authorize.php');
-$findPosition = strpos($authorizeSource, 'User::findOne([\'smith_id\' => $smithId])');
+$findPosition = strpos($authorizeSource, 'AcrlSignInIdentityService())->findOrCreate(');
 $notifyPosition = strpos($authorizeSource, 'User::notifyAdminsOfNewUser($user)');
 $identityPosition = strpos($authorizeSource, 'AcrlInviteSignInOrchestrator::inviteIdentityFromServer($_SERVER)');
 $orchestratorPosition = strpos($authorizeSource, 'AcrlInviteSignInOrchestrator())->run(');
 acrlInviteOrchestratorCheck($findPosition !== false && $orchestratorPosition !== false && $notifyPosition !== false
     && $findPosition < $orchestratorPosition && $orchestratorPosition < $notifyPosition,
-    'authorize.php calls the testable invite sign-in orchestrator after find-or-create and before new-user notification.');
+    'authorize.php calls the extracted identity service before the invite sign-in orchestrator and notification.');
 acrlInviteOrchestratorCheck($identityPosition !== false && $identityPosition < $orchestratorPosition,
     'authorize.php selects invite identity only from Shibboleth server attributes before the invite decision.');
 $previousRemoteUser = $_SERVER['REMOTE_USER'] ?? null;
@@ -135,7 +135,7 @@ acrlInviteOrchestratorCheck(is_array($withoutShibUidIdentity)
 $withoutShibUidIdentity = is_array($withoutShibUidIdentity) ? $withoutShibUidIdentity : ['eppn' => null, 'uid' => null];
 $remoteAccepted = false;
 $withoutShibUid = acrlInviteOrchestratorRun(1, true, function ($eppn, $uid) use ($remoteIdentity, &$remoteAccepted) {
-    $remoteAccepted = ($eppn !== null && strtolower($eppn) === $remoteIdentity . '@smith.example')
+    $remoteAccepted = ($eppn !== null && strtolower($eppn) === $remoteIdentity . '@smith.edu')
         || ($uid !== null && strtolower($uid) === $remoteIdentity);
     return $remoteAccepted;
 }, false, 'missing Shibboleth uid with matching REMOTE_USER', $withoutShibUidIdentity['eppn'], $withoutShibUidIdentity['uid']);
@@ -150,13 +150,13 @@ acrlInviteOrchestratorCheck(array_column($remoteEvents, 0) === ['accept', 'reloa
 $withShibUidIdentity = null;
 try {
     $withShibUidIdentity = AcrlInviteSignInOrchestrator::inviteIdentityFromServer([
-        'eppn' => 'sign-in@smith.example', 'uid' => 'sign-in', 'REMOTE_USER' => 'different-user',
+        'eppn' => 'sign-in@smith.edu', 'uid' => 'sign-in', 'REMOTE_USER' => 'different-user',
     ]);
 } catch (Throwable $error) {
     $failures[] = 'Identity selection with Shibboleth attributes failed: ' . $error->getMessage();
 }
 acrlInviteOrchestratorCheck(is_array($withShibUidIdentity) && ($withShibUidIdentity['uid'] ?? null) === 'sign-in'
-    && ($withShibUidIdentity['eppn'] ?? null) === 'sign-in@smith.example',
+    && ($withShibUidIdentity['eppn'] ?? null) === 'sign-in@smith.edu',
     'Invite identity selection returns the Shibboleth eppn and uid attributes.');
 
 if ($failures) {

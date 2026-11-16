@@ -18,9 +18,9 @@ class AcrlSectionAssignmentService
             : null);
     }
 
-    public function searchApprovedUsers(string $query): array
+    public function searchApprovedUsers(string $query, ?string $institutionCode = null): array
     {
-        return $this->users->search($query);
+        return $this->users->search($query, $institutionCode);
     }
 
     public function listForYear(int $year, string $institutionCode): array
@@ -189,6 +189,7 @@ class AcrlSectionAssignmentService
             'sourceYear' => $previousYear,
             'copiedSections' => $writeResult['copiedSections'],
             'skippedSections' => $writeResult['skippedSections'],
+            'skippedUsers' => $writeResult['skippedUsers'] ?? [],
             'unmatchedSections' => $unmatchedSections,
             'alreadyAssigned' => $writeResult['alreadyAssigned'],
             'failed' => false,

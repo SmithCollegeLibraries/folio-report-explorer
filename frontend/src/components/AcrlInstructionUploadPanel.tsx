@@ -7,9 +7,12 @@ import { sha256ForFile } from '../services/acrlWorksheetParser';
 import { errorMessage } from '../utils/errorMessage';
 import AcrlFileStatus from './AcrlFileStatus';
 import type { AcrlInstructionParseResult, AcrlSurveyYear } from '../types/acrl';
+import { useAuth } from '../hooks/useAuth';
+import { acrlQueryKey } from '../services/acrlAccess';
 
 export default function AcrlInstructionUploadPanel({ years }: { years: AcrlSurveyYear[] }) {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [year, setYear] = useState<number | ''>('');
   const [file, setFile] = useState<File | null>(null);
   const [parsed, setParsed] = useState<AcrlInstructionParseResult | null>(null);
@@ -18,7 +21,8 @@ export default function AcrlInstructionUploadPanel({ years }: { years: AcrlSurve
   const [readMessage, setReadMessage] = useState('');
   const [saveStage, setSaveStage] = useState<'checking' | 'saving' | null>(null);
   const [saveFailureStage, setSaveFailureStage] = useState<'checking' | 'saving' | null>(null);
-  const review = useQuery({ queryKey: ['acrl', 'review', year], queryFn: () => getAcrlReview(Number(year)), enabled: year !== '' });
+  const reviewKey = acrlQueryKey('acrl-review', user?.id, year);
+  const review = useQuery({ queryKey: reviewKey, queryFn: () => getAcrlReview(Number(year)), enabled: year !== '' });
   const questions = (review.data?.items || []).flatMap((item) => item.current?.sheet === 'survey' ? [{
     sheet: 'survey' as const,
     question_id: item.current.question_id,
@@ -36,7 +40,7 @@ export default function AcrlInstructionUploadPanel({ years }: { years: AcrlSurve
       setSaveStage('checking');
       try {
         await queryClient.fetchQuery({
-          queryKey: ['acrl', 'review', year],
+          queryKey: reviewKey,
           queryFn: () => getAcrlReview(Number(year)),
           staleTime: 0,
         });

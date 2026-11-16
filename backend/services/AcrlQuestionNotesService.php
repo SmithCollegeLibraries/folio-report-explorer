@@ -87,9 +87,10 @@ class AcrlQuestionNotesService
     public function editNote(int $id, $note, $source, $originYear, string $userId): array
     {
         return $this->repository->withQuestionNoteYearLock($id, function ($current) use ($id, $note, $source, $originYear, $userId) {
-            if (!$current || (string)$current['institution_code'] !== 'SC') throw new \DomainException('The collection note no longer exists.');
+            if (!$current) throw new \DomainException('The collection note no longer exists.');
+            $institution = (string)$current['institution_code'];
             $changes = $this->normalizeNote($note, $source, $originYear, (int)$current['origin_year']);
-            $updated = $this->repository->updateQuestionNote($id, $changes, $userId, 'SC');
+            $updated = $this->repository->updateQuestionNote($id, $changes, $userId, $institution);
             if (!$updated) throw new \DomainException('The collection note no longer exists.');
             return $this->publicNote($updated);
         });
@@ -98,9 +99,14 @@ class AcrlQuestionNotesService
     public function deleteNote(int $id): bool
     {
         return $this->repository->withQuestionNoteYearLock($id, function ($current) use ($id) {
-            if (!$current || (string)$current['institution_code'] !== 'SC') return false;
-            return $this->repository->deleteQuestionNote($id, 'SC');
+            if (!$current) return false;
+            return $this->repository->deleteQuestionNote($id, (string)$current['institution_code']);
         });
+    }
+
+    public function institutionForNote(int $id): ?string
+    {
+        return $this->repository->questionNoteInstitution($id);
     }
 
     public function notesForQuestion(int $year, string $sheet, string $questionId, string $part, string $institutionCode): array

@@ -93,6 +93,12 @@ class AcrlDetailsRepository
         return $this->findQuestionNote($id);
     }
 
+    public function questionNoteInstitution(int $id): ?string
+    {
+        $institution = $this->db->createCommand('SELECT institution_code FROM acrl_question_notes WHERE id = :id', [':id' => $id])->queryScalar();
+        return $institution === false || $institution === null ? null : (string)$institution;
+    }
+
     public function deleteQuestionNote(int $id, string $institutionCode): bool
     {
         return $this->db->createCommand()->delete('acrl_question_notes', ['id' => $id, 'institution_code' => $institutionCode])->execute() > 0;

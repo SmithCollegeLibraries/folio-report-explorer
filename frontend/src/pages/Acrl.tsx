@@ -10,9 +10,13 @@ import { getAcrlReview, listAcrlCatalogueYears, publishAcrlYear, saveAcrlLinks, 
 import { parseWorksheetFile, sha256ForFile } from '../services/acrlWorksheetParser';
 import { errorMessage } from '../utils/errorMessage';
 import type { AcrlAssignmentCopyResult, AcrlLinkDecisionInput, AcrlQuestionPart, AcrlWorksheetParseResult } from '../types/acrl';
+import { useAuth } from '../hooks/useAuth';
+import { acrlQueryKey } from '../services/acrlAccess';
 
 export default function AcrlPage() {
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const yearsKey = acrlQueryKey('acrl-years', user?.id);
   const [surveyYear, setSurveyYear] = useState(String(new Date().getFullYear()));
   const [worksheet, setWorksheet] = useState<File | null>(null);
   const [parsed, setParsed] = useState<AcrlWorksheetParseResult | null>(null);
@@ -27,9 +31,9 @@ export default function AcrlPage() {
   const reviewHeadingRef = useRef<HTMLHeadingElement>(null);
   const lastScrolledReviewSequence = useRef(0);
 
-  const yearsQuery = useQuery({ queryKey: ['acrl', 'years'], queryFn: listAcrlCatalogueYears });
+  const yearsQuery = useQuery({ queryKey: yearsKey, queryFn: listAcrlCatalogueYears });
   const reviewQuery = useQuery({
-    queryKey: ['acrl', 'review', reviewYear],
+    queryKey: acrlQueryKey('acrl-review', user?.id, reviewYear),
     queryFn: () => getAcrlReview(reviewYear as number),
     enabled: reviewYear !== null,
   });
@@ -51,8 +55,8 @@ export default function AcrlPage() {
     onSuccess: (result) => {
       setReviewYear(result.surveyYear.surveyYear);
       setReviewOpenSequence((current) => current + 1);
-      queryClient.setQueryData(['acrl', 'review', result.surveyYear.surveyYear], result.review);
-      queryClient.invalidateQueries({ queryKey: ['acrl', 'years'] });
+      queryClient.setQueryData(acrlQueryKey('acrl-review', user?.id, result.surveyYear.surveyYear), result.review);
+      queryClient.invalidateQueries({ queryKey: yearsKey });
       queryClient.invalidateQueries({ queryKey: ['local', 'acrl-years'] });
     },
     onMutate: () => setUploadPhase('saving'),
@@ -63,7 +67,7 @@ export default function AcrlPage() {
       if (reviewYear === null) throw new Error('Select a year to review first.');
       return saveAcrlLinks(reviewYear, links);
     },
-    onSuccess: (review) => queryClient.setQueryData(['acrl', 'review', review.surveyYear], review),
+    onSuccess: (review) => queryClient.setQueryData(acrlQueryKey('acrl-review', user?.id, review.surveyYear), review),
   });
   const publishMutation = useMutation({
     mutationFn: () => {
@@ -73,8 +77,8 @@ export default function AcrlPage() {
     onMutate: () => setAssignmentCopyResult(null),
     onSuccess: (review) => {
       setAssignmentCopyResult(review.assignmentCopy || null);
-      queryClient.setQueryData(['acrl', 'review', review.surveyYear], review);
-      queryClient.invalidateQueries({ queryKey: ['acrl', 'years'] });
+      queryClient.setQueryData(acrlQueryKey('acrl-review', user?.id, review.surveyYear), review);
+      queryClient.invalidateQueries({ queryKey: yearsKey });
     },
   });
 
@@ -93,7 +97,7 @@ export default function AcrlPage() {
 
     try {
       const years = await queryClient.fetchQuery({
-        queryKey: ['acrl', 'years'],
+        queryKey: yearsKey,
         queryFn: listAcrlCatalogueYears,
         staleTime: 0,
       });

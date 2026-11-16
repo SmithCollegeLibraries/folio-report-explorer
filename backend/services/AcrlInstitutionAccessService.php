@@ -2,15 +2,15 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/AcrlInstitutionMembershipService.php';
+
 /** Validates the institution query used by institution-scoped ACRL routes. */
 class AcrlInstitutionAccessService
 {
-    private const INSTITUTIONS = ['AC', 'HC', 'MH', 'SC', 'UM'];
-
     public function requireSupported(string $queryString, array $queryParams): string
     {
         $institution = $this->requireCode($queryString, $queryParams);
-        if ($institution !== 'SC') {
+        if (!in_array($institution, AcrlInstitutionMembershipService::ENABLED_INSTITUTIONS, true)) {
             throw new \DomainException('institution_not_enabled', 403);
         }
         return $institution;
@@ -34,7 +34,7 @@ class AcrlInstitutionAccessService
         }
 
         $institution = $queryParams['institution'];
-        if (!in_array($institution, self::INSTITUTIONS, true)) {
+        if (!array_key_exists($institution, AcrlInstitutionMembershipService::INSTITUTIONS)) {
             throw new \DomainException('institution_unknown', 400);
         }
         return $institution;
