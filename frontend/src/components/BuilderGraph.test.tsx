@@ -65,11 +65,22 @@ vi.mock('@xyflow/react', async () => {
     useReactFlow: () => ({ fitView: flowHarness.fitView }),
     useNodesState: (initial: Node[]) => {
       const [nodes, setNodes] = ReactModule.useState(initial);
-      const onNodesChange = (changes: { id: string; type: string; position?: Node['position'] }[]) => {
+      const onNodesChange = (changes: {
+        id: string;
+        type: string;
+        position?: Node['position'];
+        dimensions?: NonNullable<Node['measured']>;
+      }[]) => {
         setNodes((current) => current.map((node) => {
           const positionChange = changes.find((change) => (
             change.id === node.id && change.type === 'position' && change.position
           ));
+          const dimensionsChange = changes.find((change) => (
+            change.id === node.id && change.type === 'dimensions' && change.dimensions
+          ));
+          if (dimensionsChange?.dimensions) {
+            return { ...node, measured: dimensionsChange.dimensions };
+          }
           return positionChange?.position
             ? { ...node, position: positionChange.position }
             : node;
@@ -131,6 +142,26 @@ const graphElementWithData = (
     onAddTable={vi.fn()}
     onRemoveTable={vi.fn()}
   />
+);
+
+const selectedLongTable = 'inventory.instance__t__identifiers';
+const suggestedLongTable = 'inventory.preceding_suceeding_titles__t';
+const longTableDetails = {
+  [selectedLongTable]: {
+    relationships: {
+      parents: [],
+      children: [{ child_table: suggestedLongTable, local_column: 'preceding_id', child_column: 'id' }],
+    },
+  },
+} as unknown as Record<string, TableDetail>;
+const longTableIndex = {
+  [selectedLongTable]: { name: selectedLongTable },
+  [suggestedLongTable]: { name: suggestedLongTable },
+} as unknown as Record<string, TableSummary>;
+const longTableGraphElement = () => graphElementWithData(
+  [selectedLongTable],
+  longTableDetails,
+  longTableIndex,
 );
 
 const pairId = 'inventory.item__t<->inventory.location__t';
@@ -370,6 +401,42 @@ afterEach(() => {
 });
 
 describe('BuilderGraph layout behavior', () => {
+  it('renders selected and suggested table names without clipping', async () => {
+    render(longTableGraphElement());
+
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+    expect(currentNode(selectedLongTable)).toMatchObject({
+      style: { width: 'max-content', whiteSpace: 'nowrap', minWidth: '160px' },
+      domAttributes: { title: selectedLongTable },
+    });
+    expect(currentNode(suggestedLongTable)).toMatchObject({
+      style: { width: 'max-content', whiteSpace: 'nowrap', minWidth: '150px' },
+      domAttributes: { title: suggestedLongTable },
+    });
+  });
+
+  it('reruns automatic layout with React Flow measured node dimensions', async () => {
+    render(longTableGraphElement());
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      const onNodesChange = flowHarness.latestProps?.onNodesChange as (changes: unknown[]) => void;
+      onNodesChange([
+        { id: selectedLongTable, type: 'dimensions', dimensions: { width: 310, height: 48 } },
+        { id: suggestedLongTable, type: 'dimensions', dimensions: { width: 380, height: 48 } },
+      ]);
+    });
+
+    await waitFor(() => expect(layoutRelationshipGraph).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(layoutRelationshipGraph).mock.calls[1][0].nodes.map(({ id, measured }) => ({
+      id,
+      width: measured?.width,
+    }))).toEqual([
+      { id: selectedLongTable, width: 310 },
+      { id: suggestedLongTable, width: 380 },
+    ]);
+  });
+
   it('displays canonical endpoints for backend child-projected relationship alternatives', async () => {
     const user = userEvent.setup();
     render(canonicalGraph({}, vi.fn(), childProjectedGroups));

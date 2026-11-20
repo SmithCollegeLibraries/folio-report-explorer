@@ -65,6 +65,10 @@ function graphTopologySignature(nodes: Node[], edges: Edge[]): string {
   });
 }
 
+function graphNodeMeasurementSignature(nodes: Node[]): string {
+  return JSON.stringify(nodes.map(({ id, measured }) => [id, measured?.width, measured?.height]));
+}
+
 function graphNodePresentationSignature(nodes: Node[]): string {
   return JSON.stringify(nodes.map(({ id, type, data, style }) => ({ id, type, data, style })));
 }
@@ -148,9 +152,12 @@ function BuilderGraphCanvas({
           fontSize: '13px',
           fontWeight: 'bold',
           minWidth: '160px',
+          width: 'max-content',
+          whiteSpace: 'nowrap',
           textAlign: 'center' as const,
           boxShadow: '0 2px 8px rgba(30,64,175,0.25)',
         },
+        domAttributes: { title: t },
       });
     }
 
@@ -238,9 +245,12 @@ function BuilderGraphCanvas({
           fontFamily: 'ui-monospace, monospace',
           fontSize: '12px',
           minWidth: '150px',
+          width: 'max-content',
+          whiteSpace: 'nowrap',
           textAlign: 'center' as const,
           cursor: 'pointer',
         },
+        domAttributes: { title: ct.name },
       });
 
       // Dashed edges from ghost to connected selected tables
@@ -279,11 +289,17 @@ function BuilderGraphCanvas({
   const mounted = useRef(true);
   const latestGraphNodes = useRef(graphNodes);
   const latestGraphEdges = useRef(graphEdges);
+  const latestMeasuredNodes = useRef(nodes);
   latestGraphNodes.current = graphNodes;
   latestGraphEdges.current = graphEdges;
+  latestMeasuredNodes.current = nodes;
   const topologySignature = useMemo(
     () => graphTopologySignature(graphNodes, graphEdges),
     [graphEdges, graphNodes],
+  );
+  const measuredNodeSignature = useMemo(
+    () => graphNodeMeasurementSignature(nodes),
+    [nodes],
   );
   const nodePresentationSignature = useMemo(
     () => graphNodePresentationSignature(graphNodes),
@@ -389,8 +405,13 @@ function BuilderGraphCanvas({
     setLayoutPending(true);
     setLayoutError(null);
     try {
+      const measuredById = new Map(latestMeasuredNodes.current.map((node) => [node.id, node.measured]));
+      const measuredNodes = nextNodes.map((node) => ({
+        ...node,
+        measured: node.measured ?? measuredById.get(node.id),
+      }));
       const result = await layoutRelationshipGraph({
-        nodes: nextNodes,
+        nodes: measuredNodes,
         edges: nextEdges,
         direction: 'RIGHT',
       });
@@ -408,6 +429,7 @@ function BuilderGraphCanvas({
         );
         return latestGraphNodes.current.map((node) => ({
           ...node,
+          measured: currentById.get(node.id)?.measured ?? node.measured,
           position: promotedPositions.get(node.id) ?? resultPositions.get(node.id) ?? node.position,
         }));
       });
@@ -445,6 +467,21 @@ function BuilderGraphCanvas({
       if (mounted.current && sequence === layoutSequence.current) setLayoutPending(false);
     }
   }, [cancelScheduledFit, fitView, setEdges, setNodes]);
+
+  const laidOutMeasurementSignature = useRef<string | null>(null);
+  useEffect(() => {
+    const nodesAreMeasured = nodes.length > 0 && nodes.every(({ measured }) => (
+      typeof measured?.width === 'number' && typeof measured?.height === 'number'
+    ));
+    if (!nodesAreMeasured) {
+      laidOutMeasurementSignature.current = null;
+      return;
+    }
+    if (laidOutMeasurementSignature.current === measuredNodeSignature) return;
+    laidOutMeasurementSignature.current = measuredNodeSignature;
+    if (layoutModeRef.current !== 'automatic' && !explicitRelayoutPending.current) return;
+    void runAutomaticLayout(nodes, edges, explicitRelayoutPending.current);
+  }, [edges, measuredNodeSignature, nodes, runAutomaticLayout]);
 
   useEffect(() => {
     if (layoutModeRef.current === 'automatic' || explicitRelayoutPending.current) {
