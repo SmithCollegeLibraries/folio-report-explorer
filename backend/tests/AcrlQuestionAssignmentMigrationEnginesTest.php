@@ -53,11 +53,11 @@ $migrationDir = __DIR__ . '/../../mysql/migrations';
 $temporaryMigrationDir = sys_get_temp_dir() . '/acrl029-migrations-' . bin2hex(random_bytes(8));
 $allMigrationFiles = array_map('basename', glob(rtrim($migrationDir, '/') . '/*.sql') ?: []);
 sort($allMigrationFiles, SORT_STRING);
-$migrationFilesExcept066And067And073And074 = array_values(array_filter($allMigrationFiles, function ($filename) {
-    return !in_array($filename, ['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql'], true);
+$migrationFilesExcept066And067And073And074And075 = array_values(array_filter($allMigrationFiles, function ($filename) {
+    return !in_array($filename, ['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql', '075_weeding.sql'], true);
 }));
-$migrationFilesExcept073And074 = array_values(array_filter($allMigrationFiles, function ($filename) {
-    return !in_array($filename, ['073_acrl_institutions.sql', '074_acrl_institution_members.sql'], true);
+$migrationFilesExcept073And074And075 = array_values(array_filter($allMigrationFiles, function ($filename) {
+    return !in_array($filename, ['073_acrl_institutions.sql', '074_acrl_institution_members.sql', '075_weeding.sql'], true);
 }));
 
 function acrlMigrationEngineCheck($condition, string $message): void
@@ -330,7 +330,7 @@ try {
         acrlMigrationEngineCheck(!in_array('067_acrl_invites.sql', $dryRunA['baselined'], true) && !in_array('074_acrl_institution_members.sql', $dryRunA['baselined'], true), 'Scenario (a) must not baseline missing 067 or 074.');
         $dryBaselinedA = $dryRunA['baselined'];
         sort($dryBaselinedA, SORT_STRING);
-        acrlMigrationEngineSame($migrationFilesExcept066And067And073And074, $dryBaselinedA, 'Scenario (a) dry run must baseline every existing migration other than the missing 066, 067, 073, and 074.');
+        acrlMigrationEngineSame($migrationFilesExcept066And067And073And074And075, $dryBaselinedA, 'Scenario (a) dry run must baseline every existing migration other than the missing 066, 067, 073, 074, and 075.');
         $resultA = MigrationService::run($appDbA, $migrationDir, false);
         acrlMigrationEngineCheck(in_array('066_acrl_question_assignments.sql', $resultA['applied'], true), 'Scenario (a) must execute and record missing 066.');
         acrlMigrationEngineCheck(in_array('067_acrl_invites.sql', $resultA['applied'], true), 'Scenario (a) must execute and record missing 067.');
@@ -338,10 +338,10 @@ try {
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbA, '067_acrl_invites.sql'), 'Scenario (a) must re-recognize both 067 tables, columns, defaults, and target uniqueness after executing the migration.');
         $appliedA = $resultA['applied'];
         sort($appliedA, SORT_STRING);
-        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql'], $appliedA, 'Scenario (a) must execute only missing 066, 067, 073, and 074 instead of replaying any previously applied migration.');
+        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql', '075_weeding.sql'], $appliedA, 'Scenario (a) must execute only missing 066, 067, 073, 074, and 075 instead of replaying any previously applied migration.');
         $baselinedA = $resultA['baselined'];
         sort($baselinedA, SORT_STRING);
-        acrlMigrationEngineSame($migrationFilesExcept066And067And073And074, $baselinedA, 'Scenario (a) must baseline every previously applied migration except the missing 066, 067, 073, and 074.');
+        acrlMigrationEngineSame($migrationFilesExcept066And067And073And074And075, $baselinedA, 'Scenario (a) must baseline every previously applied migration except the missing 066, 067, 073, 074, and 075.');
         $questionCountA = (int)$appDbA->createCommand("SELECT COUNT(*) FROM acrl_questions WHERE survey_year = 2025 AND sheet = 'survey' AND question_id = '60' AND part = 'A'")->queryScalar();
         acrlMigrationEngineSame(0, $questionCountA, 'Scenario (a) must keep the deliberately deleted seed question deleted.');
     } catch (Throwable $error) {
@@ -371,8 +371,8 @@ try {
         acrlMigrationEngineCheck(in_array('073_acrl_institutions.sql', $resultB['applied'], true), 'Scenario (b) must apply missing 073.');
         $baselinedB = $resultB['baselined'];
         sort($baselinedB, SORT_STRING);
-        acrlMigrationEngineSame($migrationFilesExcept073And074, $baselinedB, 'Scenario (b) must baseline every migration except incomplete 073 and missing 074 when legacy ACRL schemas are present.');
-        acrlMigrationEngineSame(['073_acrl_institutions.sql', '074_acrl_institution_members.sql'], $resultB['applied'], 'Scenario (b) must apply the missing institution and membership schemas.');
+        acrlMigrationEngineSame($migrationFilesExcept073And074And075, $baselinedB, 'Scenario (b) must baseline every migration except incomplete 073, missing 074, and missing 075 when legacy ACRL schemas are present.');
+        acrlMigrationEngineSame(['073_acrl_institutions.sql', '074_acrl_institution_members.sql', '075_weeding.sql'], $resultB['applied'], 'Scenario (b) must apply the missing institution, membership, and Weeding schemas.');
         $questionCountB = (int)$appDbB->createCommand("SELECT COUNT(*) FROM acrl_questions WHERE survey_year = 2025 AND sheet = 'survey' AND question_id = '60' AND part = 'A'")->queryScalar();
         acrlMigrationEngineSame(0, $questionCountB, 'Scenario (b) must keep the deleted seed question deleted.');
 
@@ -413,7 +413,7 @@ try {
         $appDbD = acrlMigrationEngineConnection($dsnD, $runtimeUser, $runtimePassword);
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbD, '067_acrl_invites.sql'), 'Scenario (d) must recognize complete 067 independently of missing 066.');
         $resultD = MigrationService::run($appDbD, $migrationDir, false);
-        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql'], $resultD['applied'], 'Scenario (d) must apply missing 066, 073, and 074 while keeping complete legacy 067 baselined.');
+        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql', '075_weeding.sql'], $resultD['applied'], 'Scenario (d) must apply missing 066, 073, 074, and 075 while keeping complete legacy 067 baselined.');
         acrlMigrationEngineCheck(in_array('067_acrl_invites.sql', $resultD['baselined'], true), 'Scenario (d) must baseline complete 067 in the empty-ledger path.');
         $appliedD = (int)$appDbD->createCommand("SELECT COUNT(*) FROM schema_migrations WHERE filename = '067_acrl_invites.sql'")->queryScalar();
         acrlMigrationEngineSame(1, $appliedD, 'Scenario (d) must record exactly one baseline ledger row for 067.');
@@ -481,7 +481,7 @@ try {
         list($adminDbC, $dsnC) = acrlMigrationEnginePrepareCurrentSchema($admin, $adminDsn, $adminUser, $adminPassword === false ? '' : $adminPassword, $scenarioC, $migrationDir, $temporaryMigrationDir, $createdDatabases, $runtimeUser, $runtimePassword);
         $appDbC = acrlMigrationEngineConnection($dsnC, $runtimeUser, $runtimePassword);
         $firstRunC = MigrationService::run($appDbC, $migrationDir, false);
-        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql'], $firstRunC['applied'], 'Scenario (c) must run 066, 067, 073, then new migration 074 once after a normal ledger through 065.');
+        acrlMigrationEngineSame(['066_acrl_question_assignments.sql', '067_acrl_invites.sql', '073_acrl_institutions.sql', '074_acrl_institution_members.sql', '075_weeding.sql'], $firstRunC['applied'], 'Scenario (c) must run 066, 067, 073, 074, and 075 once after a normal ledger through 065.');
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbC, '067_acrl_invites.sql'), 'Scenario (c) must re-recognize complete 067 after applying it on the normal-ledger path.');
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbC, '073_acrl_institutions.sql') && acrlMigrationEngineApplied($appDbC, '074_acrl_institution_members.sql'), 'Scenario (c) must recognize 073 and 074 after applying them following 067.');
         $secondRunC = MigrationService::run($appDbC, $migrationDir, false);
@@ -642,7 +642,7 @@ try {
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbJ, '066_acrl_question_assignments.sql'), 'Scenario (j) 066 must recognize the first partial 073 column.');
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbJ, '067_acrl_invites.sql'), 'Scenario (j) 067 must recognize the first partial 073 column.');
         $resumedJ = MigrationService::run($appDbJ, $migrationDir, false);
-        acrlMigrationEngineSame(['073_acrl_institutions.sql', '074_acrl_institution_members.sql'], $resumedJ['applied'], 'Scenario (j) empty-ledger full-directory run resumes partial 073, applies new 074, and applies no earlier migration.');
+        acrlMigrationEngineSame(['073_acrl_institutions.sql', '074_acrl_institution_members.sql', '075_weeding.sql'], $resumedJ['applied'], 'Scenario (j) empty-ledger full-directory run resumes partial 073, applies new 074 and 075, and applies no earlier migration.');
         acrlMigrationEngineCheck(acrlMigrationEngineApplied($appDbJ, '073_acrl_institutions.sql') && acrlMigrationEngineApplied($appDbJ, '074_acrl_institution_members.sql'), 'Scenario (j) must recognize 073 and 074 after empty-ledger recovery.');
     } catch (Throwable $error) {
         acrlMigrationEngineCheck(false, 'Scenario (j) partial-073 empty-ledger recovery failed: ' . get_class($error) . ': ' . $error->getMessage());
