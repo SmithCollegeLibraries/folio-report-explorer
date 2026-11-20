@@ -47,18 +47,15 @@ final class BuilderSubtableRelationshipService
 
             foreach (($info['columns'] ?? []) as $column) {
                 $columnName = $column['name'] ?? null;
-                if (!is_string($columnName) || substr($columnName, -3) !== '_id') {
+                $arrayColumnPrefix = $arrayName . '__';
+                if (!is_string($columnName)
+                    || $arrayName === ''
+                    || strpos($columnName, $arrayColumnPrefix) !== 0
+                    || substr($columnName, -3) !== '_id') {
                     continue;
                 }
 
-                $targetName = substr($columnName, 0, -3);
-                if (strpos($targetName, '__') !== false) {
-                    $arrayColumnPrefix = $arrayName . '__';
-                    if ($arrayName === '' || strpos($targetName, $arrayColumnPrefix) !== 0) {
-                        continue;
-                    }
-                    $targetName = substr($targetName, strlen($arrayColumnPrefix));
-                }
+                $targetName = substr($columnName, strlen($arrayColumnPrefix), -3);
                 if ($targetName === '') {
                     continue;
                 }

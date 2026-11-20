@@ -63,23 +63,30 @@ Yii::$app = (object) [
 $mapping = [
     'inventory_instances' => 'inventory.instance__t',
     'inventory_identifier_types' => 'inventory.identifier_type__t',
+    'inventory_instance_types' => 'inventory.instance_type__t',
     'inventory_holdings' => 'inventory.holdings_record__t',
     'inventory_holdings_note_types' => 'inventory.holdings_note_type__t',
     'inventory.instance__t' => 'inventory.instance__t',
     'inventory.identifier_type__t' => 'inventory.identifier_type__t',
+    'inventory.instance_type__t' => 'inventory.instance_type__t',
     'inventory.holdings_record__t' => 'inventory.holdings_record__t',
     'inventory.holdings_note_type__t' => 'inventory.holdings_note_type__t',
 ];
 $columns = [
     'inventory.instance__t' => [['name' => 'id'], ['name' => 'title']],
     'inventory.identifier_type__t' => [['name' => 'id'], ['name' => 'name']],
+    'inventory.instance_type__t' => [['name' => 'id'], ['name' => 'name']],
     'inventory.holdings_record__t' => [['name' => 'id'], ['name' => 'hrid']],
     'inventory.holdings_note_type__t' => [['name' => 'id'], ['name' => 'name']],
 ];
 $subtables = [
     'inventory.instance__t__identifiers' => [
         'parent' => 'inventory.instance__t',
-        'columns' => [['name' => 'id'], ['name' => 'identifiers__identifier_type_id']],
+        'columns' => [
+            ['name' => 'id'],
+            ['name' => 'identifiers__identifier_type_id'],
+            ['name' => 'instance_type_id'],
+        ],
     ],
     'inventory.holdings_record__t__notes' => [
         'parent' => 'inventory.holdings_record__t',
@@ -95,6 +102,7 @@ $schemaProperties = [
         'tables' => [
             'inventory_instances' => ['columns' => []],
             'inventory_identifier_types' => ['columns' => []],
+            'inventory_instance_types' => ['columns' => []],
             'inventory_holdings' => ['columns' => []],
             'inventory_holdings_note_types' => ['columns' => []],
         ],
@@ -115,6 +123,7 @@ foreach ($schemaProperties as $propertyName => $value) {
 $catalog = BuilderSchemaService::catalog();
 $parentId = 'inventory.instance__t__identifiers.id->inventory.instance__t.id';
 $lookupId = 'inventory.instance__t__identifiers.identifiers__identifier_type_id->inventory.identifier_type__t.id';
+$copiedLookupId = 'inventory.instance__t__identifiers.instance_type_id->inventory.instance_type__t.id';
 $notesParentId = 'inventory.holdings_record__t__notes.id->inventory.holdings_record__t.id';
 $unresolvedLookupId = 'inventory.instance__t__unresolved.unresolved__missing_type_id->inventory.missing_type__t.id';
 
@@ -135,6 +144,18 @@ expectSubtableRelationship(
     !isset($catalog['relationships_by_id'][$unresolvedLookupId])
         && $catalog['warnings'] === [],
     'An unresolved lookup target must be omitted without a catalog warning.'
+);
+expectSubtableRelationship(
+    !isset($catalog['relationships_by_id'][$copiedLookupId])
+        && BuilderSchemaService::findShortestPath(
+            'inventory.instance__t',
+            'inventory.instance_type__t'
+        ) === null
+        && FolioSchemaService::findShortestPath(
+            'inventory_instances',
+            'inventory_instance_types'
+        ) === null,
+    'A copied parent foreign key must not create a subtable lookup edge or route a path through the subtable.'
 );
 
 $builderPath = BuilderSchemaService::findShortestPath(
