@@ -7,6 +7,7 @@ use Yii;
 require_once __DIR__ . '/CatalogingQueryGuidanceService.php';
 require_once __DIR__ . '/ClarificationService.php';
 require_once __DIR__ . '/ReferenceJsonBundleService.php';
+require_once __DIR__ . '/BuilderSubtableRelationshipService.php';
 
 /**
  * FolioSchemaService — loads the scraped JSON schema files and provides
@@ -208,6 +209,7 @@ class FolioSchemaService
             'legacy_relationships' => $schema['relationships'] ?? [],
             'mapping' => self::discoverTableMapping(),
             'columns_by_physical_table' => self::discoverAllColumns(),
+            'subtables' => self::discoverSubtables(),
         ];
     }
 
@@ -595,7 +597,12 @@ class FolioSchemaService
             }
         }
 
-        return $adj;
+        return BuilderSubtableRelationshipService::appendToAdjacency(
+            $adj,
+            self::discoverSubtables(),
+            self::discoverAllColumns(),
+            self::discoverTableMapping()
+        );
     }
 
     /**

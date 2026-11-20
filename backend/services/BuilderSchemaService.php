@@ -216,10 +216,11 @@ final class BuilderSchemaService
         $overlay = BuilderRelationshipCatalogService::loadOverlay(
             \Yii::$app->params['builderRelationshipOverlayPath']
         );
-        self::$catalog = BuilderRelationshipCatalogService::build(
+        self::$catalog = BuilderRelationshipCatalogService::buildWithSubtables(
             $inputs['legacy_relationships'],
             $inputs['mapping'],
             $inputs['columns_by_physical_table'],
+            $inputs['subtables'],
             $overlay
         );
         foreach ((self::$catalog['warnings'] ?? []) as $warning) {
