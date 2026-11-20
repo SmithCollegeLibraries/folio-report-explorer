@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Panel } from '@xyflow/react';
+import { Handle, Panel, Position } from '@xyflow/react';
 import type { SubtableGroup } from './builderGraphSubtableGroups';
 
 interface Props {
@@ -10,12 +10,15 @@ interface Props {
 
 export function BuilderSubtableGroupNode({ data }: { data: Record<string, unknown> }) {
   return (
-    <button
-      type="button"
-      className="nodrag nopan w-full cursor-pointer border-0 bg-transparent p-0 text-center font-mono text-xs text-inherit focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
-    >
-      {typeof data.label === 'string' ? data.label : ''}
-    </button>
+    <>
+      <Handle type="target" position={Position.Left} />
+      <button
+        type="button"
+        className="nodrag nopan w-full cursor-pointer border-0 bg-transparent p-0 text-center font-mono text-xs text-inherit focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-600"
+      >
+        {typeof data.label === 'string' ? data.label : ''}
+      </button>
+    </>
   );
 }
 
