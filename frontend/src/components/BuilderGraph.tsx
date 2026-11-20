@@ -25,16 +25,8 @@ import BuilderRelationshipEdge, {
 } from './BuilderRelationshipEdge';
 import { layoutRelationshipGraph } from './builderGraphLayout';
 import { reconcileUserArrangedNodes } from './builderGraphPositions';
-
-interface ConnectedTable {
-  name: string;
-  connections: {
-    fromTable: string;
-    column: string;
-    toColumn: string;
-    direction: 'parent' | 'child';
-  }[];
-}
+import BuilderSubtablePicker, { BuilderSubtableGroupNode } from './BuilderSubtablePicker';
+import { createSubtableGroupGraph, groupConnectedTables } from './builderGraphSubtableGroups';
 
 interface Props {
   selectedTables: string[];
@@ -88,46 +80,10 @@ function BuilderGraphCanvas({
   activeRelationshipOverrides = emptyRelationshipOverrides,
   onRelationshipChange = ignoreRelationshipChange,
 }: Props) {
-  // Compute connected tables
-  const connectedTables = useMemo(() => {
-    if (selectedTables.length === 0) return [];
-    const selectedSet = new Set(selectedTables);
-    const map = new Map<string, ConnectedTable['connections']>();
-
-    for (const selTable of selectedTables) {
-      const detail = tableDetails[selTable];
-      if (!detail?.relationships) continue;
-
-      for (const rel of detail.relationships.parents || []) {
-        const parentName = rel.parent_table;
-        if (!parentName || !tables[parentName] || selectedSet.has(parentName)) continue;
-        if (!map.has(parentName)) map.set(parentName, []);
-        map.get(parentName)!.push({
-          fromTable: selTable,
-          column: rel.local_column,
-          toColumn: rel.parent_column || 'id',
-          direction: 'parent',
-        });
-      }
-      for (const rel of detail.relationships.children || []) {
-        const childName = rel.child_table;
-        if (!childName || !tables[childName] || selectedSet.has(childName)) continue;
-        if (!map.has(childName)) map.set(childName, []);
-        map.get(childName)!.push({
-          fromTable: selTable,
-          column: rel.local_column,
-          toColumn: rel.child_column || rel.local_column,
-          direction: 'child',
-        });
-      }
-    }
-
-    const result: ConnectedTable[] = [];
-    for (const [name, connections] of map) {
-      result.push({ name, connections });
-    }
-    return result.sort((a, b) => b.connections.length - a.connections.length);
-  }, [tableDetails, selectedTables, tables]);
+  const { ordinaryTables, subtableGroups } = useMemo(
+    () => groupConnectedTables(selectedTables, tableDetails, tables),
+    [selectedTables, tableDetails, tables],
+  );
 
   // Build nodes and edges
   const { graphNodes, graphEdges } = useMemo(() => {
@@ -230,7 +186,7 @@ function BuilderGraphCanvas({
 
     // Ghost nodes (connected but not selected)
     const maxGhosts = 10;
-    connectedTables.slice(0, maxGhosts).forEach((ct) => {
+    ordinaryTables.slice(0, maxGhosts).forEach((ct) => {
       nodes.push({
         id: ct.name,
         data: { label: shortName(ct.name), isSelected: false, tableName: ct.name, connectionCount: ct.connections.length },
@@ -273,8 +229,19 @@ function BuilderGraphCanvas({
       }
     });
 
+    const subtableGraph = createSubtableGroupGraph(subtableGroups);
+    nodes.push(...subtableGraph.nodes);
+    edges.push(...subtableGraph.edges);
+
     return { graphNodes: nodes, graphEdges: edges };
-  }, [activeRelationshipOverrides, connectedTables, relationshipGroups, selectedTables, tableDetails]);
+  }, [
+    activeRelationshipOverrides,
+    ordinaryTables,
+    relationshipGroups,
+    selectedTables,
+    subtableGroups,
+    tableDetails,
+  ]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(graphEdges);
@@ -310,12 +277,22 @@ function BuilderGraphCanvas({
   const graphContainerRef = useRef<HTMLDivElement>(null);
   const selectorRef = useRef<HTMLDivElement>(null);
   const selectorTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const subtableGroupTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [selectedPairId, setSelectedPairId] = useState<string | null>(null);
+  const [selectedSubtableParent, setSelectedSubtableParent] = useState<string | null>(null);
 
   const closeRelationshipSelector = useCallback((restoreFocus = true) => {
     setSelectedPairId(null);
     if (restoreFocus) {
       const trigger = selectorTriggerRef.current;
+      if (trigger?.isConnected) trigger.focus();
+    }
+  }, []);
+
+  const closeSubtablePicker = useCallback((restoreFocus = true) => {
+    setSelectedSubtableParent(null);
+    if (restoreFocus) {
+      const trigger = subtableGroupTriggerRef.current;
       if (trigger?.isConnected) trigger.focus();
     }
   }, []);
@@ -326,11 +303,13 @@ function BuilderGraphCanvas({
   ) => {
     const group = relationshipGroups[pairId];
     if (!group || group.relationships.length <= 1) return;
+    closeSubtablePicker(false);
     selectorTriggerRef.current = trigger ?? null;
     setSelectedPairId(pairId);
-  }, [relationshipGroups]);
+  }, [closeSubtablePicker, relationshipGroups]);
 
   const edgeTypes = useMemo(() => ({ builderRelationship: BuilderRelationshipEdge }), []);
+  const nodeTypes = useMemo(() => ({ subtableGroup: BuilderSubtableGroupNode }), []);
 
   const edgesWithCallbacks = useMemo(() => edges.map((edge) => {
     if (edge.type !== 'builderRelationship' || !edge.data) return edge;
@@ -344,12 +323,19 @@ function BuilderGraphCanvas({
   }), [edges, openRelationshipSelector]);
 
   const selectedRelationshipGroup = selectedPairId ? relationshipGroups[selectedPairId] : undefined;
+  const selectedSubtableGroup = subtableGroups.find((group) => (
+    group.parentName === selectedSubtableParent
+  ));
 
   useEffect(() => {
     if (selectedPairId && (!selectedRelationshipGroup || selectedRelationshipGroup.relationships.length <= 1)) {
       closeRelationshipSelector();
     }
   }, [closeRelationshipSelector, selectedPairId, selectedRelationshipGroup]);
+
+  useEffect(() => {
+    if (selectedSubtableParent && !selectedSubtableGroup) closeSubtablePicker();
+  }, [closeSubtablePicker, selectedSubtableGroup, selectedSubtableParent]);
 
   useEffect(() => {
     if (!selectedPairId) return;
@@ -534,13 +520,20 @@ function BuilderGraphCanvas({
   }, [cancelScheduledFit, graphEdges, graphNodes, setEdges, setNodes]);
 
   const onNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      const data = node.data as { isSelected?: boolean; tableName?: string };
+    (event: React.MouseEvent, node: Node) => {
+      const data = node.data as { isSelected?: boolean; tableName?: string; parentName?: string };
+      if (data.parentName) {
+        if (!subtableGroups.some((group) => group.parentName === data.parentName)) return;
+        closeRelationshipSelector(false);
+        subtableGroupTriggerRef.current = event.currentTarget.querySelector('button');
+        setSelectedSubtableParent(data.parentName);
+        return;
+      }
       if (data.tableName && !data.isSelected) {
         onAddTable(data.tableName as string);
       }
     },
-    [onAddTable],
+    [closeRelationshipSelector, onAddTable, subtableGroups],
   );
 
   const onNodeDoubleClick = useCallback(
@@ -567,6 +560,7 @@ function BuilderGraphCanvas({
       <ReactFlow
         nodes={nodes}
         edges={edgesWithCallbacks}
+        nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -646,6 +640,12 @@ function BuilderGraphCanvas({
             </div>
           </Panel>
         )}
+
+        <BuilderSubtablePicker
+          group={selectedSubtableGroup}
+          onAddTable={onAddTable}
+          onClose={() => closeSubtablePicker()}
+        />
 
         <Panel position="top-right">
           <div className="flex flex-col items-end gap-2">
