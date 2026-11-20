@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Edge, Node } from '@xyflow/react';
@@ -24,13 +24,36 @@ vi.mock('@xyflow/react', async () => {
     ReactFlow: (props: Record<string, unknown> & {
       nodes: Node[];
       edges: Edge[];
+      nodeTypes?: Record<string, React.ComponentType<{ data: Node['data'] }>>;
       edgeTypes?: Record<string, React.ComponentType<Record<string, unknown>>>;
       children?: React.ReactNode;
     }) => {
       flowHarness.latestProps = props;
       return (
         <div data-testid="react-flow">
-          {props.nodes.map((node) => <div key={node.id} data-testid={`node-${node.id}`} />)}
+          {props.nodes.map((node) => {
+            const NodeComponent = node.type ? props.nodeTypes?.[node.type] : undefined;
+            return (
+              <div
+                key={node.id}
+                data-testid={`node-${node.id}`}
+                role={node.ariaRole}
+                aria-label={node.ariaLabel}
+                tabIndex={node.focusable ? 0 : undefined}
+                title={node.domAttributes?.title}
+                onClick={(event) => (
+                  props.onNodeClick as ((event: React.MouseEvent, node: Node) => void) | undefined
+                )?.(event, node)}
+                onDoubleClick={(event) => (
+                  props.onNodeDoubleClick as ((event: React.MouseEvent, node: Node) => void) | undefined
+                )?.(event, node)}
+              >
+                {NodeComponent
+                  ? <NodeComponent data={node.data} />
+                  : (typeof node.data.label === 'string' ? node.data.label : '')}
+              </div>
+            );
+          })}
           {props.edges.map((edge) => {
             const EdgeComponent = edge.type ? props.edgeTypes?.[edge.type] : undefined;
             return EdgeComponent ? (
@@ -340,6 +363,34 @@ const renderedNodeIds = () => screen
   .map((element) => element.dataset.testid?.replace('node-', ''))
   .filter((id): id is string => Boolean(id))
   .sort();
+
+function relatedGraphData(
+  parents: string[],
+  related: { name: string; parent: string; parentTable?: string; type: string }[],
+  parentAliases: Record<string, string> = {},
+) {
+  const tables = Object.fromEntries([
+    ...parents.map((name) => [name, { name, type: 'TABLE', alias_name: parentAliases[name] }]),
+    ...related.map((table) => [table.name, {
+      name: table.name,
+      type: table.type,
+      parent_table: table.parentTable ?? table.parent,
+    }]),
+  ]) as unknown as Record<string, TableSummary>;
+  const tableDetails = Object.fromEntries(parents.map((parent) => [parent, {
+    relationships: {
+      parents: [],
+      children: related
+        .filter((table) => table.parent === parent)
+        .map((table) => ({
+          child_table: table.name,
+          local_column: `${table.name.split('.').pop()}_id`,
+          child_column: 'id',
+        })),
+    },
+  }])) as unknown as Record<string, TableDetail>;
+  return { tables, tableDetails };
+}
 
 const currentNodes = () => flowHarness.latestProps?.nodes as Node[];
 
@@ -865,5 +916,174 @@ describe('BuilderGraph layout behavior', () => {
 
     expect(flowHarness.animationFrames).toHaveLength(0);
     expect(flowHarness.fitView).not.toHaveBeenCalled();
+  });
+});
+
+describe('BuilderGraph subtable suggestions', () => {
+  it('groups a parent’s subtables, filters and adds a choice, then updates the group count', async () => {
+    const user = userEvent.setup();
+    const parent = 'inventory.instance__t';
+    const subtableNames = [
+      'contributors', 'identifiers', 'notes', 'formats', 'languages', 'classifications',
+      'alternate_titles', 'electronic_access', 'publication', 'staff_suppress',
+      'statistical_codes', 'instance_formats',
+    ].map((name) => `${parent}__${name}`);
+    const related = [
+      { name: 'inventory.source_record__t', parent, type: 'TABLE' },
+      { name: 'inventory.holdings_record__t', parent, type: 'TABLE' },
+      ...subtableNames.map((name) => ({
+        name,
+        parent,
+        parentTable: 'inventory_instances',
+        type: 'SUBTABLE',
+      })),
+    ];
+    const { tables: nextTables, tableDetails: nextDetails } = relatedGraphData(
+      [parent],
+      related,
+      { [parent]: 'inventory_instances' },
+    );
+    const onAddTable = vi.fn();
+    const onRemoveTable = vi.fn();
+    const view = render(
+      <BuilderGraph
+        selectedTables={[parent]}
+        tableDetails={nextDetails}
+        tables={nextTables}
+        onAddTable={onAddTable}
+        onRemoveTable={onRemoveTable}
+      />,
+    );
+
+    const group = await screen.findByRole('button', { name: '+ 12 subtables' });
+    expect(currentNodes().filter((node) => node.data.isSubtableGroup)).toHaveLength(1);
+    expect(renderedNodeIds()).toContain('inventory.source_record__t');
+    expect(renderedNodeIds()).toContain('inventory.holdings_record__t');
+    expect(renderedNodeIds().filter((id) => subtableNames.includes(id))).toEqual([]);
+    expect(screen.getByTestId(`node-subtable-group:${parent}`))
+      .toHaveAttribute('title', 'Subtables of instance__t');
+
+    await user.click(group);
+    let picker = screen.getByRole('dialog', { name: 'Subtables of instance__t' });
+    expect(within(picker).getByRole('list').querySelectorAll('button')).toHaveLength(12);
+    expect(Array.from(within(picker).getByRole('list').querySelectorAll('button')).map((button) => button.textContent))
+      .toEqual([
+        'alternate_titles', 'classifications', 'contributors', 'electronic_access', 'formats', 'identifiers',
+        'instance_formats', 'languages', 'notes', 'publication', 'staff_suppress', 'statistical_codes',
+      ]);
+
+    await user.click(within(picker).getByRole('button', { name: 'Close subtable picker' }));
+    expect(screen.queryByRole('dialog', { name: 'Subtables of instance__t' })).not.toBeInTheDocument();
+    await user.click(group);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Subtables of instance__t' })).not.toBeInTheDocument();
+    await user.dblClick(group);
+    expect(onAddTable).not.toHaveBeenCalled();
+    expect(onRemoveTable).not.toHaveBeenCalled();
+    await user.keyboard('{Escape}');
+
+    group.focus();
+    await user.keyboard('{Enter}');
+    picker = screen.getByRole('dialog', { name: 'Subtables of instance__t' });
+    await user.type(within(picker).getByRole('searchbox', { name: 'Search subtables' }), 'ident');
+    expect(within(picker).getByRole('list').querySelectorAll('button')).toHaveLength(1);
+    expect(within(picker).getByRole('button', { name: 'identifiers' })).toBeInTheDocument();
+    await user.click(within(picker).getByRole('button', { name: 'identifiers' }));
+    expect(onAddTable).toHaveBeenCalledWith(`${parent}__identifiers`);
+    expect(screen.queryByRole('dialog', { name: 'Subtables of instance__t' })).not.toBeInTheDocument();
+
+    view.rerender(
+      <BuilderGraph
+        selectedTables={[parent, `${parent}__identifiers`]}
+        tableDetails={nextDetails}
+        tables={nextTables}
+        onAddTable={onAddTable}
+        onRemoveTable={onRemoveTable}
+      />,
+    );
+    await waitFor(() => expect(currentNode(`subtable-group:${parent}`)?.data.label).toBe('+ 11 subtables'));
+    expect(currentNode(`${parent}__identifiers`)).toMatchObject({
+      data: { isSelected: true },
+      style: { background: '#1e40af' },
+    });
+  });
+
+  it('groups subtables per selected parent and caps ordinary ghost nodes separately', async () => {
+    const firstParent = 'inventory.instance__t';
+    const secondParent = 'inventory.holdings_record__t';
+    const emptyParent = 'inventory.location__t';
+    const orphanSubtable = 'inventory.mystery__t__orphan';
+    const related = [
+      {
+        name: `${firstParent}__identifiers`,
+        parent: firstParent,
+        parentTable: 'inventory_instances',
+        type: 'SUBTABLE',
+      },
+      {
+        name: `${firstParent}__notes`,
+        parent: firstParent,
+        parentTable: 'legacy_parent_not_in_index',
+        type: 'SUBTABLE',
+      },
+      {
+        name: `${secondParent}__notes`,
+        parent: secondParent,
+        parentTable: 'inventory_holdings_records',
+        type: 'SUBTABLE',
+      },
+      {
+        name: orphanSubtable,
+        parent: firstParent,
+        parentTable: 'unknown_legacy_parent',
+        type: 'SUBTABLE',
+      },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        name: `inventory.ordinary_${index + 1}__t`,
+        parent: firstParent,
+        type: 'TABLE',
+      })),
+    ];
+    const selectedTables = [firstParent, secondParent, emptyParent];
+    const { tables: nextTables, tableDetails: nextDetails } = relatedGraphData(selectedTables, related, {
+      [firstParent]: 'inventory_instances',
+      [secondParent]: 'inventory_holdings_records',
+    });
+
+    render(
+      <BuilderGraph
+        selectedTables={selectedTables}
+        tableDetails={nextDetails}
+        tables={nextTables}
+        onAddTable={vi.fn()}
+        onRemoveTable={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(currentNodes().filter((node) => node.data.isSubtableGroup)).toHaveLength(2));
+    expect(screen.getByRole('button', { name: '+ 2 subtables' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '+ 1 subtable' })).toBeInTheDocument();
+    expect(currentNode(`subtable-group:${emptyParent}`)).toBeUndefined();
+    expect(currentNodes().filter((node) => (
+      !selectedTables.includes(node.id) && node.data.isSubtableGroup !== true
+    ))).toHaveLength(10);
+    expect(currentNode(orphanSubtable)).toMatchObject({
+      data: { isSelected: false, tableName: orphanSubtable },
+    });
+    const groupEdges = (flowHarness.latestProps?.edges as Edge[])
+      .filter((edge) => edge.id.startsWith('subtable-group-edge:'));
+    expect(groupEdges).toHaveLength(2);
+    expect(groupEdges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: firstParent,
+        target: `subtable-group:${firstParent}`,
+        style: { strokeWidth: 1.5, stroke: '#9ca3af', strokeDasharray: '6 4' },
+      }),
+      expect.objectContaining({
+        source: secondParent,
+        target: `subtable-group:${secondParent}`,
+        style: { strokeWidth: 1.5, stroke: '#9ca3af', strokeDasharray: '6 4' },
+      }),
+    ]));
   });
 });
