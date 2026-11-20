@@ -62,12 +62,36 @@ function getConnectedTables(
   return result.sort((left, right) => right.connections.length - left.connections.length);
 }
 
+function resolveSelectedParentName(
+  subtableName: string,
+  parentTable: string | undefined,
+  selectedTables: string[],
+  tables: Record<string, TableSummary>,
+): string | undefined {
+  if (parentTable) {
+    for (const selectedName of selectedTables) {
+      const selected = tables[selectedName];
+      if (
+        parentTable === selectedName
+        || parentTable === selected?.name
+        || parentTable === selected?.sql_name
+        || parentTable === selected?.alias_name
+      ) return selectedName;
+    }
+  }
+
+  const marker = '__t__';
+  const markerIndex = subtableName.indexOf(marker);
+  if (markerIndex < 0) return undefined;
+  const derivedName = `${subtableName.slice(0, markerIndex)}__t`;
+  return selectedTables.includes(derivedName) ? derivedName : undefined;
+}
+
 export function groupConnectedTables(
   selectedTables: string[],
   tableDetails: Record<string, TableDetail>,
   tables: Record<string, TableSummary>,
 ): { ordinaryTables: ConnectedTable[]; subtableGroups: SubtableGroup[] } {
-  const selected = new Set(selectedTables);
   const ordinaryTables: ConnectedTable[] = [];
   const subtablesByParent = new Map<string, SubtableGroup['subtables']>();
 
@@ -78,8 +102,16 @@ export function groupConnectedTables(
       continue;
     }
 
-    const parentName = table.parent_table;
-    if (!parentName || !selected.has(parentName)) continue;
+    const parentName = resolveSelectedParentName(
+      connected.name,
+      table.parent_table,
+      selectedTables,
+      tables,
+    );
+    if (!parentName) {
+      ordinaryTables.push(connected);
+      continue;
+    }
     const prefix = `${parentName}__`;
     const shortName = connected.name.startsWith(prefix)
       ? connected.name.slice(prefix.length)

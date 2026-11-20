@@ -366,11 +366,16 @@ const renderedNodeIds = () => screen
 
 function relatedGraphData(
   parents: string[],
-  related: { name: string; parent: string; type: string }[],
+  related: { name: string; parent: string; parentTable?: string; type: string }[],
+  parentAliases: Record<string, string> = {},
 ) {
   const tables = Object.fromEntries([
-    ...parents.map((name) => [name, { name, type: 'TABLE' }]),
-    ...related.map((table) => [table.name, { name: table.name, type: table.type, parent_table: table.parent }]),
+    ...parents.map((name) => [name, { name, type: 'TABLE', alias_name: parentAliases[name] }]),
+    ...related.map((table) => [table.name, {
+      name: table.name,
+      type: table.type,
+      parent_table: table.parentTable ?? table.parent,
+    }]),
   ]) as unknown as Record<string, TableSummary>;
   const tableDetails = Object.fromEntries(parents.map((parent) => [parent, {
     relationships: {
@@ -926,9 +931,18 @@ describe('BuilderGraph subtable suggestions', () => {
     const related = [
       { name: 'inventory.source_record__t', parent, type: 'TABLE' },
       { name: 'inventory.holdings_record__t', parent, type: 'TABLE' },
-      ...subtableNames.map((name) => ({ name, parent, type: 'SUBTABLE' })),
+      ...subtableNames.map((name) => ({
+        name,
+        parent,
+        parentTable: 'inventory_instances',
+        type: 'SUBTABLE',
+      })),
     ];
-    const { tables: nextTables, tableDetails: nextDetails } = relatedGraphData([parent], related);
+    const { tables: nextTables, tableDetails: nextDetails } = relatedGraphData(
+      [parent],
+      related,
+      { [parent]: 'inventory_instances' },
+    );
     const onAddTable = vi.fn();
     const onRemoveTable = vi.fn();
     const view = render(
@@ -998,10 +1012,32 @@ describe('BuilderGraph subtable suggestions', () => {
     const firstParent = 'inventory.instance__t';
     const secondParent = 'inventory.holdings_record__t';
     const emptyParent = 'inventory.location__t';
+    const orphanSubtable = 'inventory.mystery__t__orphan';
     const related = [
-      { name: `${firstParent}__identifiers`, parent: firstParent, type: 'SUBTABLE' },
-      { name: `${firstParent}__notes`, parent: firstParent, type: 'SUBTABLE' },
-      { name: `${secondParent}__notes`, parent: secondParent, type: 'SUBTABLE' },
+      {
+        name: `${firstParent}__identifiers`,
+        parent: firstParent,
+        parentTable: 'inventory_instances',
+        type: 'SUBTABLE',
+      },
+      {
+        name: `${firstParent}__notes`,
+        parent: firstParent,
+        parentTable: 'legacy_parent_not_in_index',
+        type: 'SUBTABLE',
+      },
+      {
+        name: `${secondParent}__notes`,
+        parent: secondParent,
+        parentTable: 'inventory_holdings_records',
+        type: 'SUBTABLE',
+      },
+      {
+        name: orphanSubtable,
+        parent: firstParent,
+        parentTable: 'unknown_legacy_parent',
+        type: 'SUBTABLE',
+      },
       ...Array.from({ length: 12 }, (_, index) => ({
         name: `inventory.ordinary_${index + 1}__t`,
         parent: firstParent,
@@ -1009,7 +1045,10 @@ describe('BuilderGraph subtable suggestions', () => {
       })),
     ];
     const selectedTables = [firstParent, secondParent, emptyParent];
-    const { tables: nextTables, tableDetails: nextDetails } = relatedGraphData(selectedTables, related);
+    const { tables: nextTables, tableDetails: nextDetails } = relatedGraphData(selectedTables, related, {
+      [firstParent]: 'inventory_instances',
+      [secondParent]: 'inventory_holdings_records',
+    });
 
     render(
       <BuilderGraph
@@ -1025,7 +1064,12 @@ describe('BuilderGraph subtable suggestions', () => {
     expect(screen.getByRole('button', { name: '+ 2 subtables' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '+ 1 subtable' })).toBeInTheDocument();
     expect(currentNode(`subtable-group:${emptyParent}`)).toBeUndefined();
-    expect(currentNodes().filter((node) => String(node.id).includes('ordinary_'))).toHaveLength(10);
+    expect(currentNodes().filter((node) => (
+      !selectedTables.includes(node.id) && node.data.isSubtableGroup !== true
+    ))).toHaveLength(10);
+    expect(currentNode(orphanSubtable)).toMatchObject({
+      data: { isSelected: false, tableName: orphanSubtable },
+    });
     const groupEdges = (flowHarness.latestProps?.edges as Edge[])
       .filter((edge) => edge.id.startsWith('subtable-group-edge:'));
     expect(groupEdges).toHaveLength(2);
