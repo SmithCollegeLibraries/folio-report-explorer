@@ -227,9 +227,9 @@ function weedingEngineMigrationAudit(string $dsn, string $schema, string $user, 
     $host = 'localhost';
     $port = '3306';
     $socket = null;
-    if (preg_match('/(?:^|;)host=([^;]+)/i', $dsn, $matches) === 1) $host = $matches[1];
-    if (preg_match('/(?:^|;)port=([^;]+)/i', $dsn, $matches) === 1) $port = $matches[1];
-    if (preg_match('/(?:^|;)unix_socket=([^;]+)/i', $dsn, $matches) === 1) $socket = $matches[1];
+    if (preg_match('/(?:^|[;:])host=([^;]+)/i', $dsn, $matches) === 1) $host = $matches[1];
+    if (preg_match('/(?:^|[;:])port=([^;]+)/i', $dsn, $matches) === 1) $port = $matches[1];
+    if (preg_match('/(?:^|[;:])unix_socket=([^;]+)/i', $dsn, $matches) === 1) $socket = $matches[1];
     $command = escapeshellarg(PHP_BINARY);
     if ($socket !== null) $command .= ' -d ' . escapeshellarg('pdo_mysql.default_socket=' . $socket);
     $command .= ' ' . escapeshellarg(__DIR__ . '/../yii') . ' migration/audit';
