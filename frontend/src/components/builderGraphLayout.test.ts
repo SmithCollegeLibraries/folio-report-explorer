@@ -46,6 +46,21 @@ describe('layoutRelationshipGraph', () => {
     expect(result.nodes.find((entry) => entry.id === 'items')?.data).toEqual({ label: 'items' });
   });
 
+  it('passes each measured node width to ELK', async () => {
+    const layout = vi.fn(async (graph) => graph);
+    const layoutGraph = createRelationshipGraphLayout(async () => ({ layout }));
+    const longTable = {
+      ...node('inventory.preceding_suceeding_titles__t'),
+      measured: { width: 380, height: 48 },
+    };
+
+    await layoutGraph({ nodes: [longTable], edges: [], direction: 'RIGHT' });
+
+    expect(layout.mock.calls[0][0].children).toEqual([
+      { id: 'inventory.preceding_suceeding_titles__t', width: 380, height: 48 },
+    ]);
+  });
+
   it('preserves canonical relationship edge rendering while smoothing legacy edges', async () => {
     const layout = vi.fn(async (graph) => graph);
     const layoutGraph = createRelationshipGraphLayout(async () => ({ layout }));
