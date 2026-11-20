@@ -7,7 +7,7 @@ require_once __DIR__ . '/CatalogingMarcFieldFinderService.php';
 require_once __DIR__ . '/CatalogingReportMigrationRecognitionService.php';
 require_once __DIR__ . '/AcrlRetirementMigrationRecognitionService.php';
 require_once __DIR__ . '/AcrlQuestionAssignmentMigrationRecognitionService.php';
-require_once __DIR__ . '/BudgetYearFundReportMigrationRecognitionService.php'; require_once __DIR__ . '/VisualizationHistoryMigrationRecognitionService.php';
+require_once __DIR__ . '/BudgetYearFundReportMigrationRecognitionService.php'; require_once __DIR__ . '/VisualizationHistoryMigrationRecognitionService.php'; require_once __DIR__ . '/WeedingMigrationRecognitionService.php';
 
 class MigrationService
 {
@@ -127,7 +127,7 @@ class MigrationService
 
         $files = $audit['files'];
         if (empty($appliedRows) && self::databaseAppearsCurrent($db)) {
-            return AcrlQuestionAssignmentMigrationRecognitionService::baselineCurrentSchema($db, $files, $dryRun);
+            return WeedingMigrationRecognitionService::baselineCurrentSchema($db, $files, $dryRun);
         }
 
         $appliedByFilename = [];
@@ -218,6 +218,7 @@ class MigrationService
         }
 
         if (($file['filename'] ?? '') === '069_marc_combination_finder_record_scopes.sql' && !CatalogingReportMigrationRecognitionService::marcCombinationFinder068ReportAppearsComplete($db)) throw new \RuntimeException('Migration 069 cannot update non-canonical report marc-field-combination-finder.'); self::executeSqlFile($db, (string)$file['path']);
+        if (($file['filename'] ?? '') === '075_weeding.sql') WeedingMigrationRecognitionService::assertSchemaAppearsComplete($db);
         AcrlQuestionAssignmentMigrationRecognitionService::assertMigrationSchemaAfterExecution($db, (string)($file['filename'] ?? ''));
     }
 
@@ -437,6 +438,7 @@ class MigrationService
             case '061_retire_acrl_statistics.sql': return AcrlRetirementMigrationRecognitionService::retirementAppearsComplete($db); case '064_visualization_history.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryAppearsComplete($db); case '065_visualization_history_version.sql': return VisualizationHistoryMigrationRecognitionService::visualizationHistoryVersionAppearsComplete($db);
             case '066_acrl_question_assignments.sql': case '067_acrl_invites.sql': case '071_vea_gate_zones.sql': case '073_acrl_institutions.sql': case '074_acrl_institution_members.sql':
                 return AcrlQuestionAssignmentMigrationRecognitionService::migrationSchemaAppearsComplete($db, $filename);
+            case '075_weeding.sql': return WeedingMigrationRecognitionService::schemaAppearsComplete($db);
             case '044_query_feedback_reuse_trust.sql':
                 return self::hasColumns($db, 'ai_query_feedback', [
                     'generation_id',
