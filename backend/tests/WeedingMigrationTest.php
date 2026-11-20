@@ -64,6 +64,51 @@ weedingMigrationAssert(
     !app\services\WeedingMigrationRecognitionService::schemaAppearsComplete($emptyDb),
     'A database without the weeding schema must not be recognized as migration 075.'
 );
+$metadataDb = new class {
+    public $columnRows = [];
+    public $indexRows = [];
+    public function createCommand($sql, $params = [])
+    {
+        $rows = stripos($sql, 'information_schema.COLUMNS') !== false ? $this->columnRows : $this->indexRows;
+        return new class($rows) {
+            private $rows;
+            public function __construct(array $rows) { $this->rows = $rows; }
+            public function queryAll() { return $this->rows; }
+        };
+    }
+};
+$metadataDb->columnRows = [
+    ['COLUMN_NAME' => 'id', 'COLUMN_TYPE' => 'int(10) unsigned', 'IS_NULLABLE' => 'NO', 'COLUMN_DEFAULT' => 'NULL', 'EXTRA' => 'auto_increment'],
+    ['COLUMN_NAME' => 'weeding_access', 'COLUMN_TYPE' => 'tinyint(1)', 'IS_NULLABLE' => 'NO', 'COLUMN_DEFAULT' => '0', 'EXTRA' => ''],
+];
+$columnCheck = new ReflectionMethod(app\services\WeedingMigrationRecognitionService::class, 'columnsAppearComplete');
+$indexCheck = new ReflectionMethod(app\services\WeedingMigrationRecognitionService::class, 'indexesAppearComplete');
+if (PHP_VERSION_ID < 80500) {
+    $columnCheck->setAccessible(true);
+    $indexCheck->setAccessible(true);
+}
+$expectedColumns = [
+    'id' => ['int unsigned', 'NO', null, 'auto_increment'],
+    'weeding_access' => ['tinyint(1)', 'NO', '0', ''],
+];
+weedingMigrationAssert(
+    $columnCheck->invoke(null, $metadataDb, 'users', $expectedColumns),
+    'MariaDB integer widths and string NULL defaults must match the expected schema while tinyint(1) stays distinct.'
+);
+$metadataDb->columnRows[0]['COLUMN_TYPE'] = 'bigint(20) unsigned';
+weedingMigrationAssert(!$columnCheck->invoke(null, $metadataDb, 'users', $expectedColumns), 'A wrong integer type must not be recognized.');
+$metadataDb->columnRows[0]['COLUMN_TYPE'] = 'int(10) unsigned';
+$metadataDb->columnRows[0]['IS_NULLABLE'] = 'YES';
+weedingMigrationAssert(!$columnCheck->invoke(null, $metadataDb, 'users', $expectedColumns), 'Wrong nullability must not be recognized.');
+$metadataDb->columnRows[0]['IS_NULLABLE'] = 'NO';
+$metadataDb->columnRows[1]['COLUMN_DEFAULT'] = '1';
+weedingMigrationAssert(!$columnCheck->invoke(null, $metadataDb, 'users', $expectedColumns), 'A wrong default must not be recognized.');
+$metadataDb->indexRows = [['NON_UNIQUE' => 0, 'SEQ_IN_INDEX' => 1, 'COLUMN_NAME' => 'id', 'SUB_PART' => null]];
+weedingMigrationAssert(
+    $indexCheck->invoke(null, $metadataDb, 'users', ['PRIMARY' => [['id'], true]])
+        && !$indexCheck->invoke(null, $metadataDb, 'users', ['PRIMARY' => [['other'], true]]),
+    'A missing or wrong key must not be recognized.'
+);
 $postMigrationDb = new class {
     public function createCommand($sql = null, $params = [])
     {
@@ -188,10 +233,11 @@ function weedingEngineMigrationAudit(string $dsn, string $schema, string $user, 
     $command = escapeshellarg(PHP_BINARY);
     if ($socket !== null) $command .= ' -d ' . escapeshellarg('pdo_mysql.default_socket=' . $socket);
     $command .= ' ' . escapeshellarg(__DIR__ . '/../yii') . ' migration/audit';
-    $environment = [
+    $inheritedEnvironment = getenv();
+    $environment = array_merge(is_array($inheritedEnvironment) ? $inheritedEnvironment : [], [
         'MYSQL_HOST' => $host, 'MYSQL_PORT' => $port, 'MYSQL_DATABASE' => $schema,
         'MYSQL_USER' => $user, 'MYSQL_PASSWORD' => $password,
-    ];
+    ]);
     $pipes = [];
     $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
     if (!is_resource($process)) throw new RuntimeException('Could not start migration/audit against the throwaway schema.');
@@ -203,7 +249,8 @@ function weedingEngineMigrationAudit(string $dsn, string $schema, string $user, 
     $exitCode = proc_close($process);
     if ($exitCode !== 0 || strpos($stdout, 'Duplicate numbers: 0') === false
         || strpos($stdout, 'Changed checksums: 0') === false || strpos($stdout, 'Risk 075_weeding.sql:') !== false) {
-        throw new RuntimeException('migration/audit failed on the throwaway schema (exit ' . $exitCode . ').');
+        throw new RuntimeException('migration/audit failed on the throwaway schema (exit ' . $exitCode . ').'
+            . "\nstdout:\n" . trim($stdout) . "\nstderr:\n" . trim($stderr));
     }
 }
 

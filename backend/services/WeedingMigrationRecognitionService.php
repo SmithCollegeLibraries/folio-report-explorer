@@ -192,10 +192,13 @@ final class WeedingMigrationRecognitionService
             }
             $column = $columns[$name];
             $actualDefault = $column['COLUMN_DEFAULT'];
+            if ($shape[2] === null && is_string($actualDefault) && strtoupper(trim($actualDefault)) === 'NULL') {
+                $actualDefault = null;
+            }
             $defaultMatches = $shape[2] === null
                 ? $actualDefault === null
                 : trim((string)$actualDefault, "'") === (string)$shape[2];
-            if (strtolower((string)$column['COLUMN_TYPE']) !== $shape[0]
+            if (self::normalizeColumnType((string)$column['COLUMN_TYPE']) !== $shape[0]
                 || strtoupper((string)$column['IS_NULLABLE']) !== $shape[1]
                 || !$defaultMatches
                 || strtolower((string)$column['EXTRA']) !== $shape[3]) {
@@ -203,6 +206,16 @@ final class WeedingMigrationRecognitionService
             }
         }
         return true;
+    }
+
+    private static function normalizeColumnType(string $type): string
+    {
+        $type = strtolower($type);
+        if (preg_match('/^(tinyint|smallint|mediumint|int|bigint)\((\d+)\)(.*)$/', $type, $matches) === 1
+            && !($matches[1] === 'tinyint' && $matches[2] === '1')) {
+            return $matches[1] . $matches[3];
+        }
+        return $type;
     }
 
     private static function indexesAppearComplete($db, string $table, array $expected): bool
