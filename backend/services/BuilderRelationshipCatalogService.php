@@ -2,6 +2,8 @@
 
 namespace app\services;
 
+require_once __DIR__ . '/BuilderSubtableRelationshipService.php';
+
 final class BuilderRelationshipCatalogService
 {
     public static function relationshipId(string $fromTable, string $fromColumn, string $toTable, string $toColumn): string
@@ -55,7 +57,13 @@ final class BuilderRelationshipCatalogService
         ];
     }
 
-    public static function build(array $legacyRelationships, array $mapping, array $columnsByTable, array $overlay): array
+    public static function build(
+        array $legacyRelationships,
+        array $mapping,
+        array $columnsByTable,
+        array $overlay,
+        array $subtableRelationships = []
+    ): array
     {
         $relationshipsById = [];
         $warnings = is_array($overlay['_catalog_warnings'] ?? null)
@@ -79,6 +87,10 @@ final class BuilderRelationshipCatalogService
             }
         }
 
+        foreach ($subtableRelationships as $relationship) {
+            self::mergeCandidate($relationshipsById, $warnings, $columnsByTable, $relationship);
+        }
+
         foreach (($overlay['relationships'] ?? []) as $entry) {
             self::mergeCandidate($relationshipsById, $warnings, $columnsByTable, [
                 'from_table' => $entry['fromTable'] ?? null,
@@ -92,6 +104,23 @@ final class BuilderRelationshipCatalogService
         }
 
         return self::finalizeCatalog($relationshipsById, $warnings);
+    }
+
+    public static function buildWithSubtables(
+        array $legacyRelationships,
+        array $mapping,
+        array $columnsByTable,
+        array $subtables,
+        array $overlay
+    ): array {
+        $columnsByTable = BuilderSubtableRelationshipService::columnsByTable($columnsByTable, $subtables);
+        return self::build(
+            $legacyRelationships,
+            $mapping,
+            $columnsByTable,
+            $overlay,
+            BuilderSubtableRelationshipService::build($subtables, $columnsByTable)
+        );
     }
 
     private static function mergeCandidate(array &$relationshipsById, array &$warnings, array $columnsByTable, array $candidate): void
