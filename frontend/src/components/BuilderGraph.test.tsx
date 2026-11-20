@@ -20,6 +20,23 @@ const flowHarness = vi.hoisted(() => ({
 vi.mock('@xyflow/react', async () => {
   const ReactModule = await import('react');
   return {
+    Handle: ({
+      id,
+      position,
+      type,
+    }: {
+      id?: string;
+      position: string;
+      type: string;
+    }) => (
+      <div
+        className="react-flow__handle"
+        data-handleid={id}
+        data-handlepos={position}
+        data-handletype={type}
+      />
+    ),
+    Position: { Left: 'left' },
     ReactFlowProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
     ReactFlow: (props: Record<string, unknown> & {
       nodes: Node[];
@@ -957,6 +974,17 @@ describe('BuilderGraph subtable suggestions', () => {
 
     const group = await screen.findByRole('button', { name: '+ 12 subtables' });
     expect(currentNodes().filter((node) => node.data.isSubtableGroup)).toHaveLength(1);
+    const groupNodeId = `subtable-group:${parent}`;
+    const groupNode = screen.getByTestId(`node-${groupNodeId}`);
+    const groupHandle = groupNode.querySelector('.react-flow__handle');
+    expect(groupHandle).toBeInTheDocument();
+    expect(groupHandle).toHaveAttribute('data-handletype', 'target');
+    expect(groupHandle).toHaveAttribute('data-handlepos', 'left');
+    const groupEdge = (flowHarness.latestProps?.edges as Edge[]).find(
+      (edge) => edge.id === `subtable-group-edge:${parent}`,
+    );
+    expect(groupEdge).toMatchObject({ target: groupNodeId });
+    expect(groupEdge?.targetHandle).toBeUndefined();
     expect(renderedNodeIds()).toContain('inventory.source_record__t');
     expect(renderedNodeIds()).toContain('inventory.holdings_record__t');
     expect(renderedNodeIds().filter((id) => subtableNames.includes(id))).toEqual([]);
